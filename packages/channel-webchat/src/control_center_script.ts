@@ -60,6 +60,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         recoveryLoadGeneration: 0,
         recoveryRestorePlanGeneration: 0,
         recoveryRestorePending: false,
+        recoveryGoalPurposeRepair: null,
+        goalPurposeRepairReviews: Object.create(null),
+        goalPurposeRepairHandoffGeneration: 0,
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: storedActiveScreen && storedActiveScreen !== "home" ? storedActiveScreen : "conversation",
@@ -452,6 +455,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function setActiveScreen(screen) {
         const selected = screen || "conversation";
+        if (state.activeScreen === "approvals" && selected !== "approvals") clearGoalPurposeRepairHandoff();
         state.activeScreen = selected;
         sessionStorage.setItem("bt.activeScreen", selected);
         document.body.dataset.activeScreen = selected;
@@ -480,6 +484,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
         if (!response.ok) throw new Error(path + " failed: HTTP " + response.status);
         return response.json();
+      }
+
+      function hasNoStore(response) {
+        const header = response.headers.get("cache-control") || "";
+        return header.split(",").some(function (value) { return value.trim().toLowerCase() === "no-store"; });
       }
 
       function chatRoleForKind(kind) {
@@ -3597,6 +3606,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) refreshedContentDigests[item.command_id] = digest;
         }
         state.approvalContentDigests = refreshedContentDigests;
+        state.goalPurposeRepairReviews = Object.create(null);
         const grants = Array.isArray(body.grants) ? body.grants : [];
         const approvalHistory = Array.isArray(body.approval_history) ? body.approval_history : [];
         const activeExecutions = Array.isArray(body.active_executions) ? body.active_executions : [];
@@ -3665,18 +3675,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const meaningUpdateReview = isObject(item.meaning_update_review) &&
                 item.meaning_update_review.kind === "meaning_update_adoption" ? item.meaning_update_review : null;
               const isRecoveryRestore = item.operation === "recovery.restore";
+              const isGoalPurposeRepair = isRecoveryRestore && item.goal_purpose_repair === true;
               const isGoalPurposeAdoption = typeof item.target === "string" && item.target.startsWith("goal.governance.adopt:");
               const recoveryArchiveSha = isRecoveryRestore && typeof item.recovery_archive_sha256 === "string" &&
                 /^[a-f0-9]{64}$/.test(item.recovery_archive_sha256) ? item.recovery_archive_sha256 : null;
-              const requiresContentReview = item.content_review_required === true;
+              const requiresContentReview = item.content_review_required === true || isGoalPurposeRepair;
               const approveBlocked = requiresContentReview || isGoalPurposeAdoption || Boolean(cronReview && cronReview.eligible !== true) ||
                 Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale") ||
-                (isRecoveryRestore && recoveryArchiveSha === null);
+                (isRecoveryRestore && !isGoalPurposeRepair && recoveryArchiveSha === null);
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '"' +
                  (isGoalPurposeAdoption ? ' data-goal-purpose-adoption="' + escapeHtml(item.target) + '"' : '') +
+                 (isGoalPurposeRepair ? ' data-goal-purpose-repair=""' : '') +
                  (meaningUpdateReview ? ' data-proposal-digest="' + escapeHtml(meaningUpdateReview.proposal_digest) +
                    '" data-candidate-digest="' + escapeHtml(meaningUpdateReview.candidate_digest) +
                    '" data-target-record-id="' + escapeHtml(meaningUpdateReview.target_record_id) +
@@ -3693,7 +3705,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
                 (item.target ? '<dt>target</dt><dd>' + escapeHtml(item.target) + '</dd>' : '') +
-                (isRecoveryRestore ? '<dt>復元元のSHA-256</dt><dd class="mono">' +
+                (isGoalPurposeRepair ? '<dt>復旧対象</dt><dd>委任目的のJ・M台帳。承認後、停止したGatewayの設置先で適用します。</dd>' : '') +
+                (isRecoveryRestore && !isGoalPurposeRepair ? '<dt>復元元のSHA-256</dt><dd class="mono">' +
                   (recoveryArchiveSha ? escapeHtml(recoveryArchiveSha) : '未確認。復元を再申請してください。') + '</dd>' : '') +
                 '<dt>risk</dt><dd>' + badge(item.risk || "unknown", riskTone) + '</dd>' +
               '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3_final_review" ? "review" : "good") + '</dd>' +
@@ -3748,7 +3761,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   : '') +
                 (requiresContentReview
                   ? '<section class="approval-content-review"><button data-review-content="' + escapeHtml(item.command_id || "") + '">' +
-                     (isGoalPurposeAdoption ? '登録する委任目的の原文を確認' : goalPurposeReview ? 'Review exact purpose' :
+                     (isGoalPurposeRepair ? '委任目的J/Mの復旧内容を確認' :
+                       isGoalPurposeAdoption ? '登録する委任目的の原文を確認' : goalPurposeReview ? 'Review exact purpose' :
                        goalPurposeRelationReview ? 'task・目的の内容を確認' :
                        meaningUpdateReview ? '候補本文を確認' : item.operation === 'tool.file.edit' ? '変更差分を確認' :
                          item.operation === 'tool.file.delete' ? '削除対象を確認' : 'Review exact content') +
@@ -5948,12 +5962,37 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function clearRecoveryRestorePlan() {
         state.recoveryRestorePlanGeneration += 1;
+        state.recoveryGoalPurposeRepair = null;
         setText("recovery-restore-plan-status", "包括復元計画の確認にはバックアップIDを入力してください。");
         setText("recovery-restore-plan-details", "");
+        setText("goal-purpose-repair-request-status", "");
         byId("recovery-restore-plan-details").hidden = true;
+        const request = byId("request-goal-purpose-repair");
+        request.hidden = true;
+        request.disabled = true;
       }
 
-      function renderRecoveryRestorePlan(report) {
+      function goalPurposeRepairStoreLines(stores) {
+        const states = { missing: "なし", different: "不一致", matched: "一致" };
+        if (!Array.isArray(stores) || stores.length !== 2 ||
+            stores[0]?.store_key !== "goal_purpose_j_control" || stores[1]?.store_key !== "goal_purpose_m_state" ||
+            stores.some(store => typeof store.target_state !== "string" || !Object.hasOwn(states, store.target_state)) ||
+            stores.every(store => store.target_state === "matched")) return null;
+        return [
+          "委任目的J制御台帳　現行：" + states[stores[0].target_state],
+          "委任目的M状態台帳　現行：" + states[stores[1].target_state]
+        ];
+      }
+
+      function goalPurposeRepairBinding(value) {
+        if (!value || typeof value.backup_id !== "string" || value.backup_id === "latest" ||
+            !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value.backup_id) ||
+            typeof value.manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.manifest_sha256) ||
+            typeof value.repair_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.repair_sha256)) return null;
+        return { backup_id: value.backup_id, manifest_sha256: value.manifest_sha256, repair_sha256: value.repair_sha256 };
+      }
+
+      function renderRecoveryRestorePlan(report, backupId) {
         if (report?.surface !== "offline_recovery_restore_plan" || report.schema_version !== 1 ||
             report.offline_lease_verified !== false || report.cross_store_atomic !== false ||
             report.used_for_authority !== false || report.may_execute !== false) return false;
@@ -6027,12 +6066,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const stores = report.canonical_stores.filter(store => store?.store_key === key);
           return stores.length === 1 && stores[0]?.archive_status === "verified";
         });
-        if (replay && typeof replay === "object" && !Array.isArray(replay) && typeof replay.status === "string" &&
+        const validReplay = replay && typeof replay === "object" && !Array.isArray(replay) && typeof replay.status === "string" &&
             Object.hasOwn(replayLabels, replay.status) && Number.isSafeInteger(replay.verified_purpose_count) &&
             (replay.status === "matched" ? replay.verified_purpose_count > 0 : replay.verified_purpose_count === 0) &&
-            ((replay.status !== "matched" && replay.status !== "no_current_purpose") || verifiedPurposePair)) {
+            ((replay.status !== "matched" && replay.status !== "no_current_purpose") || verifiedPurposePair);
+        if (validReplay) {
           const verifiedCount = replay.status === "matched" ? "（" + replay.verified_purpose_count + "件）" : "";
           rows.push("", "委任目的J/Mと現行監査の読み取り専用照合　" + replayLabels[replay.status] + verifiedCount);
+        }
+        const repair = report.goal_purpose_repair;
+        const repairStores = goalPurposeRepairStoreLines(repair?.stores);
+        const repairBinding = goalPurposeRepairBinding({
+          backup_id: backupId, manifest_sha256: report.manifest_sha256, repair_sha256: repair?.repair_sha256
+        });
+        if (validReplay && replay.status === "matched" && verifiedPurposePair && repairStores && repairBinding) {
+          state.recoveryGoalPurposeRepair = repairBinding;
+          const request = byId("request-goal-purpose-repair");
+          request.hidden = false;
+          request.disabled = false;
+          rows.push("", "委任目的J/Mのオフライン復旧範囲", ...repairStores,
+            "復旧計画 SHA-256 " + repairBinding.repair_sha256);
         }
         setText("recovery-restore-plan-status", "読み取り専用の計画です。Gateway停止状態と一括復元の整合性は未確認です。");
         setText("recovery-restore-plan-details", rows.join("\\n"));
@@ -6057,11 +6110,44 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           backupId === byId("recovery-backup-id").value.trim() && token === byId("recovery-token").value.trim();
         try {
           const report = await postJson("/recovery/restore-plan", token, { backup_id: backupId });
-          if (current() && !renderRecoveryRestorePlan(report)) {
+          if (current() && !renderRecoveryRestorePlan(report, backupId)) {
             setText("recovery-restore-plan-status", "包括復元計画を確認できません。対象バックアップを確認してください。");
           }
         } catch {
           if (current()) setText("recovery-restore-plan-status", "包括復元計画を取得できません。接続と保守用トークンを確認してください。");
+        }
+      }
+
+      async function requestGoalPurposeRepair() {
+        const request = byId("request-goal-purpose-repair");
+        const binding = state.recoveryGoalPurposeRepair;
+        const token = byId("recovery-token").value.trim();
+        if (request.disabled || !binding || !token || binding.backup_id !== byId("recovery-backup-id").value.trim()) return;
+        request.disabled = true;
+        const current = () => state.recoveryGoalPurposeRepair === binding && byId("recovery-token").value.trim() === token;
+        setText("goal-purpose-repair-request-status", "最終承認を申請中です。");
+        try {
+          const response = await fetch("/recovery/goal-purpose-repair", {
+            method: "POST", cache: "no-store",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
+            body: JSON.stringify(binding)
+          });
+          if (!current()) return;
+          if (response.status !== 202 || !hasNoStore(response)) throw new Error("repair review unavailable");
+          const result = await response.json();
+          if (!current()) return;
+          if (result?.status !== "approval_required" || result.executed !== false ||
+              typeof result.command_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(result.command_id)) {
+            throw new Error("repair review unavailable");
+          }
+          state.recoveryGoalPurposeRepair = null;
+          setText("goal-purpose-repair-request-status", "申請しました。承認画面で復旧範囲を確認してください。");
+          setActiveScreen("approvals");
+          if (byId("approval-token").value.trim()) await loadApprovals();
+        } catch {
+          if (!current()) return;
+          setText("goal-purpose-repair-request-status", "承認を申請できません。バックアップの復元計画を確認してください。");
+          request.disabled = false;
         }
       }
 
@@ -6517,12 +6603,45 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      function clearGoalPurposeRepairHandoff() {
+        state.goalPurposeRepairHandoffGeneration += 1;
+        byId("goal-purpose-repair-handoff").hidden = true;
+        setText("goal-purpose-repair-command", "");
+        setText("goal-purpose-repair-expiry", "");
+        setText("goal-purpose-repair-handoff-code", "");
+      }
+
+      function showGoalPurposeRepairHandoff(result, reviewed) {
+        const binding = goalPurposeRepairBinding(result);
+        if (!binding || !reviewed || result.status !== "offline_goal_purpose_repair_prepared" ||
+            result.approval !== "approve" || result.executed !== false ||
+            binding.backup_id !== reviewed.backup_id || binding.manifest_sha256 !== reviewed.manifest_sha256 ||
+            binding.repair_sha256 !== reviewed.repair_sha256 ||
+            typeof result.handoff_code !== "string" || !/^[a-f0-9]{64}$/.test(result.handoff_code) ||
+            !Number.isSafeInteger(result.expires_at_ms) || result.expires_at_ms <= Date.now()) return false;
+        setText("goal-purpose-repair-command", "recovery-apply-goal-purpose --backup-id " + binding.backup_id +
+          " --manifest-sha256 " + binding.manifest_sha256 + " --repair-sha256 " + binding.repair_sha256);
+        setText("goal-purpose-repair-expiry", "コードの期限 " + formatDate(result.expires_at_ms));
+        setText("goal-purpose-repair-handoff-code", result.handoff_code);
+        byId("goal-purpose-repair-handoff").hidden = false;
+        return true;
+      }
+
       async function submitApproval(commandId, verdict, approvalToken) {
         const token = byId("approval-token").value.trim();
-        const adoptionCard = Array.from(document.querySelectorAll(".queue-item[data-command][data-goal-purpose-adoption]"))
+        const card = Array.from(document.querySelectorAll(".queue-item[data-command]"))
           .find(function (item) { return item.getAttribute("data-command") === commandId; });
+        const adoptionCard = card?.getAttribute("data-goal-purpose-adoption") != null;
+        const repairCard = card?.getAttribute("data-goal-purpose-repair") != null;
+        const reviewedRepair = repairCard ? state.goalPurposeRepairReviews[commandId] : null;
+        if (repairCard) {
+          clearGoalPurposeRepairHandoff();
+          if (verdict === "approve" && !reviewedRepair) throw new Error("復旧範囲を確認してから承認してください。");
+        }
+        const handoffGeneration = state.goalPurposeRepairHandoffGeneration;
         const response = await fetch("/approval/" + encodeURIComponent(commandId), {
           method: "POST",
+          cache: "no-store",
           headers: {
             "content-type": "application/json",
             ...authHeaders(token)
@@ -6536,6 +6655,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           })
         });
         if (!response.ok) {
+          if (repairCard) throw new Error("復旧の承認を確認できません。承認画面を再読み込みしてください。");
           const text = await response.text();
           throw new Error("approval failed: HTTP " + response.status + " " + text);
         }
@@ -6545,6 +6665,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.textContent = result?.status === "goal_purpose_adoption_committed" && result.version === 1
             ? "委任目的を登録しました。Tasksで「委任目的を読込」を選んでください。"
             : "今回の操作で委任目的の登録は確認できませんでした。";
+        }
+        if (repairCard && verdict === "approve") {
+          if (!hasNoStore(response)) throw new Error("復旧コードを安全に表示できませんでした。");
+          const result = (await response.json().catch(function () { return null; }))?.result;
+          if (handoffGeneration === state.goalPurposeRepairHandoffGeneration && token === byId("approval-token").value.trim() &&
+              !showGoalPurposeRepairHandoff(result, reviewedRepair)) {
+            throw new Error("復旧コードを照合できませんでした。");
+          }
         }
         await loadApprovals();
       }
@@ -6575,6 +6703,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const card = Array.from(document.querySelectorAll(".queue-item[data-command]"))
           .find(function (item) { return item.getAttribute("data-command") === commandId; });
         if (!card) throw new Error("approval is no longer shown; reload pending approvals");
+        const repairCard = card.getAttribute("data-goal-purpose-repair") != null;
+        if (repairCard) delete state.goalPurposeRepairReviews[commandId];
         const view = card.querySelector("[data-content-review-view]");
         const approve = card.querySelector('[data-verdict="approve"]');
         if (!view || !approve) throw new Error("content review panel is unavailable");
@@ -6582,15 +6712,44 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         approve.disabled = true;
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
           method: "POST",
+          cache: "no-store",
           headers: authHeaders(token)
         });
         if (!response.ok) {
+          if (repairCard) throw new Error("復旧範囲を取得できません。");
           const text = await response.text();
           throw new Error("content review failed: HTTP " + response.status + " " + text);
         }
         const review = await response.json();
         if ((card.getAttribute("data-goal-purpose-adoption") !== null) !== (review.kind === "goal_purpose_adoption")) {
           throw new Error("委任目的の登録対象と審査内容が一致しません。");
+        }
+        if (repairCard !== (review.kind === "goal_purpose_repair")) throw new Error("復旧対象と審査内容が一致しません。");
+        if (repairCard) {
+          const binding = goalPurposeRepairBinding(review);
+          const scope = goalPurposeRepairStoreLines(review.stores);
+          if (review.command_id !== commandId || review.operation !== "recovery.restore" ||
+              review.used_for_authority !== false || review.may_execute !== false || !hasNoStore(response) ||
+              typeof review.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(review.command_digest) ||
+              typeof review.review_digest !== "string" || !/^[a-f0-9]{64}$/.test(review.review_digest) ||
+              !binding || !scope || !card.isConnected || token !== byId("approval-token").value.trim()) {
+            throw new Error("復旧範囲を照合できませんでした。");
+          }
+          const details = document.createElement("pre");
+          details.textContent = [
+            "委任目的J/Mのオフライン復旧",
+            "バックアップ " + binding.backup_id,
+            "マニフェスト SHA-256 " + binding.manifest_sha256,
+            "復旧計画 SHA-256 " + binding.repair_sha256,
+            ...scope,
+            "承認すると、Gateway停止後の復旧に使う一回限りのコードを発行します。"
+          ].join("\\n");
+          view.replaceChildren(details);
+          state.goalPurposeRepairReviews[commandId] = binding;
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "復旧範囲を再確認";
+          return;
         }
         if (review.kind === "mcp_call") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
@@ -10124,6 +10283,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("reconcile-runtime-results").addEventListener("click", function () { void reconcileRuntimeResults(); });
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
+      byId("approval-token").addEventListener("input", clearGoalPurposeRepairHandoff);
+      byId("hide-goal-purpose-repair-handoff").addEventListener("click", clearGoalPurposeRepairHandoff);
+      window.addEventListener("pagehide", clearGoalPurposeRepairHandoff);
       byId("load-owner-task-goals").addEventListener("click", function () {
         loadOwnerTaskGoals().catch(function (error) {
           const status = byId("owner-task-status");
@@ -10271,6 +10433,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       });
       byId("load-recovery").addEventListener("click", loadRecovery);
       byId("inspect-recovery-restore-plan").addEventListener("click", inspectRecoveryRestorePlan);
+      byId("request-goal-purpose-repair").addEventListener("click", requestGoalPurposeRepair);
       byId("inspect-recovery-ledgers").addEventListener("click", function () {
         inspectRecoveryLedgers().catch(function () {
           setText("recovery-inspection-status", "取得失敗");

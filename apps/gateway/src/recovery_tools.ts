@@ -21,6 +21,27 @@ export const RECOVERY_TOOL_NAMES = [
 
 export type RecoveryToolName = (typeof RECOVERY_TOOL_NAMES)[number];
 
+export interface OfflineGoalPurposeRepairSelector {
+  readonly backup_id: string;
+  readonly manifest_sha256: string;
+  readonly repair_sha256: string;
+}
+
+export function readOfflineGoalPurposeRepairSelector(input: unknown): OfflineGoalPurposeRepairSelector | null {
+  if (!isRecord(input) || Object.keys(input).length !== 3) return null;
+  const { backup_id, manifest_sha256, repair_sha256 } = input;
+  if (typeof backup_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backup_id) || backup_id === "latest" ||
+      typeof manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(manifest_sha256) ||
+      typeof repair_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(repair_sha256)) return null;
+  return { backup_id, manifest_sha256, repair_sha256 };
+}
+
+export function readOfflineGoalPurposeRepairCommand(input: unknown): OfflineGoalPurposeRepairSelector | null {
+  if (!isRecord(input)) return null;
+  const { scope_kind, confirm, ...selector } = input;
+  return scope_kind === "offline_goal_purpose" && confirm === "RESTORE" ? readOfflineGoalPurposeRepairSelector(selector) : null;
+}
+
 const CANONICAL_STORE_RESTORE_CONSUMERS: Record<RestorableCanonicalStateStoreKey, readonly string[]> = {
   j_control: [],
   m_state: [],
@@ -123,6 +144,7 @@ export function createRecoveryMutationTools(
       context?: Pick<ToolContext, "command_id">,
     ) => boolean;
     readonly factoryResetFence?: (commandId: string) => FactoryResetRecoveryFence;
+    readonly prepareGoalPurposeRepair?: (selector: OfflineGoalPurposeRepairSelector, context: ToolContext) => Promise<void>;
   } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
@@ -131,6 +153,12 @@ export function createRecoveryMutationTools(
     description: "Restore one explicitly selected canonical state store from a local recovery backup after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
     async invoke(raw, ctx?: ToolContext) {
+      if (isRecord(raw) && raw.scope_kind === "offline_goal_purpose") {
+        const selector = readOfflineGoalPurposeRepairCommand(raw);
+        if (!selector || !ctx || !options.prepareGoalPurposeRepair) throw new Error("offline_goal_purpose_repair_not_admitted");
+        await options.prepareGoalPurposeRepair(selector, ctx);
+        return { status: "prepared", action: "prepare_goal_purpose_repair", files_changed: false };
+      }
       const args = normalizeRecoveryMutationArguments("recovery.restore", raw, { acceptArchiveBinding: true });
       // A package restore rewrites persistent audit and runtime files whose
       // consumers remain loaded in this Gateway process. Keep it unavailable

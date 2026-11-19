@@ -61,12 +61,35 @@ export class EmergencyStopStateStore {
   }
 
   load(): EmergencyStopDurableState {
-    const row = this.db.prepare("SELECT state_json, digest FROM emergency_stop_state WHERE id=1").get() as
-      { state_json: string; digest: string } | undefined;
-    if (!row) return structuredClone(INITIAL_STATE);
-    const raw: unknown = JSON.parse(row.state_json);
-    if (digest(raw) !== row.digest) throw new Error("emergency_stop_state_integrity_failed");
-    return parseDurableState(raw);
+    return readDurableState(this.db);
+  }
+
+  static permitsOfflineRepair(env: NodeJS.ProcessEnv, approvedAtMs: number): boolean {
+    let db: DatabaseType | undefined;
+    try {
+      const root = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
+      const privateRoot = join(root, "private-state");
+      const directory = join(privateRoot, "safety-control");
+      for (const dir of [root, privateRoot, directory]) {
+        if (!lstatSync(dir).isDirectory()) return false;
+      }
+      const filepath = join(directory, "emergency-stop.sqlite");
+      const file = lstatSync(filepath, { bigint: true });
+      if (!file.isFile() || file.nlink !== 1n || emergencyStopHasSidecars(filepath)) return false;
+      db = new DatabaseSync(filepath, { readOnly: true });
+      db.exec("PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; PRAGMA query_only=ON; PRAGMA trusted_schema=OFF");
+      const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
+      if (mode?.journal_mode !== "delete") return false;
+      const state = readDurableState(db);
+      const current = lstatSync(filepath, { bigint: true });
+      return !state.active && (state.last_clear?.occurred_at_ms ?? 0) < approvedAtMs &&
+        current.isFile() && current.nlink === 1n && current.dev === file.dev && current.ino === file.ino &&
+        current.mtimeNs === file.mtimeNs && !emergencyStopHasSidecars(filepath);
+    } catch {
+      return false;
+    } finally {
+      db?.close();
+    }
   }
 
   activate(input: { control_event_id: string; actor: string; occurred_at_ms: number }): EmergencyStopDurableState {
@@ -116,6 +139,22 @@ export class EmergencyStopStateStore {
       throw error;
     }
   }
+}
+
+function readDurableState(db: DatabaseType): EmergencyStopDurableState {
+  const row = db.prepare("SELECT state_json, digest FROM emergency_stop_state WHERE id=1").get() as
+    { state_json: string; digest: string } | undefined;
+  if (!row) return structuredClone(INITIAL_STATE);
+  const raw: unknown = JSON.parse(row.state_json);
+  if (digest(raw) !== row.digest) throw new Error("emergency_stop_state_integrity_failed");
+  return parseDurableState(raw);
+}
+
+function emergencyStopHasSidecars(filepath: string): boolean {
+  return ["-journal", "-wal", "-shm"].some((suffix) => {
+    try { lstatSync(filepath + suffix); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return false; }
+  });
 }
 
 function digest(value: unknown): string {

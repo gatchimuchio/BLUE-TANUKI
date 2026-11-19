@@ -674,12 +674,13 @@ describe("Windows product installer package", () => {
     }
   }, 25_000);
 
-  it("runs recovery inspection and reconciliation from the product launcher without setup or resident startup", () => {
+  it("runs recovery inspection, reconciliation, and offline goal repair from the product launcher without resident startup", () => {
     const command = findPowerShell();
     if (process.platform !== "win32" || !command) {
       const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
       expect(launcher).toContain('"recovery-inspect" { Run-RecoveryDiagnostic "--recovery-inspect" }');
       expect(launcher).toContain('"recovery-reconcile" { Run-RecoveryDiagnostic "--recovery-reconcile" }');
+      expect(launcher).toContain('"recovery-apply-goal-purpose" { Run-RecoveryDiagnostic "--recovery-apply-goal-purpose" }');
       return;
     }
     const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-product-recovery-inspect-"));
@@ -724,6 +725,15 @@ describe("Windows product installer package", () => {
         surface: "offline_recovery_restore_plan", status: "offline_lease_unverified",
         offline_lease_status: "owner_state_unavailable", offline_lease_verified: false, may_execute: false,
       });
+      const repairArguments = ["recovery-apply-goal-purpose", "--backup-id", "absent-backup-id", "--manifest-sha256",
+        "1".repeat(64), "--repair-sha256", "2".repeat(64), "--json"];
+      const syntheticCode = "a".repeat(64);
+      const unowned = spawnSync(command, powerShellFileArgs(command, launcher, repairArguments), {
+        cwd: temp, env: { ...env, BLUE_TANUKI_NO_PAUSE: "1" }, input: `${syntheticCode}\n`, encoding: "utf8", timeout: 10_000,
+      });
+      expect(unowned.status, unowned.stderr).toBe(2);
+      expect(JSON.parse(unowned.stdout)).toEqual({ status: "owner_state_unavailable" });
+      expect(unowned.stdout + unowned.stderr).not.toContain(syntheticCode);
       writeFileSync(join(dist, "main.js"), "console.log(JSON.stringify(process.argv.slice(2)))\n", "utf8");
       const reconcile = runPowerShellFile(command, launcher, ["recovery-reconcile", "--json"], temp, env);
       expect(reconcile.status, reconcile.stderr).toBe(0);

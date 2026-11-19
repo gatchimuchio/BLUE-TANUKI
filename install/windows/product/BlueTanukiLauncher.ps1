@@ -1066,6 +1066,7 @@ switch ($Command.ToLowerInvariant()) {
   "doctor-open" { Run-Doctor $true }
   "recovery-inspect" { Run-RecoveryDiagnostic "--recovery-inspect" }
   "recovery-reconcile" { Run-RecoveryDiagnostic "--recovery-reconcile" }
+  "recovery-apply-goal-purpose" { Run-RecoveryDiagnostic "--recovery-apply-goal-purpose" }
   "logs" { Open-Logs }
   "resident-logs" { Open-Logs }
   "autostart-enable" { Enable-Autostart }
@@ -1075,7 +1076,7 @@ switch ($Command.ToLowerInvariant()) {
   "autostart-status" { Show-AutostartStatus }
   "resident-autostart-status" { Show-AutostartStatus }
   "help" {
-    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|recovery-inspect|recovery-reconcile|logs|autostart-enable|autostart-disable|autostart-status|help]"
+    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|recovery-inspect|recovery-reconcile|recovery-apply-goal-purpose|logs|autostart-enable|autostart-disable|autostart-status|help]"
     Write-Host "Autostart is opt-in only and is not enabled by install/setup."
   }
   default { Fail "unknown command: $Command" }

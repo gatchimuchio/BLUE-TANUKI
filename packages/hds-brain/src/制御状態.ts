@@ -13,13 +13,16 @@ import {
   resolvePrivateStateDatabasePath,
   PersistenceStoreError,
   sqliteErrorCode,
+  standaloneRecoveryDatabaseUrl,
   unavailableLedgerInspection,
+  verifyStandaloneRecoverySchema,
   type JMemoryApprovalReader,
   type JMemoryApprovalReference,
   type PersistenceLedgerInspection,
   type PersistenceFailureReason,
   type PersistenceHealth,
   type PersistenceRecoveryResult,
+  type StandaloneRecoverySchema,
 } from "./保存取引.js";
 import { MemoryUpdateLedger } from "./記憶更新.js";
 
@@ -988,6 +991,7 @@ export function rebuildJControlProjection(options: {
 export function inspectJControlRecoveryLedger(options: {
   readonly private_state_root: string;
   readonly database_path: string;
+  readonly standalone_schema?: boolean;
 }): PersistenceLedgerInspection {
   let database: DatabaseSyncType | undefined;
   try {
@@ -1003,7 +1007,7 @@ export function inspectJControlRecoveryLedger(options: {
     if (hasSQLiteRecoverySidecars(databasePath)) {
       return unavailableLedgerInspection("J", "store_unavailable");
     }
-    database = new DatabaseSync(databasePath, {
+    database = new DatabaseSync(options.standalone_schema ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,
@@ -1013,7 +1017,9 @@ export function inspectJControlRecoveryLedger(options: {
     if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
       return unavailableLedgerInspection("J", "store_unavailable");
     }
-    if (!verifySupportedJTableSchema(database) || !verifyNoJRecoveryTriggers(database)) {
+    if (!verifySupportedJTableSchema(database) || !verifyNoJRecoveryTriggers(database) ||
+        (options.standalone_schema && !verifyStandaloneRecoverySchema(database,
+          verifyJTableSchema(database) ? J_STANDALONE_SCHEMA : J_LEGACY_STANDALONE_SCHEMA))) {
       return unavailableLedgerInspection("J", "schema_mismatch");
     }
 
@@ -1076,6 +1082,50 @@ export function inspectJControlRecoveryLedger(options: {
   }
 }
 
+const J_COMMIT_OUTBOX_DEFINITION = `CREATE TABLE j_commit_outbox (
+  update_id TEXT PRIMARY KEY,
+  content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+  commit_json TEXT NOT NULL
+)`;
+
+const J_LEGACY_STANDALONE_SCHEMA: StandaloneRecoverySchema = {
+  j_schema: [`CREATE TABLE j_schema (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    schema_version INTEGER NOT NULL
+  )`, 0],
+  j_events: [`CREATE TABLE j_events (
+    event_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL UNIQUE CHECK (revision > 0),
+    previous_event_digest TEXT NOT NULL,
+    event_digest TEXT NOT NULL CHECK (length(event_digest) = 64),
+    event_payload_json TEXT NOT NULL
+  )`, 2],
+  j_state: [`CREATE TABLE j_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    event_digest TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ready', 'memory_commit_pending', 'blocked')),
+    active_update_id TEXT
+  )`, 0],
+  j_pending: [`CREATE TABLE j_pending (
+    update_id TEXT PRIMARY KEY,
+    j_event_id TEXT NOT NULL UNIQUE,
+    content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+    expected_version INTEGER NOT NULL CHECK (expected_version >= 0),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'receipt_confirmed', 'blocked')),
+    receipt_json TEXT,
+    block_reason TEXT,
+    CHECK ((status = 'pending' AND receipt_json IS NULL AND block_reason IS NULL) OR
+           (status = 'receipt_confirmed' AND receipt_json IS NOT NULL AND block_reason IS NULL) OR
+           (status = 'blocked' AND receipt_json IS NULL AND block_reason IN ('m_receipt_mismatch', 'm_update_rejected')))
+  )`, 2],
+};
+
+const J_STANDALONE_SCHEMA: StandaloneRecoverySchema = {
+  ...J_LEGACY_STANDALONE_SCHEMA,
+  j_commit_outbox: [J_COMMIT_OUTBOX_DEFINITION, 1],
+};
+
 function initializeJStorageSchema(database: DatabaseSyncType): void {
   const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'j_*' ORDER BY name")
     .all().map((row) => stringValue(row.name)).filter((name): name is string => name !== null);
@@ -1092,7 +1142,7 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
       const lockedInspection = inspectJDatabase(database);
       if (!lockedInspection.ok) throw new PersistenceStoreError("J", lockedInspection.reason);
       if (!verifyNoJRecoveryTriggers(database)) throw new PersistenceStoreError("J", "schema_mismatch");
-      database.exec("CREATE TABLE j_commit_outbox (update_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), commit_json TEXT NOT NULL)");
+      database.exec(J_COMMIT_OUTBOX_DEFINITION);
       database.prepare("UPDATE j_schema SET schema_version = ? WHERE singleton = 1").run(J_STORAGE_SCHEMA_VERSION);
       database.exec("COMMIT");
     } catch (error) {
@@ -1107,42 +1157,8 @@ function initializeJStorageSchema(database: DatabaseSyncType): void {
 
   database.exec("BEGIN EXCLUSIVE");
   try {
+    for (const [definition] of Object.values(J_STANDALONE_SCHEMA)) database.exec(definition);
     database.exec(`
-      CREATE TABLE j_schema (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        schema_version INTEGER NOT NULL
-      );
-      CREATE TABLE j_events (
-        event_id TEXT PRIMARY KEY,
-        revision INTEGER NOT NULL UNIQUE CHECK (revision > 0),
-        previous_event_digest TEXT NOT NULL,
-        event_digest TEXT NOT NULL CHECK (length(event_digest) = 64),
-        event_payload_json TEXT NOT NULL
-      );
-      CREATE TABLE j_state (
-        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        revision INTEGER NOT NULL CHECK (revision >= 0),
-        event_digest TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('ready', 'memory_commit_pending', 'blocked')),
-        active_update_id TEXT
-      );
-      CREATE TABLE j_pending (
-        update_id TEXT PRIMARY KEY,
-        j_event_id TEXT NOT NULL UNIQUE,
-        content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
-        expected_version INTEGER NOT NULL CHECK (expected_version >= 0),
-        status TEXT NOT NULL CHECK (status IN ('pending', 'receipt_confirmed', 'blocked')),
-        receipt_json TEXT,
-        block_reason TEXT,
-        CHECK ((status = 'pending' AND receipt_json IS NULL AND block_reason IS NULL) OR
-               (status = 'receipt_confirmed' AND receipt_json IS NOT NULL AND block_reason IS NULL) OR
-               (status = 'blocked' AND receipt_json IS NULL AND block_reason IN ('m_receipt_mismatch', 'm_update_rejected')))
-      );
-      CREATE TABLE j_commit_outbox (
-        update_id TEXT PRIMARY KEY,
-        content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
-        commit_json TEXT NOT NULL
-      );
       INSERT INTO j_schema (singleton, schema_version) VALUES (1, ${J_STORAGE_SCHEMA_VERSION});
       INSERT INTO j_state (singleton, revision, event_digest, status, active_update_id)
         VALUES (1, 0, '${GENESIS_EVENT_DIGEST}', 'ready', NULL);

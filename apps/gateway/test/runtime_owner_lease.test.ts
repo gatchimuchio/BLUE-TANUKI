@@ -1,15 +1,18 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyUnderOfflineGoalPurposeRepairLock,
   GatewayRuntimeOwnerLease,
   inspectRuntimeRecoveryFence,
   observeUnderOfflineGatewayOwnerLock,
   reconcileRuntimeRecoveryFence,
+  type OfflineGoalPurposeRepairBinding,
   type RuntimeRecoveryFenceEvidence,
 } from "../src/runtime_owner_lease.js";
 
@@ -25,6 +28,14 @@ const recoveryEvidence: RuntimeRecoveryFenceEvidence = {
 const verification = { before_sha256: "3".repeat(64), after_sha256: "4".repeat(64) };
 const verifiableEvidence = { ...recoveryEvidence, verification };
 const expectedBackup = { backup_id: recoveryEvidence.backup_id, manifest_sha256: recoveryEvidence.manifest_sha256 };
+const fixtureHandoff = "f".repeat(64);
+const goalPurposeRepair = {
+  backup_id: "fixture-goal-purpose-backup", manifest_sha256: "8".repeat(64), repair_sha256: "a".repeat(64),
+  handoff_digest: createHash("sha256").update(fixtureHandoff).digest("hex"),
+};
+function goalPurposeRepairBinding(): OfflineGoalPurposeRepairBinding {
+  return { ...goalPurposeRepair, command_digest: "9".repeat(64), verification, expires_at_ms: Date.now() + 60_000 };
+}
 function temporaryStateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-"));
   roots.push(root);
@@ -43,6 +54,152 @@ afterEach(() => {
 });
 
 describe("Gateway runtime owner lease", () => {
+  it("consumes exactly one goal-purpose handoff before writing and settles it under the existing exclusive owner lock", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const ownerStatePath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    let observed = verification.before_sha256;
+    let applications = 0;
+    const prepare = vi.fn(async (reviewed: OfflineGoalPurposeRepairBinding) => {
+      expect(reviewed).toEqual(binding);
+      return {
+        apply: async () => {
+          expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
+          expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", operation: "recovery.goal_purpose_repair",
+            command_digest: binding.command_digest, backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256,
+            repair_sha256: binding.repair_sha256 });
+          const db = new DatabaseSync(ownerStatePath, { readOnly: true });
+          try {
+            expect(db.prepare("SELECT name FROM sqlite_schema WHERE name='gateway_goal_purpose_repair_authorization'").get())
+              .toBeUndefined();
+          } finally {
+            db.close();
+          }
+          applications += 1;
+          observed = verification.after_sha256;
+        },
+        observe: async () => observed,
+      };
+    });
+    try {
+      lease.prepareOfflineGoalPurposeRepair(binding);
+      expect(() => lease.prepareOfflineGoalPurposeRepair({ ...binding, repair_sha256: "b".repeat(64) }))
+        .toThrow("gateway_goal_purpose_repair_authorization_pending");
+      const busy = await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, { prepare });
+      expect(["owner_lock_busy", "owner_lock_sidecars_present"]).toContain(busy);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(readFileSync(ownerStatePath).includes(Buffer.from(fixtureHandoff))).toBe(false);
+    } finally {
+      lease.close();
+    }
+    for (const selector of [{ ...goalPurposeRepair, handoff_digest: "0".repeat(64) },
+      { ...goalPurposeRepair, backup_id: "different-backup" }, { ...goalPurposeRepair, manifest_sha256: "b".repeat(64) },
+      { ...goalPurposeRepair, repair_sha256: "b".repeat(64) }]) {
+      expect(await applyUnderOfflineGoalPurposeRepairLock(env, selector, { prepare })).toBe("authorization_required");
+    }
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, { prepare })).toBe("applied");
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, { prepare })).toBe("authorization_required");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(applications).toBe(1);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    const db = new DatabaseSync(ownerStatePath, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT generation,execution_epoch FROM gateway_owner_state").get()).toEqual({
+        generation: lease.generation, execution_epoch: lease.executionEpoch,
+      });
+      expect(db.prepare("SELECT * FROM gateway_recovery_settlements").all()).toEqual([{
+        generation: lease.generation, operation: "recovery.goal_purpose_repair", command_digest: binding.command_digest,
+        backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256, repair_sha256: binding.repair_sha256,
+        observed_sha256: verification.after_sha256, status: "postconditions_matched",
+      }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves state on rejected preflight or expiry and invalidates the handoff on a fresh owner generation", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try { lease.prepareOfflineGoalPurposeRepair(binding); } finally { lease.close(); }
+    const apply = vi.fn(async () => {});
+    const beforeMismatch = { prepare: async () => ({ apply, observe: async () => "0".repeat(64) }) };
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, beforeMismatch)).toBe("preflight_changed");
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const expiryAtClaim = { prepare: async () => ({ apply, observe: async () => {
+        clock.mockReturnValue(binding.expires_at_ms);
+        return verification.before_sha256;
+      } }) };
+      expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, expiryAtClaim)).toBe("authorization_expired");
+    } finally {
+      clock.mockRestore();
+    }
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    expect(apply).not.toHaveBeenCalled();
+    const restarted = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(restarted.generation).toBe(lease.generation + 1);
+      expect(restarted.executionEpoch).not.toBe(lease.executionEpoch);
+    } finally {
+      restarted.close();
+    }
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, beforeMismatch)).toBe("authorization_required");
+  });
+
+  it("revokes the live handoff without settling another operation or advancing the owner generation", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      try { lease.prepareOfflineGoalPurposeRepair({ ...goalPurposeRepairBinding(), expires_at_ms: now + 300_000 }); }
+      finally { clock.mockRestore(); }
+      lease.revokePreparedOfflineGoalPurposeRepair();
+      expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+      lease.beginRecoveryMutation(verifiableEvidence);
+      lease.revokePreparedOfflineGoalPurposeRepair();
+      expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", ...recoveryEvidence });
+      lease.finishRecoveryMutation(verifiableEvidence);
+    } finally {
+      lease.close();
+    }
+    const prepare = vi.fn(async () => null);
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, { prepare })).toBe("authorization_required");
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("retains an interrupted goal-purpose fence until reconciliation separately observes an exact terminal state", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try { lease.prepareOfflineGoalPurposeRepair(binding); } finally { lease.close(); }
+    let observed = verification.before_sha256;
+    const apply = vi.fn(async () => {
+      observed = "0".repeat(64);
+      throw new Error("synthetic interruption after writing one store");
+    });
+    const callbacks = { prepare: async () => ({ apply, observe: async () => observed }) };
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("outcome_unknown");
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_recovery_pending");
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("recovery_pending");
+    expect(apply).toHaveBeenCalledTimes(1);
+    const observe = vi.fn(async (evidence: RuntimeRecoveryFenceEvidence) => {
+      expect(evidence).toEqual({ operation: "recovery.goal_purpose_repair", command_digest: binding.command_digest,
+        backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256, repair_sha256: binding.repair_sha256,
+        verification });
+      return observed;
+    });
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe)).toEqual({ status: "unresolved" });
+    expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", repair_sha256: binding.repair_sha256 });
+    observed = verification.after_sha256;
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe)).toEqual({ status: "postconditions_matched" });
+    expect(observe).toHaveBeenCalledTimes(3);
+    GatewayRuntimeOwnerLease.fromEnvironment(env).close();
+  });
+
   it("holds the existing owner lock across an asynchronous offline observation without advancing the generation", async () => {
     const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
     const directory = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime");

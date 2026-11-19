@@ -100,6 +100,8 @@ import type {
   WebChatOwnerTaskSubmissionStore,
   WebChatOptions,
   WebChatRateLimits,
+  WebChatGoalPurposeRepairRequest,
+  WebChatGoalPurposeRepairStore,
   WebChatRecoverySurface,
   WebChatResumeContext,
   WebChatRuntimeSurface,
@@ -191,6 +193,28 @@ function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record
 }
 
 const RESUME_GLOBAL_KEY = "*";
+
+function goalPurposeRepairBinding(value: Record<string, unknown>): WebChatGoalPurposeRepairRequest | null {
+  const { backup_id, manifest_sha256, repair_sha256 } = value;
+  if (typeof backup_id !== "string" || backup_id === "latest" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backup_id) ||
+      typeof manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(manifest_sha256) ||
+      typeof repair_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(repair_sha256)) return null;
+  return { backup_id, manifest_sha256, repair_sha256 };
+}
+
+function goalPurposeRepairStores(value: unknown): readonly WebChatGoalPurposeRepairStore[] | null {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const [j, m] = value;
+  const allowed = ["missing", "different", "matched"];
+  if (j?.store_key !== "goal_purpose_j_control" || m?.store_key !== "goal_purpose_m_state" ||
+      !allowed.includes(j?.target_state) || !allowed.includes(m?.target_state) ||
+      (j.target_state === "matched" && m.target_state === "matched")) return null;
+  return [
+    { store_key: j.store_key, target_state: j.target_state },
+    { store_key: m.store_key, target_state: m.target_state },
+  ];
+}
+
 const AOTANU_ASSET_FILENAMES_SET = new Set(AOTANU_ASSET_FILENAMES);
 const AOTANU_ASSET_ROOT = findAotanuAssetRoot();
 
@@ -2862,6 +2886,23 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
+      if (content.kind === "goal_purpose_repair") {
+        const binding = goalPurposeRepairBinding({ ...content });
+        const stores = goalPurposeRepairStores(content.stores);
+        if (!binding || !stores || content.command_id !== command_id || content.operation !== "recovery.restore" ||
+            typeof content.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(content.command_digest) ||
+            typeof content.review_digest !== "string" || !/^[a-f0-9]{64}$/.test(content.review_digest) ||
+            content.used_for_authority !== false || content.may_execute !== false) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+          return;
+        }
+        content = {
+          kind: "goal_purpose_repair", operation: "recovery.restore", command_id,
+          command_digest: content.command_digest, review_digest: content.review_digest,
+          ...binding, stores, used_for_authority: false, may_execute: false,
+        };
+      }
       res.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -3109,6 +3150,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const content_review_digest = typeof body?.content_review_digest === "string"
       ? body.content_review_digest
       : undefined;
+    const requiresApprovalEndpoint = this.opts.approval?.requiresApprovalEndpoint?.(approval_id) === true;
+    let contentReviewValidated = false;
     if (verdict === "approve" && this.opts.approval?.validateContentReview) {
       let review: WebChatApprovalContentReviewValidation;
       try {
@@ -3126,6 +3169,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
         return;
       }
+      contentReviewValidated = review === "valid";
     }
     if (!(await this.consumeResumeApprovalToken(approval_id, body, res))) return;
 
@@ -3139,6 +3183,30 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ...(content_review_digest ? { content_review_digest } : {}),
         approval: readResumeApprovalOptions(body),
       });
+      if (result !== null && typeof result === "object" &&
+          ("handoff_code" in result || ("status" in result && result.status === "offline_goal_purpose_repair_prepared"))) {
+        const candidate = result as Record<string, unknown>;
+        const binding = goalPurposeRepairBinding(candidate);
+        if (verdict !== "approve" || !requiresApprovalEndpoint || !contentReviewValidated ||
+            !/^[a-f0-9]{64}$/.test(content_review_digest ?? "") ||
+            !binding || candidate.status !== "offline_goal_purpose_repair_prepared" ||
+            candidate.approval !== "approve" || candidate.executed !== false ||
+            typeof candidate.handoff_code !== "string" || !/^[a-f0-9]{64}$/.test(candidate.handoff_code) ||
+            typeof candidate.expires_at_ms !== "number" || !Number.isSafeInteger(candidate.expires_at_ms) ||
+            candidate.expires_at_ms <= 0) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "offline_goal_purpose_repair_handoff_unavailable" }));
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff",
+        });
+        res.end(JSON.stringify({ ok: true, result: {
+          approval: "approve", executed: false, status: "offline_goal_purpose_repair_prepared", ...binding,
+          handoff_code: candidate.handoff_code, expires_at_ms: candidate.expires_at_ms,
+        } }));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, result }));
     } catch (e) {
@@ -3770,6 +3838,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           Number.isSafeInteger(replay.verified_purpose_count) &&
           (replay.status === "matched" ? replay.verified_purpose_count > 0 : replay.verified_purpose_count === 0) &&
           ((replay.status !== "matched" && replay.status !== "no_current_purpose") || verifiedPurposePair);
+        const repair = report.goal_purpose_repair;
+        const repairStores = goalPurposeRepairStores(repair?.stores);
+        const publishRepair = replayValid && replay.status === "matched" && verifiedPurposePair &&
+          repair && typeof repair.repair_sha256 === "string" && /^[a-f0-9]{64}$/.test(repair.repair_sha256) && repairStores;
         const response = JSON.stringify({
           surface: report.surface,
           schema_version: report.schema_version,
@@ -3781,6 +3853,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             store_key, archive_status, disposition,
           })),
           ...(replayValid ? { goal_purpose_replay: { status: replay.status, verified_purpose_count: replay.verified_purpose_count } } : {}),
+          ...(publishRepair ? { goal_purpose_repair: { repair_sha256: repair.repair_sha256, stores: repairStores } } : {}),
           offline_lease_verified: false,
           cross_store_atomic: false,
           used_for_authority: false,
@@ -3791,6 +3864,41 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       } catch {
         res.writeHead(500, headers);
         res.end(JSON.stringify({ error: "recovery_restore_plan_failed" }));
+      }
+      return;
+    }
+    if (route === "/recovery/goal-purpose-repair") {
+      const headers = { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff" };
+      if (req.method !== "POST") {
+        res.writeHead(405, headers);
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      if (!this.opts.recovery.prepareGoalPurposeRepair) {
+        res.writeHead(501, headers);
+        res.end(JSON.stringify({ error: "offline_goal_purpose_repair_not_configured" }));
+        return;
+      }
+      const body = await readJson(req, 1024, true).catch(() => null);
+      const binding = body && Object.keys(body).length === 3 ? goalPurposeRepairBinding(body) : null;
+      if (!binding) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ error: "invalid_offline_goal_purpose_repair_request" }));
+        return;
+      }
+      try {
+        const result = await this.opts.recovery.prepareGoalPurposeRepair(binding) as Record<string, unknown> | null;
+        if (result?.status !== "approval_required" || result.executed !== false || typeof result.command_id !== "string" ||
+            !/^[A-Za-z0-9_-]{1,128}$/.test(result.command_id)) {
+          res.writeHead(409, headers);
+          res.end(JSON.stringify({ error: "offline_goal_purpose_repair_unavailable" }));
+          return;
+        }
+        res.writeHead(202, headers);
+        res.end(JSON.stringify({ status: "approval_required", executed: false, command_id: result.command_id }));
+      } catch {
+        res.writeHead(503, headers);
+        res.end(JSON.stringify({ error: "offline_goal_purpose_repair_unavailable" }));
       }
       return;
     }

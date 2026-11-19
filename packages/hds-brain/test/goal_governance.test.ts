@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent, OperationPlan } from "@blue-tanuki/protocol";
@@ -16,6 +17,7 @@ const delegated = "goal_0000000000000001";
 const operational = "goal_0000000000000002";
 const subgoal = "goal_0000000000000003";
 const digest = (character: string): string => character.repeat(64);
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 function createConfig(): GoalGovernanceConfig {
   const events: GoalGovernanceEvent[] = [
@@ -535,6 +537,22 @@ describe("HDS goal governance consumer", () => {
       expect(inspectGoalPurposeRecovery({ ...archivePaths, audit: new AuditLog() }))
         .toEqual({ status: "unverified", verified_purpose_count: 0 });
       expect(archivedFiles.map((filename) => readFileSync(filename))).toEqual(beforeInspection);
+      const altered = purposeMemoryStorage(join(root, "altered-archive"));
+      for (const [source, target, statement, role] of [
+        [archivePaths.j_database_path, altered.database_path, "CREATE TABLE stray (value TEXT)", "j_database_path"],
+        [archivePaths.m_database_path, altered.memory_database_path,
+          "CREATE INDEX stray ON m_records(record_id)", "m_database_path"],
+        [archivePaths.j_database_path, altered.database_path, "PRAGMA journal_mode = WAL", "j_database_path"],
+      ] as const) {
+        copyFileSync(source, target);
+        const database = new DatabaseSync(target);
+        try { database.exec(statement); } finally { database.close(); }
+        const alteredBytes = readFileSync(target);
+        expect(inspectGoalPurposeRecovery({ ...archivePaths, [role]: target, audit: currentAudit }))
+          .toEqual({ status: "unverified", verified_purpose_count: 0 });
+        expect(readFileSync(target)).toEqual(alteredBytes);
+        expect(["-journal", "-wal", "-shm"].some((suffix) => existsSync(target + suffix))).toBe(false);
+      }
       restarted = new HDSUpperController({ audit: new AuditLog({ filepath }), goal_purpose_memory: memoryStorage });
       expect(restarted.readGoalPurposeContent(args.goal_ref, 1)).toMatchObject({ ...args, version: 1, purpose_text, used_for_authority: false });
       expect(restarted.getGoalGovernanceProjection()?.goals).toMatchObject([{ goal_ref: args.goal_ref, current_version: 1 }]);

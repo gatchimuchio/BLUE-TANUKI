@@ -181,6 +181,8 @@ export interface WebChatApprovalQueueItem {
   reason: string;
   /** True when this approval requires an explicit, digest-bound content review before approval. */
   content_review_required?: boolean;
+  /** Offline repair handoff for the reconciled delegated-purpose J/M pair. */
+  goal_purpose_repair?: true;
   /** Digest-only projection for a delegated goal purpose change requiring explicit review. */
   goal_purpose_change_review?: {
     kind: "goal_purpose_change";
@@ -782,6 +784,17 @@ export interface WebChatGoalPurposeAdoptionContentReview {
   goal_ref: string;
   purpose_text: string;
   purpose_digest: string;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface WebChatGoalPurposeRepairContentReview extends WebChatGoalPurposeRepairRequest {
+  kind: "goal_purpose_repair";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  operation: "recovery.restore";
+  stores: readonly WebChatGoalPurposeRepairStore[];
   used_for_authority: false;
   may_execute: false;
 }
@@ -1445,7 +1458,7 @@ export type WebChatComposioExecuteContentReview = ComposioActionContentReview & 
 
 export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   WebChatGmailMessageModifyContentReview |
-  WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview |
+  WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview | WebChatGoalPurposeRepairContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview | WebChatSettingsWriteContentReview | WebChatMcpCallContentReview |
   WebChatComposioExecuteContentReview |
@@ -1847,6 +1860,17 @@ export interface WebChatUpdateSurface {
   prepareUpdate?: (body: Record<string, unknown>) => Promise<unknown>;
 }
 
+export interface WebChatGoalPurposeRepairRequest {
+  backup_id: string;
+  manifest_sha256: string;
+  repair_sha256: string;
+}
+
+export interface WebChatGoalPurposeRepairStore {
+  store_key: "goal_purpose_j_control" | "goal_purpose_m_state";
+  target_state: "missing" | "different" | "matched";
+}
+
 export interface WebChatRecoveryRestorePlan {
   surface: "offline_recovery_restore_plan";
   schema_version: 1;
@@ -1858,6 +1882,10 @@ export interface WebChatRecoveryRestorePlan {
   goal_purpose_replay?: {
     status: "matched" | "no_current_purpose" | "not_included" | "unverified";
     verified_purpose_count: number;
+  };
+  goal_purpose_repair?: {
+    repair_sha256: string;
+    stores: readonly WebChatGoalPurposeRepairStore[];
   };
   offline_lease_verified: false;
   cross_store_atomic: false;
@@ -1874,6 +1902,8 @@ export interface WebChatRecoverySurface {
   inspectBackup?: () => Promise<unknown>;
   /** Plan from an explicit backup ID without changing state or granting authority. */
   inspectRestorePlan?: (backupId: string) => Promise<WebChatRecoveryRestorePlan>;
+  /** Request L3 review of the exact plan for offline delegated-purpose repair. */
+  prepareGoalPurposeRepair?: (request: WebChatGoalPurposeRepairRequest) => Promise<unknown>;
   /** Correlate a caller-specified scope and canonical store candidates with one verified backup, read-only. */
   inspectScopeApplicability?: (body: Record<string, unknown>) => Promise<unknown>;
   /** Create a local recovery backup pack. */

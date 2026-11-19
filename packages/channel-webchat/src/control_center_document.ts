@@ -531,6 +531,8 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <p id="recovery-restore-plan-status" role="status">包括復元計画の確認にはバックアップIDを入力してください。</p>
           <pre id="recovery-restore-plan-details" hidden></pre>
+          <button id="request-goal-purpose-repair" type="button" disabled hidden>委任目的J/Mのオフライン復旧を申請</button>
+          <p id="goal-purpose-repair-request-status" role="status"></p>
           <div class="status-grid">
             <label>Restore exactly one canonical store<select id="recovery-restore-store">
               <option value="">Select a store</option>
@@ -737,6 +739,14 @@ ${CONTROL_CENTER_STYLE}    </style>
               <button id="submit-goal-purpose-change" class="primary" type="button">Submit for L3 review</button>
               <span id="goal-purpose-submit-status" class="badge warn">not submitted</span>
             </div>
+          </section>
+          <section id="goal-purpose-repair-handoff" hidden>
+            <h3>委任目的J/Mのオフライン復旧</h3>
+            <p>承認を受け付けました。Gatewayを停止してから、設置先のランチャーで次の引数を指定してください。コードは端末の非表示入力に1行だけ貼り付けてください。</p>
+            <pre id="goal-purpose-repair-command"></pre>
+            <p id="goal-purpose-repair-expiry"></p>
+            <pre id="goal-purpose-repair-handoff-code" aria-label="一回限りの復旧コード"></pre>
+            <button id="hide-goal-purpose-repair-handoff" type="button">コードを画面から消す</button>
           </section>
           <div id="approval-list" class="queue-list"></div>
           <h2>Reusable Grants</h2>

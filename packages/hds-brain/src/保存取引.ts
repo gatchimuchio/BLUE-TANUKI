@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import {
   memoryCommitContentDigest,
   parseMemoryCommitV2,
@@ -554,6 +555,63 @@ const M_TABLE_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.free
   m_receipts: ["update_id", "receipt_json"],
 });
 
+export type StandaloneRecoverySchema = Readonly<Record<string, readonly [definition: string, indexCount: number]>>;
+
+export function standaloneRecoveryDatabaseUrl(filepath: string): string {
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    try {
+      lstatSync(filepath + suffix);
+      throw new Error("standalone_recovery_sidecar_present");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  const file = openSync(filepath, "r");
+  try {
+    const stat = fstatSync(file);
+    const header = Buffer.alloc(20);
+    if (!stat.isFile() || stat.nlink !== 1 || readSync(file, header, 0, header.length, 0) !== header.length ||
+        !header.subarray(0, 16).equals(Buffer.from("SQLite format 3\0")) || header[18] !== 1 || header[19] !== 1) {
+      throw new Error("standalone_recovery_database_unavailable");
+    }
+  } finally {
+    closeSync(file);
+  }
+  const url = pathToFileURL(filepath);
+  // A captured standalone file has no journal to replay. An immutable read cannot create one.
+  url.searchParams.set("immutable", "1");
+  return url.href;
+}
+
+/** A complete, transportable database must contain only the standalone writer's schema. */
+export function verifyStandaloneRecoverySchema(database: DatabaseSyncType, tables: StandaloneRecoverySchema): boolean {
+  const definitionTokens = (sql: string): string => (sql.match(/'(?:[^']|'')*'|\w+|\S/g) ?? []).join(" ");
+  const expected = new Map<string, { type: string; table: string; sql: string | null }>();
+  for (const [table, [definition, indexCount]] of Object.entries(tables)) {
+    expected.set(table, { type: "table", table, sql: definitionTokens(definition) });
+    for (let ordinal = 1; ordinal <= indexCount; ordinal++) {
+      expected.set(`sqlite_autoindex_${table}_${ordinal}`, { type: "index", table, sql: null });
+    }
+  }
+  const schema = database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema").all();
+  return schema.length === expected.size && schema.every((row) => {
+    if (typeof row.name !== "string") return false;
+    const item = expected.get(row.name);
+    expected.delete(row.name);
+    return item !== undefined && row.type === item.type && row.tbl_name === item.table &&
+      (typeof row.sql === "string" ? definitionTokens(row.sql) : row.sql) === item.sql;
+  });
+}
+
+const M_STANDALONE_SCHEMA: StandaloneRecoverySchema = {
+  m_schema: ["CREATE TABLE m_schema (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL)", 0],
+  m_events: ["CREATE TABLE m_events (event_id TEXT PRIMARY KEY, revision INTEGER NOT NULL UNIQUE CHECK (revision > 0), previous_event_digest TEXT NOT NULL, event_digest TEXT NOT NULL CHECK (length(event_digest) = 64), event_payload_json TEXT NOT NULL)", 2],
+  m_state: ["CREATE TABLE m_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), revision INTEGER NOT NULL CHECK (revision >= 0), event_digest TEXT NOT NULL)", 0],
+  m_records: ["CREATE TABLE m_records (record_id TEXT PRIMARY KEY, value_json TEXT NOT NULL)", 1],
+  m_updates: ["CREATE TABLE m_updates (update_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), revision INTEGER NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE REFERENCES m_events(event_id))", 3],
+  m_receipts: ["CREATE TABLE m_receipts (update_id TEXT PRIMARY KEY REFERENCES m_updates(update_id), receipt_json TEXT NOT NULL)", 1],
+};
+
 function initializeMStorageSchema(database: DatabaseSyncType, existedWithContents: boolean): void {
   const existingMTables = database.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'm_*' ORDER BY name",
@@ -569,12 +627,7 @@ function initializeMStorageSchema(database: DatabaseSyncType, existedWithContent
 
   database.exec("BEGIN EXCLUSIVE");
   try {
-    database.exec("CREATE TABLE m_schema (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), schema_version INTEGER NOT NULL)");
-    database.exec("CREATE TABLE m_events (event_id TEXT PRIMARY KEY, revision INTEGER NOT NULL UNIQUE CHECK (revision > 0), previous_event_digest TEXT NOT NULL, event_digest TEXT NOT NULL CHECK (length(event_digest) = 64), event_payload_json TEXT NOT NULL)");
-    database.exec("CREATE TABLE m_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), revision INTEGER NOT NULL CHECK (revision >= 0), event_digest TEXT NOT NULL)");
-    database.exec("CREATE TABLE m_records (record_id TEXT PRIMARY KEY, value_json TEXT NOT NULL)");
-    database.exec("CREATE TABLE m_updates (update_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), revision INTEGER NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE REFERENCES m_events(event_id))");
-    database.exec("CREATE TABLE m_receipts (update_id TEXT PRIMARY KEY REFERENCES m_updates(update_id), receipt_json TEXT NOT NULL)");
+    for (const [definition] of Object.values(M_STANDALONE_SCHEMA)) database.exec(definition);
     database.prepare("INSERT INTO m_schema (singleton, schema_version) VALUES (1, ?)").run(MEMORY_STORAGE_SCHEMA_VERSION);
     database.prepare("INSERT INTO m_state (singleton, revision, event_digest) VALUES (1, 0, ?)").run(GENESIS_EVENT_DIGEST);
     database.exec("COMMIT");
@@ -918,6 +971,7 @@ export function rebuildMemoryDerivedProjection(options: {
 interface MemoryRecoveryLedgerPaths {
   readonly private_state_root: string;
   readonly database_path: string;
+  readonly standalone_schema?: boolean;
 }
 
 export function inspectMemoryRecoveryLedger(options: MemoryRecoveryLedgerPaths): PersistenceLedgerInspection {
@@ -952,7 +1006,7 @@ function inspectMemoryRecoveryLedgerInternal(
     if (hasSQLiteRecoverySidecars(databasePath)) {
       return unavailableLedgerInspection("M", "store_unavailable");
     }
-    database = new DatabaseSync(databasePath, {
+    database = new DatabaseSync(options.standalone_schema ? standaloneRecoveryDatabaseUrl(databasePath) : databasePath, {
       readOnly: true,
       enableForeignKeyConstraints: true,
       allowExtension: false,
@@ -962,7 +1016,8 @@ function inspectMemoryRecoveryLedgerInternal(
     if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
       return unavailableLedgerInspection("M", "store_unavailable");
     }
-    if (!verifyMTableSchema(database) || !verifyNoMRecoveryTriggers(database)) {
+    if (!verifyMTableSchema(database) || !verifyNoMRecoveryTriggers(database) ||
+        (options.standalone_schema && !verifyStandaloneRecoverySchema(database, M_STANDALONE_SCHEMA))) {
       return unavailableLedgerInspection("M", "schema_mismatch");
     }
 

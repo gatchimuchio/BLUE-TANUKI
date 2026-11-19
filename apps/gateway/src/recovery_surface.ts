@@ -15,6 +15,7 @@ import {
   inspectCanonicalStateSnapshots,
   isRestorableCanonicalStateStore,
   restoreCanonicalStateSnapshotStore,
+  resolveCanonicalStateStoreInspectionPath,
   resolveCanonicalStateStoreTargetPath,
   type CanonicalStateSnapshotEntryStatus,
   type CanonicalStateSnapshotInspection,
@@ -335,6 +336,19 @@ interface GoalPurposeReplayObservation {
   verified_purpose_count: number;
 }
 
+const GOAL_PURPOSE_STORES = ["goal_purpose_j_control", "goal_purpose_m_state"] as const;
+type GoalPurposeStoreKey = typeof GOAL_PURPOSE_STORES[number];
+
+export interface OfflineGoalPurposeRepairPlan {
+  readonly backup_id: string;
+  readonly manifest_sha256: string;
+  readonly repair_sha256: string;
+  readonly before_sha256: string;
+  readonly after_sha256: string;
+  readonly stores: readonly { readonly store_key: GoalPurposeStoreKey;
+    readonly target_state: "missing" | "different" | "matched" }[];
+}
+
 export interface OfflineRecoveryRestorePlan {
   surface: "offline_recovery_restore_plan";
   schema_version: 1;
@@ -345,6 +359,7 @@ export interface OfflineRecoveryRestorePlan {
   canonical_stores: readonly { store_key: CanonicalStateStoreKey; archive_status: CanonicalStateSnapshotEntryStatus | "not_included";
     disposition: "requires_store_reconciliation" | "preserve_current" }[];
   goal_purpose_replay?: GoalPurposeReplayObservation;
+  goal_purpose_repair?: Pick<OfflineGoalPurposeRepairPlan, "repair_sha256" | "stores">;
   offline_lease_verified: false;
   cross_store_atomic: false;
   used_for_authority: false;
@@ -1587,43 +1602,363 @@ export async function inspectRecoveryBackupById(
   });
 }
 
+function readGoalPurposeReplayContext(env: NodeJS.ProcessEnv) {
+  if (!env.BLUE_TANUKI_AUDIT_DIR) throw new Error("offline_goal_purpose_audit_unavailable");
+  const filepath = path.resolve(env.BLUE_TANUKI_AUDIT_DIR, AUDIT_FILENAME);
+  const audit = new AuditLog({ filepath, read_only: true });
+  const config = goalGovernanceConfigFromEnvironment(env, { read_only: true });
+  const entries = audit.list();
+  const markers = entries.filter(({ log }) => "kind" in log && log.kind === "authority_event" &&
+    (log.event === "goal_purpose_adoption_committed" || log.event === "goal_purpose_change_committed"));
+  // Commit hashes already bind their approval evidence in the verified chain prefix. Later unrelated appends
+  // must leave a reviewed repair usable, including the append that records its own approval.
+  const purpose_binding = recoveryDigest(["offline-goal-purpose-current.v1", filepath, config ?? null,
+    markers.map(({ entry_hash }) => entry_hash)]);
+  return { audit, config, purpose_binding, tail: entries.at(-1)?.entry_hash ?? null };
+}
+
+type GoalPurposeReplayContext = ReturnType<typeof readGoalPurposeReplayContext>;
+
+export function hasOfflineGoalPurposeRepairAuditReceipt(env: NodeJS.ProcessEnv,
+  binding: { readonly command_digest: string; readonly repair_sha256: string }): boolean {
+  if (!/^[a-f0-9]{64}$/.test(binding.command_digest) || !/^[a-f0-9]{64}$/.test(binding.repair_sha256)) return false;
+  try {
+    const entries = readGoalPurposeReplayContext(env).audit.list();
+    const authorizations = entries.filter(({ log }) => "kind" in log && log.kind === "authority_event" &&
+      log.event === "offline_goal_purpose_repair_authorized" &&
+      log.offline_goal_purpose_repair_review?.command_digest === binding.command_digest &&
+      log.offline_goal_purpose_repair_review.repair_sha256 === binding.repair_sha256);
+    if (authorizations.length !== 1) return false;
+    const authorization = authorizations[0]!;
+    if (entries.some(({ index, log }) => index > authorization.index && "kind" in log &&
+        log.kind === "authority_event" && log.event === "emergency_stop_activated")) return false;
+    const log = authorization.log;
+    const actor = "webchat-resume-token-holder";
+    if (!("kind" in log) || log.kind !== "authority_event" || log.actor !== actor || log.operation !== "recovery.restore" ||
+        !log.request_id || !log.command_id || !log.offline_goal_purpose_repair_review ||
+        !/^[a-f0-9]{64}$/.test(log.offline_goal_purpose_repair_review.review_digest)) return false;
+    const reviewDigest = log.offline_goal_purpose_repair_review.review_digest;
+    const reviews = entries.filter(({ log: entry }) => "kind" in entry && entry.kind === "authority_event" &&
+      entry.event === "offline_goal_purpose_repair_content_reviewed" && entry.request_id === log.request_id &&
+      entry.command_id === log.command_id);
+    if (reviews.length !== 1 || reviews[0]!.index >= authorization.index) return false;
+    const review = reviews[0]!;
+    const evidence = review.log;
+    if (!("kind" in evidence) || evidence.kind !== "authority_event" || evidence.actor !== actor ||
+        evidence.operation !== "recovery.restore" || evidence.offline_goal_purpose_repair_review?.review_digest !== reviewDigest ||
+        evidence.offline_goal_purpose_repair_review.command_digest !== binding.command_digest ||
+        evidence.offline_goal_purpose_repair_review.repair_sha256 !== binding.repair_sha256) return false;
+    const approvals = entries.filter(({ index, log: entry }) => index > review.index && "kind" in entry &&
+      entry.kind === "command_lifecycle" && entry.request_id === log.request_id && entry.command_id === log.command_id &&
+      ["approval_approved", "approval_rejected", "approval_cancelled"].includes(entry.phase));
+    if (approvals.length !== 1 || approvals[0]!.index >= authorization.index) return false;
+    const approval = approvals[0]!.log;
+    return "kind" in approval && approval.kind === "command_lifecycle" && approval.phase === "approval_approved" &&
+      approval.actor === actor && approval.reason === "human_approval:approve";
+  } catch {
+    return false;
+  }
+}
+
+function inspectGoalPurposePair(context: GoalPurposeReplayContext, paths: readonly [string, string]) {
+  return inspectGoalPurposeRecovery({ audit: context.audit, goal_governance: context.config,
+    j_database_path: paths[0], m_database_path: paths[1] });
+}
+
+function recoveryDigest(data: unknown): string {
+  return createHash("sha256").update(JSON.stringify(data)).digest("hex");
+}
+
+type GoalPurposeFileProof = { bytes: number; sha256: string };
+type GoalPurposeArchiveFile = { filepath: string; proof: GoalPurposeFileProof };
+type GoalPurposeArchive = {
+  files: readonly [GoalPurposeArchiveFile, GoalPurposeArchiveFile];
+  context: GoalPurposeReplayContext;
+};
+
 /** Compare the archived pair to the preserved, current installation's audit and configuration. */
 async function observeArchivedGoalPurpose(
   env: NodeJS.ProcessEnv,
   packDir: string,
   snapshot: CanonicalStateSnapshotManifest | undefined,
-): Promise<{ observation: GoalPurposeReplayObservation; binding: string | null }> {
+): Promise<{ observation: GoalPurposeReplayObservation; binding: string | null; archive?: GoalPurposeArchive }> {
   const j = snapshot?.entries.find(({ store_key }) => store_key === "goal_purpose_j_control");
   const m = snapshot?.entries.find(({ store_key }) => store_key === "goal_purpose_m_state");
   if (!j && !m) return { observation: { status: "not_included", verified_purpose_count: 0 }, binding: null };
   const unverified = { observation: { status: "unverified", verified_purpose_count: 0 }, binding: null } as const;
-  if (j?.status !== "verified" || !j.archive_rel_path || m?.status !== "verified" || !m.archive_rel_path ||
-      !env.BLUE_TANUKI_AUDIT_DIR) return unverified;
+  if (j?.status !== "verified" || !j.archive_rel_path || !j.sha256 ||
+      m?.status !== "verified" || !m.archive_rel_path || !m.sha256) return unverified;
   try {
-    const filepath = path.resolve(env.BLUE_TANUKI_AUDIT_DIR, AUDIT_FILENAME);
-    const audit = new AuditLog({ filepath, read_only: true });
-    const config = goalGovernanceConfigFromEnvironment(env, { read_only: true });
-    const provenance = (source: AuditLog, currentConfig: typeof config) => JSON.stringify([
-      source.list().length, source.list().at(-1)?.entry_hash ?? null, currentConfig ?? null,
-    ]);
-    const before = provenance(audit, config);
+    const context = readGoalPurposeReplayContext(env);
     const jPath = await assertArchivePath(packDir, path.join(packDir, j.archive_rel_path), "goal_purpose_replay_j");
     const mPath = await assertArchivePath(packDir, path.join(packDir, m.archive_rel_path), "goal_purpose_replay_m");
-    const observation = inspectGoalPurposeRecovery({ audit, goal_governance: config,
-      j_database_path: jPath, m_database_path: mPath });
+    const files = [
+      { filepath: jPath, proof: { bytes: j.bytes, sha256: j.sha256 } },
+      { filepath: mPath, proof: { bytes: m.bytes, sha256: m.sha256 } },
+    ] as const;
+    for (const file of files) await assertGoalPurposeFileProof(file.filepath, file.proof);
+    const observation = inspectGoalPurposePair(context, [jPath, mPath]);
     if (observation.status === "unverified") return unverified;
-    for (const [entry, archive] of [[j, jPath], [m, mPath]] as const) {
-      const proof = await readRecoveryPathProof(archive);
-      if (proof?.kind !== "file" || proof.bytes !== entry.bytes || proof.sha256 !== entry.sha256) return unverified;
-    }
-    if (before !== provenance(new AuditLog({ filepath, read_only: true }),
-      goalGovernanceConfigFromEnvironment(env, { read_only: true }))) return unverified;
-    const binding = createHash("sha256").update(JSON.stringify([
-      "offline-goal-purpose-replay.v1", before, j.sha256, m.sha256, observation,
-    ])).digest("hex");
-    return { observation, binding };
+    for (const file of files) await assertGoalPurposeFileProof(file.filepath, file.proof);
+    const after = readGoalPurposeReplayContext(env);
+    if (after.tail !== context.tail || after.purpose_binding !== context.purpose_binding) return unverified;
+    const binding = recoveryDigest(["offline-goal-purpose-replay.v2", context.tail, context.purpose_binding,
+      j.sha256, m.sha256, observation]);
+    return { observation, binding, ...(observation.status === "matched" && { archive: { files, context } }) };
   } catch {
     return unverified;
+  }
+}
+
+type GoalPurposeRepairSelector = Pick<OfflineGoalPurposeRepairPlan, "backup_id" | "manifest_sha256">;
+type GoalPurposeTarget = { filepath: string; proof: GoalPurposeFileProof | null };
+
+function sameGoalPurposeProof(left: GoalPurposeFileProof | null, right: GoalPurposeFileProof | null): boolean {
+  return left === null || right === null ? left === right : left.bytes === right.bytes && left.sha256 === right.sha256;
+}
+
+async function readGoalPurposeFileProof(filepath: string): Promise<GoalPurposeFileProof | null> {
+  for (const suffix of ["-journal", "-wal", "-shm"]) {
+    if (await recoveryPathKind(filepath + suffix)) throw new Error("offline_goal_purpose_target_busy");
+  }
+  const kind = await recoveryPathKind(filepath);
+  if (!kind) return null;
+  if (kind !== "file") throw new Error("offline_goal_purpose_path_unverified");
+  const handle = await fs.open(filepath, "r");
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.nlink !== 1) throw new Error("offline_goal_purpose_path_unverified");
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead === header.length && header.subarray(0, 16).equals(Buffer.from("SQLite format 3\0")) &&
+        (header[18] === 2 || header[19] === 2)) throw new Error("offline_goal_purpose_target_busy");
+    const hash = createHash("sha256");
+    let bytes = 0;
+    for await (const chunk of handle.createReadStream({ start: 0, autoClose: false })) {
+      hash.update(chunk);
+      bytes += chunk.length;
+    }
+    const after = await fs.lstat(filepath);
+    if (!after.isFile() || after.nlink !== 1 || after.dev !== before.dev || after.ino !== before.ino ||
+        before.size !== bytes || after.size !== bytes || after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs) throw new Error("offline_goal_purpose_file_changed");
+    return { bytes, sha256: hash.digest("hex") };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertGoalPurposeFileProof(filepath: string, expected: GoalPurposeFileProof | null): Promise<void> {
+  if (!sameGoalPurposeProof(await readGoalPurposeFileProof(filepath), expected)) {
+    throw new Error("offline_goal_purpose_file_changed");
+  }
+}
+
+async function realPathFromExistingAncestor(filepath: string): Promise<string> {
+  try {
+    return await fs.realpath(filepath);
+  } catch (error) {
+    const parent = path.dirname(filepath);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === filepath) throw error;
+    if (await fs.lstat(filepath).catch((failure: NodeJS.ErrnoException) => {
+      if (failure.code === "ENOENT") return null;
+      throw failure;
+    })) throw new Error("offline_goal_purpose_path_unverified");
+    return path.join(await realPathFromExistingAncestor(parent), path.basename(filepath));
+  }
+}
+
+async function assertGoalPurposeTargetsIsolated(env: NodeJS.ProcessEnv, directory: string): Promise<void> {
+  const protectedPaths = [recoveryRoot(env), env.BLUE_TANUKI_COMPLETE_HISTORY_FILE, env.BLUE_TANUKI_INSTALL_ROOT,
+    ...sourceSpecs(env).map(({ source_path }) => source_path)];
+  for (const candidate of protectedPaths) {
+    if (!candidate) continue;
+    const resolved = path.resolve(candidate);
+    for (const location of [resolved, await realPathFromExistingAncestor(resolved)]) {
+      if (isSameOrInside(location, directory) || isSameOrInside(directory, location)) {
+        throw new Error("offline_goal_purpose_protected_path_overlap");
+      }
+    }
+  }
+  if (env.BLUE_TANUKI_FILE_ROOT) {
+    const fileRoot = await realPathFromExistingAncestor(path.resolve(env.BLUE_TANUKI_FILE_ROOT));
+    // File tools already exclude private-state below a larger workspace root.
+    if (isSameOrInside(fileRoot, directory)) throw new Error("offline_goal_purpose_protected_path_overlap");
+  }
+}
+
+function goalPurposeStateSha256(selector: GoalPurposeRepairSelector, context: GoalPurposeReplayContext,
+  pair: readonly [GoalPurposeTarget, GoalPurposeTarget]): string {
+  return recoveryDigest(["offline-goal-purpose-state.v1", selector.backup_id, selector.manifest_sha256,
+    context.purpose_binding, pair.map(({ filepath, proof }, index) => [GOAL_PURPOSE_STORES[index], filepath, proof])]);
+}
+
+async function readOfflineGoalPurposeRepairState(env: NodeJS.ProcessEnv, selector: GoalPurposeRepairSelector,
+  archive: GoalPurposeArchive) {
+  const stateRoot = path.resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
+  const j = resolveCanonicalStateStoreInspectionPath(stateRoot, GOAL_PURPOSE_STORES[0]);
+  const m = resolveCanonicalStateStoreInspectionPath(stateRoot, GOAL_PURPOSE_STORES[1]);
+  const directory = path.dirname(j);
+  if (path.dirname(m) !== directory || path.relative(path.join(stateRoot, "private-state", "goal-purpose-memory"), directory)) {
+    throw new Error("offline_goal_purpose_path_unverified");
+  }
+  await assertGoalPurposeTargetsIsolated(env, directory);
+  const before = [{ filepath: j, proof: await readGoalPurposeFileProof(j) },
+    { filepath: m, proof: await readGoalPurposeFileProof(m) }] as const;
+  const after = [{ filepath: j, proof: archive.files[0].proof }, { filepath: m, proof: archive.files[1].proof }] as const;
+  const context = readGoalPurposeReplayContext(env);
+  if (context.purpose_binding !== archive.context.purpose_binding) throw new Error("offline_goal_purpose_context_changed");
+  const before_sha256 = goalPurposeStateSha256(selector, context, before);
+  const after_sha256 = goalPurposeStateSha256(selector, context, after);
+  const plan: OfflineGoalPurposeRepairPlan = {
+    backup_id: selector.backup_id, manifest_sha256: selector.manifest_sha256, before_sha256, after_sha256,
+    repair_sha256: recoveryDigest(["offline-goal-purpose-repair.v1", before_sha256, after_sha256]),
+    stores: before.map(({ proof }, index) => ({ store_key: GOAL_PURPOSE_STORES[index]!,
+      target_state: !proof ? "missing" : sameGoalPurposeProof(proof, after[index]!.proof) ? "matched" : "different" })),
+  };
+  return { plan, directory, before, after, archive };
+}
+
+type GoalPurposeRepairState = Awaited<ReturnType<typeof readOfflineGoalPurposeRepairState>>;
+
+async function loadOfflineGoalPurposeRepairState(env: NodeJS.ProcessEnv, selector: GoalPurposeRepairSelector) {
+  assertBackupId(selector.backup_id);
+  if (!/^[a-f0-9]{64}$/.test(selector.manifest_sha256)) return null;
+  const manifestPath = path.join(recoveryRoot(env), selector.backup_id, "manifest.json");
+  if (await recoveryPathKind(manifestPath) !== "file" || await recoveryPathKind(`${manifestPath}.sha256`) !== "file") return null;
+  const manifest = await readManifest(env, selector.backup_id);
+  if (manifest.manifest_sha256 !== selector.manifest_sha256 || !manifest.canonical_state_snapshot) return null;
+  assertRecoveryManifestBoundary(manifest);
+  await preflightRestoreManifest(env, manifest);
+  const packDir = path.dirname(manifest.manifest_path);
+  await inspectCanonicalStateSnapshots(packDir, manifest.canonical_state_snapshot);
+  const { archive } = await observeArchivedGoalPurpose(env, packDir, manifest.canonical_state_snapshot);
+  if (!archive || (await readManifest(env, selector.backup_id)).manifest_sha256 !== selector.manifest_sha256) return null;
+  return await readOfflineGoalPurposeRepairState(env, selector, archive);
+}
+
+async function isGoalPurposeRepairCandidate(env: NodeJS.ProcessEnv, state: GoalPurposeRepairState): Promise<boolean> {
+  if (state.plan.before_sha256 === state.plan.after_sha256) return false;
+  const stateRoot = env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki";
+  const [j, m] = state.before;
+  for (const [index, target] of state.before.entries()) {
+    if (!target.proof || sameGoalPurposeProof(target.proof, state.after[index]!.proof)) continue;
+    const current = await inspectCanonicalStateStoreTarget(stateRoot, GOAL_PURPOSE_STORES[index]!);
+    if (current.status === "verified") {
+      const other = state.archive.files;
+      const pair = index === 0 ? [j.filepath, other[1].filepath] as const : [other[0].filepath, m.filepath] as const;
+      // Refuse to discard a structurally readable store containing unreconciled or extra records.
+      if (inspectGoalPurposePair(state.archive.context, pair).status !== "matched") return false;
+    } else if (current.status !== "mismatch") return false;
+    await assertGoalPurposeFileProof(target.filepath, target.proof);
+  }
+  return readGoalPurposeReplayContext(env).purpose_binding === state.archive.context.purpose_binding;
+}
+
+export async function planOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, selector: GoalPurposeRepairSelector):
+  Promise<OfflineGoalPurposeRepairPlan | null> {
+  try {
+    const state = await loadOfflineGoalPurposeRepairState(env, selector);
+    return state && await isGoalPurposeRepairCandidate(env, state) ? state.plan : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function observeOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv,
+  evidence: GoalPurposeRepairSelector): Promise<string | null> {
+  try {
+    const state = await loadOfflineGoalPurposeRepairState(env, evidence);
+    if (!state) return null;
+    if (state.plan.before_sha256 === state.plan.after_sha256 && inspectGoalPurposePair(state.archive.context,
+      [state.before[0].filepath, state.before[1].filepath]).status !== "matched") return null;
+    for (const target of state.before) await assertGoalPurposeFileProof(target.filepath, target.proof);
+    return readGoalPurposeReplayContext(env).purpose_binding === state.archive.context.purpose_binding
+      ? state.plan.before_sha256 : null;
+  } catch {
+    return null;
+  }
+}
+
+async function syncGoalPurposePath(filepath: string, directory = false): Promise<void> {
+  // Node cannot open Windows directories for fsync. The runtime fence remains pending until readback.
+  if (directory && process.platform === "win32") return;
+  const handle = await fs.open(filepath, directory ? "r" : "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function copyGoalPurposeRepairFile(source: string, destination: string, proof: GoalPurposeFileProof): Promise<void> {
+  await fs.copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+  if (process.platform !== "win32") await fs.chmod(destination, 0o600);
+  await syncGoalPurposePath(destination);
+  await assertGoalPurposeFileProof(destination, proof);
+}
+
+/** Called only with the installation lease held and a durable prepared fence for this exact plan. */
+export async function applyOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, plan: OfflineGoalPurposeRepairPlan): Promise<void> {
+  const state = await loadOfflineGoalPurposeRepairState(env, plan);
+  if (!state || state.plan.repair_sha256 !== plan.repair_sha256 || state.plan.before_sha256 !== plan.before_sha256 ||
+      state.plan.after_sha256 !== plan.after_sha256 || !await isGoalPurposeRepairCandidate(env, state)) {
+    throw new Error("offline_goal_purpose_plan_changed");
+  }
+  const directoryKind = await recoveryPathKind(state.directory);
+  if (directoryKind === null) {
+    await fs.mkdir(state.directory, { mode: 0o700 });
+    await syncGoalPurposePath(path.dirname(state.directory), true);
+  } else if (directoryKind !== "directory") throw new Error("offline_goal_purpose_path_unverified");
+
+  const preserveDirectory = await fs.mkdtemp(path.join(state.directory, ".offline-goal-repair-"));
+  if (process.platform !== "win32") await fs.chmod(preserveDirectory, 0o700);
+  const staged = [path.join(preserveDirectory, "new-j-control.sqlite"), path.join(preserveDirectory, "new-m-state.sqlite")] as const;
+  try {
+    const preserved = [];
+    for (const [index, target] of state.before.entries()) {
+      const file = state.archive.files[index]!;
+      await copyGoalPurposeRepairFile(file.filepath, staged[index]!, file.proof);
+      const name = `before-${path.basename(target.filepath)}`;
+      if (target.proof) await copyGoalPurposeRepairFile(target.filepath, path.join(preserveDirectory, name), target.proof);
+      preserved.push({ store_key: GOAL_PURPOSE_STORES[index], file: target.proof ? name : null, proof: target.proof });
+    }
+    const evidence = await fs.open(path.join(preserveDirectory, "before-state.json"), "wx", 0o600);
+    try {
+      await evidence.writeFile(JSON.stringify({ schema_version: 1, ...state.plan, preserved }) + "\n", "utf8");
+      await evidence.sync();
+    } finally {
+      await evidence.close();
+    }
+    await syncGoalPurposePath(preserveDirectory, true);
+    await syncGoalPurposePath(state.directory, true);
+
+    const current = await readOfflineGoalPurposeRepairState(env, plan, state.archive);
+    if (current.plan.repair_sha256 !== plan.repair_sha256 ||
+        (await readManifest(env, plan.backup_id)).manifest_sha256 !== plan.manifest_sha256 ||
+        inspectGoalPurposePair(state.archive.context, staged).status !== "matched") {
+      throw new Error("offline_goal_purpose_plan_changed");
+    }
+    for (const [index, target] of state.before.entries()) {
+      if (sameGoalPurposeProof(target.proof, state.after[index]!.proof)) continue;
+      for (const [position, member] of state.before.entries()) {
+        await assertGoalPurposeFileProof(member.filepath, position < index ? state.after[position]!.proof : member.proof);
+      }
+      await assertGoalPurposeFileProof(staged[index]!, state.after[index]!.proof);
+      await fs.rename(staged[index]!, target.filepath);
+      await syncGoalPurposePath(target.filepath);
+      await syncGoalPurposePath(state.directory, true);
+      await syncGoalPurposePath(preserveDirectory, true);
+    }
+    if (await observeOfflineGoalPurposeRepair(env, plan) !== plan.after_sha256) {
+      throw new Error("offline_goal_purpose_postcondition_unverified");
+    }
+  } finally {
+    for (const file of staged) {
+      await fs.unlink(file).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
   }
 }
 
@@ -1712,15 +2047,25 @@ export async function planOfflineRecoveryRestore(
         disposition: entry?.status === "verified" ? "requires_store_reconciliation" : "preserve_current" } as const;
     });
     const goalPurpose = await observeArchivedGoalPurpose(env, packDir, manifest.canonical_state_snapshot);
+    let goalPurposeRepair: OfflineRecoveryRestorePlan["goal_purpose_repair"];
+    if (goalPurpose.archive) {
+      try {
+        const state = await readOfflineGoalPurposeRepairState(env,
+          { backup_id: backupId, manifest_sha256: manifestSha256 }, goalPurpose.archive);
+        if (await isGoalPurposeRepairCandidate(env, state)) {
+          goalPurposeRepair = { repair_sha256: state.plan.repair_sha256, stores: state.plan.stores };
+        }
+      } catch { /* Keep pack observations usable when the local pair is unavailable for repair. */ }
+    }
     if ((await readManifest(env, backupId)).manifest_sha256 !== manifestSha256) {
       return { ...base, status: "manifest_changed" };
     }
     const planSha256 = createHash("sha256").update(JSON.stringify([
-      "offline-recovery-restore-plan.v2", manifestSha256, privateRoot, bindings, canonical_stores,
-      goalPurpose.observation, goalPurpose.binding,
+      "offline-recovery-restore-plan.v3", manifestSha256, privateRoot, bindings, canonical_stores,
+      goalPurpose.observation, goalPurpose.binding, goalPurposeRepair ?? null,
     ])).digest("hex");
     return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256, items, canonical_stores,
-      goal_purpose_replay: goalPurpose.observation };
+      goal_purpose_replay: goalPurpose.observation, ...(goalPurposeRepair && { goal_purpose_repair: goalPurposeRepair }) };
   } catch {
     return base;
   }
@@ -2434,6 +2779,7 @@ function unverifiedRecoveryStoreHoldCandidate(
     const commandStoreKey = isRestorableCanonicalStateStore(commandArguments?.store_key)
       ? commandArguments.store_key
       : null;
+    if (entry.payload.offline_goal_purpose_repair_preparation === true && !attempt && !completed && !commandStoreKey) continue;
     const candidateStoreKeys = [attempt?.store_key, completed?.store_key, commandStoreKey]
       .filter((value): value is RestorableCanonicalStateStoreKey => value !== undefined && value !== null);
     const distinctStoreKeys = [...new Set(candidateStoreKeys)];
@@ -2497,6 +2843,8 @@ export async function buildRecoveryPostActionObservation(
       ? recoveryStoreRestoreEvidenceFromHistory(entry.payload.recovery_store_restore) : null;
     const restoreAttempt = operation === "recovery.restore" && isRecoveryObservationRecord(entry.payload)
       ? recoveryStoreRestoreAttemptFromHistory(entry.payload.recovery_store_restore_attempt) : null;
+    if (operation === "recovery.restore" && entry.payload.offline_goal_purpose_repair_preparation === true &&
+        !restoreEvidence && !restoreAttempt) continue;
     if (options.mode === "startup_operation_plan_hold" && operation !== "recovery.restore") continue;
     if (options.mode === "startup_operation_plan_hold" && restoreEvidence && restoreEvidence.store_key !== "operation_plans") continue;
     if (options.mode === "startup_operation_plan_hold" && !restoreEvidence && restoreAttempt?.store_key !== "operation_plans") continue;

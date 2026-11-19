@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { resolve as resolvePath } from "node:path";
@@ -155,6 +155,7 @@ import type {
   WebChatGoalPurposeRelationContentReview,
   WebChatGoalPurposeChangeCandidate,
   WebChatGoalPurposeAdoptionContentReview,
+  WebChatGoalPurposeRepairRequest,
   WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
@@ -192,6 +193,8 @@ import {
   inspectSelectedRecoveryArchiveDigest,
   inspectLatestRecoveryBackup,
   planOfflineRecoveryRestore,
+  planOfflineGoalPurposeRepair,
+  type OfflineGoalPurposeRepairPlan,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
   inspectRecoveryScopeApplicability,
@@ -204,6 +207,9 @@ import {
   createRecoveryMutationTools,
   canonicalStoreRestoreConsumersNotQuiesced,
   normalizeRecoveryMutationArguments,
+  readOfflineGoalPurposeRepairCommand,
+  readOfflineGoalPurposeRepairSelector,
+  type OfflineGoalPurposeRepairSelector,
   RECOVERY_TOOL_NAMES,
   type RecoveryToolName,
 } from "./recovery_tools.js";
@@ -329,6 +335,7 @@ interface PendingApproval {
   approval_token?: string;
   approval_token_expires_at_ms?: number;
   recovery_archive_sha256?: string;
+  goal_purpose_repair?: OfflineGoalPurposeRepairPlan;
   content_review_digest?: string;
   content_review_operation_plan_binding_digest?: string;
   content_review_provider_state_digest?: string;
@@ -745,6 +752,21 @@ function getMemoryJudgmentReassessmentArguments(command: ExecuteCommand): Memory
 
 function isGoalPurposeAdoptionCommand(command: ExecuteCommand): boolean {
   return command.type === "tool_call" && command.payload.tool_name === "goal.governance.adopt";
+}
+
+function isOfflineGoalPurposeRepairCommand(command: ExecuteCommand): boolean {
+  return command.type === "tool_call" && command.payload.tool_name === "recovery.restore" &&
+    command.payload.arguments.scope_kind === "offline_goal_purpose";
+}
+
+function sameOfflineGoalPurposeRepair(a: OfflineGoalPurposeRepairSelector, b: OfflineGoalPurposeRepairSelector): boolean {
+  return a.backup_id === b.backup_id && a.manifest_sha256 === b.manifest_sha256 && a.repair_sha256 === b.repair_sha256;
+}
+
+function offlineGoalPurposeRepairMatches(command: ExecuteCommand, plan: OfflineGoalPurposeRepairPlan): boolean {
+  if (command.type !== "tool_call" || !isOfflineGoalPurposeRepairCommand(command)) return false;
+  const selector = readOfflineGoalPurposeRepairCommand(command.payload.arguments);
+  return selector !== null && sameOfflineGoalPurposeRepair(plan, selector);
 }
 
 function isGoalPurposeChangeCommand(command: ExecuteCommand): boolean {
@@ -1253,6 +1275,10 @@ async function serveWithOwnerLease(
   tools.register(createSettingsWriteTool(createGatewaySettingsWritePort(process.env)));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
+  const goalPurposeRepairAdmissions = new Map<string, {
+    plan: OfflineGoalPurposeRepairPlan; commandDigest: string; reviewDigest: string; requestId: string;
+    handoffDigest: string; expiresAt: number; prepared: boolean;
+  }>();
   let runtimeKernelShadowObserver: RuntimeKernelShadowObserver | undefined;
   let gatewayShuttingDown = false;
   let cronEventsStoreQuiesced = false;
@@ -1291,6 +1317,27 @@ async function serveWithOwnerLease(
     return null;
   };
   for (const tool of createRecoveryMutationTools(process.env, () => recoveryExecutionStore, {
+    prepareGoalPurposeRepair: async (selector, context) => {
+      const admission = goalPurposeRepairAdmissions.get(context.command_id);
+      if (!admission || admission.prepared || context.command_digest !== admission.commandDigest ||
+          !sameOfflineGoalPurposeRepair(admission.plan, selector) || !context.idempotency_key) {
+        throw new Error("offline_goal_purpose_repair_not_admitted");
+      }
+      const current = await planOfflineGoalPurposeRepair(process.env, selector);
+      if (!current || !sameOfflineGoalPurposeRepair(admission.plan, current) ||
+          context.signal?.aborted || gatewayShuttingDown || emergencyStop.active ||
+          !hds.getAudit().isPersistent() || !hds.getAudit().verify()) {
+        throw new Error("offline_goal_purpose_repair_preflight_changed");
+      }
+      recordGoalPurposeRepairReviewEvidence("offline_goal_purpose_repair_authorized", admission.requestId,
+        context.command_id, admission.commandDigest, admission.reviewDigest, selector.repair_sha256);
+      ownerLease.prepareOfflineGoalPurposeRepair({
+        ...selector, command_digest: admission.commandDigest, handoff_digest: admission.handoffDigest,
+        expires_at_ms: admission.expiresAt,
+        verification: { before_sha256: current.before_sha256, after_sha256: current.after_sha256 },
+      });
+      admission.prepared = true;
+    },
     canonicalStoreRestoreQuiesced: (storeKey: CanonicalStateStoreKey, context) =>
       storeKey === "operation_plans" ? operationPlanRestoreCommandId === context?.command_id
         : storeKey === "cron_events" ? cronEventsStoreQuiesced
@@ -1913,6 +1960,8 @@ async function serveWithOwnerLease(
 
   function activateEmergencyStop(ctx: WebChatApprovalControlContext): WebChatEmergencyStopSnapshot {
     const snapshot = emergencyStop.activate(ctx);
+    try { ownerLease.revokePreparedOfflineGoalPurposeRepair(); }
+    catch { gatewayLog.error("emergency-stop could not revoke prepared recovery; durable stop still blocks repair"); }
     try {
       recordApprovalControlHistory("emergency_stop_activated", ctx.actor, {
         reason: ctx.reason ?? "owner emergency stop",
@@ -2008,6 +2057,7 @@ async function serveWithOwnerLease(
         result_digest: feedback.result === undefined ? undefined : digestValue(feedback.result),
         ...(recoveryStoreRestore ? { recovery_store_restore: recoveryStoreRestore } : {}),
         ...(recoveryStoreRestoreAttempt ? { recovery_store_restore_attempt: recoveryStoreRestoreAttempt } : {}),
+        ...(isOfflineGoalPurposeRepairCommand(cmd) ? { offline_goal_purpose_repair_preparation: true } : {}),
         ...(browserReadObservation ? { browser_read_observation: browserReadObservation } : {}),
         error: feedback.error,
         metrics: feedback.metrics,
@@ -2149,6 +2199,7 @@ async function serveWithOwnerLease(
     approval_evaluation?: ApprovalEvaluation;
     command_digest?: string;
     recovery_archive_sha256?: string;
+    goal_purpose_repair?: OfflineGoalPurposeRepairPlan;
     expected_gmail_draft_provider_state_digest?: string;
     expected_gmail_message_send_provider_state_digest?: string;
     expected_gmail_message_trash_provider_state_digest?: string;
@@ -2275,7 +2326,15 @@ async function serveWithOwnerLease(
     const restoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
       ? cmd.payload.arguments.store_key
       : undefined;
+    const goalPurposeRepair = isOfflineGoalPurposeRepairCommand(cmd);
+    if (goalPurposeRepair && (!opts.goal_purpose_repair ||
+        !offlineGoalPurposeRepairMatches(cmd, opts.goal_purpose_repair) ||
+        (opts.skip_approval && !goalPurposeRepairAdmissions.has(cmd.id)))) {
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "offline_goal_purpose_repair_not_admitted" });
+      return { status: "offline_goal_purpose_repair_not_admitted" };
+    }
     if (cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+        !goalPurposeRepair &&
         (!opts.recovery_archive_sha256 || cmd.payload.arguments.expected_archive_sha256 !== opts.recovery_archive_sha256)) {
       const reason = "canonical_state_restore_archive_binding_required";
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
@@ -2457,6 +2516,11 @@ async function serveWithOwnerLease(
           reason: "goal_purpose_adoption_requires_l3_final_review", request_id: log.request_id });
         return { status: "goal_purpose_adoption_requires_l3_final_review" };
       }
+      if (goalPurposeRepair && (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
+          evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
+        hds.onCommandLifecycle(cmd.id, "approval_rejected", { actor, reason: "offline_goal_purpose_repair_requires_l3" });
+        return { status: "offline_goal_purpose_repair_requires_l3" };
+      }
       if (isMeaningUpdateAdoptionCommand(cmd) &&
           (evaluation.decision !== "ask" || evaluation.risk !== "high" ||
            evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required)) {
@@ -2582,6 +2646,7 @@ async function serveWithOwnerLease(
           approval_token: issued?.token,
           approval_token_expires_at_ms: issued?.expires_at_ms,
           ...(opts.recovery_archive_sha256 ? { recovery_archive_sha256: opts.recovery_archive_sha256 } : {}),
+          ...(opts.goal_purpose_repair ? { goal_purpose_repair: opts.goal_purpose_repair } : {}),
           ...(cronEvent ? { cron_event: cronEvent } : {}),
           ...(opts.goal_purpose_adoption ? { goal_purpose_adoption: opts.goal_purpose_adoption } : {}),
           ...(opts.goal_purpose_proposal ? { goal_purpose_proposal: opts.goal_purpose_proposal } : {}),
@@ -2732,7 +2797,7 @@ async function serveWithOwnerLease(
     }
     const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
       "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
-    if (cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore") {
+    if (cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" && !goalPurposeRepair) {
       const backupId = cmd.payload.arguments.backup_id as string;
       const archiveSha = await inspectSelectedRecoveryArchiveDigest(process.env, backupId, restoreStoreKey as CanonicalStateStoreKey)
         .catch(() => null);
@@ -3883,7 +3948,8 @@ async function serveWithOwnerLease(
       (command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create", "release.publish"].includes(String(command.payload.arguments.operation)))
     );
-    return isGoalPurposeAdoptionCommand(command) || isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
+    return isGoalPurposeAdoptionCommand(command) || isOfflineGoalPurposeRepairCommand(command) ||
+      isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
       isBrowserLinkNavigationReviewCommand(command) || isGmailWriteContentReviewCommand(command) ||
       isGmailDraftSendReviewCommand(command) || isGmailMessageTrashReviewCommand(command) ||
       requiresToolContentReview;
@@ -4275,6 +4341,38 @@ async function serveWithOwnerLease(
         failure_memory_gate_rechecked: true,
         ...(ctx.content_review_digest ? { content_review_digest: ctx.content_review_digest } : {}),
       });
+      if (pending.goal_purpose_repair) {
+        const plan = pending.goal_purpose_repair;
+        if (ctx.actor !== "webchat-resume-token-holder" || !pending.content_review_digest ||
+            ctx.content_review_digest !== pending.content_review_digest ||
+            pending.evaluation.approval_level !== "L3_final_review" || !pending.evaluation.final_review_required) {
+          completeApprovalResolution(command_id);
+          return { approval: "approve", executed: false, status: "offline_goal_purpose_repair_not_admitted" };
+        }
+        const handoffCode = randomBytes(32).toString("hex");
+        const admission = { plan, commandDigest: pending.command_digest, reviewDigest: pending.content_review_digest,
+          requestId: pending.log.request_id, handoffDigest: digestString(handoffCode),
+          expiresAt: Date.now() + 5 * 60_000, prepared: false };
+        goalPurposeRepairAdmissions.set(command_id, admission);
+        try {
+          const result = await executeAndEcho(pending.command, pending.log, pending.origin, {
+            skip_approval: true, actor: approvalActor, approval_evaluation: pending.evaluation,
+            command_digest: pending.command_digest, goal_purpose_repair: plan,
+            failure_memory_gate_digest: pending.failure_memory_gate_digest,
+            failure_memory_gate_actor: pending.failure_memory_gate_actor,
+            ...(executionController ? { execution_controller: executionController, execution_registered: true,
+              finish_execution_registry_on_return: false } : {}),
+          });
+          completeApprovalResolution(command_id);
+          return result.status === "success" && admission.prepared
+            ? { approval: "approve", executed: false, status: "offline_goal_purpose_repair_prepared",
+                backup_id: plan.backup_id, manifest_sha256: plan.manifest_sha256, repair_sha256: plan.repair_sha256,
+                handoff_code: handoffCode, expires_at_ms: admission.expiresAt }
+            : { approval: "approve", executed: false, status: "offline_goal_purpose_repair_not_prepared" };
+        } finally {
+          goalPurposeRepairAdmissions.delete(command_id);
+        }
+      }
       if (pending.meaning_update_proposal) {
         const proposal = pending.meaning_update_proposal;
         const args = getMeaningUpdateAdoptionArguments(pending.command);
@@ -4557,6 +4655,7 @@ async function serveWithOwnerLease(
   async function requestRecoveryMutation(
     toolName: RecoveryToolName,
     rawArguments: Record<string, unknown>,
+    goalPurposeRepair?: OfflineGoalPurposeRepairPlan,
   ): Promise<Record<string, unknown>> {
     const activeRecoveryMaintenanceReason = canonicalStoreRestoreMaintenanceCommandId
       ? "canonical_state_restore_in_progress"
@@ -4583,8 +4682,11 @@ async function serveWithOwnerLease(
     const latestBackupId = toolName === "recovery.restore"
       ? snapshot.recovery_backups.latest_backup_id
       : null;
-    const arguments_ = normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
-    if (toolName === "recovery.restore" && arguments_.store_key === undefined) {
+    const arguments_: Record<string, string> = goalPurposeRepair
+      ? { backup_id: goalPurposeRepair.backup_id, manifest_sha256: goalPurposeRepair.manifest_sha256,
+          repair_sha256: goalPurposeRepair.repair_sha256, scope_kind: "offline_goal_purpose", confirm: "RESTORE" }
+      : normalizeRecoveryMutationArguments(toolName, rawArguments, { latestBackupId });
+    if (toolName === "recovery.restore" && arguments_.store_key === undefined && !goalPurposeRepair) {
       return {
         status: "blocked_runtime_restore_requires_offline_gateway",
         executed: false,
@@ -4659,7 +4761,7 @@ async function serveWithOwnerLease(
         next_action: "指定backup・store・scope digestの読み取り照合を確認してください。復元要求は作成されていません。",
       };
     }
-    if (toolName === "recovery.restore") {
+    if (toolName === "recovery.restore" && !goalPurposeRepair) {
       const archiveSha = await inspectSelectedRecoveryArchiveDigest(
         process.env, arguments_.backup_id!, arguments_.store_key as CanonicalStateStoreKey,
       ).catch(() => null);
@@ -4709,7 +4811,8 @@ async function serveWithOwnerLease(
       timestamp: log.timestamp,
       payload: hdsDecisionHistoryPayload(log, command),
     });
-    if (!command || command.type !== "tool_call" || command.payload.tool_name !== toolName) {
+    if (!command || command.type !== "tool_call" || command.payload.tool_name !== toolName ||
+        (goalPurposeRepair && !offlineGoalPurposeRepairMatches(command, goalPurposeRepair))) {
       if (command) hds.onCommandLifecycle(command.id, "approval_rejected", {
         actor: authorityOrigin.user,
         reason: "recovery_hds_operation_mismatch",
@@ -4737,6 +4840,8 @@ async function serveWithOwnerLease(
       actor: authorityOrigin.user,
       approval_evaluation: evaluation,
       recovery_archive_sha256: arguments_.expected_archive_sha256,
+      goal_purpose_repair: goalPurposeRepair,
+      quiet_approval_notice: Boolean(goalPurposeRepair),
     });
     if (result.status !== "approval_required") {
       return {
@@ -4782,7 +4887,8 @@ async function serveWithOwnerLease(
         restore_effect_scope: restoreEffectScope,
         scope_applicability: planScopeInspection,
       } : {}),
-      next_action: "Review this exact operation and target in the owner approval queue. A fresh owner L3 approval token is required; this request has not executed.",
+      next_action: goalPurposeRepair ? "承認画面で対象のJ/M台帳を確認してください。承認後に停止中の復旧用コードを発行します。"
+        : "Review this exact operation and target in the owner approval queue. A fresh owner L3 approval token is required; this request has not executed.",
     };
   }
 
@@ -5034,7 +5140,8 @@ async function serveWithOwnerLease(
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
-        requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption),
+        requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption ||
+          pendingApprovals.get(id)?.goal_purpose_repair),
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
           requestTaskExecutionCancellation(command_id, ctx),
@@ -5185,6 +5292,13 @@ async function serveWithOwnerLease(
         },
         inspectBackup: async () => inspectLatestRecoveryBackup(process.env),
         inspectRestorePlan: async (backupId: string) => planOfflineRecoveryRestore(process.env, backupId),
+        prepareGoalPurposeRepair: async (body: WebChatGoalPurposeRepairRequest) => {
+          const selector = readOfflineGoalPurposeRepairSelector(body);
+          if (!selector) throw new Error("invalid_offline_goal_purpose_repair_selector");
+          const plan = await planOfflineGoalPurposeRepair(process.env, selector);
+          if (!plan || !sameOfflineGoalPurposeRepair(plan, selector)) return { status: "offline_goal_purpose_repair_preflight_changed", executed: false };
+          return requestRecoveryMutation("recovery.restore", {}, plan);
+        },
         inspectScopeApplicability: async (body: Record<string, unknown>) =>
           inspectRecoveryScopeApplicability(process.env, body),
         inspectLedgerState: async () => {
@@ -5948,8 +6062,49 @@ async function serveWithOwnerLease(
       ? "valid" : "stale";
   }
 
+  async function guardedGoalPurposeRepairReview(pending: PendingApproval): Promise<Extract<WebChatApprovalContentReview, {
+    kind: "goal_purpose_repair";
+  }> | null> {
+    const plan = pending.goal_purpose_repair;
+    if (!plan || pending.evaluation.context.operation !== "recovery.restore" ||
+        !offlineGoalPurposeRepairMatches(pending.command, plan) || executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.operationPlanCommandIsCurrent(pending.command) || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return null;
+    const current = await planOfflineGoalPurposeRepair(process.env, plan);
+    if (!current || !sameOfflineGoalPurposeRepair(plan, current) || pendingApprovals.get(pending.command.id) !== pending) return null;
+    const review_digest = digestString(JSON.stringify([
+      "offline-goal-purpose-repair-review.v1", pending.command.id, pending.log.request_id, pending.command_digest,
+      plan.backup_id, plan.manifest_sha256, plan.repair_sha256, plan.stores,
+    ]));
+    return { kind: "goal_purpose_repair", operation: "recovery.restore", command_id: pending.command.id,
+      backup_id: plan.backup_id, manifest_sha256: plan.manifest_sha256, repair_sha256: plan.repair_sha256,
+      stores: plan.stores, command_digest: pending.command_digest, review_digest, used_for_authority: false, may_execute: false };
+  }
+
+  function recordGoalPurposeRepairReviewEvidence(
+    event: "offline_goal_purpose_repair_content_reviewed" | "offline_goal_purpose_repair_authorized",
+    requestId: string, commandId: string, commandDigest: string, reviewDigest: string, repairSha256: string,
+  ): void {
+    hds.getAudit().append({ kind: "authority_event", event, request_id: requestId, command_id: commandId,
+      actor: "webchat-resume-token-holder", operation: "recovery.restore", reason: event,
+      offline_goal_purpose_repair_review: { command_digest: commandDigest, review_digest: reviewDigest, repair_sha256: repairSha256 },
+      timestamp: Date.now() });
+  }
+
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
+    if (pending?.goal_purpose_repair) {
+      const review = await guardedGoalPurposeRepairReview(pending);
+      if (!review || approvalRecoveryStore.state(command_id) !== "pending") return null;
+      if (pending.content_review_digest === review.review_digest) return review;
+      try {
+        recordGoalPurposeRepairReviewEvidence("offline_goal_purpose_repair_content_reviewed", pending.log.request_id,
+          command_id, review.command_digest, review.review_digest, review.repair_sha256);
+      } catch { return null; }
+      recordApprovalHistory("offline_goal_purpose_repair_content_reviewed", pending.command, pending.log, pending.origin,
+        "webchat-resume-token-holder", pending.evaluation, { content_review_digest: review.review_digest });
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+      return review;
+    }
     if (pending?.goal_purpose_adoption) {
       const review = goalPurposeAdoptionReview(pending);
       if (!review || approvalRecoveryStore.state(command_id) !== "pending" || !hds.recordGoalPurposeAdoptionContentReview({
@@ -6476,6 +6631,13 @@ async function serveWithOwnerLease(
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
     if (signal?.aborted) return "cancelled";
+    if (pending.goal_purpose_repair) {
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      const review = await guardedGoalPurposeRepairReview(pending);
+      if (signal?.aborted) return "cancelled";
+      return review?.review_digest === content_review_digest ? "valid" : "stale";
+    }
     if (isBrowserFormInputReviewCommand(pending.command)) {
       if (executorCommandDigest(pending.command) !== pending.command_digest ||
           !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
@@ -6859,6 +7021,7 @@ async function serveWithOwnerLease(
       reason: p.evaluation.reason,
       ...(p.evaluation.context.operation === "recovery.restore" && p.recovery_archive_sha256 &&
           /^[a-f0-9]{64}$/.test(p.recovery_archive_sha256) ? { recovery_archive_sha256: p.recovery_archive_sha256 } : {}),
+      ...(p.goal_purpose_repair ? { goal_purpose_repair: true as const } : {}),
       content_review_required: pendingApprovalNeedsContentReview(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||

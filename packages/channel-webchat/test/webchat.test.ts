@@ -3512,6 +3512,9 @@ describe("WebChatChannel — Control Center shell", () => {
       "recovery-token": { value: MAINTENANCE_TOKEN, text: "", hidden: false },
       "recovery-restore-plan-status": { value: "", text: "", hidden: false },
       "recovery-restore-plan-details": { value: "", text: "", hidden: true },
+      "request-goal-purpose-repair": { value: "", text: "", hidden: true, disabled: true },
+      "goal-purpose-repair-request-status": { value: "", text: "", hidden: false },
+      "approval-token": { value: RESUME_TOKEN, text: "", hidden: true },
     };
     const report = {
       surface: "offline_recovery_restore_plan", schema_version: 1, status: "planned",
@@ -3524,6 +3527,10 @@ describe("WebChatChannel — Control Center shell", () => {
         { store_key: "goal_purpose_m_state", archive_status: "verified", disposition: "requires_store_reconciliation" },
       ],
       goal_purpose_replay: { status: "matched", verified_purpose_count: 2, original: "raw-purpose-sentinel" },
+      goal_purpose_repair: { repair_sha256: "c".repeat(64), stores: [
+        { store_key: "goal_purpose_j_control", target_state: "missing", raw: "raw-repair-sentinel" },
+        { store_key: "goal_purpose_m_state", target_state: "matched" },
+      ] },
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
     };
     let nextReport: unknown = report;
@@ -3532,6 +3539,19 @@ describe("WebChatChannel — Control Center shell", () => {
       byId: (id: keyof typeof elements) => elements[id],
       setText: (id: keyof typeof elements, value: string) => { elements[id].text = value; },
       sessionStorage: { setItem() {} },
+      authHeaders: (token: string) => ({ authorization: `Bearer ${token}` }),
+      hasNoStore: () => true,
+      setActiveScreen: (screen: string) => { expect(screen).toBe("approvals"); },
+      loadApprovals: async () => {},
+      fetch: async (url: string, options: RequestInit) => {
+        expect(url).toBe("/recovery/goal-purpose-repair");
+        expect(options).toMatchObject({ method: "POST", cache: "no-store" });
+        expect(JSON.parse(String(options.body))).toEqual({
+          backup_id: "backup-review", manifest_sha256: report.manifest_sha256,
+          repair_sha256: report.goal_purpose_repair.repair_sha256,
+        });
+        return { status: 202, json: async () => ({ status: "approval_required", executed: false, command_id: "repair-command" }) };
+      },
       recoveryInspectionDigest(value: unknown) {
         return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null;
       },
@@ -3552,7 +3572,12 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(details.text).toContain("委任目的M状態台帳　収録済み・整合確認済み／台帳の照合が必要");
     const replayRow = "委任目的J/Mと現行監査の読み取り専用照合　";
     expect(details.text).toContain(replayRow + "記録と原文が一致（2件）");
+    expect(details.text).toContain("委任目的J制御台帳　現行：なし");
+    expect(details.text).toContain("復旧計画 SHA-256 " + report.goal_purpose_repair.repair_sha256);
     expect(details.text).not.toMatch(/raw-.*-sentinel|__proto__|backup-review/);
+    expect(elements["request-goal-purpose-repair"]).toMatchObject({ hidden: false, disabled: false });
+    await execute("requestGoalPurposeRepair()");
+    expect(elements["request-goal-purpose-repair"].disabled).toBe(true);
     for (const [status, label] of [
       ["no_current_purpose", "照合対象の委任目的レコードなし"],
       ["not_included", "バックアップに未収録"],
@@ -3562,6 +3587,7 @@ describe("WebChatChannel — Control Center shell", () => {
       await execute("inspectRecoveryRestorePlan()");
       expect(details.text).toContain(replayRow + label);
       expect(details.text).not.toContain("記録と原文が一致");
+      expect(elements["request-goal-purpose-repair"]).toMatchObject({ hidden: true, disabled: true });
     }
     for (const replay of [undefined, { status: "__proto__", verified_purpose_count: 0 },
       { status: "matched", verified_purpose_count: 0 }, { status: "unverified", verified_purpose_count: 2 }]) {
@@ -3603,6 +3629,13 @@ describe("WebChatChannel — Control Center shell", () => {
         { store_key: "goal_purpose_m_state", archive_status: "verified", disposition: "requires_store_reconciliation" },
       ],
       goal_purpose_replay: { status: "matched", verified_purpose_count: 1, purpose_text: "private-purpose-sentinel" },
+      goal_purpose_repair: {
+        repair_sha256: "c".repeat(64),
+        stores: [
+          { store_key: "goal_purpose_j_control", target_state: "missing", private: "private-repair-sentinel" },
+          { store_key: "goal_purpose_m_state", target_state: "matched" },
+        ],
+      },
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
       secret: "private-sentinel",
     } as const;
@@ -3655,12 +3688,17 @@ describe("WebChatChannel — Control Center shell", () => {
         used_for_authority: false, may_execute: false,
       });
       expect(response.body.goal_purpose_replay).toEqual({ status: "matched", verified_purpose_count: 1 });
+      expect(response.body.goal_purpose_repair).toEqual({
+        repair_sha256: report.goal_purpose_repair.repair_sha256,
+        stores: report.goal_purpose_repair.stores.map(({ store_key, target_state }) => ({ store_key, target_state })),
+      });
       expect(JSON.stringify(response.body)).not.toContain("private");
       for (const backupId of ["backup-legacy", "backup-malformed", "backup-incomplete-pair", "backup-changed"]) {
         const omitted = await postJson(ctx.port, route, { backup_id: backupId }, auth);
         expect(omitted.status).toBe(200);
         expect(omitted.headers.get("cache-control")).toBe("no-store");
         expect(omitted.body).not.toHaveProperty("goal_purpose_replay");
+        expect(omitted.body).not.toHaveProperty("goal_purpose_repair");
       }
       const error = await postJson(ctx.port, route, { backup_id: "backup-throw" }, auth);
       expect(error.status).toBe(500);
@@ -3669,6 +3707,188 @@ describe("WebChatChannel — Control Center shell", () => {
     } finally {
       await ctx.teardown();
     }
+  });
+
+  it("separates offline goal-purpose repair submission, exact L3 review, and one-time handoff", async () => {
+    const binding = { backup_id: "backup-repair", manifest_sha256: "a".repeat(64), repair_sha256: "b".repeat(64) };
+    const proof = "c".repeat(64);
+    const secret = "d".repeat(64);
+    const commandId = "repair-pending";
+    const stores = [
+      { store_key: "goal_purpose_j_control", target_state: "missing" },
+      { store_key: "goal_purpose_m_state", target_state: "matched" },
+    ] as const;
+    let reviewed = false;
+    const submissions: unknown[] = [];
+    const decisions: unknown[] = [];
+    const expires = Date.now() + 60_000;
+    const ctx = await setup({
+      rate_limits: false,
+      recovery: {
+        getSnapshot: async () => ({}),
+        prepareGoalPurposeRepair: async value => {
+          submissions.push(value);
+          return { status: "approval_required", executed: false, command_id: commandId, handoff_code: secret };
+        },
+      },
+      approval: {
+        list: async () => [],
+        requiresApprovalEndpoint: id => id === commandId,
+        reviewContent: async id => {
+          if (id !== commandId) return null;
+          reviewed = true;
+          return {
+            kind: "goal_purpose_repair", operation: "recovery.restore", command_id: id, command_digest: "e".repeat(64),
+            review_digest: proof, ...binding, stores, used_for_authority: false, may_execute: false,
+            handoff_code: secret,
+          };
+        },
+        validateContentReview: async (_id, digest) => !reviewed || !digest ? "required" : digest === proof ? "valid" : "stale",
+      },
+      onResume: async (id, verdict) => {
+        decisions.push([id, verdict]);
+        return { status: "offline_goal_purpose_repair_prepared", approval: "approve", executed: false,
+          ...binding, handoff_code: secret, expires_at_ms: expires, raw: "private fixture" };
+      },
+    });
+    try {
+      await ctx.ch.start(async () => {});
+      const maintenance = { authorization: `Bearer ${MAINTENANCE_TOKEN}` };
+      const resume = { authorization: `Bearer ${RESUME_TOKEN}` };
+      const prepare = "/recovery/goal-purpose-repair";
+      const approval = "/approval/" + commandId;
+      expect((await postJson(ctx.port, prepare, binding, resume)).status).toBe(401);
+      for (const value of [{ ...binding, backup_id: "latest" }, { ...binding, repair_sha256: "bogus" },
+        { ...binding, handoff_code: secret }]) {
+        expect((await postJson(ctx.port, prepare, value, maintenance)).status).toBe(400);
+      }
+      const pending = await postJson(ctx.port, prepare, binding, maintenance);
+      expect(pending.status).toBe(202);
+      expect(pending.headers.get("cache-control")).toBe("no-store");
+      expect(pending.body).toEqual({ status: "approval_required", executed: false, command_id: commandId });
+      expect(submissions).toEqual([binding]);
+
+      expect((await postJson(ctx.port, approval + "/content", {}, maintenance)).status).toBe(401);
+      const issued = await ctx.ch.issueResumeApprovalToken(commandId);
+      const decision = { verdict: "approve", approval_token: issued?.token, content_review_digest: proof };
+      expect((await postJson(ctx.port, "/resume", { request_id: commandId, ...decision }, resume)).status).toBe(409);
+      expect((await postJson(ctx.port, approval, decision, resume)).status).toBe(409);
+      expect(decisions).toEqual([]);
+      const content = await postJson(ctx.port, approval + "/content", {}, resume);
+      expect(content.status).toBe(200);
+      expect(content.headers.get("cache-control")).toBe("no-store");
+      expect(content.body).toMatchObject({ ...binding, stores, review_digest: proof });
+      expect(content.body).not.toHaveProperty("handoff_code");
+      expect((await postJson(ctx.port, approval, { ...decision, content_review_digest: "f".repeat(64) }, resume)).status).toBe(409);
+
+      const approved = await postJson(ctx.port, approval, decision, resume);
+      expect(approved.status).toBe(200);
+      expect(approved.headers.get("cache-control")).toBe("no-store");
+      expect(approved.body).toEqual({ ok: true, result: {
+        approval: "approve", executed: false, status: "offline_goal_purpose_repair_prepared",
+        ...binding, handoff_code: secret, expires_at_ms: expires,
+      } });
+      const replay = await postJson(ctx.port, approval, decision, resume);
+      expect(replay.status).toBeGreaterThanOrEqual(400);
+      expect(JSON.stringify(replay.body)).not.toContain(secret);
+      expect(decisions).toEqual([[commandId, "approve"]]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("shows the goal-purpose repair code only as text for the reviewed no-store approval", async () => {
+    const extract = (declaration: string) => {
+      const start = CONTROL_CENTER_SCRIPT.indexOf(declaration);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const tail = CONTROL_CENTER_SCRIPT.slice(start + declaration.length);
+      const next = tail.search(/\n {6}(?:async )?function /);
+      return CONTROL_CENTER_SCRIPT.slice(start, start + declaration.length + next);
+    };
+    const declarations = [
+      "function hasNoStore(", "function goalPurposeRepairBinding(", "function goalPurposeRepairStoreLines(",
+      "function clearGoalPurposeRepairHandoff(", "function showGoalPurposeRepairHandoff(", "async function submitApproval(",
+      "async function reviewApprovalContent(",
+    ].map(extract).join("\n");
+    const commandId = "repair-command";
+    const binding = { backup_id: "repair-pack", manifest_sha256: "a".repeat(64), repair_sha256: "b".repeat(64) };
+    const digest = "c".repeat(64);
+    const code = "d".repeat(64);
+    const expires = Date.now() + 60_000;
+    const states = [
+      { store_key: "goal_purpose_j_control", target_state: "missing" },
+      { store_key: "goal_purpose_m_state", target_state: "different" },
+    ];
+    const review = { command_id: commandId, kind: "goal_purpose_repair", operation: "recovery.restore",
+      ...binding, stores: states, command_digest: "e".repeat(64), review_digest: digest, used_for_authority: false, may_execute: false };
+    const handoff = { approval: "approve", executed: false, status: "offline_goal_purpose_repair_prepared", ...binding,
+      handoff_code: code, expires_at_ms: expires };
+    const outputs: Record<string, string> = {};
+    const nodes = {
+      "approval-token": { value: RESUME_TOKEN },
+      "goal-purpose-repair-handoff": { hidden: true },
+    };
+    const approve = { disabled: true };
+    const view = {
+      textContent: "",
+      replaceChildren(child: { textContent: string }) { this.textContent = child.textContent; },
+    };
+    const card = {
+      isConnected: true,
+      getAttribute: (name: string) => name === "data-command" ? commandId : name === "data-goal-purpose-repair" ? "" : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : approve,
+    };
+    let header = "no-store";
+    let nextResult = handoff;
+    const requests: string[] = [];
+    const context = {
+      document: { querySelectorAll: () => [card], createElement: () => ({ textContent: "" }) },
+      state: { approvalContentDigests: {}, goalPurposeRepairReviews: {}, goalPurposeRepairHandoffGeneration: 0 },
+      byId: (id: keyof typeof nodes) => nodes[id],
+      authHeaders: (token: string) => ({ authorization: `Bearer ${token}` }),
+      setText: (id: string, value: string) => { if (value.includes(code)) expect(id).toBe("goal-purpose-repair-handoff-code"); outputs[id] = value; },
+      formatDate: (value: number) => String(value),
+      loadApprovals: async () => {},
+      fetch: async (url: string, options: RequestInit) => {
+        requests.push(url);
+        expect(options).toMatchObject({ method: "POST", cache: "no-store" });
+        const reviewRequest = url.endsWith("/content");
+        if (!reviewRequest) expect(JSON.parse(String(options.body))).toEqual({
+          verdict: "approve", approval_token: "one-time", content_review_digest: digest,
+        });
+        return { ok: true, headers: new Headers({ "cache-control": header }),
+          json: async () => reviewRequest ? review : { ok: true, result: nextResult } };
+      },
+    };
+    const execute = (script: string) => new Script(declarations + "\n" + script).runInNewContext(context);
+    const submit = () => execute('submitApproval("repair-command", "approve", "one-time")');
+    await expect(submit()).rejects.toThrow(/復旧範囲を確認/);
+    expect(requests).toEqual([]);
+    await execute('reviewApprovalContent("repair-command", {})');
+    expect(view.textContent).toContain("マニフェスト SHA-256 " + binding.manifest_sha256);
+    expect(view.textContent).toContain("委任目的J制御台帳　現行：なし");
+    expect(approve.disabled).toBe(false);
+    expect(view.textContent).not.toContain(code);
+    header = "private";
+    await expect(submit()).rejects.toThrow(/安全に表示/);
+    expect(nodes["goal-purpose-repair-handoff"].hidden).toBe(true);
+    header = "no-store";
+    nextResult = { ...handoff, repair_sha256: "f".repeat(64) };
+    await expect(submit()).rejects.toThrow(/照合できません/);
+    expect(nodes["goal-purpose-repair-handoff"].hidden).toBe(true);
+
+    nextResult = handoff;
+    await submit();
+    expect(nodes["goal-purpose-repair-handoff"].hidden).toBe(false);
+    expect(outputs["goal-purpose-repair-handoff-code"]).toBe(code);
+    expect(outputs["goal-purpose-repair-command"]).toBe(
+      "recovery-apply-goal-purpose --backup-id " + binding.backup_id + " --manifest-sha256 " +
+      binding.manifest_sha256 + " --repair-sha256 " + binding.repair_sha256,
+    );
+    execute("clearGoalPurposeRepairHandoff()");
+    expect(outputs["goal-purpose-repair-handoff-code"]).toBe("");
+    expect(nodes["goal-purpose-repair-handoff"].hidden).toBe(true);
+    expect(JSON.stringify(context.state)).not.toContain(code);
   });
 
   it("routes Composio settings preparation through owner task planning without the settings write endpoint or API key input", () => {

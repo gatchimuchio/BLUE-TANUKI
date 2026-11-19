@@ -554,6 +554,10 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
       const backupId = typeof args.backup_id === "string" ? args.backup_id : undefined;
       const storeKey = typeof args.store_key === "string" ? args.store_key : undefined;
       const scopeKind = typeof args.scope_kind === "string" ? args.scope_kind : undefined;
+      if (scopeKind === "offline_goal_purpose" && backupId && typeof args.repair_sha256 === "string" &&
+          /^[a-f0-9]{64}$/.test(args.repair_sha256)) {
+        return { target_scope: "task_type", target: `recovery.restore:${backupId}:offline_goal_purpose:${args.repair_sha256}` };
+      }
       const scopeDigest = typeof args.scope_digest === "string" && /^[a-f0-9]{64}$/i.test(args.scope_digest)
         ? args.scope_digest.toLowerCase() : undefined;
       const planScope = storeKey === "operation_plans"

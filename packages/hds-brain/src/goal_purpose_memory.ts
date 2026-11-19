@@ -209,8 +209,8 @@ export function inspectGoalPurposeMemoryPair(jPath: string, mPath: string): (Pic
   const jFile = lstatSync(jPath, { bigint: true });
   const mFile = lstatSync(mPath, { bigint: true });
   if (!jFile.isFile() || !mFile.isFile() || (jFile.dev === mFile.dev && jFile.ino === mFile.ino)) return null;
-  const j = inspectJControlRecoveryLedger({ private_state_root: dirname(jPath), database_path: jPath });
-  const m = readVerifiedMemoryRecoveryLedger({ private_state_root: dirname(mPath), database_path: mPath });
+  const j = inspectJControlRecoveryLedger({ private_state_root: dirname(jPath), database_path: jPath, standalone_schema: true });
+  const m = readVerifiedMemoryRecoveryLedger({ private_state_root: dirname(mPath), database_path: mPath, standalone_schema: true });
   if (j.status !== "verified" || !m) return null;
 
   const jUpdates = new Map(j.updates.map((entry) => [entry.update_id_digest, entry]));

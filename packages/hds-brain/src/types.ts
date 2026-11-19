@@ -618,6 +618,8 @@ export type AuthorityEventKind =
   | "goal_purpose_adoption_content_reviewed"
   | "goal_purpose_adoption_committed"
   | "goal_purpose_change_committed"
+  | "offline_goal_purpose_repair_content_reviewed"
+  | "offline_goal_purpose_repair_authorized"
   | "approval_asked"
   | "approval_allowed"
   | "approval_denied";
@@ -649,6 +651,7 @@ export interface AuthorityEventLog {
   goal_governance_authorization?: GoalGovernanceAuthorization;
   goal_purpose_adoption_event?: GoalPurposeAdoptionEvent;
   goal_purpose_adoption_review?: GoalPurposeAdoptionReviewBinding;
+  offline_goal_purpose_repair_review?: { command_digest: string; review_digest: string; repair_sha256: string };
   timestamp: number;
 }
 

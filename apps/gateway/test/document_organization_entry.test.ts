@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { once } from "node:events";
@@ -562,6 +562,207 @@ describe("delegated goal purpose owner review", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 90_000);
+
+  it("repairs the exact L3-reviewed goal-purpose pair through the compiled offline recovery CLI", async () => {
+    const gatewayPort = await reserveLoopbackPort();
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-offline-repair-"));
+    const auditDir = join(tempRoot, "audit");
+    const auditFile = join(auditDir, "audit.jsonl");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const stateRoot = join(tempRoot, "state");
+    const recoveryRoot = join(tempRoot, "recovery");
+    const envFile = join(tempRoot, "fixture.env");
+    const purpose = "合成復旧確認として、同じ委任目的を継続して観測する。";
+    const pairRoot = join(stateRoot, "private-state", "goal-purpose-memory");
+    const targets = [join(pairRoot, "j-control.sqlite"), join(pairRoot, "m-state.sqlite")];
+    const env = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, join(tempRoot, "sessions"));
+    env.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    env.BLUE_TANUKI_FILE_ROOT = join(tempRoot, "workspace");
+    env.BLUE_TANUKI_RECOVERY_DIR = recoveryRoot;
+    env.LLM_BACKEND = "stub";
+    env.BLUE_TANUKI_LLM_BACKEND_HINT = "stub";
+    delete env.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON;
+    delete env.LLM_PROVIDERS_JSON;
+
+    const request = (route: string, bearer: string, method = "GET", body?: Record<string, unknown>) =>
+      fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method,
+        headers: { authorization: `Bearer ${bearer}`, ...(body ? { "content-type": "application/json" } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(10_000),
+      });
+    const approvalRoute = (commandId: string) => `/approval/${encodeURIComponent(commandId)}`;
+    const pendingApproval = async (commandId: string) => {
+      const response = await request("/approval", resumeToken);
+      expect(response.status).toBe(200);
+      const { pending_approvals } = await response.json() as { pending_approvals: Record<string, unknown>[] };
+      const pending = pending_approvals.find((entry) => entry.command_id === commandId);
+      expect(pending).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+        content_review_required: true, approval_token: expect.any(String) });
+      return pending!;
+    };
+    const observeGoals = async () => {
+      const response = await request("/owner/task-goals", ownerToken);
+      expect(response.status).toBe(200);
+      return (await response.json() as { goals: unknown[] }).goals;
+    };
+    const expectPair = (expected: readonly Buffer[]) => {
+      targets.forEach((target, index) => expect(readFileSync(target).equals(expected[index]!), target).toBe(true));
+    };
+    const startGateway = () => spawnCaptured([gatewayEntry, "--serve", "--env-file", envFile], env);
+
+    let gateway: CapturedProcess | undefined;
+    try {
+      mkdirSync(env.BLUE_TANUKI_FILE_ROOT);
+      writeFileSync(envFile, "# synthetic recovery test\n");
+      gateway = startGateway();
+      await waitForHealth(gatewayPort, gateway);
+
+      const adoption = await request("/owner/goal-purpose-adoption", ownerToken, "POST", { purpose_text: purpose });
+      expect(adoption.status).toBe(202);
+      const { command_id: adoptionId } = await adoption.json() as { command_id: string };
+      const pendingAdoption = await pendingApproval(adoptionId);
+      const adoptionReview = await request(`${approvalRoute(adoptionId)}/content`, resumeToken, "POST");
+      expect(adoptionReview.status).toBe(200);
+      const adoptionContent = await adoptionReview.json() as { review_digest: string };
+      const adopted = await request(approvalRoute(adoptionId), resumeToken, "POST", {
+        verdict: "approve", approval_token: pendingAdoption.approval_token, content_review_digest: adoptionContent.review_digest,
+      });
+      expect(adopted.status).toBe(200);
+      const goals = await observeGoals();
+      expect(goals).toEqual([{ goal_ref: expect.stringMatching(/^goal_[a-f0-9]{16,64}$/), purpose_version: 1,
+        purpose_preview: purpose }]);
+
+      const backup = await request("/recovery/backup", maintenanceToken, "POST", {});
+      expect(backup.status).toBe(200);
+      const { result: { backup_id } } = await backup.json() as { result: { backup_id: string } };
+      const archiveRoot = join(recoveryRoot, backup_id);
+      const manifest = readFileSync(join(archiveRoot, "manifest.json"));
+      const manifest_sha256 = createHash("sha256").update(manifest).digest("hex");
+      const { canonical_state_snapshot: snapshot } = JSON.parse(manifest.toString("utf8")) as {
+        canonical_state_snapshot: { entries: { store_key: string; archive_rel_path?: string }[] };
+      };
+      const storeKeys = ["goal_purpose_j_control", "goal_purpose_m_state"] as const;
+      const archivedPair = storeKeys.map((key) => {
+        const archived = snapshot.entries.find((entry) => entry.store_key === key)?.archive_rel_path;
+        expect(archived, key).toBeTypeOf("string");
+        return readFileSync(join(archiveRoot, archived!));
+      });
+
+      await stopChild(gateway.child);
+      const j = new DatabaseSync(targets[0]!);
+      try {
+        j.exec("PRAGMA application_id = 123456789");
+      } finally {
+        j.close();
+      }
+      gateway = startGateway();
+      await waitForHealth(gatewayPort, gateway);
+      expect(await observeGoals()).toEqual(goals);
+      const changedPair = targets.map((target) => readFileSync(target));
+      expect(changedPair[0]!.equals(archivedPair[0]!)).toBe(false);
+
+      const plan = await request("/recovery/restore-plan", maintenanceToken, "POST", { backup_id });
+      expect(plan.status).toBe(200);
+      expect(plan.headers.get("cache-control")).toBe("no-store");
+      const planBody = await plan.json() as { goal_purpose_repair?: { repair_sha256: string; stores: unknown[] } };
+      expect(planBody).toMatchObject({ status: "planned", manifest_sha256, may_execute: false, used_for_authority: false,
+        goal_purpose_replay: { status: "matched", verified_purpose_count: 1 },
+        goal_purpose_repair: { repair_sha256: expect.stringMatching(/^[a-f0-9]{64}$/), stores: [
+          { store_key: storeKeys[0], target_state: "different" }, { store_key: storeKeys[1], target_state: "matched" },
+        ] },
+      });
+      const repair = planBody.goal_purpose_repair!;
+      const selector = { backup_id, manifest_sha256, repair_sha256: repair.repair_sha256 };
+      const genericRestore = await request("/recovery/restore", maintenanceToken, "POST", { backup_id, confirm: "RESTORE" });
+      expect(genericRestore.status).toBe(200);
+      expect(await genericRestore.json()).toMatchObject({ result: { status: "blocked_runtime_restore_requires_offline_gateway" } });
+
+      const preparation = "/recovery/goal-purpose-repair";
+      expect((await request(preparation, token, "POST", selector)).status).toBe(401);
+      const queued = await request(preparation, maintenanceToken, "POST", selector);
+      expect(queued.status).toBe(202);
+      expect(queued.headers.get("cache-control")).toBe("no-store");
+      const { command_id: repairId } = await queued.json() as { command_id: string };
+      const pendingRepair = await pendingApproval(repairId);
+      const approval = { verdict: "approve", approval_token: pendingRepair.approval_token };
+      expect((await request(approvalRoute(repairId), resumeToken, "POST", approval)).status).toBe(409);
+      const review = await request(`${approvalRoute(repairId)}/content`, resumeToken, "POST");
+      expect(review.status).toBe(200);
+      expect(review.headers.get("cache-control")).toBe("no-store");
+      const reviewBody = await review.json() as { review_digest: string };
+      expect(reviewBody).toMatchObject({ kind: "goal_purpose_repair", operation: "recovery.restore", command_id: repairId,
+        ...selector, stores: repair.stores, used_for_authority: false, review_digest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(JSON.stringify(reviewBody).includes(purpose)).toBe(false);
+      const approved = await request(approvalRoute(repairId), resumeToken, "POST", {
+        ...approval, content_review_digest: reviewBody.review_digest,
+      });
+      expect(approved.status).toBe(200);
+      expect(approved.headers.get("cache-control")).toBe("no-store");
+      const { ok, result: { handoff_code: code, ...prepared } } = await approved.json() as {
+        ok: boolean; result: { handoff_code: string; expires_at_ms: number };
+      };
+      expect(ok).toBe(true);
+      expect(prepared).toMatchObject({ status: "offline_goal_purpose_repair_prepared", executed: false, ...selector,
+        expires_at_ms: expect.any(Number) });
+      expect(/^[a-f0-9]{64}$/.test(code)).toBe(true);
+      expect(prepared.expires_at_ms).toBeGreaterThan(Date.now());
+      expectPair(changedPair);
+
+      const apply = (handoffCode: string) => {
+        const run = spawnSync(process.execPath, [gatewayEntry, "--recovery-apply-goal-purpose", "--backup-id", backup_id,
+          "--manifest-sha256", manifest_sha256, "--repair-sha256", repair.repair_sha256, "--env-file", envFile, "--json"], {
+          cwd: repositoryRoot, env, input: `${handoffCode}\n`, encoding: "utf8", timeout: 15_000, windowsHide: true,
+        });
+        if (run.error) throw run.error;
+        expect(`${run.stdout}\n${run.stderr}`.includes(code)).toBe(false);
+        return { exit: run.status, result: JSON.parse(run.stdout) as { status: string } };
+      };
+      const blocked = apply(code);
+      expect(blocked.exit).toBe(2);
+      expect(["owner_lock_busy", "owner_lock_sidecars_present"]).toContain(blocked.result.status);
+      expectPair(changedPair);
+      await stopChild(gateway.child);
+      const auditBefore = readFileSync(auditFile);
+      const historyBefore = readFileSync(historyFile);
+      const incorrectCode = `${code[0] === "0" ? "1" : "0"}${code.slice(1)}`;
+      expect(apply(incorrectCode)).toEqual({ exit: 2, result: { status: "authorization_required" } });
+      expectPair(changedPair);
+      const receiptOffset = auditBefore.indexOf('"event":"offline_goal_purpose_repair_authorized"');
+      expect(receiptOffset).toBeGreaterThan(0);
+      const receiptStart = auditBefore.lastIndexOf(0x0a, receiptOffset) + 1;
+      expect(receiptStart).toBeGreaterThan(0);
+      // Remove only the synthetic authorization tail while preserving a valid hash-chain prefix.
+      writeFileSync(auditFile, auditBefore.subarray(0, receiptStart));
+      try {
+        expect(apply(code)).toEqual({ exit: 2, result: { status: "preflight_changed" } });
+        expectPair(changedPair);
+      } finally {
+        writeFileSync(auditFile, auditBefore);
+      }
+      expect(apply(code)).toEqual({ exit: 0, result: { status: "applied" } });
+      expectPair(archivedPair);
+      const preservedDirectories = readdirSync(pairRoot).filter((name) => name.startsWith(".offline-goal-repair-"));
+      expect(preservedDirectories).toHaveLength(1);
+      for (const [index, filename] of ["before-j-control.sqlite", "before-m-state.sqlite"].entries()) {
+        expect(readFileSync(join(pairRoot, preservedDirectories[0]!, filename)).equals(changedPair[index]!)).toBe(true);
+      }
+      expect(apply(code)).toEqual({ exit: 2, result: { status: "authorization_required" } });
+      expectPair(archivedPair);
+      expect(readFileSync(auditFile).equals(auditBefore)).toBe(true);
+      expect(readFileSync(historyFile).equals(historyBefore)).toBe(true);
+      expect(auditBefore.includes(code)).toBe(false);
+      expect([...gateway.stdout, ...gateway.stderr].join("\n").includes(code)).toBe(false);
+
+      gateway = startGateway();
+      await waitForHealth(gatewayPort, gateway);
+      expect(await observeGoals()).toEqual(goals);
+      await stopChild(gateway.child);
+    } finally {
+      if (gateway) await stopChild(gateway.child);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 150_000);
 
   it("BT-U-E2E-01: keeps synthetic file.delete behind reviewed L3 and stops on a stale target", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-file-delete-review-"));

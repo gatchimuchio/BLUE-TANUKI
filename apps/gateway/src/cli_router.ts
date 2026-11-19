@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { relative } from "node:path";
+import { createInterface } from "node:readline";
+import { Writable } from "node:stream";
 import { createLogger } from "@blue-tanuki/core";
 import { loadEnvFileFromArgv, stripEnvFileArgs } from "./env_file.js";
 import { applyGatewaySafeMode } from "./safe_mode.js";
@@ -272,7 +275,7 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
   const json = args.includes("--json");
   function writeResult(status: string, successful = false): void {
     writeStdout(json ? JSON.stringify({ status, used_for_authority: false })
-      : `初期化の照合結果 ${status}`);
+      : `復旧処理の照合結果 ${status}`);
     process.exitCode = successful ? 0 : 2;
   }
 
@@ -311,14 +314,114 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
 
   try {
     const { reconcileRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
-    const { observeFactoryResetRecoveryState } = await import("./recovery_surface.js");
+    const { observeFactoryResetRecoveryState, hasOfflineGoalPurposeRepairAuditReceipt, observeOfflineGoalPurposeRepair } =
+      await import("./recovery_surface.js");
     const result = await reconcileRuntimeRecoveryFence(env, {
       backup_id: backupId, manifest_sha256: manifestSha256,
-    }, evidence => observeFactoryResetRecoveryState(env, evidence));
+    }, async (evidence) => {
+      if (evidence.operation === "recovery.factory_reset") return observeFactoryResetRecoveryState(env, evidence);
+      return hasOfflineGoalPurposeRepairAuditReceipt(env, evidence) ? observeOfflineGoalPurposeRepair(env, evidence) : null;
+    });
     writeResult(result.status, result.status !== "unresolved");
   } catch {
     writeResult("unresolved");
   }
+}
+
+const goalPurposeRepairFlag = "--recovery-apply-goal-purpose";
+
+async function runRecoveryApplyGoalPurposeCli(argv: string[]): Promise<void> {
+  const json = argv.includes("--json");
+  function writeResult(status: string): void {
+    writeStdout(json ? JSON.stringify({ status }) : `委任目的J/Mの復旧結果 ${status}`);
+    process.exitCode = status === "applied" ? 0 : 2;
+  }
+
+  const inputs = new Map<string, string>();
+  const flags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index]!;
+    if (flags.has(flag)) { writeResult("invalid_arguments"); return; }
+    flags.add(flag);
+    if (flag === goalPurposeRepairFlag || flag === "--json") continue;
+    const value = argv[index + 1];
+    if (!["--backup-id", "--manifest-sha256", "--repair-sha256", "--env-file"].includes(flag) ||
+        !value || value.startsWith("--")) { writeResult("invalid_arguments"); return; }
+    inputs.set(flag, value);
+    index += 1;
+  }
+  const { readOfflineGoalPurposeRepairSelector } = await import("./recovery_tools.js");
+  const selector = readOfflineGoalPurposeRepairSelector({ backup_id: inputs.get("--backup-id"),
+    manifest_sha256: inputs.get("--manifest-sha256"), repair_sha256: inputs.get("--repair-sha256") });
+  if (!selector || !inputs.has("--env-file")) { writeResult("invalid_arguments"); return; }
+
+  const env = { ...process.env };
+  try {
+    const config = await loadEnvFileFromArgv(argv, env);
+    if (!config || (env.BLUE_TANUKI_ENV_FILE && relative(config.path, env.BLUE_TANUKI_ENV_FILE) !== "")) {
+      writeResult("configuration_unavailable");
+      return;
+    }
+    env.BLUE_TANUKI_ENV_FILE = config.path;
+  } catch {
+    writeResult("configuration_unavailable");
+    return;
+  }
+
+  const handoffDigest = await readRecoveryHandoffDigest().catch(() => null);
+  if (!handoffDigest) { writeResult("authorization_required"); return; }
+
+  const { EmergencyStopStateStore } = await import("./emergency_stop_state_store.js");
+  const { applyUnderOfflineGoalPurposeRepairLock } = await import("./runtime_owner_lease.js");
+  const { applyOfflineGoalPurposeRepair, hasOfflineGoalPurposeRepairAuditReceipt, observeOfflineGoalPurposeRepair, planOfflineGoalPurposeRepair } =
+    await import("./recovery_surface.js");
+  const result = await applyUnderOfflineGoalPurposeRepairLock(env, { ...selector, handoff_digest: handoffDigest }, {
+    prepare: async (binding, issuedAtMs) => {
+      if (!EmergencyStopStateStore.permitsOfflineRepair(env, issuedAtMs) ||
+          !hasOfflineGoalPurposeRepairAuditReceipt(env, binding)) return null;
+      const plan = await planOfflineGoalPurposeRepair(env, selector);
+      if (!plan || plan.repair_sha256 !== selector.repair_sha256 ||
+          plan.before_sha256 !== binding.verification.before_sha256 || plan.after_sha256 !== binding.verification.after_sha256) {
+        return null;
+      }
+      return {
+        observe: async () => hasOfflineGoalPurposeRepairAuditReceipt(env, binding)
+          ? observeOfflineGoalPurposeRepair(env, selector) : null,
+        apply: async () => {
+          if (!EmergencyStopStateStore.permitsOfflineRepair(env, issuedAtMs) ||
+              !hasOfflineGoalPurposeRepairAuditReceipt(env, binding)) throw new Error("offline_repair_stopped");
+          await applyOfflineGoalPurposeRepair(env, plan);
+        },
+      };
+    },
+  });
+  writeResult(result);
+}
+
+async function readRecoveryHandoffDigest(): Promise<string | null> {
+  let code: string;
+  if (process.stdin.isTTY) {
+    process.stderr.write("承認画面に表示された一回限りのコードを入力してください。入力は表示されません。\n");
+    const output = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+    const input = createInterface({ input: process.stdin, output, terminal: true, historySize: 0 });
+    input.once("SIGINT", () => input.close());
+    try {
+      const line = await input[Symbol.asyncIterator]().next();
+      code = line.done ? "" : line.value;
+    } finally {
+      input.close();
+      output.end();
+      process.stderr.write("\n");
+    }
+  } else {
+    let raw = "";
+    for await (const chunk of process.stdin) {
+      raw += String(chunk);
+      if (raw.length > 66) return null;
+    }
+    code = raw.replace(/\r?\n$/, "");
+  }
+  return /^[a-f0-9]{64}$/.test(code) ? createHash("sha256").update(code).digest("hex") : null;
 }
 
 async function runSetupCliMode(): Promise<void> {
@@ -338,6 +441,10 @@ async function runOneShotCliMode(argv: readonly string[]): Promise<void> {
 
 export async function runGatewayCliRouter(): Promise<void> {
   const argv = process.argv.slice(2);
+  if (argv.includes(goalPurposeRepairFlag)) {
+    await runRecoveryApplyGoalPurposeCli(argv);
+    return;
+  }
   if (argv.includes("--recovery-inspect")) {
     await runRecoveryInspectCli(argv);
     return;

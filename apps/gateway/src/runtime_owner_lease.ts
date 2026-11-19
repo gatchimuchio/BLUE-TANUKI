@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
@@ -12,22 +12,55 @@ const RECOVERY_FENCE_SCHEMA_VERSION = 3;
 const OWNER_UUID = /^[0-9a-f-]{36}$/i;
 const DIGEST = /^[a-f0-9]{64}$/;
 const FACTORY_BACKUP_ID = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z\.pre_factory_reset\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const EXPLICIT_BACKUP_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const GOAL_PURPOSE_REPAIR_MAX_HANDOFF_MS = 5 * 60_000;
 
-export interface RuntimeRecoveryFenceEvidence {
-  readonly operation: "recovery.factory_reset";
+interface RecoveryVerification {
+  readonly before_sha256: string;
+  readonly after_sha256: string;
+}
+
+interface RecoveryFenceBinding {
   readonly command_digest: string;
   readonly backup_id: string;
   readonly manifest_sha256: string;
-  readonly verification?: { readonly before_sha256: string; readonly after_sha256: string };
 }
+
+interface FactoryResetFenceEvidence extends RecoveryFenceBinding {
+  readonly operation: "recovery.factory_reset";
+  readonly verification?: RecoveryVerification;
+}
+
+export interface GoalPurposeRepairFenceEvidence extends RecoveryFenceBinding {
+  readonly operation: "recovery.goal_purpose_repair";
+  readonly repair_sha256: string;
+  readonly verification: RecoveryVerification;
+}
+
+export type RuntimeRecoveryFenceEvidence = FactoryResetFenceEvidence | GoalPurposeRepairFenceEvidence;
+
+export interface OfflineGoalPurposeRepairBinding extends Omit<GoalPurposeRepairFenceEvidence, "operation"> {
+  readonly handoff_digest: string;
+  readonly expires_at_ms: number;
+}
+
+export type OfflineGoalPurposeRepairSelector = Pick<OfflineGoalPurposeRepairBinding,
+  "backup_id" | "manifest_sha256" | "repair_sha256" | "handoff_digest">;
+
+export type OfflineGoalPurposeRepairResult = "applied" | "authorization_required" | "authorization_expired" |
+  "preflight_changed" | "owner_lock_busy" | "owner_lock_sidecars_present" | "owner_state_unavailable" |
+  "recovery_pending" | "outcome_unknown";
 
 export type RuntimeRecoveryFenceInspection =
   | { readonly status: "clear" | "unavailable" }
   | { readonly status: "pending"; readonly operation: RuntimeRecoveryFenceEvidence["operation"];
-      readonly command_digest: string; readonly backup_id: string; readonly manifest_sha256: string };
+      readonly command_digest: string; readonly backup_id: string; readonly manifest_sha256: string;
+      readonly repair_sha256?: string };
 
 type OwnerGeneration = { generation: number; execution_epoch: string; updated_at_ms: number };
 type OwnerStateRow = OwnerGeneration & { host_audience_digest: string };
+type OwnerIdentity = Pick<OwnerStateRow, "generation" | "execution_epoch" | "host_audience_digest">;
+type PreparedGoalPurposeRepair = { readonly binding: OfflineGoalPurposeRepairBinding; readonly issued_at_ms: number };
 type RecoveryFenceTerminalStatus = "pre_action_state_matched" | "postconditions_matched";
 export type RuntimeRecoveryFenceReconciliation =
   { readonly status: RecoveryFenceTerminalStatus | "unresolved" | "no_pending" };
@@ -82,6 +115,11 @@ export class GatewayRuntimeOwnerLease {
       lockDb.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA");
       try {
         lockDb.exec("BEGIN EXCLUSIVE");
+        if (lstatSync(lockPath).size === 0) {
+          // Materialize the empty SQLite database before holding the lease. Otherwise, SQLite keeps
+          // an initialization journal open for the process lifetime, so a Windows stop leaves it behind.
+          lockDb.exec("PRAGMA user_version=0; COMMIT; BEGIN EXCLUSIVE");
+        }
       } catch {
         throw new Error("gateway_runtime_owner_already_active");
       }
@@ -121,26 +159,23 @@ export class GatewayRuntimeOwnerLease {
   }
 
   /** A deny-only boundary. The caller already owns the L3 and mutation admission checks. */
-  beginRecoveryMutation(evidence: RuntimeRecoveryFenceEvidence): void {
+  beginRecoveryMutation(evidence: FactoryResetFenceEvidence): void {
     this.assertActive();
     const record = parseRecoveryFenceEvidence(evidence);
+    if (record.operation !== "recovery.factory_reset") throw new Error("gateway_runtime_recovery_fence_invalid");
     ownerStateTransaction(this.stateDb, () => {
-      if (pragmaInteger(this.stateDb, "user_version") !== OWNER_STATE_SCHEMA_VERSION ||
-          hasRecoveryFence(this.stateDb)) throw new Error("gateway_runtime_recovery_fence_unavailable");
-      this.stateDb.exec(`CREATE TABLE gateway_recovery_fence (
-        singleton INTEGER PRIMARY KEY CHECK(singleton=1), evidence_json TEXT NOT NULL, digest TEXT NOT NULL
-      ) STRICT;
-      PRAGMA user_version=${RECOVERY_FENCE_SCHEMA_VERSION};`);
-      this.stateDb.prepare("INSERT INTO gateway_recovery_fence VALUES(1,?,?)").run(
-        JSON.stringify(record), recoveryFenceDigest(record, this.generation, this.executionEpoch, this.hostAudienceDigest),
-      );
+      persistRecoveryFence(this.stateDb, record, {
+        generation: this.generation, execution_epoch: this.executionEpoch, host_audience_digest: this.hostAudienceDigest,
+      });
+      clearPreparedGoalPurposeRepair(this.stateDb);
     });
   }
 
   /** Only the live lease that started the exact, now-verified mutation can settle this boundary. */
-  finishRecoveryMutation(evidence: RuntimeRecoveryFenceEvidence): void {
+  finishRecoveryMutation(evidence: FactoryResetFenceEvidence): void {
     this.assertActive();
     const expected = parseRecoveryFenceEvidence(evidence);
+    if (expected.operation !== "recovery.factory_reset") throw new Error("gateway_runtime_recovery_fence_invalid");
     ownerStateTransaction(this.stateDb, () => {
       if (pragmaInteger(this.stateDb, "user_version") !== RECOVERY_FENCE_SCHEMA_VERSION ||
           JSON.stringify(readRecoveryFence(this.stateDb, this.generation, this.executionEpoch, this.hostAudienceDigest)) !==
@@ -149,6 +184,35 @@ export class GatewayRuntimeOwnerLease {
       }
       clearRecoveryFence(this.stateDb);
     });
+  }
+
+  /** Persist one exact L3-authorized handoff from the trusted live preparation path. */
+  prepareOfflineGoalPurposeRepair(binding: OfflineGoalPurposeRepairBinding): void {
+    this.assertActive();
+    const record = parsePreparedGoalPurposeRepair({ binding, issued_at_ms: Date.now() });
+    const owner = { generation: this.generation, execution_epoch: this.executionEpoch,
+      host_audience_digest: this.hostAudienceDigest };
+    ownerStateTransaction(this.stateDb, () => {
+      if (pragmaInteger(this.stateDb, "user_version") !== OWNER_STATE_SCHEMA_VERSION || hasRecoveryFence(this.stateDb)) {
+        throw new Error("gateway_runtime_recovery_fence_unavailable");
+      }
+      const previous = readPreparedGoalPurposeRepair(this.stateDb, owner);
+      if (previous && record.issued_at_ms < previous.binding.expires_at_ms) {
+        throw new Error("gateway_goal_purpose_repair_authorization_pending");
+      }
+      this.stateDb.exec(`CREATE TABLE IF NOT EXISTS gateway_goal_purpose_repair_authorization (
+        singleton INTEGER PRIMARY KEY CHECK(singleton=1), evidence_json TEXT NOT NULL, digest TEXT NOT NULL
+      ) STRICT;`);
+      this.stateDb.prepare(`INSERT INTO gateway_goal_purpose_repair_authorization VALUES(1,?,?)
+        ON CONFLICT(singleton) DO UPDATE SET evidence_json=excluded.evidence_json,digest=excluded.digest`).run(
+        JSON.stringify(record), goalPurposeRepairAuthorizationDigest(record, owner),
+      );
+    });
+  }
+
+  revokePreparedOfflineGoalPurposeRepair(): void {
+    this.assertActive();
+    ownerStateTransaction(this.stateDb, () => clearPreparedGoalPurposeRepair(this.stateDb));
   }
 
   close(): void {
@@ -183,10 +247,12 @@ export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env
     }
     if (version === OWNER_STATE_SCHEMA_VERSION && !hasRecoveryFence(db)) return { status: "clear" };
     if (version !== RECOVERY_FENCE_SCHEMA_VERSION) return { status: "unavailable" };
-    const { operation, command_digest, backup_id, manifest_sha256 } = readRecoveryFence(
+    const evidence = readRecoveryFence(
       db, owner.generation, owner.execution_epoch, owner.host_audience_digest,
     );
-    return { status: "pending", operation, command_digest, backup_id, manifest_sha256 };
+    const { operation, command_digest, backup_id, manifest_sha256 } = evidence;
+    return { status: "pending", operation, command_digest, backup_id, manifest_sha256,
+      ...(evidence.operation === "recovery.goal_purpose_repair" ? { repair_sha256: evidence.repair_sha256 } : {}) };
   } catch {
     return { status: "unavailable" };
   } finally {
@@ -237,6 +303,114 @@ export async function observeUnderOfflineGatewayOwnerLock<T>(
   }
 }
 
+/** Continue one live L3 handoff without creating an installation or advancing its owner epoch. */
+export async function applyUnderOfflineGoalPurposeRepairLock(
+  env: NodeJS.ProcessEnv,
+  input: OfflineGoalPurposeRepairSelector,
+  callbacks: {
+    /** Prepare and observe without changing repair targets. Apply runs only after the durable fence. */
+    readonly prepare: (binding: OfflineGoalPurposeRepairBinding, issuedAtMs: number) => Promise<null | {
+      readonly apply: () => Promise<void>;
+      readonly observe: () => Promise<string | null>;
+    }>;
+  },
+): Promise<OfflineGoalPurposeRepairResult> {
+  const { backup_id, manifest_sha256, repair_sha256, handoff_digest } = input;
+  if (!validExplicitBackupId(backup_id) || !isDigest(manifest_sha256) || !isDigest(repair_sha256) || !isDigest(handoff_digest)) {
+    return "authorization_required";
+  }
+  let lockDb: DatabaseType | undefined;
+  let stateDb: DatabaseType | undefined;
+  let fenceAttempted = false;
+  try {
+    const files = existingRuntimeOwnerFiles(env);
+    if (!files?.lockPath) return "owner_state_unavailable";
+    const { lockPath, statePath } = files;
+    const lockIdentity = ownerFileIdentity(lockPath);
+    const stateIdentity = ownerFileIdentity(statePath);
+    lockDb = acquireExistingRuntimeOwnerLock(lockPath);
+    const lock = lockDb;
+    stateDb = openOwnerDatabaseForRecovery(statePath);
+    const db = stateDb;
+    assertIntegrity(db);
+    const owner = hasOwnerStateSchema(db) ? readOwnerState(db) : undefined;
+    if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== currentHostAudienceDigest()) {
+      return "owner_state_unavailable";
+    }
+    const assertContinuity = (): void => {
+      if (lock.isTransaction === false || ownerFileIdentity(lockPath) !== lockIdentity ||
+          ownerFileIdentity(statePath) !== stateIdentity || JSON.stringify(readOwnerState(db)) !== JSON.stringify(owner)) {
+        throw new Error("gateway_runtime_owner_lease_lost");
+      }
+    };
+    assertContinuity();
+    const version = pragmaInteger(db, "user_version");
+    if (version === RECOVERY_FENCE_SCHEMA_VERSION) {
+      readRecoveryFence(db, owner.generation, owner.execution_epoch, owner.host_audience_digest);
+      return "recovery_pending";
+    }
+    if (version !== OWNER_STATE_SCHEMA_VERSION || hasRecoveryFence(db)) return "owner_state_unavailable";
+    const authorization = readPreparedGoalPurposeRepair(db, owner);
+    const binding = authorization?.binding;
+    if (!authorization || !binding || binding.backup_id !== backup_id || binding.manifest_sha256 !== manifest_sha256 ||
+        binding.repair_sha256 !== repair_sha256 ||
+        !timingSafeEqual(Buffer.from(binding.handoff_digest, "hex"), Buffer.from(handoff_digest, "hex"))) {
+      return "authorization_required";
+    }
+    if (!goalPurposeRepairAuthorizationCurrent(authorization)) return "authorization_expired";
+
+    let prepared: Awaited<ReturnType<typeof callbacks.prepare>>;
+    try {
+      prepared = await callbacks.prepare(binding, authorization.issued_at_ms);
+      if (!prepared || await prepared.observe() !== binding.verification.before_sha256) return "preflight_changed";
+    } catch {
+      return "preflight_changed";
+    }
+    const evidence: GoalPurposeRepairFenceEvidence = { operation: "recovery.goal_purpose_repair",
+      command_digest: binding.command_digest, backup_id, manifest_sha256, repair_sha256, verification: binding.verification };
+    const assertApplyingFence = (): void => {
+      assertContinuity();
+      if (pragmaInteger(db, "user_version") !== RECOVERY_FENCE_SCHEMA_VERSION ||
+          JSON.stringify(readRecoveryFence(db, owner.generation, owner.execution_epoch, owner.host_audience_digest)) !==
+            JSON.stringify(evidence)) throw new Error("gateway_runtime_recovery_fence_mismatch");
+    };
+    assertContinuity();
+    ownerStateTransaction(db, () => {
+      assertContinuity();
+      const current = readPreparedGoalPurposeRepair(db, owner);
+      if (!current || JSON.stringify(current) !== JSON.stringify(authorization)) {
+        throw new Error("gateway_goal_purpose_repair_authorization_changed");
+      }
+      if (!goalPurposeRepairAuthorizationCurrent(current)) throw new Error("gateway_goal_purpose_repair_authorization_expired");
+      fenceAttempted = true;
+      persistRecoveryFence(db, evidence, owner);
+      clearPreparedGoalPurposeRepair(db);
+    });
+    assertApplyingFence();
+    await prepared.apply();
+    const after = await prepared.observe();
+    if (after !== evidence.verification.after_sha256 || await prepared.observe() !== after) return "outcome_unknown";
+    ownerStateTransaction(db, () => {
+      assertApplyingFence();
+      persistRecoverySettlement(db, owner.generation, evidence, after, "postconditions_matched");
+      clearRecoveryFence(db);
+    });
+    return "applied";
+  } catch (error) {
+    if (fenceAttempted) return "outcome_unknown";
+    if (!lockDb && isSqliteBusy(error)) return "owner_lock_busy";
+    if (error instanceof Error) {
+      if (!lockDb && error.message === "gateway_runtime_owner_lock_sidecars_present") return "owner_lock_sidecars_present";
+      if (error.message === "gateway_goal_purpose_repair_authorization_changed") return "authorization_required";
+      if (error.message === "gateway_goal_purpose_repair_authorization_expired") return "authorization_expired";
+    }
+    return "owner_state_unavailable";
+  } finally {
+    closeDatabase(stateDb);
+    closeDatabase(lockDb);
+  }
+}
+
 /** Settle existing evidence under the regular Gateway lock, without obtaining a runtime lease or replaying work. */
 export async function reconcileRuntimeRecoveryFence(
   env: NodeJS.ProcessEnv,
@@ -249,14 +423,12 @@ export async function reconcileRuntimeRecoveryFence(
     const files = existingRuntimeOwnerFiles(env);
     if (!files) return { status: "no_pending" };
     if (!files.lockPath) return { status: "unresolved" };
+    const lockIdentity = ownerFileIdentity(files.lockPath);
+    const stateIdentity = ownerFileIdentity(files.statePath);
     lockDb = acquireExistingRuntimeOwnerLock(files.lockPath);
 
-    assertNoOwnerSidecars(files.statePath);
-    const modeProbe = openOwnerDatabaseReadOnly(files.statePath);
-    try { assertOwnerDeleteJournal(modeProbe); } finally { closeDatabase(modeProbe); }
-    stateDb = openExistingOwnerDatabase(files.statePath);
-    stateDb.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE");
-    assertOwnerDeleteJournal(stateDb);
+    stateDb = openOwnerDatabaseForRecovery(files.statePath);
+    stateDb.exec("BEGIN IMMEDIATE");
     assertIntegrity(stateDb);
     const version = pragmaInteger(stateDb, "user_version");
     if (version === 1 && hasOwnerStateSchemaV1(stateDb) && !hasRecoveryFence(stateDb)) {
@@ -280,7 +452,10 @@ export async function reconcileRuntimeRecoveryFence(
     // A reset can be a no-op. Matching both proofs cannot establish that it ran.
     const status = observed === evidence.verification.before_sha256 ? "pre_action_state_matched"
       : observed === evidence.verification.after_sha256 ? "postconditions_matched" : null;
-    if (!status || await observe(evidence) !== observed) return { status: "unresolved" };
+    if (!status || await observe(evidence) !== observed || lockDb.isTransaction === false ||
+        ownerFileIdentity(files.lockPath) !== lockIdentity || ownerFileIdentity(files.statePath) !== stateIdentity) {
+      return { status: "unresolved" };
+    }
     persistRecoverySettlement(stateDb, owner.generation, evidence, observed, status);
     clearRecoveryFence(stateDb);
     stateDb.exec("COMMIT");
@@ -359,6 +534,43 @@ function openExistingOwnerDatabase(filepath: string): DatabaseType {
   return new DatabaseSync(url.href);
 }
 
+function openOwnerDatabaseForRecovery(filepath: string): DatabaseType {
+  assertNoOwnerSidecars(filepath);
+  const probe = openOwnerDatabaseReadOnly(filepath);
+  try { assertOwnerDeleteJournal(probe); } finally { closeDatabase(probe); }
+  const db = openExistingOwnerDatabase(filepath);
+  try {
+    db.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA");
+    assertOwnerDeleteJournal(db);
+    return db;
+  } catch (error) {
+    closeDatabase(db);
+    throw error;
+  }
+}
+
+function ownerFileIdentity(filepath: string): string {
+  const stat = lstatSync(filepath, { bigint: true });
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.ino <= 0n) {
+    throw new Error("gateway_runtime_owner_state_unavailable");
+  }
+  return `${stat.dev}:${stat.ino}`;
+}
+
+function persistRecoveryFence(
+  db: DatabaseType, evidence: RuntimeRecoveryFenceEvidence, owner: OwnerIdentity,
+): void {
+  if (pragmaInteger(db, "user_version") !== OWNER_STATE_SCHEMA_VERSION || hasRecoveryFence(db)) {
+    throw new Error("gateway_runtime_recovery_fence_unavailable");
+  }
+  db.exec(`CREATE TABLE gateway_recovery_fence (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1), evidence_json TEXT NOT NULL, digest TEXT NOT NULL
+  ) STRICT;
+  PRAGMA user_version=${RECOVERY_FENCE_SCHEMA_VERSION};`);
+  db.prepare("INSERT INTO gateway_recovery_fence VALUES(1,?,?)").run(JSON.stringify(evidence),
+    recoveryFenceDigest(evidence, owner.generation, owner.execution_epoch, owner.host_audience_digest));
+}
+
 function persistRecoverySettlement(
   db: DatabaseType,
   generation: number,
@@ -372,9 +584,18 @@ function persistRecoverySettlement(
     status TEXT NOT NULL CHECK(status IN ('pre_action_state_matched','postconditions_matched')),
     PRIMARY KEY(generation, backup_id)
   ) STRICT;`);
-  db.prepare("INSERT INTO gateway_recovery_settlements VALUES(?,?,?,?,?,?,?)").run(
-    generation, evidence.operation, evidence.command_digest, evidence.backup_id, evidence.manifest_sha256, observed, status,
-  );
+  const parameters = [generation, evidence.operation, evidence.command_digest, evidence.backup_id, evidence.manifest_sha256,
+    observed, status] as const;
+  const columns = "generation,operation,command_digest,backup_id,manifest_sha256,observed_sha256,status";
+  if (evidence.operation === "recovery.goal_purpose_repair") {
+    if (!db.prepare("SELECT 1 FROM pragma_table_info('gateway_recovery_settlements') WHERE name='repair_sha256'").get()) {
+      db.exec("ALTER TABLE gateway_recovery_settlements ADD COLUMN repair_sha256 TEXT");
+    }
+    db.prepare(`INSERT INTO gateway_recovery_settlements (${columns},repair_sha256) VALUES(?,?,?,?,?,?,?,?)`)
+      .run(...parameters, evidence.repair_sha256);
+  } else {
+    db.prepare(`INSERT INTO gateway_recovery_settlements (${columns}) VALUES(?,?,?,?,?,?,?)`).run(...parameters);
+  }
 }
 
 function clearRecoveryFence(db: DatabaseType): void {
@@ -389,11 +610,95 @@ function statIfPresent(filepath: string): ReturnType<typeof lstatSync> | null {
   }
 }
 
+function isDigest(value: unknown): value is string {
+  return typeof value === "string" && DIGEST.test(value);
+}
+
+function validExplicitBackupId(value: unknown): value is string {
+  return typeof value === "string" && value !== "latest" && EXPLICIT_BACKUP_ID.test(value);
+}
+
+function parseRecoveryVerification(value: unknown): RecoveryVerification {
+  const verification = value as Record<string, unknown> | null | undefined;
+  if (!verification || typeof verification !== "object" || Object.keys(verification).length !== 2 ||
+      !Object.hasOwn(verification, "before_sha256") || !isDigest(verification.before_sha256) ||
+      !Object.hasOwn(verification, "after_sha256") || !isDigest(verification.after_sha256)) {
+    throw new Error("gateway_runtime_recovery_fence_invalid");
+  }
+  return Object.freeze({ before_sha256: verification.before_sha256, after_sha256: verification.after_sha256 });
+}
+
+function parsePreparedGoalPurposeRepair(value: unknown): PreparedGoalPurposeRepair {
+  const row = value as Record<string, unknown> | null | undefined;
+  const binding = row?.binding as Record<string, unknown> | null | undefined;
+  if (!row || typeof row !== "object" || Object.keys(row).length !== 2 ||
+      !Object.hasOwn(row, "binding") || !Object.hasOwn(row, "issued_at_ms") ||
+      !binding || typeof binding !== "object" || Object.keys(binding).length !== 7 ||
+      !["command_digest", "backup_id", "manifest_sha256", "repair_sha256", "verification", "handoff_digest",
+        "expires_at_ms"].every(key => Object.hasOwn(binding, key)) ||
+      !isDigest(binding.command_digest) || !validExplicitBackupId(binding.backup_id) ||
+      !isDigest(binding.manifest_sha256) || !isDigest(binding.repair_sha256) || !isDigest(binding.handoff_digest) ||
+      typeof row.issued_at_ms !== "number" || !Number.isSafeInteger(row.issued_at_ms) || row.issued_at_ms <= 0 ||
+      typeof binding.expires_at_ms !== "number" || !Number.isSafeInteger(binding.expires_at_ms) ||
+      binding.expires_at_ms <= row.issued_at_ms || binding.expires_at_ms - row.issued_at_ms > GOAL_PURPOSE_REPAIR_MAX_HANDOFF_MS) {
+    throw new Error("gateway_goal_purpose_repair_authorization_invalid");
+  }
+  const verification = parseRecoveryVerification(binding.verification);
+  if (verification.before_sha256 === verification.after_sha256) {
+    throw new Error("gateway_goal_purpose_repair_authorization_invalid");
+  }
+  return Object.freeze({ binding: Object.freeze({
+    command_digest: binding.command_digest, backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256,
+    repair_sha256: binding.repair_sha256, verification, handoff_digest: binding.handoff_digest,
+    expires_at_ms: binding.expires_at_ms,
+  }), issued_at_ms: row.issued_at_ms });
+}
+
+function goalPurposeRepairAuthorizationDigest(record: PreparedGoalPurposeRepair, owner: OwnerIdentity): string {
+  return createHash("sha256").update(JSON.stringify([
+    "gateway-goal-purpose-repair-authorization.v1", owner.generation, owner.execution_epoch,
+    owner.host_audience_digest, record,
+  ])).digest("hex");
+}
+
+function goalPurposeRepairAuthorizationCurrent(record: PreparedGoalPurposeRepair): boolean {
+  const now = Date.now();
+  return now >= record.issued_at_ms && now < record.binding.expires_at_ms;
+}
+
+function clearPreparedGoalPurposeRepair(db: DatabaseType): void {
+  db.exec("DROP TABLE IF EXISTS gateway_goal_purpose_repair_authorization");
+}
+
+function readPreparedGoalPurposeRepair(db: DatabaseType, owner: OwnerIdentity): PreparedGoalPurposeRepair | null {
+  if (!db.prepare("SELECT 1 FROM sqlite_schema WHERE name='gateway_goal_purpose_repair_authorization'").get()) return null;
+  const rows = db.prepare("SELECT singleton,evidence_json,digest FROM gateway_goal_purpose_repair_authorization LIMIT 2")
+    .all() as Array<{ singleton: number; evidence_json: string; digest: string }>;
+  const [row] = rows;
+  if (rows.length !== 1 || row?.singleton !== 1) throw new Error("gateway_goal_purpose_repair_authorization_invalid");
+  const evidence = parsePreparedGoalPurposeRepair(JSON.parse(row.evidence_json));
+  if (row.digest !== goalPurposeRepairAuthorizationDigest(evidence, owner)) {
+    throw new Error("gateway_goal_purpose_repair_authorization_invalid");
+  }
+  return evidence;
+}
+
 function parseRecoveryFenceEvidence(value: unknown): RuntimeRecoveryFenceEvidence {
   if (!value || typeof value !== "object") {
     throw new Error("gateway_runtime_recovery_fence_invalid");
   }
   const row = value as Record<string, unknown>;
+  if (row.operation === "recovery.goal_purpose_repair") {
+    if (Object.keys(row).length !== 6 || !["operation", "command_digest", "backup_id", "manifest_sha256", "repair_sha256",
+      "verification"].every(key => Object.hasOwn(row, key)) || !isDigest(row.command_digest) ||
+      !validExplicitBackupId(row.backup_id) || !isDigest(row.manifest_sha256) || !isDigest(row.repair_sha256)) {
+      throw new Error("gateway_runtime_recovery_fence_invalid");
+    }
+    const verification = parseRecoveryVerification(row.verification);
+    if (verification.before_sha256 === verification.after_sha256) throw new Error("gateway_runtime_recovery_fence_invalid");
+    return Object.freeze({ operation: row.operation, command_digest: row.command_digest, backup_id: row.backup_id,
+      manifest_sha256: row.manifest_sha256, repair_sha256: row.repair_sha256, verification });
+  }
   if (row.operation !== "recovery.factory_reset" || typeof row.command_digest !== "string" || !DIGEST.test(row.command_digest) ||
       typeof row.manifest_sha256 !== "string" || !DIGEST.test(row.manifest_sha256) ||
       typeof row.backup_id !== "string" || !FACTORY_BACKUP_ID.test(row.backup_id) ||
@@ -404,22 +709,15 @@ function parseRecoveryFenceEvidence(value: unknown): RuntimeRecoveryFenceEvidenc
   const evidence = { operation: row.operation, command_digest: row.command_digest, backup_id: row.backup_id,
     manifest_sha256: row.manifest_sha256 } as const;
   if (!Object.hasOwn(row, "verification")) return Object.freeze(evidence);
-  const verification = row.verification as Record<string, unknown> | null | undefined;
-  if (!verification || typeof verification !== "object" || Object.keys(verification).length !== 2 ||
-      !Object.hasOwn(verification, "before_sha256") || typeof verification.before_sha256 !== "string" ||
-      !DIGEST.test(verification.before_sha256) || !Object.hasOwn(verification, "after_sha256") ||
-      typeof verification.after_sha256 !== "string" || !DIGEST.test(verification.after_sha256)) {
-    throw new Error("gateway_runtime_recovery_fence_invalid");
-  }
-  return Object.freeze({ ...evidence, verification: Object.freeze({
-    before_sha256: verification.before_sha256, after_sha256: verification.after_sha256,
-  }) });
+  return Object.freeze({ ...evidence, verification: parseRecoveryVerification(row.verification) });
 }
 
 function recoveryFenceDigest(
   evidence: RuntimeRecoveryFenceEvidence, generation: number, epoch: string, hostAudienceDigest: string,
 ): string {
-  const bound = evidence.verification ? ["gateway-recovery-fence.v2", generation, epoch, hostAudienceDigest, evidence]
+  const bound = evidence.operation === "recovery.goal_purpose_repair"
+    ? ["gateway-recovery-fence.v3", generation, epoch, hostAudienceDigest, evidence]
+    : evidence.verification ? ["gateway-recovery-fence.v2", generation, epoch, hostAudienceDigest, evidence]
     : ["gateway-recovery-fence.v1", generation, epoch, evidence];
   return createHash("sha256").update(JSON.stringify(bound)).digest("hex");
 }
@@ -516,6 +814,7 @@ function advanceOwnerState(db: DatabaseType, hostAudienceDigest: string): OwnerS
       }
       throw new Error("owner generation invalid");
     }
+    clearPreparedGoalPurposeRepair(db);
     const state: OwnerStateRow = {
       generation: previous ? previous.generation + 1 : 1,
       execution_epoch: randomUUID(),
