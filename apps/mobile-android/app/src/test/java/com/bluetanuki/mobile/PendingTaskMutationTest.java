@@ -87,16 +87,76 @@ public final class PendingTaskMutationTest {
     }
 
     @Test
+    public void restoredMutationsHoldOnlyTheirOwnBrokerRequests() throws Exception {
+        var start = PendingTaskMutation.forRequest(PendingTaskMutation.Action.START, DESKTOP, draft(ID, null), null);
+        var cancel = PendingTaskMutation.forRequest(PendingTaskMutation.Action.CANCEL, DESKTOP, draft(OTHER, ID), ID);
+        var oppositeAction = PendingTaskMutation.forRequest(PendingTaskMutation.Action.CANCEL, DESKTOP, draft(ID, ID), ID);
+        var changedDraft = new MobileTaskContract.Draft(ID, "other-runtime", OTHER, "workspace",
+                HASH, 10, 20, null);
+        List<PendingTaskMutation> one = PendingTaskMutation.decodeList(PendingTaskMutation.encodeList(List.of(start)));
+        assertTrue(PendingTaskMutation.blocks(one, DESKTOP, draft(ID, ID)));
+        assertTrue(PendingTaskMutation.blocks(one, DESKTOP, changedDraft));
+        assertFalse(PendingTaskMutation.blocks(one, DESKTOP, draft(OTHER, ID)));
+        assertFalse(PendingTaskMutation.blocks(one, credential(OTHER, ID, "a".repeat(64)), draft(ID, ID)));
+        assertFalse(PendingTaskMutation.blocks(one, credential(ID, OTHER, "a".repeat(64)), draft(ID, ID)));
+        assertFalse(PendingTaskMutation.blocks(one, credential(ID, ID, "b".repeat(64)), draft(ID, ID)));
+        assertTrue(oppositeAction.conflictsWith(start));
+        assertFalse(cancel.conflictsWith(start));
+        assertFalse(one.get(0).resolvedBy(DESKTOP, changedDraft, task("running", ID), "INTERNAL_STATE"));
+
+        List<PendingTaskMutation> two = PendingTaskMutation.decodeList(PendingTaskMutation.encodeList(List.of(start, cancel)));
+        assertEquals(2, two.size());
+        assertTrue(PendingTaskMutation.blocks(two, DESKTOP, draft(ID, ID)));
+        assertTrue(PendingTaskMutation.blocks(two, DESKTOP, draft(OTHER, ID)));
+        assertFalse(PendingTaskMutation.blocks(two, DESKTOP, draft("f".repeat(32), null)));
+        assertTrue(two.get(0).resolvedBy(DESKTOP, draft(ID, ID), task("running", ID), "INTERNAL_STATE"));
+        assertFalse(two.get(1).resolvedBy(DESKTOP, draft(ID, ID), task("running", ID), "INTERNAL_STATE"));
+    }
+
+    @Test
+    public void legacySingletonHoldsUntilExactObservationAndInvalidListsFailClosed() throws Exception {
+        String oldRecord = "START:49b9125780b7383c0ef349ea47e1f9e098f480e7f9070622daa48970a52d340f";
+        List<PendingTaskMutation> legacy = PendingTaskMutation.decodeList(oldRecord);
+        assertEquals(oldRecord, legacy.get(0).encode());
+        assertTrue(PendingTaskMutation.blocks(legacy, DESKTOP, draft(OTHER, null)));
+        assertFalse(legacy.get(0).resolvedBy(DESKTOP, draft(OTHER, ID), task("running", ID), "INTERNAL_STATE"));
+        assertTrue(legacy.get(0).resolvedBy(DESKTOP, draft(ID, ID), task("running", ID), "INTERNAL_STATE"));
+
+        var start = PendingTaskMutation.forRequest(PendingTaskMutation.Action.START, DESKTOP, draft(ID, null), null);
+        var opposite = PendingTaskMutation.forRequest(PendingTaskMutation.Action.CANCEL, DESKTOP, draft(ID, ID), ID);
+        assertThrows(StrictJson.JsonException.class, () -> PendingTaskMutation.decodeList("v2\n" + oldRecord));
+        assertThrows(StrictJson.JsonException.class, () -> PendingTaskMutation.decodeList(start.encode()));
+        assertThrows(StrictJson.JsonException.class, () ->
+                PendingTaskMutation.decodeList(PendingTaskMutation.encodeList(List.of(start, opposite))));
+
+        List<PendingTaskMutation> full = new ArrayList<>();
+        for (int i = 0; i < PendingTaskMutation.MAX_PENDING; i++) {
+            full.add(PendingTaskMutation.forRequest(PendingTaskMutation.Action.START, DESKTOP,
+                    draft(String.format("%032x", i), null), null));
+        }
+        List<PendingTaskMutation> restored = PendingTaskMutation.decodeList(PendingTaskMutation.encodeList(full));
+        assertEquals(PendingTaskMutation.MAX_PENDING, restored.size());
+        assertTrue(PendingTaskMutation.blocks(restored, DESKTOP, draft(OTHER, null)));
+        full.add(start);
+        assertThrows(StrictJson.JsonException.class, () ->
+                PendingTaskMutation.decodeList(PendingTaskMutation.encodeList(full)));
+    }
+
+    @Test
     public void listRefreshReconcilesTheMatchingRequestAndKeepsIndependentFailuresUnknown() throws Exception {
         String laterID = "f".repeat(32);
+        String secondHeldID = "b".repeat(32);
         MobileTaskContract.Draft held = draft(ID, ID);
-        List<MobileTaskContract.Draft> entries = List.of(draft(OTHER, null), held, draft(laterID, null));
+        MobileTaskContract.Draft secondHeld = draft(secondHeldID, null);
+        List<MobileTaskContract.Draft> entries = List.of(draft(OTHER, null), held, draft(laterID, null), secondHeld);
         PendingTaskMutation pending = PendingTaskMutation.decode(PendingTaskMutation.forRequest(
                 PendingTaskMutation.Action.CANCEL, DESKTOP, held, ID).encode());
+        List<PendingTaskMutation> checkpoints = List.of(pending, PendingTaskMutation.forRequest(
+                PendingTaskMutation.Action.START, DESKTOP, secondHeld, null));
         List<String> queried = new ArrayList<>();
         List<String> resolved = new ArrayList<>();
         Map<String, MobileTaskContract.TaskStatus> statuses = MobileTaskClient.observeOwnedStatuses(
-                entries, DESKTOP, pending, () -> true, entry -> {
+                entries, DESKTOP, checkpoints, () -> true, entry -> {
                     queried.add(entry.id);
                     if (OTHER.equals(entry.id)) throw new PairingResponseParser.PairingRejectedException();
                     MobileTaskContract.TaskStatus status = ID.equals(entry.id)
@@ -104,9 +164,9 @@ public final class PendingTaskMutationTest {
                     if (pending.resolvedBy(DESKTOP, entry, status, "INTERNAL_STATE")) resolved.add(entry.id);
                     return status;
                 });
-        assertEquals(List.of(ID, OTHER, laterID), queried);
+        assertEquals(List.of(ID, secondHeldID, OTHER, laterID), queried);
         assertEquals(List.of(ID), resolved);
-        assertEquals(List.of(ID, laterID), new ArrayList<>(statuses.keySet()));
+        assertEquals(List.of(ID, secondHeldID, laterID), new ArrayList<>(statuses.keySet()));
         assertFalse(pending.matchesListedRequest(DESKTOP, draft(ID, OTHER)));
         assertFalse(pending.matchesListedRequest(DESKTOP, draft(ID, null)));
     }
@@ -115,12 +175,12 @@ public final class PendingTaskMutationTest {
     public void listRefreshStopsReadingWhenTheTransportOrForegroundIsLost() {
         List<MobileTaskContract.Draft> entries = List.of(draft(OTHER, null), draft(ID, ID));
         List<String> queried = new ArrayList<>();
-        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, null, () -> true, entry -> {
+        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, List.of(), () -> true, entry -> {
             queried.add(entry.id);
             throw new DeviceLinkTransport.TransportException(false);
         }).isEmpty());
         assertEquals(List.of(OTHER), queried);
-        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, null, () -> false, entry -> {
+        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, List.of(), () -> false, entry -> {
             throw new AssertionError("background read");
         }).isEmpty());
     }

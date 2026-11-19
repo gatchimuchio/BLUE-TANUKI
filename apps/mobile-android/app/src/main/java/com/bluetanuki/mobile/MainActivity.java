@@ -947,19 +947,37 @@ public final class MainActivity extends Activity {
     }
 
     private boolean canUseMobileTask() {
+        return availableMobileTaskCredential() != null;
+    }
+
+    private DeviceCredential availableMobileTaskCredential() {
         if (!foreground || busy || credentialStateUncertain || taskStateUncertain ||
                 credentialStore.hasPendingDesktopRevocation() || !hasLocalNetworkPermission()) {
-            return false;
+            return null;
         }
         try {
             DeviceCredential credential = credentialStore.readForDeviceLink();
-            return credential != null && credential.expiresAt > System.currentTimeMillis() / 1000L;
+            return credential != null && credential.expiresAt > System.currentTimeMillis() / 1000L ? credential : null;
         } catch (AndroidCredentialStore.CredentialStoreException exception) {
             credentialStateUncertain = true;
             taskStateUncertain = true;
             taskMessage = "Keystore資格またはTask照合記録を確認できません。Task操作を停止しています。";
-            return false;
+            return null;
         }
+    }
+
+    private List<PendingTaskMutation> readablePendingTaskMutations() {
+        try {
+            return credentialStore.pendingTaskMutations();
+        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+            return null;
+        }
+    }
+
+    private boolean taskMutationNeedsReconciliation(MobileTaskContract.Draft draft) {
+        DeviceCredential credential = availableMobileTaskCredential();
+        List<PendingTaskMutation> pending = readablePendingTaskMutations();
+        return credential != null && pending != null && PendingTaskMutation.blocks(pending, credential, draft);
     }
 
     private void refreshTaskControls() {
@@ -975,7 +993,7 @@ public final class MainActivity extends Activity {
             display += "\n前回の申請sessionをDesktop一覧で照合するまで新規申請を停止しています。再送しないでください。";
         }
         if (credentialStore.hasPendingTaskMutation()) {
-            display += "\n開始・取消の照合記録があります。対象の状態を確認してください。照合できるまで開始・取消を停止します。";
+            display += "\n照合待ちの開始・取消があります。対象の状態を確認してください。";
         }
         taskStatusView.setText(display);
         refreshCatalogButton.setEnabled(ready);
@@ -1338,8 +1356,8 @@ public final class MainActivity extends Activity {
                 epoch -> taskClient.mutate(PendingTaskMutation.Action.START, draft, () -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
-                                ? "未照合の操作があるため、開始要求を送信していません。"
-                                : credentialStore.hasPendingTaskMutation()
+                                ? "照合が必要なため、この開始要求を送信していません。"
+                                : taskMutationNeedsReconciliation(draft)
                                 ? "開始要求の結果を確定できません。状態を照会してください。"
                                 : "開始結果を確認できません。Desktopの状態を確認してください。";
                         return;
@@ -1359,8 +1377,8 @@ public final class MainActivity extends Activity {
                 epoch -> taskClient.mutate(PendingTaskMutation.Action.CANCEL, draft, () -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
-                                ? "未照合の操作があるため、取消要求を送信していません。"
-                                : credentialStore.hasPendingTaskMutation()
+                                ? "照合が必要なため、この取消要求を送信していません。"
+                                : taskMutationNeedsReconciliation(draft)
                                 ? "取消要求の結果を確定できません。状態を照会してください。"
                                 : "取消結果を確認できません。Desktopの状態を確認してください。";
                         return;
@@ -1453,8 +1471,9 @@ public final class MainActivity extends Activity {
     private void refreshTaskList() {
         if (taskListContainer == null) return;
         taskListContainer.removeAllViews();
-        boolean ready = canUseMobileTask();
-        boolean mutationReady = ready && !credentialStore.hasPendingTaskMutation();
+        DeviceCredential credential = availableMobileTaskCredential();
+        boolean ready = credential != null;
+        List<PendingTaskMutation> pending = ready ? readablePendingTaskMutations() : null;
         if (ownedTaskRequests.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("申請は読み込まれていません。Desktop ownerの確認後も一覧を更新してください。");
@@ -1463,6 +1482,7 @@ public final class MainActivity extends Activity {
             return;
         }
         for (MobileTaskContract.Draft draft : ownedTaskRequests) {
+            boolean mutationReady = ready && pending != null && !PendingTaskMutation.blocks(pending, credential, draft);
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setPadding(0, dp(12), 0, dp(12));
@@ -1475,7 +1495,8 @@ public final class MainActivity extends Activity {
             digest.setTypeface(Typeface.MONOSPACE);
             row.addView(digest, matchWrap());
             TextView state = new TextView(this);
-            state.setText(taskStatusLabel(taskStatuses.get(draft.id)));
+            String stateLabel = taskStatusLabel(taskStatuses.get(draft.id));
+            state.setText(ready && !mutationReady ? stateLabel + "\n開始・取消は照合待ちです。" : stateLabel);
             row.addView(state, matchWrap());
             MobileTaskContract.TaskStatus taskStatus = taskStatuses.get(draft.id);
             if (taskStatus != null && MobileTaskContract.TaskStatus.TASK.equals(taskStatus.kind)) {
