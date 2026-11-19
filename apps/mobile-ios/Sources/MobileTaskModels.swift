@@ -100,8 +100,21 @@ enum MobileTaskMutationKind: String {
 
 /// 端末内の結果照合に使う記録。資格と権限を持たない。
 struct PendingMobileTaskMutation: Equatable {
+  static let maximumPendingCount = 32
   let kind: MobileTaskMutationKind
   private let scopeDigest: String
+  let requestDigest: String?
+
+  static func requestDigest(credential: DeviceLinkCredential, draft: MobileTaskDraft) -> String {
+    let fields = ["blue-tanuki.mobile-task-mutation-scope.v1", credential.hostID,
+      credential.certificateHash, credential.deviceID, draft.id]
+    return SHA256.hash(data: Data(fields.joined(separator: "|").utf8))
+      .map { String(format: "%02x", $0) }.joined()
+  }
+
+  static func blocksRequest(_ pending: [Self], digest: String) -> Bool {
+    pending.count >= maximumPendingCount || pending.contains { $0.requestDigest == nil || $0.requestDigest == digest }
+  }
 
   init(kind: MobileTaskMutationKind, credential: DeviceLinkCredential,
        draft: MobileTaskDraft, taskID: String?) throws {
@@ -123,10 +136,12 @@ struct PendingMobileTaskMutation: Equatable {
     self.kind = kind
     self.scopeDigest = SHA256.hash(data: Data(fields.joined(separator: "|").utf8))
       .map { String(format: "%02x", $0) }.joined()
+    self.requestDigest = Self.requestDigest(credential: credential, draft: draft)
   }
 
-  init(stored object: [String: Any]) throws {
-    guard DeviceLinkJSON.exactKeys(object, ["kind", "scope_digest"]),
+  init(stored object: [String: Any], scoped: Bool = true) throws {
+    let keys: Set<String> = scoped ? ["kind", "scope_digest", "request_digest"] : ["kind", "scope_digest"]
+    guard DeviceLinkJSON.exactKeys(object, keys),
           let value = DeviceLinkJSON.string(object["kind"]),
           let kind = MobileTaskMutationKind(rawValue: value),
           let digest = DeviceLinkJSON.string(object["scope_digest"]),
@@ -135,10 +150,31 @@ struct PendingMobileTaskMutation: Equatable {
     }
     self.kind = kind
     self.scopeDigest = digest
+    if scoped {
+      guard let request = DeviceLinkJSON.string(object["request_digest"]), DeviceLinkJSON.isHex(request, length: 64) else {
+        throw DeviceLinkFailure.storage
+      }
+      requestDigest = request
+    } else {
+      requestDigest = nil
+    }
+  }
+
+  static func readCollection(_ value: Any?) throws -> [Self] {
+    guard let rows = value as? [[String: Any]], rows.count <= maximumPendingCount else {
+      throw DeviceLinkFailure.storage
+    }
+    let pending = try rows.map { try Self(stored: $0, scoped: $0.keys.contains("request_digest")) }
+    if pending.count == 1, pending[0].requestDigest == nil { return pending }
+    guard Set(pending.compactMap(\.requestDigest)).count == pending.count,
+          Set(pending.map(\.scopeDigest)).count == pending.count else { throw DeviceLinkFailure.storage }
+    return pending
   }
 
   func storageObject() -> [String: Any] {
-    ["kind": kind.rawValue, "scope_digest": scopeDigest]
+    var object = ["kind": kind.rawValue, "scope_digest": scopeDigest]
+    if let requestDigest { object["request_digest"] = requestDigest }
+    return object
   }
 
   func matchesListedRequest(credential: DeviceLinkCredential, draft: MobileTaskDraft) -> Bool {
@@ -147,7 +183,7 @@ struct PendingMobileTaskMutation: Equatable {
 
   private func matchesRequest(credential: DeviceLinkCredential, draft: MobileTaskDraft, taskID: String?) -> Bool {
     guard let observed = try? Self(kind: kind, credential: credential, draft: draft, taskID: taskID) else { return false }
-    return observed == self
+    return observed.scopeDigest == scopeDigest && (requestDigest == nil || requestDigest == observed.requestDigest)
   }
 
   func isResolved(credential: DeviceLinkCredential, draft: MobileTaskDraft,
@@ -301,14 +337,18 @@ enum MobileTaskContract {
   }
 
   static func observeOwnedStatuses(
-    _ drafts: [MobileTaskDraft], credential: DeviceLinkCredential, pending: PendingMobileTaskMutation?,
+    _ drafts: [MobileTaskDraft], credential: DeviceLinkCredential, pending: [PendingMobileTaskMutation],
     canRead: () -> Bool, read: (MobileTaskDraft) throws -> MobileTaskStatus
   ) -> [String: MobileTaskStatus] {
-    var readOrder = drafts
-    if let pending, let index = drafts.firstIndex(where: { pending.matchesListedRequest(credential: credential, draft: $0) }) {
-      let checkpointDraft = readOrder.remove(at: index)
-      readOrder.insert(checkpointDraft, at: 0)
+    let prioritized = pending.isEmpty ? [] : drafts.filter { draft in
+      let digest = PendingMobileTaskMutation.requestDigest(credential: credential, draft: draft)
+      return pending.contains { record in
+        if let stored = record.requestDigest { return digest == stored }
+        return record.matchesListedRequest(credential: credential, draft: draft)
+      }
     }
+    let prioritizedIDs = Set(prioritized.map(\.id))
+    let readOrder = prioritized + drafts.filter { !prioritizedIDs.contains($0.id) }
     var statuses: [String: MobileTaskStatus] = [:]
     for draft in readOrder {
       guard canRead() else { break }

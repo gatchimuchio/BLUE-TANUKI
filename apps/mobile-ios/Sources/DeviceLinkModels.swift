@@ -446,10 +446,42 @@ struct DesktopNotificationSummary: Equatable {
   }
 }
 
+struct PendingDeviceLinkRevocation: Equatable {
+  let credentialDigest: String
+
+  init(credential: DeviceLinkCredential) throws {
+    var bytes = try DeviceLinkJSON.encode([
+      "scope": "blue-tanuki.ios.device-link-revocation.v1",
+      "credential": credential.storageObject(),
+    ], maximumBytes: 4096)
+    defer { bytes.resetBytes(in: 0..<bytes.count) }
+    credentialDigest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+  }
+
+  init(stored: String) throws {
+    guard DeviceLinkJSON.isHex(stored, length: 64) else { throw DeviceLinkFailure.storage }
+    credentialDigest = stored
+  }
+
+  func matches(_ credential: DeviceLinkCredential) throws -> Bool {
+    self == (try Self(credential: credential))
+  }
+}
+
 enum DeviceLinkProtocol {
   static let evidenceSources: Set<String> = [
     "LIVE_RUNTIME", "INTERNAL_STATE", "CONFIG", "EXTERNAL_EVIDENCE", "FIXTURE",
   ]
+
+  static func requireConfirmedRevocation(_ envelope: [String: Any], nonce: String) throws {
+    guard DeviceLinkJSON.string(envelope["evidence_source"]) == "INTERNAL_STATE" else {
+      throw DeviceLinkFailure.invalid
+    }
+    let body = try acceptedBody(envelope, nonce: nonce, operation: "端末離脱")
+    guard DeviceLinkJSON.exactKeys(body, ["状態"]), DeviceLinkJSON.string(body["状態"]) == "失効" else {
+      throw DeviceLinkFailure.invalid
+    }
+  }
 
   static func acceptedBody(
     _ envelope: [String: Any],
