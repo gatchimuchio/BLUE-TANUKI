@@ -186,8 +186,8 @@ import type {
 } from "@blue-tanuki/channel-webchat";
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
-  projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
-  projectOwnerTaskRequestCommandIds, resolveOwnerTaskSavedResult, type OwnerTaskCancellationPlanReference } from "./task_outcome_projection.js";
+  projectOwnerTaskCancellationScope, projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
+  resolveOwnerTaskSavedResult, type OwnerTaskCancellationPlanReference } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -5073,23 +5073,23 @@ async function serveWithOwnerLease(
         return rendered;
       },
       onOwnerTaskSubmissionCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellationStatus> => {
-        let operationPlans: unknown;
-        try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
-        catch {
-          return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
-        }
-        const binding = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
-        if (binding.status === "ambiguous" || binding.status === "invalid") {
-          return projectOwnerTaskCancellationStatus(operationPlans, request_id, []);
-        }
         try {
+          const operationPlans = hds.getRuntimeSnapshot().operation_plans;
+          const audit = hds.getAudit();
+          const entries = audit.isPersistent() && audit.verify() ? audit.list() : [];
+          const binding = projectOwnerTaskCancellationScope(operationPlans, request_id, entries);
+          if (binding.status === "ambiguous" || binding.status === "invalid") {
+            return { status: "unknown", reason_code: binding.status === "ambiguous" ? "projection_ambiguous" : "projection_invalid",
+              used_for_authority: false, may_execute: false };
+          }
           const commandIds = new Set(binding.status === "matched" ? binding.command_ids : []);
           const plans = binding.status === "matched" ? binding.plans : [];
-          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans);
+          const computeCommands = binding.status === "matched" ? binding.compute_command_ids : [];
+          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans, new Set(computeCommands), entries);
           const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
             [...commandIds], undefined, ["owner_task", "resume"],
           );
-          const execution = projectOwnerTaskCancellationStatus(operationPlans, request_id, observations);
+          const execution = projectOwnerTaskCancellationStatus(operationPlans, request_id, observations, computeCommands);
           if (!withdrawal) return execution;
           if (execution.status === "unknown") {
             return execution.reason_code === "no_recorded_evidence" || binding.status === "not_found" ? withdrawal : execution;
@@ -5103,19 +5103,25 @@ async function serveWithOwnerLease(
         Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null> => {
         ownerLease.assertActive();
         let operationPlans: unknown;
-        try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
+        let entries: readonly AuditEntry[];
+        try {
+          operationPlans = hds.getRuntimeSnapshot().operation_plans;
+          const audit = hds.getAudit();
+          entries = audit.isPersistent() && audit.verify() ? audit.list() : [];
+        }
         catch { return null; }
-        const plan = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
+        const plan = projectOwnerTaskCancellationScope(operationPlans, request_id, entries);
         if (plan.status === "ambiguous" || plan.status === "invalid") return null;
-        const planCommands = new Set(plan.status === "matched" ? plan.command_ids : []);
+        const commandIds = new Set(plan.status === "matched" ? plan.command_ids : []);
         const plans = plan.status === "matched" ? plan.plans : [];
-        const pending = ownerTaskPendingApprovals(request_id, planCommands, plans);
+        const computeCommands = plan.status === "matched" ? plan.compute_command_ids : [];
+        const computeCommandIds = new Set(computeCommands);
+        const pending = ownerTaskPendingApprovals(request_id, commandIds, plans, computeCommandIds);
         const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
-        const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds);
+        const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds, computeCommands);
         if (binding.status === "ambiguous" || binding.status === "invalid" || pending.length > 1) return null;
         if (plans.length && activeCommandIds.size) {
-          const audit = hds.getAudit();
-          if (!audit.isPersistent() || !audit.verify() || ownerTaskRelationReviewApprovalGates(audit.list(), plans)
+          if (!entries.length || ownerTaskRelationReviewApprovalGates(entries, plans)
             .some(review => activeCommandIds.has(review.command_id) && review.command_id !== pending[0]?.command.id)) return null;
         }
         if (pending.length === 1) {
@@ -5123,7 +5129,7 @@ async function serveWithOwnerLease(
           if (binding.status === "matched" && binding.command_id !== approval!.command.id) return null;
           return withdrawPendingTaskApproval(approval!, OWNER_TASK_APPROVAL_ACTOR, OWNER_TASK_WITHDRAWAL_REASON, { ownerTaskPlans: plans });
         }
-        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, planCommands, plans);
+        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans, computeCommandIds, entries);
         if (binding.status !== "matched") return null;
         const cancellation = requestTaskExecutionCancellation(binding.command_id, {
           actor: OWNER_TASK_APPROVAL_ACTOR,
@@ -7879,7 +7885,8 @@ async function serveWithOwnerLease(
   }
 
   function ownerTaskPendingApprovals(
-    requestId: string, planCommands: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[] = [],
+    requestId: string, commandIds: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[] = [],
+    computeCommandIds?: ReadonlySet<string>,
   ): PendingApproval[] {
     return [...pendingApprovals.values()].filter(pending => {
       const { command, log, origin } = pending;
@@ -7887,20 +7894,19 @@ async function serveWithOwnerLease(
           origin.metadata?.["blue_tanuki.actor_kind"] !== "owner" || origin.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
           origin.id !== log.request_id || command.upstream_decision.request_id !== origin.id) return false;
       return (origin.id === requestId && origin.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan") ||
-        (planCommands.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command))) ||
+        (computeCommandIds?.has(command.id) === true && command.type === "llm_call") ||
+        (commandIds.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command))) ||
         ownerTaskRelationReviewMatches(pending, plans);
     });
   }
 
   function readOwnerTaskApprovalWithdrawal(
-    requestId: string, planCommands: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[],
+    requestId: string, commandIds: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[],
+    computeCommandIds: ReadonlySet<string>, entries: readonly AuditEntry[],
   ): WebChatTaskApprovalWithdrawal | null {
-    if (ownerTaskPendingApprovals(requestId, planCommands, plans).length > 0) return null;
-    const audit = hds.getAudit();
-    if (!audit.isPersistent() || !audit.verify()) return null;
-    const entries = audit.list();
+    if (!entries.length || ownerTaskPendingApprovals(requestId, commandIds, plans, computeCommandIds).length > 0) return null;
     const relatedReviews = ownerTaskRelationReviewApprovalGates(entries, plans);
-    const scopedCommandIds = new Set([...planCommands, ...relatedReviews.map(review => review.command_id)]);
+    const scopedCommandIds = new Set([...commandIds, ...relatedReviews.map(review => review.command_id)]);
     if (activeTaskExecutions.snapshot().some(item => scopedCommandIds.has(item.command_id))) return null;
     const relationEvidence = new Set(relatedReviews.map(review =>
       JSON.stringify([review.command_id, review.request_id, review.upstream_commit_hash])));
@@ -7908,7 +7914,7 @@ async function serveWithOwnerLease(
       if (!("kind" in log) || log.kind !== "command_lifecycle" || log.phase !== "approval_cancelled" ||
           log.actor !== OWNER_TASK_APPROVAL_ACTOR || log.reason !== OWNER_TASK_WITHDRAWAL_REASON) return [];
       const relationKey = JSON.stringify([log.command_id, log.request_id, log.upstream_commit_hash]);
-      return log.request_id === requestId || planCommands.has(log.command_id) ||
+      return log.request_id === requestId || commandIds.has(log.command_id) ||
         (log.upstream_decision === "ASSERT" && relationEvidence.has(relationKey)) ? [log] : [];
     });
     if (!matches.length) return null;

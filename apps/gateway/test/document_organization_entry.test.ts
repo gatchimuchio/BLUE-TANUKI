@@ -2057,6 +2057,8 @@ describe("delegated goal purpose owner review", () => {
     const providerRequestIds: string[] = [];
     const plannerPrompts: string[] = [];
     const taskText = "Prepare one bounded read-only search plan.";
+    const cancelledReplanTask = "中止試験用に、検証済み結果を踏まえて次の未実行候補計画を作成してください。";
+    const replanAttempts: Array<{ requestId: string; prompt: string; disconnected: boolean }> = [];
     const provider = createServer((request, response) => {
       providerCalls += 1;
       void readPrompt(request).then((prompt) => {
@@ -2078,6 +2080,16 @@ describe("delegated goal purpose owner review", () => {
           response.end(JSON.stringify({ id: "c0802-memory-citation-fixture", object: "chat.completion", created: 1,
             model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        if (isPlanPrompt && prompt.includes(cancelledReplanTask)) {
+          const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
+          if (!requestId) throw new Error("J operation request id was not bound into the replan prompt");
+          const attempt = { requestId, prompt, disconnected: false };
+          replanAttempts.push(attempt);
+          response.once("close", () => { attempt.disconnected = !response.writableEnded; });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"choices":[');
           return;
         }
         if (!prompt.includes(taskText)) throw new Error("owner task intent was not passed to the local C fixture");
@@ -2344,11 +2356,12 @@ describe("delegated goal purpose owner review", () => {
       await once(taskWebSocket, "open");
 
       const taskReply = waitForWebChatSend(taskWebSocket, "owner task compute");
+      const earlierSubmissionId = "01a119c0-5b35-4491-ae00-000000000801";
       const taskSubmission = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef,
-          submission_id: "01a119c0-5b35-4491-ae00-000000000801",
+          submission_id: earlierSubmissionId,
           actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
       });
       expect(taskSubmission.status).toBe(202);
@@ -2560,11 +2573,22 @@ describe("delegated goal purpose owner review", () => {
       expect(rejected.status).toBe(200);
       expect(providerCalls).toBe(providerCallsBeforeRejectedReview);
 
-      const providerCallsBeforeSyntheticTask = providerCalls;
+      const providerCallsBeforeFileWrite = providerCalls;
       const dynamicTaskFileName = "owner-task-note.txt";
       const dynamicTaskBody = "WebChatのowner task入力から作成した記録。";
       const dynamicOwnerTask = `次の内容で新しいテキストファイルを作成してください。\nファイル名: ${dynamicTaskFileName}\n本文: ${dynamicTaskBody}`;
       const syntheticSubmissionId = "01a119c0-5b35-4491-ae00-000000000802";
+      const submitSyntheticTask = () => fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ user: "c0802-owner", task: dynamicOwnerTask,
+          submission_id: syntheticSubmissionId, goal_ref: goalRef, purpose_version: 2 }),
+      });
+      const ownerTaskReceipt = (suffix: "status" | "cancel", bearer = ownerToken, submissionId = syntheticSubmissionId) =>
+        fetch(`http://127.0.0.1:${gatewayPort}/owner/task-submission-${suffix}`, {
+          method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+          body: JSON.stringify({ submission_id: submissionId }),
+        });
       await stopChild(gateway.child);
       runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
       runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
@@ -2585,14 +2609,9 @@ describe("delegated goal purpose owner review", () => {
       await once(taskWebSocket, "open");
 
       const syntheticTaskReply = waitForWebChatSend(taskWebSocket, "synthetic create-only task");
-      const syntheticTaskSubmission = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/task-compute", {
-        method: "POST",
-        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: dynamicOwnerTask,
-          submission_id: syntheticSubmissionId,
-          goal_ref: goalRef, purpose_version: 2 }),
-      });
+      const syntheticTaskSubmission = await submitSyntheticTask();
       expect(syntheticTaskSubmission.status).toBe(202);
+      const syntheticTaskAccepted = await syntheticTaskSubmission.json() as { request_id: string };
       const syntheticTaskOutput = await syntheticTaskReply;
       expect(syntheticTaskOutput.length).toBeGreaterThan(0);
 
@@ -2738,11 +2757,13 @@ describe("delegated goal purpose owner review", () => {
       const createdFiles = readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName);
       expect(createdFiles).toEqual([dynamicTaskFileName]);
       expect(readFileSync(join(fileRoot, dynamicTaskFileName), "utf8")).toBe(dynamicTaskBody);
+      expect(providerCalls).toBe(providerCallsBeforeFileWrite);
 
       const previousTaskWebSocket = taskWebSocket;
       taskWebSocket = undefined;
       previousTaskWebSocket.close();
       await stopChild(gateway.child);
+      restoreProviderRuntimeEnvironment();
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
 
@@ -2757,8 +2778,6 @@ describe("delegated goal purpose owner review", () => {
         await once(socket, "open");
         return socket;
       };
-      taskWebSocket = await reconnectSyntheticTaskSocket();
-
       const restoredWritePlan = await waitFor(async () => {
         const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
           headers: { authorization: "Bearer " + token },
@@ -2776,7 +2795,6 @@ describe("delegated goal purpose owner review", () => {
       expect(readdirSync(fileRoot).filter((name) => name === dynamicTaskFileName))
         .toEqual(createdFiles);
 
-      const syntheticReplanReply = waitForWebChatSend(taskWebSocket, "synthetic same-task replan");
       const replanControl = {
         task: "同じtaskの検証済み結果を踏まえて、次の未実行候補計画を作成してください。",
         goal_purpose_binding: goalPurposeBinding,
@@ -2784,12 +2802,85 @@ describe("delegated goal purpose owner review", () => {
         source_observation_refs: [{ plan_id_digest: writePlanId, revision_digest: writeRevision,
           step_id_digest: writeStepId }],
       };
-      const replanResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/inbound", {
-        method: "POST",
-        headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
+      const submitReplan = (task: string) => fetch(`http://127.0.0.1:${gatewayPort}/owner/inbound`, {
+        method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", plan_id: writePlanId, revision_digest: writeRevision,
-          content: "plan:compute " + JSON.stringify(replanControl) }),
+          content: "plan:compute " + JSON.stringify({ ...replanControl, task }) }),
       });
+      const readTaskPlanIds = async () => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(response.status).toBe(200);
+        const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
+        return snapshot.operation_plan_status?.plans?.filter((plan) =>
+          plan.task_identity_digest === writePlan.task_identity_digest).map((plan) => plan.plan_id);
+      };
+      expect(await readTaskPlanIds()).toEqual([writePlanId]);
+      const blockedReplan = await submitReplan(cancelledReplanTask);
+      expect(blockedReplan.status).toBe(202);
+      const blockedReplanAccepted = await blockedReplan.json() as { request_id: string };
+      const replanAttempt = await waitFor(() => replanAttempts[0] ?? null, gateway,
+        "same-task replan did not reach the loopback C provider");
+      expect(replanAttempt.requestId).toBe(`operation-request:${blockedReplanAccepted.request_id}`);
+      expect(replanAttempt.prompt).toContain('"source":"verified_file_write_result"');
+      expect(replanAttempt.prompt).toContain(`"step_id_digest":"${writeStepId}"`);
+      expect(replanAttempt.prompt).toContain(`"parent_revision_digest":"${writeRevision}"`);
+      expect((await ownerTaskReceipt("cancel", token)).status).toBe(401);
+      expect((await ownerTaskReceipt("cancel", ownerToken, earlierSubmissionId)).status).toBe(409);
+      expect(replanAttempt.disconnected).toBe(false);
+      expect(await readTaskPlanIds()).toEqual([writePlanId]);
+      const cancelReplan = await ownerTaskReceipt("cancel");
+      expect(cancelReplan.status).toBe(202);
+      expect(cancelReplan.headers.get("cache-control")).toBe("no-store");
+      expect(await cancelReplan.json()).toEqual({ found: true, accepted: true, cancellation: {
+        status: "cancel_requested", cancel_request_accepted: true, executor_settled: false,
+        execution_signal_aborted: true, executor_state: "cancel_requested", local_worker_stop: "not_observed",
+        external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+      } });
+      await waitFor(() => replanAttempt.disconnected ? true : null, gateway,
+        "owner receipt cancellation did not close the in-flight replan response");
+      const observedReplanCancellation = await waitFor(async () => {
+        const response = await ownerTaskReceipt("status");
+        expect(response.status).toBe(200);
+        const body = await response.json() as { found?: boolean; request_id?: string; cancellation?: { status?: string } };
+        return body.cancellation?.status === "execution_observed" ? body : null;
+      }, gateway, "owner receipt did not expose the settled replan cancellation");
+      expect(observedReplanCancellation).toMatchObject({ found: true, request_id: syntheticTaskAccepted.request_id,
+        cancellation: { status: "execution_observed", cancel_request_accepted: true, executor_settled: true,
+          external_processing_stop: "unknown", used_for_authority: false, may_execute: false } });
+      expect(await readTaskPlanIds()).toEqual([writePlanId]);
+      expect(readFileSync(join(fileRoot, dynamicTaskFileName), "utf8")).toBe(dynamicTaskBody);
+      expect(replanAttempts).toHaveLength(1);
+
+      const providerCallsBeforeReplanRestart = providerCalls;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      const recoveredCancellation = await ownerTaskReceipt("status");
+      expect(recoveredCancellation.status).toBe(200);
+      expect(await recoveredCancellation.json()).toMatchObject({ found: true, request_id: syntheticTaskAccepted.request_id,
+        cancellation: observedReplanCancellation.cancellation });
+      const duplicateOriginalWork = await submitSyntheticTask();
+      expect(duplicateOriginalWork.status).toBe(202);
+      expect(await duplicateOriginalWork.json()).toMatchObject({ status: "already_accepted",
+        request_id: syntheticTaskAccepted.request_id });
+      expect(await readTaskPlanIds()).toEqual([writePlanId]);
+      expect(replanAttempts).toHaveLength(1);
+      expect(providerCalls).toBe(providerCallsBeforeReplanRestart);
+      expect(providerFailure).toBeUndefined();
+
+      const providerCallsBeforeSyntheticTask = providerCalls;
+      await stopChild(gateway.child);
+      runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
+      runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
+      runtimeEnv.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      taskWebSocket = await reconnectSyntheticTaskSocket();
+
+      const syntheticReplanReply = waitForWebChatSend(taskWebSocket, "synthetic same-task replan");
+      const replanResponse = await submitReplan(replanControl.task);
       expect(replanResponse.status).toBe(202);
       expect((await syntheticReplanReply).length).toBeGreaterThan(0);
       const verificationPlan = await waitFor(async () => {
@@ -2823,11 +2914,6 @@ describe("delegated goal purpose owner review", () => {
       const firstChildPending = (await loadQueue()).pending_approvals.find((item) => item.command_id === firstChildReview.command_id);
       expect(firstChildPending?.approval_token).toBeTruthy();
       const parentResultBeforeCancel = readFileSync(join(fileRoot, dynamicTaskFileName));
-      const ownerTaskReceipt = (suffix: "status" | "cancel", bearer = ownerToken) =>
-        fetch(`http://127.0.0.1:${gatewayPort}/owner/task-submission-${suffix}`, {
-          method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
-          body: JSON.stringify({ submission_id: syntheticSubmissionId }),
-        });
       expect((await ownerTaskReceipt("cancel", token)).status).toBe(401);
       const withdrawnChild = await ownerTaskReceipt("cancel");
       expect(withdrawnChild.status).toBe(202);
@@ -2856,7 +2942,7 @@ describe("delegated goal purpose owner review", () => {
       expect(verificationRelation.status).toBe("approval_required");
       expect(verificationRelation.command_id).not.toBe(firstChildReview.command_id);
       expect(await (await ownerTaskReceipt("status")).json()).toMatchObject({ found: true,
-        cancellation: { status: "unknown" } });
+        cancellation: observedReplanCancellation.cancellation });
       const verificationQueue = await loadQueue();
       const verificationPending = verificationQueue.pending_approvals
         .find((item) => item.command_id === verificationRelation.command_id);
@@ -3697,6 +3783,7 @@ describe("delegated goal purpose owner review", () => {
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
+      provider.closeAllConnections();
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }

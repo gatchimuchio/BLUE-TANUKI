@@ -163,6 +163,7 @@ import type {
   AuditRecord,
   MemoryCitationReviewLog,
   MeaningUpdateSourceDecisionBinding,
+  OwnerTaskComputeCancellationBinding,
 } from "./types.js";
 import { frame } from "./frame.js";
 import { buildGoalRelationTreeView, type ReadonlyGoalRelationTreeView } from "./goal_relations.js";
@@ -2099,6 +2100,7 @@ ${planControl.question}`,
       }
     }
 
+    let resumedComputeWait: OperationPlanWaitState | undefined;
     if (command && planComputeWaitResume) {
       try {
         if (command.type !== "llm_call" || !isGatewayInternalInboundRequest(req) ||
@@ -2117,6 +2119,7 @@ ${planControl.question}`,
           command_id: command.id, projection_digest: operationPlanDigest(resumed),
           candidate_digest: resumed.task_identity_digest, target_digest: resumed.plan_id_digest,
           reason: planComputeWaitResume.reason, used_for_authority: false, timestamp: this.nowMs() });
+        resumedComputeWait = resumed;
       } catch {
         c = securityCommit("plan_wait_resume_denied", "wait_or_command_binding_failed", { request_id: req.id });
         log = { ...log, commit: c }; command = null;
@@ -2170,6 +2173,13 @@ ${planControl.question}`,
       } catch {
         c = securityCommit("plan_control_denied", "plan_state_or_command_binding_failed", { request_id: req.id });
         log = { ...log, commit: c }; command = null;
+      }
+    }
+    if (command?.type === "llm_call" && planComputeRequested && planComputePurpose) {
+      const cancellationBinding = ownerTaskComputeCancellationBinding(
+        req, command.id, planComputeParentContext, resumedComputeWait);
+      if (cancellationBinding) {
+        log = { ...log, owner_task_compute_cancellation_binding: Object.freeze(cancellationBinding) };
       }
     }
     this.retainGoalPurposeBinding(log, planComputePurpose);
@@ -6317,6 +6327,41 @@ function requestWithNormalizedContent(req: InboundRequest, content: string): Inb
     ...req,
     content,
   };
+}
+
+function ownerTaskComputeCancellationBinding(
+  req: InboundRequest,
+  commandId: string,
+  parent: { readonly plan_id_digest: string; readonly revision_digest: string; readonly task_identity_digest: string } | undefined,
+  resumedWait: OperationPlanWaitState | undefined,
+): OwnerTaskComputeCancellationBinding | undefined {
+  if (!isGatewayInternalInboundRequest(req) || req.user !== GOAL_OWNER_ACTOR || req.channel !== "webchat" ||
+      req.metadata?.["blue_tanuki.operator_surface"] !== "developer") return undefined;
+  const metadata = req.metadata;
+  const ownerRequest = metadata["blue_tanuki.actor_kind"] === "owner" && metadata["blue_tanuki.trust_level"] === "owner";
+  const binding = { command_id: commandId, used_for_authority: false, may_execute: false } as const;
+  if (resumedWait) {
+    const deadline = resumedWait.wake_reason === "deadline" && metadata["blue_tanuki.actor_kind"] === "system" &&
+      metadata["blue_tanuki.trust_level"] === "trusted" && metadata["blue_tanuki.process_kind"] === "cron";
+    if ((!ownerRequest && !deadline) || resumedWait.owner_digest !== operationPlanDigest(req.user) ||
+        resumedWait.channel_digest !== operationPlanDigest(req.channel) ||
+        resumedWait.resume_command_id_digest !== operationPlanDigest(commandId)) return undefined;
+    return { ...binding, kind: "wait_resume", plan_id_digest: resumedWait.plan_id_digest,
+      revision_digest: resumedWait.revision_digest, task_identity_digest: resumedWait.task_identity_digest };
+  }
+  if (!ownerRequest) return undefined;
+  if (parent) {
+    return { ...binding, kind: "saved_result_replan", plan_id_digest: parent.plan_id_digest,
+      revision_digest: parent.revision_digest, task_identity_digest: parent.task_identity_digest };
+  }
+  if (metadata["blue_tanuki.process_kind"] === "chat" &&
+      metadata["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan" &&
+      metadata["blue_tanuki.operation_core.source_interface"] === "gui" &&
+      metadata["blue_tanuki.operation_core.request_id"] === `operation-request:${req.id}` &&
+      req.session_id === `webchat-owner-task:${req.id}`) {
+    return { ...binding, kind: "initial" };
+  }
+  return undefined;
 }
 
 function failureReviewProjectionFromRequest(req: InboundRequest): FailureReviewProjection | undefined {

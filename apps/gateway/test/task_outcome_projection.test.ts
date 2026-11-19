@@ -9,6 +9,7 @@ import {
   projectD4RuntimeCancellationStatus,
   projectD4RuntimeTaskOutcome,
   projectOwnerTaskActiveCommand,
+  projectOwnerTaskCancellationScope,
   projectOwnerTaskCancellationStatus,
   projectOwnerTaskExecutionObservation,
   projectOwnerTaskOutcome,
@@ -74,6 +75,29 @@ describe("owner task initial computation observation", () => {
       goal_version_binding: { ...purpose, purpose_version: 3 } }) })).toMatchObject({ status: "unknown" });
     expect(projectOwnerTaskExecutionObservation({ ...input, lookupCommand: () => ({ ...receipt,
       invocation_boundary: "tool_adapter", operation_plan_binding_digest: "8".repeat(64) }) })).toMatchObject({ status: "unknown" });
+  });
+
+  it("matches the durable J and approval proof for the first computation before a plan exists", () => {
+    const provedDecision = { ...decision, owner_task_compute_cancellation_binding: {
+      kind: "initial", command_id: commandId, used_for_authority: false, may_execute: false,
+    } };
+    const boundGate = { ...gate, evaluation: { context: {
+      ...gate.evaluation.context, actor: decision.frame.actor.actor_id, command_type: "llm_call", upstream_commit_hash: commitHash,
+    } } };
+    const snapshot = { plans: [] };
+    const scope = projectOwnerTaskCancellationScope(snapshot, requestId, verifiedEntries(provedDecision, boundGate));
+    expect(scope).toEqual({ status: "matched", command_ids: [commandId], compute_command_ids: [commandId], plans: [] });
+    const proof = scope.status === "matched" ? scope.compute_command_ids : [];
+    expect(projectOwnerTaskActiveCommand(snapshot, requestId, new Set([commandId, "unrelated-worker"]), proof))
+      .toEqual({ status: "matched", command_id: commandId });
+    expect(projectOwnerTaskCancellationStatus(snapshot, requestId, [{ ...recordedCancellation,
+      command_id: commandId, actor: decision.frame.actor.actor_id, token_kind: "owner_task",
+    }], proof)).toMatchObject({ status: "request_recorded", local_worker_stop: "not_observed", external_processing_stop: "unknown" });
+    expect(projectOwnerTaskCancellationScope(snapshot, requestId, verifiedEntries(decision, boundGate))).toEqual({ status: "not_found" });
+    expect(projectOwnerTaskCancellationScope(snapshot, "b4d61cc0-46c3-49dc-9826-0b8a9fe302da", verifiedEntries(provedDecision, boundGate)))
+      .toEqual({ status: "not_found" });
+    expect(projectOwnerTaskCancellationScope(snapshot, requestId, verifiedEntries(provedDecision, provedDecision, boundGate)))
+      .toEqual({ status: "ambiguous" });
   });
 });
 
@@ -295,6 +319,49 @@ describe("owner task cancellation across durable replans", () => {
     expect(projectOwnerTaskRequestCommandIds(projection(root, { ...child, previous_revision_digests: [child.revision_digest] }), requestId))
       .toEqual({ status: "invalid" });
     expect(projectOwnerTaskRequestCommandIds(projection(child), requestId)).toEqual({ status: "not_found" });
+  });
+
+  it("scopes an issued child computation to the saved same-task parent and exact goal version", () => {
+    const snapshot = projection(root);
+    const commandId = "child-compute-command";
+    const actor = { actor_id: "webchat-owner-token-holder", actor_kind: "owner", channel: "webchat", trust_level: "owner" };
+    const commitHash = "a".repeat(64);
+    const replan = {
+      request_id: child.request_id, frame: { actor }, commit: { hash: commitHash, decision: "ASSERT" },
+      goal_purpose_binding: { goal_id_digest: createHash("sha256").update(purpose.goal_ref, "utf8").digest("hex"),
+        purpose_version: purpose.purpose_version, purpose_digest: purpose.purpose_digest },
+      owner_task_compute_cancellation_binding: { kind: "saved_result_replan", command_id: commandId,
+        plan_id_digest: root.plan_id, revision_digest: root.previous_revision_digests[0], task_identity_digest: root.task_identity_digest,
+        used_for_authority: false, may_execute: false },
+    };
+    const gate = { kind: "approval_gate", request_id: replan.request_id, command_id: commandId, upstream_commit_hash: commitHash,
+      evaluation: { context: { actor: actor.actor_id, command_id: commandId, command_type: "llm_call", upstream_commit_hash: commitHash } } };
+    const audit = (...logs: unknown[]) => logs.map(log => ({ log })) as AuditEntry[];
+    const scope = projectOwnerTaskCancellationScope(snapshot, requestId, audit(replan, gate));
+    expect(scope).toMatchObject({ status: "matched", command_ids: ["parent-command", commandId], compute_command_ids: [commandId] });
+    const proof = scope.status === "matched" ? scope.compute_command_ids : [];
+    expect(projectOwnerTaskActiveCommand(snapshot, requestId, new Set(["parent-command", commandId]), proof)).toEqual({ status: "ambiguous" });
+    expect(projectOwnerTaskActiveCommand(snapshot, requestId, new Set(), proof)).toEqual({ status: "not_active" });
+    const requested = { ...recordedCancellation, command_id: commandId, actor: actor.actor_id, token_kind: "owner_task" as const };
+    expect(projectOwnerTaskCancellationStatus(snapshot, requestId, [requested, { ...requested,
+      cancellation_event_id: "a6a61be3-4e77-4fa2-af3d-119b3391f0ec", event: "execution_cancel_observed", observed_at_ms: 101,
+      executor_settled: true, executor_status: "suspended", local_worker_stop: "provider_state_unknown",
+    }], proof)).toMatchObject({ status: "execution_observed", local_worker_stop: "provider_state_unknown", external_processing_stop: "unknown" });
+
+    const deadline = { ...replan, frame: { actor: { ...actor, actor_kind: "system", trust_level: "trusted" } },
+      owner_task_compute_cancellation_binding: { ...replan.owner_task_compute_cancellation_binding, kind: "wait_resume" } };
+    expect(projectOwnerTaskCancellationScope(snapshot, requestId, audit(deadline, gate))).toMatchObject({ compute_command_ids: [commandId] });
+    for (const mismatch of [
+      { ...replan, frame: { actor: { ...actor, channel: "cli" } } },
+      { ...replan, frame: { actor: { ...actor, actor_id: "other-owner" } } },
+      { ...replan, goal_purpose_binding: { ...replan.goal_purpose_binding, purpose_version: 3 } },
+      ...["revision_digest", "plan_id_digest", "task_identity_digest", "command_id"].map(key => ({ ...replan,
+        owner_task_compute_cancellation_binding: { ...replan.owner_task_compute_cancellation_binding, [key]: "f".repeat(64) },
+      })),
+    ]) {
+      expect(projectOwnerTaskCancellationScope(snapshot, requestId, audit(mismatch, gate)))
+        .toMatchObject({ status: "matched", command_ids: ["parent-command"], compute_command_ids: [] });
+    }
   });
 
   it("keeps a legacy receipt without a dependable purpose limited to its direct bound command", () => {

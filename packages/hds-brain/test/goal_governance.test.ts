@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -690,6 +690,7 @@ describe("HDS goal governance consumer", () => {
       });
       const decision = controller.decide(compute);
       expect(decision.log.commit.decision, JSON.stringify(decision.log.commit)).toBe("ASSERT");
+      expect(decision.log.owner_task_compute_cancellation_binding).toBeUndefined();
       const shadowProjection = controller.runtimeKernelJProjection(decision.log);
       expect(shadowProjection.status).toBe("comparable");
       if (shadowProjection.status !== "comparable") throw new Error("purpose-bound J projection unavailable");
@@ -725,6 +726,30 @@ describe("HDS goal governance consumer", () => {
         message.content.includes("goal_purpose_relation") && message.content.includes("非権威"))).toBe(true);
       expect(decision.command.payload.compute_context?.data_exposure.input_sources).toContain("selected_memory_references");
       expect(JSON.stringify(controller.getAudit().list())).not.toContain(purposeText);
+
+      const workRequestId = randomUUID();
+      const workCompute = createGatewayInternalInboundRequest({
+        ...compute, id: workRequestId, user: proposalActor, session_id: `webchat-owner-task:${workRequestId}`,
+        metadata: {
+          ...compute.metadata,
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.operation_core.request_id": `operation-request:${workRequestId}`,
+          "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+          "blue_tanuki.operation_core.source_interface": "gui",
+        },
+      });
+      const unbranded = controller.decide(structuredClone(workCompute));
+      expect(unbranded.command).toBeNull();
+      expect(unbranded.log.owner_task_compute_cancellation_binding).toBeUndefined();
+      const workDecision = controller.decide(workCompute);
+      expect(workDecision.command?.type).toBe("llm_call");
+      expect(workDecision.command?.upstream_decision.commit_hash).toBe(workDecision.log.commit.hash);
+      const workAudit = new AuditLog({ filepath: join(root, "audit.jsonl"), read_only: true });
+      expect(workAudit.list().at(-1)?.log).toMatchObject({
+        request_id: workRequestId, goal_purpose_binding: shadowProjection.projection.purpose_binding,
+        owner_task_compute_cancellation_binding: { kind: "initial", command_id: workDecision.command?.id,
+          used_for_authority: false, may_execute: false },
+      });
 
       controller.onFeedback({
         command_id: decision.command.id,
