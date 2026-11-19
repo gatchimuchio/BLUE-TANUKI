@@ -1,8 +1,8 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isIP } from "node:net";
-import { resolve as resolvePath } from "node:path";
+import { join as joinPath, resolve as resolvePath } from "node:path";
 import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
   CompleteHistoryStore,
@@ -9399,13 +9399,61 @@ function nonEmptyEnv(value: string | undefined): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+function windowsResidentStopRequest(inheritedEnvKeys: readonly string[]): (() => boolean) | undefined {
+  const flag = "--windows-resident-generation";
+  const args = process.argv.slice(2).filter((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  if (args.length === 0) return undefined;
+
+  const rootKey = "BLUE_TANUKI_WINDOWS_RESIDENT_STOP_ROOT";
+  const root = process.env[rootKey];
+  const generation = args[0]?.slice(flag.length + 1);
+  if (process.platform !== "win32" || !process.argv.includes("--serve") || args.length !== 1 ||
+      !generation || generation.length !== 36 || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(generation) ||
+      !inheritedEnvKeys.includes(rootKey) || !root || !/^[a-z]:\\/i.test(root)) {
+    throw new Error("windows_resident_stop_control_invalid");
+  }
+  const folder = resolvePath(root);
+  const identity = lstatSync(folder, { bigint: true });
+  if (!identity.isDirectory() || identity.ino === 0n || realpathSync.native(folder).toLowerCase() !== folder.toLowerCase()) {
+    throw new Error("windows_resident_stop_control_invalid");
+  }
+
+  const requestPath = joinPath(folder, `${generation}.stop`);
+  return () => {
+    try {
+      const current = lstatSync(folder, { bigint: true });
+      if (!current.isDirectory() || current.dev !== identity.dev || current.ino !== identity.ino) return false;
+      const request = lstatSync(requestPath, { bigint: true });
+      return request.isFile() && request.nlink === 1n && request.size === 0n;
+    } catch {
+      return false;
+    }
+  };
+}
+
 export async function runServe(inheritedEnvKeys: readonly string[] = []): Promise<void> {
+  const residentStopRequested = windowsResidentStopRequest(inheritedEnvKeys);
   const handle = await serve(inheritedEnvKeys);
-  const onSignal = async (sig: string): Promise<void> => {
-    gatewayLog.info("received signal", { signal: sig });
-    await handle.shutdown();
+  let stopping = false;
+  let residentStopTimer: NodeJS.Timeout | undefined;
+  const stop = async (reason: string): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(residentStopTimer);
+    gatewayLog.info("shutdown requested", { reason });
+    try {
+      await handle.shutdown();
+    } catch {
+      gatewayLog.error("graceful shutdown failed");
+      process.exit(1);
+    }
     process.exit(0);
   };
-  process.on("SIGINT", () => void onSignal("SIGINT"));
-  process.on("SIGTERM", () => void onSignal("SIGTERM"));
+  process.on("SIGINT", () => void stop("SIGINT"));
+  process.on("SIGTERM", () => void stop("SIGTERM"));
+  if (residentStopRequested) {
+    residentStopTimer = setInterval(() => {
+      if (residentStopRequested()) void stop("windows_resident_stop");
+    }, 500).unref();
+  }
 }

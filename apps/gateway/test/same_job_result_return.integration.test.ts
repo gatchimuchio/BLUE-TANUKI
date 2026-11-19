@@ -1,13 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
@@ -996,14 +996,17 @@ timer.unref();
     }
   }, 120_000);
 
-  it("preserves Telegram admission as outcome unknown when Gateway stops during getFile", async () => {
+  const residentStopModes = process.platform === "win32" ? ["signal", "Windows resident request"] : ["signal"];
+  it.each(residentStopModes)("preserves Telegram admission as outcome unknown when Gateway stops during getFile via %s", async (stopMode) => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-shutdown-"));
+    const residentGeneration = stopMode === "Windows resident request" ? randomUUID() : undefined;
     const stateRoot = join(tempRoot, "state");
     const historyFile = join(tempRoot, "complete-history.jsonl");
     const captureFile = join(tempRoot, "telegram-capture.jsonl");
     const restartedCaptureFile = join(tempRoot, "restarted-capture.jsonl");
     const preloadFile = join(tempRoot, "telegram-fetch-fixture.cjs");
-    const shutdownFile = join(tempRoot, "request-shutdown");
+    const controlRoot = realpathSync.native(tempRoot);
+    const shutdownFile = join(controlRoot, residentGeneration ? `${residentGeneration}.stop` : "request-shutdown");
     const envFile = join(tempRoot, "blue-tanuki.env");
     const attachment = Buffer.from("synthetic attachment for interrupted Telegram intake", "utf8");
     const fileId = "synthetic-shutdown-text-file-id";
@@ -1023,23 +1026,37 @@ timer.unref();
       const env = isolatedEnvironment(providerPort, gatewayPort, join(tempRoot, "audit"), stateRoot,
         join(tempRoot, "memory.jsonl"), historyFile, join(tempRoot, "sessions"), captureFile, JSON.stringify([update]));
       env.BLUE_TANUKI_ENV_FILE = envFile;
-      env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
+      if (residentGeneration) {
+        env.BLUE_TANUKI_WINDOWS_RESIDENT_STOP_ROOT = controlRoot;
+        env.BT_F1003_TELEGRAM_HOLD_GET_FILE = "1";
+        writeFileSync(join(controlRoot, `${randomUUID()}.stop`), "", { flag: "wx" });
+        writeFileSync(shutdownFile, "不正な停止要求\n", { flag: "wx" });
+      } else {
+        env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
+      }
       env.BT_F1003_TELEGRAM_FILES = JSON.stringify({ [fileId]: {
         file_path: "documents/synthetic-shutdown.txt", bytes_base64: attachment.toString("base64"),
       } });
       writeFileSync(envFile, "# 隔離済みの合成試験\n", "utf8");
       writeFileSync(preloadFile, telegramFetchPreload(), "utf8");
-      gateway = spawnGateway(env, preloadFile);
-      await waitForHealth(gatewayPort, gateway, 40_000);
+      gateway = spawnGateway(env, preloadFile, undefined, residentGeneration);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       await waitFor(() => readCaptureEvents(captureFile).find((event) => event.method === "getFile") ?? null,
         gateway, "Telegramの添付照会が永続受付後に開始されなかった");
       expect(readTelegramInboxCursor(stateRoot)).toEqual([
         { update_id: update.update_id, payload_digest: updateDigest, delivery_state: "dispatching" },
       ]);
 
-      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
-      writeFileSync(shutdownFile, "stop\n", "utf8");
+      if (residentGeneration) {
+        await delay(1100);
+        expect(gateway.child.exitCode).toBeNull();
+        expect(readCaptureEvents(captureFile).some(event => event.method === "getFileAborted")).toBe(false);
+        rmSync(shutdownFile);
+      }
+      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(15_000) });
+      writeFileSync(shutdownFile, residentGeneration ? "" : "stop\n", { flag: "wx" });
       expect(await stopped).toEqual([0, null]);
+      if (residentGeneration) expect(gateway.stdout.join("")).toContain("windows_resident_stop");
       gateway = undefined;
       expect(readCaptureEvents(captureFile).map((event) => event.method))
         .toEqual(["getUpdates", "getFile", "getFileAborted"]);
@@ -1048,22 +1065,32 @@ timer.unref();
       ]);
 
       delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
+      delete env.BT_F1003_TELEGRAM_HOLD_GET_FILE;
       env.BT_F1003_TELEGRAM_CAPTURE = restartedCaptureFile;
-      gateway = spawnGateway(env, preloadFile);
-      await waitForHealth(gatewayPort, gateway, 40_000);
+      const restartedGeneration = residentGeneration ? randomUUID() : undefined;
+      gateway = spawnGateway(env, preloadFile, undefined, restartedGeneration);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       const firstPoll = await waitFor(() => readCaptureEvents(restartedCaptureFile)
         .find((event) => event.method === "getUpdates") ?? null, gateway, "再起動後のTelegram照会を観測できなかった");
       expect(firstPoll).toMatchObject({ offset: update.update_id + 1, update_ids: [] });
       expect(readCaptureEvents(restartedCaptureFile).every((event) => event.method === "getUpdates")).toBe(true);
       expect(providerRequests).toBe(0);
       expect(readCaptureText(historyFile) ?? "").not.toContain(`telegram-${update.update_id}`);
+      if (restartedGeneration) {
+        await delay(1100);
+        expect(gateway.child.exitCode).toBeNull();
+        const restartedStopped = once(gateway.child, "close", { signal: AbortSignal.timeout(15_000) });
+        writeFileSync(join(controlRoot, `${restartedGeneration}.stop`), "", { flag: "wx" });
+        expect(await restartedStopped).toEqual([0, null]);
+        gateway = undefined;
+      }
     } finally {
       if (gateway) await stopChild(gateway);
       provider.closeAllConnections();
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 150_000);
 
   it.each(["shutdown", "andon", "interrupted"] as const)("closes Telegram reply admission and retains in-flight ambiguity during %s", async (stopMode) => {
     const root = mkdtempSync(join(tmpdir(), "bt-telegram-reply-stop-"));
@@ -2966,7 +2993,7 @@ globalThis.fetch = async (input, init) => {
       if (!file) throw new Error("synthetic Telegram fixture rejected an unconfigured getFile request");
       const byteLength = Buffer.from(file.bytes_base64, "base64").byteLength;
       append({ method, byte_count: byteLength });
-      if (shutdownFile) {
+      if (shutdownFile || process.env.BT_F1003_TELEGRAM_HOLD_GET_FILE === "1") {
         await new Promise((_resolve, reject) => {
           const abort = () => {
             append({ method: "getFileAborted" });
@@ -3029,9 +3056,10 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
     LINE_CHANNEL_SECRET: "" };
 }
 
-function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string, envFile?: string): CapturedProcess {
+function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string, envFile?: string, residentGeneration?: string): CapturedProcess {
   const args = [...(preloadFile ? ["--import", pathToFileURL(preloadFile).href] : []),
-    "apps/gateway/dist/main.js", "--serve", ...(envFile ? ["--env-file", envFile] : [])];
+    "apps/gateway/dist/main.js", "--serve", ...(envFile ? ["--env-file", envFile] : []),
+    ...(residentGeneration ? [`--windows-resident-generation=${residentGeneration}`] : [])];
   const child = spawn(process.execPath, args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   childProcesses.add(child);
   const stdout: string[] = [];

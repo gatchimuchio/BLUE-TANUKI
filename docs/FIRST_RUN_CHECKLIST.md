@@ -156,6 +156,7 @@ tool:schedule.create channel=webchat target=local-user content="runtime smoke" i
 | `doctor` exit code `2` | 安全に起動できない | `pnpm run doctor` の error check を直してから再起動する |
 | 稼働中にTelegramだけが応答しない | WebChatの作業は継続できる | token、`/start`、chat_id、BotFather privacy mode を確認する |
 | Telegramの台帳を起動時に確認できない | Telegramの送受信を停止し、WebChatの作業は継続できる | 所有者向け通知を確認し、既存の受信・送信記録を保全する。台帳の整合性と復元に使う記録を確認してからGatewayを再起動する |
+| Windows製品版の停止・再起動で正常終了を確認できない | Gatewayの終了を30秒まで待つ。タイムアウト時は停止要求とPID記録を保持し、自動再起動・更新・削除に進まない | `BLUE-TANUKI Status` とログを確認する。外部処理の停止状況は仕事の受付から別途確認する |
 | audit chain が broken | boot を止めるべき状態 | [AUDIT.md](../AUDIT.md) と [UPDATE_ROLLBACK_RUNBOOK.md](./UPDATE_ROLLBACK_RUNBOOK.md) の quarantine 手順へ |
 
 ## 9. 初回後に必ず読むもの

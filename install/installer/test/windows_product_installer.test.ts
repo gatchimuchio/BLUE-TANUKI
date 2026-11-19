@@ -1,10 +1,11 @@
-import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { lookup } from "node:dns";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
@@ -93,6 +94,27 @@ function isProcessRunning(command: string, pid: number): boolean {
     `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 0 }; exit 1`,
   ], { encoding: "utf8" });
   return result.status === 0;
+}
+
+function initializeResidentControlFixture(command: string, fixture: string, env: NodeJS.ProcessEnv): string {
+  // Start-ResidentProcess が行う保護ディレクトリ初期化だけを、実ランチャーの定義で実行する。
+  const initialize = join(fixture, "initialize-resident-control.ps1");
+  writeFileSync(initialize, [
+    "$ErrorActionPreference = 'Stop'",
+    ". (Join-Path $PSScriptRoot 'app/install/windows/safe-target.ps1')",
+    "$tokens = $null; $errors = $null",
+    "$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'app/BlueTanukiLauncher.ps1'), [ref]$tokens, [ref]$errors)",
+    "if ($errors.Count -ne 0) { throw 'Launcher parse failed' }",
+    "$definition = $ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq 'Get-ResidentStopRoot' }",
+    "if (@($definition).Count -ne 1) { throw 'Resident control setup function unavailable' }",
+    ". ([scriptblock]::Create($definition.Extent.Text))",
+    "Get-ResidentStopRoot -Create",
+  ].join("\n"), "utf8");
+  const initialized = runPowerShellFile(command, initialize, [], fixture, env);
+  expect(initialized.status, initialized.stderr).toBe(0);
+  const path = initialized.stdout.trim();
+  expect(path).toMatch(/^[A-Za-z]:\\[^\r\n]+\\BLUE-TANUKI\\resident-control$/u);
+  return path;
 }
 
 describe("Windows product installer package", () => {
@@ -882,6 +904,124 @@ describe("Windows product installer package", () => {
     }
   });
 
+  it.skipIf(process.platform !== "win32")("stops the exact resident generation and leaves a timed-out or legacy process running", async () => {
+    const command = findPowerShell();
+    if (!command?.toLowerCase().endsWith("powershell.exe")) throw new Error("Windows PowerShell is required");
+    const knownFolder = spawnSync(command, ["-NoProfile", "-NonInteractive", "-Command",
+      "[Environment]::GetFolderPath('LocalApplicationData')"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+    expect(knownFolder.status, knownFolder.stderr).toBe(0);
+    const localAppData = knownFolder.stdout.trim();
+    expect(localAppData).toMatch(/^[A-Za-z]:[\\/]/u);
+    const controlRoot = join(localAppData, "BLUE-TANUKI", "resident-control");
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-stop-"));
+    const install = join(temp, "app");
+    const data = join(temp, "data");
+    const launcher = join(install, "BlueTanukiLauncher.ps1");
+    const nodeExe = join(install, "runtime", "node.exe");
+    const dist = join(install, "apps", "gateway", "dist");
+    const entry = "apps/gateway/dist/main.js";
+    const pidFile = join(data, "blue-tanuki.pid");
+    const envFile = join(data, "blue-tanuki.env");
+    const env = windowsFixtureEnvironment();
+    const testChildren: ReturnType<typeof spawn>[] = [];
+    const markers: string[] = [];
+
+    const start = async (label: string, generation?: string) => {
+      const ready = join(temp, `${label}.ready`);
+      const observation = join(temp, `${label}.observation`);
+      const release = join(temp, `${label}.release`);
+      const marker = generation ? join(controlRoot, `${generation}.stop`) : "";
+      if (marker) {
+        expect(existsSync(marker)).toBe(false);
+        markers.push(marker);
+      }
+      const child = spawn(nodeExe, ["--", entry, "--serve", "--env-file", envFile,
+        ...(generation ? [`--windows-resident-generation=${generation}`] : [])], {
+        cwd: install, stdio: "ignore", windowsHide: true,
+        env: { ...env, BT_TEST_READY: ready, BT_TEST_OBSERVATION: observation,
+          BT_TEST_STOP_ROOT: controlRoot, BT_TEST_RELEASE: release, BT_TEST_HOLD_STOP: label === "timeout" ? "1" : "0" },
+      });
+      testChildren.push(child);
+      if (!child.pid) throw new Error("Fixture resident process did not start");
+      expect(await waitForPath(ready, 8_000)).toBe(true);
+      expect(readFileSync(ready, "ascii")).toBe(String(child.pid));
+      writeFileSync(pidFile, `${child.pid}\n`, "ascii");
+      return { child, pid: child.pid, marker, observation, release };
+    };
+    const stop = () => spawnSync(command, powerShellFileArgs(command, launcher, ["stop"]), {
+      cwd: temp, env: { ...env, BLUE_TANUKI_NO_PAUSE: "1" }, encoding: "utf8", timeout: 45_000, windowsHide: true,
+    });
+    try {
+      mkdirSync(join(install, "runtime"), { recursive: true });
+      mkdirSync(dist, { recursive: true });
+      mkdirSync(data);
+      writeProductOwnershipFixture(install, data);
+      writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+      copyFileSync(process.execPath, nodeExe);
+      writeFileSync(envFile, "# test-only product environment\n", "utf8");
+      expect(initializeResidentControlFixture(command, temp, env)).toBe(controlRoot);
+      writeFileSync(join(dist, "main.js"), `
+        const { existsSync, writeFileSync } = require("node:fs");
+        const { join } = require("node:path");
+        const argument = process.argv.slice(2).find(value => value.startsWith("--windows-resident-generation="));
+        const generation = argument?.split("=")[1];
+        const marker = generation ? join(process.env.BT_TEST_STOP_ROOT, generation + ".stop") : null;
+        const finish = () => process.exit(0);
+        writeFileSync(process.env.BT_TEST_READY, String(process.pid), { encoding: "ascii", flag: "wx" });
+        let observed = false;
+        setInterval(() => {
+          if (existsSync(process.env.BT_TEST_RELEASE)) finish();
+          if (!marker || observed || !existsSync(marker)) return;
+          observed = true;
+          writeFileSync(process.env.BT_TEST_OBSERVATION, generation, { encoding: "ascii", flag: "wx" });
+          if (process.env.BT_TEST_HOLD_STOP !== "1") finish();
+        }, 25);
+      `, "utf8");
+
+      const exactGeneration = randomUUID();
+      const exact = await start("exact", exactGeneration);
+      const stopped = stop();
+      expect(stopped.status, stopped.stdout + stopped.stderr).toBe(0);
+      expect(stopped.stdout).toContain(`resident_status=stopped pid=${exact.pid}`);
+      expect(await waitForProcessExit(exact.child, 5_000)).toBe(true);
+      expect(exact.child.exitCode).toBe(0);
+      expect(readFileSync(exact.observation, "ascii")).toBe(exactGeneration);
+      expect(existsSync(exact.marker)).toBe(false);
+      expect(existsSync(pidFile)).toBe(false);
+
+      const legacy = await start("legacy");
+      const refused = stop();
+      expect(refused.status, refused.stdout + refused.stderr).toBe(2);
+      expect(refused.stdout + refused.stderr).toContain("one exact managed shutdown generation");
+      expect(isProcessRunning(command, legacy.pid)).toBe(true);
+      expect(readFileSync(pidFile, "ascii").trim()).toBe(String(legacy.pid));
+      expect(existsSync(legacy.observation)).toBe(false);
+      writeFileSync(legacy.release, "", { flag: "wx" });
+      expect(await waitForProcessExit(legacy.child, 5_000)).toBe(true);
+
+      const heldGeneration = randomUUID();
+      const held = await start("timeout", heldGeneration);
+      const timedOut = stop();
+      expect(timedOut.status, timedOut.stdout + timedOut.stderr).toBe(2);
+      expect(timedOut.stdout + timedOut.stderr).toMatch(/shutdown\s+did not finish within 30 seconds/u);
+      expect(isProcessRunning(command, held.pid)).toBe(true);
+      expect(readFileSync(pidFile, "ascii").trim()).toBe(String(held.pid));
+      expect(readFileSync(held.observation, "ascii")).toBe(heldGeneration);
+      expect(existsSync(held.marker)).toBe(true);
+      expect(existsSync(exact.marker)).toBe(false);
+      writeFileSync(held.release, "", { flag: "wx" });
+      expect(await waitForProcessExit(held.child, 5_000)).toBe(true);
+      expect(held.child.exitCode).toBe(0);
+    } finally {
+      for (const child of testChildren) {
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+        if (!await waitForProcessExit(child, 5_000)) throw new Error("Fixture resident process did not exit");
+      }
+      for (const marker of markers) rmSync(marker, { force: true });
+      rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    }
+  }, 85_000);
+
   it("ignores a foreign relative Gateway process and holds ambiguous install ownership", () => {
     const command = findPowerShell();
     const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
@@ -950,54 +1090,14 @@ describe("Windows product installer package", () => {
     }
   });
 
-  it("stops the owned resident process only after matching its executable and launch arguments", async () => {
+  it.each([
+    { description: "after matching its recorded executable and launch arguments", recorded: true,
+      check: 'Get-ManagedProcessSnapshot $pidValue "resident"' },
+    { description: "when it has no PID record", recorded: false, check: 'Get-ManagedProcessSet "resident"' },
+  ])("finds and stops the owned resident process $description", async ({ recorded, check }) => {
     const command = findPowerShell();
     if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
-      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Get-ManagedProcessSnapshot $pidValue \"resident\"");
-      return;
-    }
-    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-stop-"));
-    const install = join(temp, "app");
-    const data = join(temp, "data");
-    const runtime = join(install, "runtime");
-    const launcher = join(install, "BlueTanukiLauncher.ps1");
-    const node = join(runtime, "node.exe");
-    const entry = join(install, "apps", "gateway", "dist", "main.js");
-    const envFile = join(data, "blue-tanuki.env");
-    const pidFile = join(data, "blue-tanuki.pid");
-    mkdirSync(runtime, { recursive: true });
-    mkdirSync(join(install, "apps", "gateway", "dist"), { recursive: true });
-    mkdirSync(data, { recursive: true });
-    linkSync(process.execPath, node);
-    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
-    writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
-    writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
-    writeProductOwnershipFixture(install, data);
-
-    const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
-      cwd: install,
-      stdio: "ignore",
-    });
-    try {
-      if (!resident.pid) throw new Error("resident fixture process did not start");
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      writeFileSync(pidFile, `${resident.pid}\n`, "ascii");
-      const result = runPowerShellFile(command, launcher, ["stop"], temp);
-      const output = `${result.stdout}\n${result.stderr}`;
-      expect(result.status).toBe(0);
-      expect(output).toContain(`resident_status=stopped pid=${resident.pid}`);
-      expect(await waitForProcessExit(resident, 3000)).toBe(true);
-      expect(existsSync(pidFile)).toBe(false);
-    } finally {
-      if (resident.exitCode === null && resident.signalCode === null) resident.kill();
-      rmSync(temp, { recursive: true, force: true });
-    }
-  }, 15000);
-
-  it("finds and stops the owned resident process when its PID record is missing", async () => {
-    const command = findPowerShell();
-    if (!command || !command.toLowerCase().endsWith("powershell.exe")) {
-      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain("Get-ManagedProcessSet \"resident\"");
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain(check);
       return;
     }
     const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-resident-unrecorded-"));
@@ -1009,34 +1109,49 @@ describe("Windows product installer package", () => {
     const entry = join(install, "apps", "gateway", "dist", "main.js");
     const envFile = join(data, "blue-tanuki.env");
     const pidFile = join(data, "blue-tanuki.pid");
-    mkdirSync(runtime, { recursive: true });
-    mkdirSync(join(install, "apps", "gateway", "dist"), { recursive: true });
-    mkdirSync(data, { recursive: true });
-    linkSync(process.execPath, node);
-    writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
-    writeFileSync(entry, "setInterval(() => {}, 1000);\n", "utf8");
-    writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
-    writeProductOwnershipFixture(install, data);
-
-    const resident = spawn(node, ["apps/gateway/dist/main.js", "--serve", "--env-file", envFile], {
-      cwd: install,
-      stdio: "ignore",
-    });
+    const env = windowsFixtureEnvironment();
+    const generation = randomUUID();
+    const ready = join(temp, "resident.ready");
+    let marker: string | undefined;
+    let resident: ReturnType<typeof spawn> | undefined;
     try {
+      mkdirSync(runtime, { recursive: true });
+      mkdirSync(join(install, "apps", "gateway", "dist"), { recursive: true });
+      mkdirSync(data, { recursive: true });
+      copyFileSync(process.execPath, node);
+      writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+      writeFileSync(envFile, "WEBCHAT_PORT=8787\n", "utf8");
+      writeProductOwnershipFixture(install, data);
+      const stopRoot = initializeResidentControlFixture(command, temp, env);
+      const scopedMarker = join(stopRoot, `${generation}.stop`);
+      expect(existsSync(scopedMarker)).toBe(false);
+      marker = scopedMarker;
+      writeFileSync(entry, `
+        const { existsSync, writeFileSync } = require("node:fs");
+        writeFileSync(${JSON.stringify(ready)}, "ready", { flag: "wx" });
+        setInterval(() => { if (existsSync(${JSON.stringify(marker)})) process.exit(0); }, 25);
+      `, "utf8");
+      resident = spawn(node, ["--", "apps/gateway/dist/main.js", "--serve", "--env-file", envFile,
+        `--windows-resident-generation=${generation}`], { cwd: install, env, stdio: "ignore", windowsHide: true });
       if (!resident.pid) throw new Error("resident fixture process did not start");
-      await new Promise((resolve) => setTimeout(resolve, 250));
       expect(existsSync(pidFile)).toBe(false);
-      const result = runPowerShellFile(command, launcher, ["stop"], temp);
+      expect(await waitForPath(ready, 8_000)).toBe(true);
+      if (recorded) writeFileSync(pidFile, `${resident.pid}\n`, "ascii");
+      const result = runPowerShellFile(command, launcher, ["stop"], temp, env);
       const output = `${result.stdout}\n${result.stderr}`;
-      expect(result.status).toBe(0);
+      expect(result.status, output).toBe(0);
       expect(output).toContain(`resident_status=stopped pid=${resident.pid}`);
-      expect(await waitForProcessExit(resident, 3000)).toBe(true);
+      expect(await waitForProcessExit(resident, 5_000)).toBe(true);
+      expect(resident.exitCode).toBe(0);
       expect(existsSync(pidFile)).toBe(false);
+      expect(existsSync(marker)).toBe(false);
     } finally {
-      if (resident.exitCode === null && resident.signalCode === null) resident.kill();
-      rmSync(temp, { recursive: true, force: true });
+      if (resident?.exitCode === null && resident.signalCode === null) resident.kill();
+      if (resident && !await waitForProcessExit(resident, 5_000)) throw new Error("Fixture resident process did not exit");
+      if (marker) rmSync(marker, { force: true });
+      rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
-  }, 15000);
+  }, 40_000);
 
   it("waits for owned watchdog exit and finds it again when its PID record is missing", async () => {
     const command = findPowerShell();

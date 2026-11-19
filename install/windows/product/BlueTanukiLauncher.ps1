@@ -65,6 +65,9 @@ $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $runName = if ([string]::IsNullOrWhiteSpace($env:BLUE_TANUKI_AUTOSTART_RUN_NAME)) { "BLUE-TANUKI" } else { ([string]$env:BLUE_TANUKI_AUTOSTART_RUN_NAME).Trim() }
 $script:autostartRunNameValid = $runName -match '^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$'
 $script:autostartCommand = "powershell.exe -NoProfile -File `"$PSCommandPath`" resident-start"
+$residentGenerationFlag = '--windows-resident-generation'
+$residentGenerationPattern = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+$residentStopTimeoutMs = 30000
 
 function Normalize-ProcessImagePath($Path) {
   return [System.IO.Path]::GetFullPath([string]$Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
@@ -260,6 +263,109 @@ function Stop-VerifiedProcess($Process, $Label) {
     }
   } catch {
     Fail "Could not confirm that $Label exited; its PID record was preserved. $($_.Exception.Message)"
+  }
+}
+
+function Get-ResidentStopRoot([switch]$Create) {
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  if ($localAppData -notmatch '^[A-Za-z]:\\' -or
+      [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($localAppData)).DriveType -ne [System.IO.DriveType]::Fixed) {
+    throw 'Current LocalAppData is not on an accessible fixed local drive.'
+  }
+  $path = Join-Path $localAppData 'BLUE-TANUKI\resident-control'
+  $root = Resolve-SafeDirectoryTarget -Path $path -Label 'ResidentStopRoot'
+  $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  $inheritance = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+  $propagation = [System.Security.AccessControl.PropagationFlags]::None
+  $fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl
+  $allow = [System.Security.AccessControl.AccessControlType]::Allow
+  if ($Create -and -not (Test-Path -LiteralPath $root -PathType Container)) {
+    $parent = [System.IO.Path]::GetDirectoryName($root)
+    [void][System.IO.Directory]::CreateDirectory($parent)
+    $root = Resolve-SafeDirectoryTarget -Path $path -Label 'ResidentStopRoot'
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetOwner($owner)
+    $acl.SetAccessRuleProtection($true, $false)
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($owner, $fullControl, $inheritance, $propagation, $allow)
+    [void]$acl.AddAccessRule($rule)
+    if ('System.IO.FileSystemAclExtensions' -as [type]) {
+      [void][System.IO.FileSystemAclExtensions]::CreateDirectory($acl, $root)
+    } else {
+      [void][System.IO.Directory]::CreateDirectory($root, $acl)
+    }
+  }
+  $root = Resolve-SafeDirectoryTarget -Path $path -Label 'ResidentStopRoot'
+  if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+    throw 'The resident control directory is missing.'
+  }
+  $acl = Get-Acl -LiteralPath $root
+  $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+  if (-not $acl.AreAccessRulesProtected -or -not $owner.Equals($acl.GetOwner([System.Security.Principal.SecurityIdentifier])) -or
+      $rules.Count -ne 1 -or -not $owner.Equals($rules[0].IdentityReference) -or $rules[0].AccessControlType -ne $allow -or
+      $rules[0].FileSystemRights -ne $fullControl -or $rules[0].InheritanceFlags -ne $inheritance -or
+      $rules[0].PropagationFlags -ne $propagation) {
+    throw 'The resident control directory does not have a private current-user ACL.'
+  }
+  return $root
+}
+
+function Get-ResidentGeneration($CommandLine) {
+  $envArgument = [regex]::Escape((Quote-Arg $envFile))
+  $prefix = '\A(?:"[^"]+"|[^\s"]+)\s+--\s+apps/gateway/dist/main\.js\s+--serve\s+--env-file\s+' + $envArgument + '\s+'
+  $generation = [regex]::Match([string]$CommandLine, $prefix + $residentGenerationFlag + '=(?<id>' + $residentGenerationPattern + ')(?=\s|\z)')
+  if (-not $generation.Success -or
+      [regex]::IsMatch($CommandLine.Substring($generation.Length), '(?i)(?:\A|\s)"?' + $residentGenerationFlag + '(?:[=\s"]|\z)')) {
+    throw 'The resident process does not advertise one exact managed shutdown generation. Its PID record was preserved.'
+  }
+  return $generation.Groups['id'].Value
+}
+
+function Get-ResidentStopMarker($Path) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+      $item.Length -ne 0 -or ($item.PSObject.Properties['LinkType'] -and $item.LinkType)) {
+    throw 'The resident stop marker is not an empty regular file.'
+  }
+  return $item
+}
+
+function Stop-VerifiedResidentProcess($Process) {
+  $Process.Refresh()
+  if ($Process.HasExited) { return }
+  $null = $Process.Handle
+  $startTime = $Process.StartTime
+  $snapshot = Get-ManagedProcessSnapshot $Process.Id 'resident'
+  if ($snapshot.state -eq 'stopped' -and $Process.HasExited) { return }
+  if ($snapshot.state -ne 'running' -or $snapshot.process.StartTime -ne $startTime) {
+    throw 'Resident process identity changed before the stop request. Its PID record was preserved.'
+  }
+  $generation = Get-ResidentGeneration $snapshot.command_line
+  $marker = Join-Path (Get-ResidentStopRoot) "$generation.stop"
+  if ($Process.HasExited) { return }
+  try {
+    $created = [System.IO.File]::Open($marker, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $created.Dispose()
+  } catch [System.IO.IOException] {
+    if (-not (Test-Path -LiteralPath $marker)) { throw }
+  }
+  try { $originalMarker = Get-ResidentStopMarker $marker } catch [System.Management.Automation.ItemNotFoundException] {
+    if ($Process.HasExited -and $Process.ExitCode -eq 0) { return }
+    throw
+  }
+  if (-not $Process.WaitForExit($residentStopTimeoutMs)) {
+    throw 'Resident shutdown did not finish within 30 seconds. The stop request and PID record were preserved.'
+  }
+  if ($Process.ExitCode -ne 0) {
+    throw "Resident shutdown exited with code $($Process.ExitCode). The stop request and PID record were preserved."
+  }
+  $marker = Join-Path (Get-ResidentStopRoot) "$generation.stop"
+  if (Test-Path -LiteralPath $marker) {
+    $currentMarker = Get-ResidentStopMarker $marker
+    if ($currentMarker.CreationTimeUtc -ne $originalMarker.CreationTimeUtc -or
+        $currentMarker.LastWriteTimeUtc -ne $originalMarker.LastWriteTimeUtc) {
+      throw 'The resident stop marker changed after the request; it and the PID record were preserved.'
+    }
+    [System.IO.File]::Delete($marker)
   }
 }
 
@@ -674,6 +780,11 @@ function Set-SafeModeEnvironment {
 }
 
 function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
+  foreach ($argument in $RemainingArgs) {
+    if ($argument -match ('\A' + $residentGenerationFlag + '(?:=|\z)')) {
+      Fail 'The resident shutdown generation is assigned by this launcher.'
+    }
+  }
   Ensure-EnvFile
   if ($Reason -eq "watchdog") { $script:installedWebChatConfiguration = $null }
   Assert-PortAvailable
@@ -686,12 +797,19 @@ function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
   $env:BLUE_TANUKI_ENV_FILE = $envFile
   $env:BLUE_TANUKI_INSTALL_ROOT = $installRoot
   $env:BLUE_TANUKI_DATA_ROOT = $dataRoot
-  $rawArgs = @("--", "apps/gateway/dist/main.js", "--serve", "--env-file", $envFile)
+  $generation = [Guid]::NewGuid().ToString('D')
+  $rawArgs = @("--", "apps/gateway/dist/main.js", "--serve", "--env-file", $envFile, "$residentGenerationFlag=$generation")
   if ($RemainingArgs) {
     $rawArgs += $RemainingArgs
   }
   $processArgs = @($rawArgs | ForEach-Object { Quote-Arg $_ })
-  $process = Start-Process -FilePath $nodeExe -ArgumentList $processArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+  $previousStopRoot = $env:BLUE_TANUKI_WINDOWS_RESIDENT_STOP_ROOT
+  try {
+    $env:BLUE_TANUKI_WINDOWS_RESIDENT_STOP_ROOT = Get-ResidentStopRoot -Create
+    $process = Start-Process -FilePath $nodeExe -ArgumentList $processArgs -WorkingDirectory $installRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+  } finally {
+    $env:BLUE_TANUKI_WINDOWS_RESIDENT_STOP_ROOT = $previousStopRoot
+  }
   Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ASCII
   Write-Host "resident_launch_reason=$Reason pid=$($process.Id)"
   return $process
@@ -855,15 +973,24 @@ function Stop-Resident {
   } elseif ($processSet.state -ne "stopped") {
     Fail "Refusing to stop resident processes because ownership could not be verified. $($processSet.reason)"
   }
+  if ($processes.Count -gt 1) { Fail 'Resident process identity changed while stopping; the PID record was preserved.' }
   foreach ($process in $processes) {
-    Stop-VerifiedProcess $process "resident runtime"
+    try { Stop-VerifiedResidentProcess $process } catch {
+      Fail "Could not confirm graceful resident shutdown; product files and the PID record were preserved. $($_.Exception.Message)"
+    }
     Write-Host "resident_status=stopped pid=$($process.Id)"
   }
   $remaining = Get-ManagedProcessSet "resident"
   if ($remaining.state -ne "stopped") {
     Fail "Refusing to clear resident PID record because shutdown could not be confirmed. $($remaining.reason)"
   }
-  if ($pidValue) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction Stop }
+  if ($pidValue) {
+    $currentPid = Read-ResidentPid
+    if ($currentPid -and $currentPid -ne $pidValue) {
+      Fail 'The resident PID record changed while stopping and was preserved.'
+    }
+    if ($currentPid) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction Stop }
+  }
   if (-not $processes.Count) { Write-Host "resident_status=stopped" }
 }
 
