@@ -389,9 +389,10 @@ ${CONTROL_CENTER_STYLE}    </style>
               <label>UTC日ごとの合計（USD）<input id="settings-cost-per-24h" type="number" min="0.000001" max="1000" step="0.000001" autocomplete="off" /></label>
             </div>
             <div id="settings-native-credential-option" hidden>
-              <label><input id="settings-register-credential" type="checkbox" autocomplete="off" />Windowsの保護ストアに資格情報を新規登録する</label>
-              <p class="muted">承認後にWindowsの資格情報入力画面が開きます。</p>
+              <label><input id="settings-register-credential" type="checkbox" autocomplete="off" />この端末の保護ストアに資格情報を新規登録する</label>
+              <p class="muted">承認後に専用入力画面が開きます。</p>
             </div>
+            <p id="settings-native-credential-unavailable" class="muted" hidden>新規登録には、専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください。保護ストアに登録済みの資格情報で切り替えることもできます。</p>
             <p class="muted">切り替えには切り替え先の資格情報が必要です。設定した上限は計算予算台帳でシステム全体、親成果、個別タスクに適用します。請求額はプロバイダー側で確定します。</p>
           </fieldset>
           <p id="settings-compute-readiness" class="badge warn" role="status">通常Computeの設定は未確認です。</p>

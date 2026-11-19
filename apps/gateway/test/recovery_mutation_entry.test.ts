@@ -84,6 +84,8 @@ globalThis.fetch = async (url, init) => {
     {status:200,headers:{"content-type":"application/json"}});
 };`);
     const base = "LLM_BACKEND=stub\nUNRELATED_SETTING=kept\n";
+    // Seed the legacy fixture before opening HTTP sockets. Its DPAPI calls can block the test process.
+    const stored = register ? undefined : storeLlmApiKeySecret("ANTHROPIC_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
     writeFileSync(envFile, base);
     let gateway = spawnGateway(env, preload);
     await waitForHealth(port, gateway, 40_000);
@@ -96,7 +98,6 @@ globalThis.fetch = async (url, init) => {
       ...(registerCredential ? { origin: `http://127.0.0.1:${port}` } : {}),
       signal: AbortSignal.timeout(10_000) });
     expect((await submit(false)).status).toBe(409);
-    const stored = register ? undefined : storeLlmApiKeySecret("ANTHROPIC_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
     const eligible = stored ? base + `${stored.ref_key}=${JSON.stringify(stored.ref)}\n` : base;
     writeFileSync(envFile, eligible + 'anthropic_endpoint="https://example.invalid/v1/messages"\n');
     expect((await submit()).status).toBe(409);

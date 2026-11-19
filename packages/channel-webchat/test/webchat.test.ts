@@ -935,6 +935,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="settings-cost-per-attempt"');
     expect(html).toContain('id="settings-cost-per-24h"');
     expect(html).toContain('id="settings-register-credential" type="checkbox"');
+    expect(html).toContain("専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください");
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
     const section = (startText: string, endText: string) => {
@@ -1060,10 +1061,12 @@ describe("WebChatChannel — Control Center shell", () => {
     const provider = node("settings-provider-choice");
     const settingsBudget = node("settings-activation-budget");
     expect(settingsBudget.hidden).toBe(true);
+    expect(node("settings-native-credential-unavailable").hidden).toBe(true);
     provider.value = "openai";
     provider.events.get("change")!();
     expect(settingsBudget.hidden).toBe(false);
     expect(node("settings-native-credential-option").hidden).toBe(true);
+    expect(node("settings-native-credential-unavailable").hidden).toBe(false);
     expect(node("settings-model").value).toBe("");
     const priorCallCount = calls.length;
     node("settings-owner-token").value = OWNER_TOKEN;
@@ -1090,6 +1093,7 @@ describe("WebChatChannel — Control Center shell", () => {
     provider.value = "openai";
     provider.events.get("change")!();
     expect(node("settings-native-credential-option").hidden).toBe(false);
+    expect(node("settings-native-credential-unavailable").hidden).toBe(true);
     node("settings-register-credential").checked = true;
     node("settings-cost-per-attempt").value = ".001501";
     node("settings-cost-per-24h").value = "5.000000";
@@ -1104,6 +1108,7 @@ describe("WebChatChannel — Control Center shell", () => {
     provider.value = "openai";
     provider.events.get("change")!();
     expect(node("settings-native-credential-option").hidden).toBe(true);
+    expect(node("settings-native-credential-unavailable").hidden).toBe(false);
     expect(node("settings-register-credential").checked).toBe(false);
   });
 
@@ -2240,9 +2245,9 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(approve.disabled).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
     await evaluate(nativeReview, "no-store", "127.0.0.1");
-    expect(JSON.stringify(view.children)).toContain("Windowsの入力画面で新規登録");
+    expect(JSON.stringify(view.children)).toContain("この端末の専用入力画面で新規登録");
     expect(approve.disabled).toBe(false);
-    expect(approve.textContent).toBe("承認してWindowsで入力");
+    expect(approve.textContent).toBe("承認して入力画面を開く");
     await evaluate(nativeReview, "no-store", "127.0.0.1", true);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatchObject({ path: `/approval/${commandId}/native-credential`, options: {

@@ -164,6 +164,10 @@ function verifyMountedImage(mount: string, version: string, arch: MacArch, expec
       !readme.includes("macOSのセキュリティ設定を変更せず")) {
     throw new Error("DMG README does not state the signing and security boundary");
   }
+  if (!readme.includes("表示されたmacOSの入力画面でキーを入力します") ||
+      !readme.includes("ログインユーザーのキーチェーンに保存されます")) {
+    throw new Error("DMG README does not state the native credential registration and storage requirements");
+  }
 }
 
 async function verifyTarget(version: string, arch: MacArch): Promise<void> {

@@ -20,7 +20,7 @@ import {
   verifyLlmConfiguration,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
-import { connectorSecretStorageStatus, llmApiKeyForProvider, llmSecretStorageStatus, storeLlmApiKeySecret,
+import { connectorSecretStorageStatus, llmApiKeyForProvider, llmSecretStorageStatus, stageRuntimeLlmApiKeySecret,
   type LlmSecretStoreResult } from "./secret_store.js";
 import { prepareLlmProviderActivation } from "./llm_provider_activation.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
@@ -35,7 +35,7 @@ export interface SettingsSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   plugins: PluginRuntime;
   mcpRuntimeObservations?: McpRuntimeObservationStore;
-  nativeCredentialPromptAvailable?: true;
+  nativeCredentialPromptAvailable?: () => boolean;
 }
 
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
@@ -200,13 +200,23 @@ function envFilePath(env: Env): string | undefined {
 }
 
 type NativeLlmCredentialRegistration = {
+  available(): boolean;
   request(provider: "anthropic" | "openai" | "openrouter", signal: AbortSignal): Promise<Buffer | null>;
   assertCurrent(commandDigest: string): void;
 };
 
-async function assertLocalCredentialTarget(target: string, env: Env): Promise<void> {
+async function assertLocalCredentialTarget(target: string, file: { mode: number; uid: number }, env: Env): Promise<void> {
   const parent = path.dirname(path.resolve(target));
   const physicalParent = await fs.realpath(parent);
+  if (process.platform !== "win32") {
+    const directory = await fs.stat(physicalParent);
+    const owner = process.geteuid?.();
+    if (physicalParent !== parent || owner === undefined || owner === 0 ||
+        file.uid !== owner || (file.mode & 0o077) !== 0 || directory.uid !== owner || (directory.mode & 0o022) !== 0) {
+      throw new Error("llm_credential_registration_target_unavailable");
+    }
+    return;
+  }
   if (physicalParent.toLowerCase() !== parent.toLowerCase() || !/^[A-Za-z]:\\/u.test(physicalParent)) {
     throw new Error("llm_credential_registration_target_unavailable");
   }
@@ -278,8 +288,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       !hasAlternateLlmRoute(env) && !hasAlternateLlmRoute(configuredEnv) &&
       defaultLlmProvider(env) === config.llm.provider && defaultLlmProvider(configuredEnv) === config.llm.provider;
     if (activationPatch?.activation?.register_credential && expectedLlmProvider === config.llm.provider && managedLlmSettings) {
-      if (!nativeRegistration) throw new Error("llm_credential_registration_unavailable");
-      await assertLocalCredentialTarget(target, env);
+      if (!nativeRegistration?.available()) throw new Error("llm_credential_registration_unavailable");
+      await assertLocalCredentialTarget(target, after, env);
     }
     const activationUpdates = activationPatch?.activation && expectedLlmProvider === config.llm.provider && managedLlmSettings
       ? prepareLlmProviderActivation(activationPatch, expectedLlmProvider, parsed.values, configuredEnv, inheritedEnvKeys)
@@ -360,7 +370,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         if (activationPatch && !latest.activationUpdates) throw new Error("llm_activation_not_ready");
       };
       const activation = activationPatch?.activation;
-      let stored: LlmSecretStoreResult | undefined;
+      let stored: LlmSecretStoreResult<boolean | Promise<boolean>> | undefined;
       let replacementAttempted = false;
       const recheckRegistration = () => {
         if (!nativeRegistration || !context?.signal || context.signal.aborted) {
@@ -381,8 +391,11 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
             const key = llmApiKeyForProvider(activation.provider);
             if (!key) throw new Error("llm_credential_registration_not_authorized");
             try {
-              stored = storeLlmApiKeySecret(key, credential.toString("utf8"), { envFilePath: state.target });
-            } catch {
+              stored = await stageRuntimeLlmApiKeySecret(key, credential.toString("utf8"), state.target);
+            } catch (error) {
+              if (error instanceof Error && error.message === "runtime_llm_keyring_outcome_unknown") {
+                throw new Error("llm_credential_registration_outcome_unknown");
+              }
               throw new Error("llm_credential_registration_storage_failed");
             }
             updates[stored.ref_key] = stored.ref;
@@ -399,7 +412,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       } catch (error) {
         if (stored) {
           const current = replacementAttempted ? await inspectCurrent(expectedLlmProvider).catch(() => undefined) : undefined;
-          if ((replacementAttempted && current?.target_state_digest !== expectedTargetStateDigest) || !stored.discard_uncommitted()) {
+          if ((replacementAttempted && current?.target_state_digest !== expectedTargetStateDigest) || !(await stored.discard_uncommitted())) {
             throw new Error("llm_credential_registration_outcome_unknown");
           }
         }
@@ -690,7 +703,7 @@ export function createWebChatSettingsSurface(
     getSnapshot: async () => {
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
       const snapshot = buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
-      if (opts.nativeCredentialPromptAvailable) snapshot.llm.native_credential_prompt_available = true;
+      if (opts.nativeCredentialPromptAvailable?.()) snapshot.llm.native_credential_prompt_available = true;
       return snapshot;
     },
     verifyLlm: async (body) => verifyLlmConfiguration(body, env, opts.plugins),

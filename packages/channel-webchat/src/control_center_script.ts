@@ -4152,6 +4152,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("settings-provider-choice").value = "";
         byId("settings-activation-budget").hidden = true;
         byId("settings-native-credential-option").hidden = true;
+        byId("settings-native-credential-unavailable").hidden = true;
         byId("settings-register-credential").checked = false;
         byId("settings-cost-per-attempt").value = "";
         byId("settings-cost-per-24h").value = "";
@@ -5849,7 +5850,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           const register = byId("settings-register-credential").checked;
           if (register && (!current.nativeCredentialPromptAvailable || !isLocalCredentialControlCenter())) {
-            throw new Error("資格情報の新規登録は、このWindows端末のControl Centerで実行してください。");
+            throw new Error("このControl Centerからは資格情報を新規登録できません。");
           }
           llm.activation = { provider, currency: "USD", max_cost_per_attempt_micros, max_cost_per_24h_micros,
             ...(register ? { register_credential: true } : {}) };
@@ -6739,10 +6740,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const nativeCredential = verdict === "approve" && approve?.getAttribute?.("data-native-credential-registration") === "true";
         if (nativeCredential) {
           if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
-            throw new Error("このWindows端末のControl Centerで登録先を確認してから承認してください。");
+            throw new Error("この端末のControl Centerで登録先を確認してから承認してください。");
           }
           approve.disabled = true;
-          setText("native-credential-approval-status", "Windowsの資格情報入力画面で入力を完了するか、キャンセルしてください。");
+          setText("native-credential-approval-status", "この端末の専用入力画面で資格情報を入力するか、キャンセルしてください。");
         }
         const reviewedRepair = repairCard ? state.goalPurposeRepairReviews[commandId] : null;
         if (repairCard) {
@@ -7244,7 +7245,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (activation) {
             for (const [labelText, valueText] of [
               ["切り替え先の送信先", activation.destination],
-              ["保護保管された資格情報", registersCredential ? "Windowsの入力画面で新規登録" : "設定済み"],
+              ["保護保管された資格情報", registersCredential ? "この端末の専用入力画面で新規登録" : "設定済み"],
               ["計算予算台帳の1試行あたりの上限", String(activation.max_cost_per_attempt_micros / 1000000) + " USD"],
               ["計算予算台帳のUTC日ごとの上限", String(activation.max_cost_per_24h_micros / 1000000) + " USD"]
             ]) {
@@ -7261,7 +7262,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           note.className = "muted";
           note.textContent = "承認後に対象版を再照合して設定へ反映します。反映後はGatewayを再起動してください。" +
             (activation ? " 費用上限はシステム全体、親成果、個別タスクの各範囲に適用し、既存のトークン数と時間の予算を維持します。" : "") +
-            (registersCredential ? " 承認後にこのWindows端末の資格情報入力画面を開きます。" : "") +
+            (registersCredential ? " 承認後に専用入力画面が開きます。" : "") +
             (composioChange ? " API keyの切断はdry-run=true／live=falseへ戻します。" : "");
           view.appendChild(note);
           const digests = document.createElement("small");
@@ -7274,7 +7275,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               return;
             }
             approve.setAttribute("data-native-credential-registration", "true");
-            approve.textContent = "承認してWindowsで入力";
+            approve.textContent = "承認して入力画面を開く";
           }
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
@@ -10698,8 +10699,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const provider = byId("settings-provider-choice").value;
         const current = state.settingsRuntimeSnapshot;
         const activating = Boolean(provider && provider !== current?.provider);
+        const canRegister = current?.nativeCredentialPromptAvailable === true;
         byId("settings-activation-budget").hidden = !activating;
-        byId("settings-native-credential-option").hidden = !activating || current?.nativeCredentialPromptAvailable !== true;
+        byId("settings-native-credential-option").hidden = !activating || !canRegister;
+        byId("settings-native-credential-unavailable").hidden = !activating || canRegister;
         byId("settings-register-credential").checked = false;
         byId("settings-model").value = activating ? "" : (current?.model || "");
         byId("settings-cost-per-attempt").value = "";

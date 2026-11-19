@@ -243,6 +243,7 @@ function packageReadmeText(version: string, target: UnixTarget): string {
       "",
       "導入後のランチャーはhttp://127.0.0.1:8787/appを開きます。自動起動は既定で無効です。",
       "利用者側にNode.js／pnpm／Gitの導入は不要です。",
+      "APIキーの初回登録は、ログイン中のmacOSデスクトップで行います。コントロールセンターで承認するとmacOS標準の入力画面（/usr/bin/osascript）が開き、キーはログインユーザーのキーチェーンに保存されます。",
       "",
     ].join("\n");
   }
@@ -262,6 +263,7 @@ function packageReadmeText(version: string, target: UnixTarget): string {
       "musl-based distributions and non-x64 Linux are not supported by this package.",
       "Installer dependencies: POSIX sh and utilities, getconf, tar, mktemp, find, ps, awk, and sha256sum or shasum.",
       "Saving credentials requires Linux Secret Service over the user's session D-Bus; install and launch do not claim that credential service is available.",
+      "First-time API key registration from the Control Center requires a local graphical session with /usr/bin/zenity or /usr/bin/kdialog and the user's Secret Service. After approval, enter the key in the masked desktop dialog. The dialog helper is optional for installation and startup.",
       "Node.js v22.14.0 compatibility reference: https://github.com/nodejs/node/blob/v22.14.0/BUILDING.md",
       "Distribution release support depends on the distribution vendor; Node.js upstream compatibility examples are not BLUE-TANUKI QA evidence.",
       "",

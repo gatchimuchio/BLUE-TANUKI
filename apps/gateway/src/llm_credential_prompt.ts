@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { win32 } from "node:path";
+import { lstatSync, statSync } from "node:fs";
+import { posix, win32 } from "node:path";
 import type { Readable } from "node:stream";
 import { SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS, type SettingsWriteActivation } from "@blue-tanuki/protocol";
 import { windowsSystemChildEnvironment } from "./child_process_environment.js";
@@ -12,6 +13,17 @@ const PROVIDER_LABELS: Record<SettingsWriteActivation["provider"], string> = {
 const NATIVE_PROMPT_TIMEOUT_MS = SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS;
 const CHILD_TIMEOUT_MS = NATIVE_PROMPT_TIMEOUT_MS + 5_000;
 const MAX_CREDENTIAL_BYTES = 4_096;
+const DIALOG_TITLE = "BLUE-TANUKI - 資格情報の入力";
+const MAC_SUCCESS = Buffer.from("OK:");
+const MAC_CANCEL = Buffer.from("CANCEL");
+const MAC_TIMEOUT = Buffer.from("TIMEOUT");
+
+interface NativePrompt {
+  kind: "windows" | "zenity" | "kdialog" | "macos";
+  command: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+}
 
 function promptScript(label: string): string {
   return `
@@ -28,7 +40,7 @@ try {
   Add-Type -AssemblyName System.Drawing
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $form = New-Object System.Windows.Forms.Form
-  $form.Text = 'BLUE-TANUKI - 資格情報の入力'
+  $form.Text = '${DIALOG_TITLE}'
   $form.ClientSize = New-Object System.Drawing.Size(460, 138)
   $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
   $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -86,24 +98,138 @@ exit $exitCode
 `;
 }
 
+function macPromptScript(label: string): string {
+  return `try
+    set answer to display dialog "${label} の API キーを入力してください。" with title "${DIALOG_TITLE}" default answer "" with hidden answer giving up after ${NATIVE_PROMPT_TIMEOUT_MS / 1_000}
+    if gave up of answer then return "TIMEOUT"
+    return "OK:" & text returned of answer
+on error number -128
+    return "CANCEL"
+end try`;
+}
+
+function trustedSystemExecutable(path: string): boolean {
+  const file = statSync(path, { throwIfNoEntry: false });
+  return file?.isFile() === true && file.uid === 0 && (file.mode & 0o111) !== 0 && (file.mode & 0o022) === 0;
+}
+
+function linuxRuntimeDirectory(source: NodeJS.ProcessEnv, uid: number): string | undefined {
+  const directory = source.XDG_RUNTIME_DIR;
+  if (!directory || !/^\/[A-Za-z0-9_./-]+$/u.test(directory) || posix.normalize(directory) !== directory) return undefined;
+  const observed = lstatSync(directory, { throwIfNoEntry: false });
+  if (observed?.isDirectory() && observed.uid === uid && (observed.mode & 0o077) === 0) return directory;
+  return undefined;
+}
+
+function linuxSessionBus(source: NodeJS.ProcessEnv, uid: number): string | undefined {
+  const address = source.DBUS_SESSION_BUS_ADDRESS;
+  const socketPath = address && /^unix:path=(\/[A-Za-z0-9_./-]+)(?:,guid=[0-9a-f]{32})?$/u.exec(address)?.[1];
+  if (!socketPath || posix.normalize(socketPath) !== socketPath) return undefined;
+  const socket = lstatSync(socketPath, { throwIfNoEntry: false });
+  return socket?.isSocket() && socket.uid === uid ? address : undefined;
+}
+
+function currentUnixUser(source: NodeJS.ProcessEnv): number | undefined {
+  const uid = process.geteuid?.();
+  if (uid === undefined || uid === 0 || process.getuid?.() !== uid ||
+      source.SSH_CONNECTION || source.SSH_CLIENT || source.SSH_TTY) return undefined;
+  return uid;
+}
+
+/** Verifies the socket used by local Linux credential registration before contacting Secret Service. */
+export function nativeLinuxCredentialSessionBus(source: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (process.platform !== "linux") return undefined;
+  const uid = currentUnixUser(source);
+  if (uid === undefined) return undefined;
+  try { return linuxSessionBus(source, uid); }
+  catch { return undefined; }
+}
+
+function linuxPrompt(label: string, uid: number, source: NodeJS.ProcessEnv): NativePrompt | undefined {
+  const runtime = linuxRuntimeDirectory(source, uid);
+  const bus = linuxSessionBus(source, uid);
+  if (!bus) return undefined;
+  const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", DBUS_SESSION_BUS_ADDRESS: bus };
+  const wayland = source.WAYLAND_DISPLAY;
+  const display = /^:(\d{1,6})(?:\.\d{1,3})?$/u.exec(source.DISPLAY ?? "");
+  if (runtime && wayland) {
+    const socketName = posix.isAbsolute(wayland) ? posix.relative(runtime, wayland) : wayland;
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u.test(socketName)) {
+      const socket = lstatSync(posix.join(runtime, socketName), { throwIfNoEntry: false });
+      if (socket?.isSocket() && socket.uid === uid) env.WAYLAND_DISPLAY = socketName;
+    }
+  }
+  if (runtime) env.XDG_RUNTIME_DIR = runtime;
+  if (display) {
+    const socket = lstatSync(`/tmp/.X11-unix/X${display[1]}`, { throwIfNoEntry: false });
+    if (socket?.isSocket() && (socket.uid === uid || socket.uid === 0)) {
+      const xauthority = source.XAUTHORITY;
+      const cookie = xauthority && posix.isAbsolute(xauthority) ? lstatSync(xauthority, { throwIfNoEntry: false }) : undefined;
+      if (!xauthority || (cookie?.isFile() && cookie.uid === uid && (cookie.mode & 0o022) === 0)) {
+        env.DISPLAY = display[0];
+        if (xauthority) env.XAUTHORITY = xauthority;
+      }
+    }
+  }
+  if (!env.WAYLAND_DISPLAY && !env.DISPLAY) return undefined;
+
+  const text = `${label} の API キーを入力してください。`;
+  if (trustedSystemExecutable("/usr/bin/zenity")) {
+    env.GDK_BACKEND = env.WAYLAND_DISPLAY ? (env.DISPLAY ? "wayland,x11" : "wayland") : "x11";
+    return { kind: "zenity", command: "/usr/bin/zenity", env, args: ["--entry", "--hide-text", `--title=${DIALOG_TITLE}`,
+      `--text=${text}`, `--timeout=${NATIVE_PROMPT_TIMEOUT_MS / 1_000}`] };
+  }
+  if (trustedSystemExecutable("/usr/bin/kdialog")) {
+    env.QT_QPA_PLATFORM = env.WAYLAND_DISPLAY ? (env.DISPLAY ? "wayland;xcb" : "wayland") : "xcb";
+    return { kind: "kdialog", command: "/usr/bin/kdialog", env, args: ["--title", DIALOG_TITLE, "--password", text] };
+  }
+  return undefined;
+}
+
+function resolveNativePrompt(label: string, source: NodeJS.ProcessEnv): NativePrompt | undefined {
+  if (process.platform === "win32") {
+    const env = windowsSystemChildEnvironment(source);
+    const windowsDirectory = env.SystemRoot;
+    if (!windowsDirectory || !/^[a-z]:\\/iu.test(windowsDirectory)) return undefined;
+    const command = win32.join(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const script = Buffer.from(promptScript(label), "utf16le").toString("base64");
+    return { kind: "windows", command, env, args: ["-NoProfile", "-NoLogo", "-NonInteractive", "-STA", "-EncodedCommand", script] };
+  }
+  const uid = currentUnixUser(source);
+  if (uid === undefined) return undefined;
+  if (process.platform === "linux") return linuxPrompt(label, uid, source);
+  if (process.platform === "darwin") {
+    const console = statSync("/dev/console", { throwIfNoEntry: false });
+    if (!console?.isCharacterDevice() || console.uid !== uid || !trustedSystemExecutable("/usr/bin/osascript")) return undefined;
+    return { kind: "macos", command: "/usr/bin/osascript", args: ["-e", macPromptScript(label)],
+      env: { PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" } };
+  }
+  return undefined;
+}
+
+/** Whether the current Gateway has a supported path to local desktop input, without opening a dialog. */
+export function nativeLlmCredentialPromptAvailable(source: NodeJS.ProcessEnv = process.env): boolean {
+  try { return resolveNativePrompt("BLUE-TANUKI", source) !== undefined; }
+  catch { return false; }
+}
+
 /** The caller owns the successful buffer and clears it after the approved storage attempt. */
 export async function promptForLlmCredential(
   provider: SettingsWriteActivation["provider"],
   signal: AbortSignal,
+  source: NodeJS.ProcessEnv = process.env,
 ): Promise<Buffer | null> {
   if (signal.aborted) return null;
-  if (process.platform !== "win32") throw new Error("llm_credential_prompt_unsupported");
+  if (!["win32", "linux", "darwin"].includes(process.platform)) throw new Error("llm_credential_prompt_unsupported");
   if (!Object.hasOwn(PROVIDER_LABELS, provider)) throw new Error("llm_credential_prompt_invalid");
-  const env = windowsSystemChildEnvironment();
-  const windowsDirectory = env.SystemRoot;
-  if (!windowsDirectory || !/^[a-z]:\\/iu.test(windowsDirectory)) {
-    throw new Error("llm_credential_prompt_unavailable");
-  }
-  const command = win32.join(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const encodedScript = Buffer.from(promptScript(PROVIDER_LABELS[provider]), "utf16le").toString("base64");
+  let prompt: NativePrompt | undefined;
+  try { prompt = resolveNativePrompt(PROVIDER_LABELS[provider], source); }
+  catch { throw new Error("llm_credential_prompt_unavailable"); }
+  if (!prompt) throw new Error("llm_credential_prompt_unavailable");
+  const { kind, command, args, env } = prompt;
   let child: ChildProcessByStdio<null, Readable, null>;
   try {
-    child = spawn(command, ["-NoProfile", "-NoLogo", "-NonInteractive", "-STA", "-EncodedCommand", encodedScript], {
+    child = spawn(command, args, {
       env,
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
@@ -113,7 +239,8 @@ export async function promptForLlmCredential(
   }
 
   return new Promise((resolve, reject) => {
-    const received = Buffer.alloc(MAX_CREDENTIAL_BYTES);
+    const framingBytes = kind === "windows" ? 0 : kind === "macos" ? MAC_SUCCESS.length + 1 : 1;
+    const received = Buffer.alloc(MAX_CREDENTIAL_BYTES + framingBytes);
     let length = 0;
     let complete = false;
 
@@ -124,14 +251,15 @@ export async function promptForLlmCredential(
       clearTimeout(timeout);
       signal.removeEventListener("abort", abort);
       if (stop) {
-        try { child.kill(); } catch { /* Its own prompt timer also stops the child. */ }
+        try { kind === "windows" ? child.kill() : child.kill("SIGKILL"); } catch { /* Child may already have exited. */ }
       }
       if (result instanceof Error) reject(result);
       else resolve(result);
     };
     const abort = () => finish(null, true);
     const unavailable = () => finish(new Error("llm_credential_prompt_unavailable"), true);
-    const timeout = setTimeout(() => finish(new Error("llm_credential_prompt_timeout"), true), CHILD_TIMEOUT_MS);
+    const timeout = setTimeout(() => finish(new Error("llm_credential_prompt_timeout"), true),
+      kind === "kdialog" ? NATIVE_PROMPT_TIMEOUT_MS : CHILD_TIMEOUT_MS);
     timeout.unref();
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -153,12 +281,29 @@ export async function promptForLlmCredential(
     child.once("close", (code) => {
       if (complete) return;
       if (signal.aborted) return finish(null, false);
-      if (code === 2 && length === 0) return finish(null, false);
-      if (code === 3 && length === 0) return finish(new Error("llm_credential_prompt_timeout"), false);
-      if (code === 4) return finish(new Error("llm_credential_prompt_invalid"), false);
+      if (kind === "windows") {
+        if (code === 2 && length === 0) return finish(null, false);
+        if (code === 3 && length === 0) return finish(new Error("llm_credential_prompt_timeout"), false);
+        if (code === 4) return finish(new Error("llm_credential_prompt_invalid"), false);
+      } else if (kind === "zenity" || kind === "kdialog") {
+        if (code === 1 && length === 0) return finish(null, false);
+        if (kind === "zenity" && code === 5 && length === 0) return finish(new Error("llm_credential_prompt_timeout"), false);
+      }
       if (code !== 0) return finish(new Error("llm_credential_prompt_unavailable"), false);
 
-      const value = received.subarray(0, length);
+      let value = received.subarray(0, length);
+      if (kind !== "windows") {
+        if (value.at(-1) !== 0x0a) return finish(new Error("llm_credential_prompt_invalid"), false);
+        value = value.subarray(0, -1);
+        if (kind === "macos") {
+          if (value.equals(MAC_CANCEL)) return finish(null, false);
+          if (value.equals(MAC_TIMEOUT)) return finish(new Error("llm_credential_prompt_timeout"), false);
+          if (!value.subarray(0, MAC_SUCCESS.length).equals(MAC_SUCCESS)) {
+            return finish(new Error("llm_credential_prompt_invalid"), false);
+          }
+          value = value.subarray(MAC_SUCCESS.length);
+        }
+      }
       if (value.length === 0 || value.some((byte) => byte < 0x21 || byte > 0x7e)) {
         return finish(new Error("llm_credential_prompt_invalid"), false);
       }

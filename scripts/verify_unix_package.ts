@@ -409,7 +409,12 @@ export function verifyUnixPackage(
     "musl-based distributions and non-x64 Linux are not supported by this package.",
     "Installer dependencies: POSIX sh and utilities, getconf, tar, mktemp, find, ps, awk, and sha256sum or shasum.",
     "Saving credentials requires Linux Secret Service over the user's session D-Bus; install and launch do not claim that credential service is available.",
-  ] : [];
+    "First-time API key registration from the Control Center requires a local graphical session with /usr/bin/zenity or /usr/bin/kdialog and the user's Secret Service.",
+    "The dialog helper is optional for installation and startup.",
+  ] : [
+    "APIキーの初回登録は、ログイン中のmacOSデスクトップで行います。",
+    "macOS標準の入力画面（/usr/bin/osascript）が開き、キーはログインユーザーのキーチェーンに保存されます。",
+  ];
   const commonReadmeNeedles = platform === "macos" ? [
     "通常利用者はソースビルドを行わないでください",
     "ネイティブアプリ入口には",

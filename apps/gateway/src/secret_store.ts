@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import { Entry } from "@napi-rs/keyring";
+import { AsyncEntry, Entry } from "@napi-rs/keyring";
 import { windowsSystemChildEnvironment } from "./child_process_environment.js";
 
 type Env = Record<string, string | undefined>;
@@ -69,7 +69,7 @@ export interface LlmSecretStorageStatus {
   evidence_source: readonly ["CONFIG"];
 }
 
-export interface LlmSecretStoreResult {
+export interface LlmSecretStoreResult<DiscardOutcome = boolean> {
   key: BlueTanukiSecretKey;
   ref_key: string;
   ref: string;
@@ -78,7 +78,7 @@ export interface LlmSecretStoreResult {
   used_for_authority: false;
   evidence_source: readonly ["EXTERNAL_EVIDENCE"];
   /** Remove only this newly created value if its reference was never committed. */
-  discard_uncommitted: () => boolean;
+  discard_uncommitted: () => DiscardOutcome;
 }
 
 interface StoreOptions {
@@ -357,6 +357,41 @@ export function storeLlmApiKeySecret(
   return storeBlueTanukiSecret(key, plaintext, opts);
 }
 
+/** The desktop approval stays cancellable while the current user's keyring handles a request. */
+export async function stageRuntimeLlmApiKeySecret(
+  key: LlmSecretKey,
+  plaintext: string,
+  envFilePath: string,
+): Promise<LlmSecretStoreResult<boolean | Promise<boolean>>> {
+  const platform = process.platform;
+  if (platform === "win32") return storeLlmApiKeySecret(key, plaintext, { envFilePath });
+  if (platform !== "linux" && platform !== "darwin") throw new Error("runtime_llm_keyring_unsupported");
+  if (!plaintext) throw new Error("refusing to store an empty secret");
+
+  const entryId = randomUUID();
+  const entry = new AsyncEntry(OS_KEYRING_SERVICE, `${key}:${entryId}`,
+    platform === "linux" ? { linux: { store: "secret-service" } } : undefined);
+  const discard = async () => {
+    try { await entry.deletePassword(); } catch { /* Confirm absence even if deletion reports an error. */ }
+    try { return await entry.getPassword() === null; } catch { return false; }
+  };
+  try {
+    // Once dispatched, observe the staged write before deciding whether this entry can be discarded.
+    await entry.setPassword(plaintext);
+    if (await entry.getPassword() !== plaintext) throw new Error("runtime_llm_keyring_readback_mismatch");
+    return osKeyringStagedResult(key, platform, entryId, discard);
+  } catch (error) {
+    if (!(await discard())) throw new Error("runtime_llm_keyring_outcome_unknown", { cause: error });
+    throw error;
+  }
+}
+
+function osKeyringStagedResult<T>(key: BlueTanukiSecretKey, platform: "linux" | "darwin", entryId: string,
+  discard_uncommitted: () => T): LlmSecretStoreResult<T> {
+  return { key, ref_key: secretRefKey(key), ref: osKeyringRef(platform, key, entryId), storage: "os_keyring_current_user",
+    os_protected: true, used_for_authority: false, evidence_source: ["EXTERNAL_EVIDENCE"], discard_uncommitted };
+}
+
 export function storeBlueTanukiSecret(
   key: BlueTanukiSecretKey,
   plaintext: string,
@@ -421,16 +456,7 @@ export function storeBlueTanukiSecret(
       if (keyring.getPassword() !== plaintext) {
         throw new Error("OS keyring secret readback did not match the supplied value");
       }
-      return {
-        key,
-        ref_key: secretRefKey(key),
-        ref: osKeyringRef(platform, key, entryId),
-        storage: "os_keyring_current_user",
-        os_protected: true,
-        used_for_authority: false,
-        evidence_source: ["EXTERNAL_EVIDENCE"],
-        discard_uncommitted: () => discardStagedKeyringEntry(keyring),
-      };
+      return osKeyringStagedResult(key, platform, entryId, () => discardStagedKeyringEntry(keyring));
     } catch (error) {
       if (!discardStagedKeyringEntry(keyring)) {
         throw new Error("OS keyring secret storage failed and the staged entry could not be removed", {

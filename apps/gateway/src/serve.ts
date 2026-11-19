@@ -188,7 +188,7 @@ import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_c
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
-import { promptForLlmCredential } from "./llm_credential_prompt.js";
+import { nativeLlmCredentialPromptAvailable, promptForLlmCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -1277,16 +1277,25 @@ async function serveWithOwnerLease(
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
   const nativeCredentialApproval = new AsyncLocalStorage<{ commandDigest: string; assertCurrent: () => void }>();
-  const nativeCredentialPromptAvailable = process.platform === "win32" && process.env.BLUE_TANUKI_SAFE_MODE !== "1";
-  const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys,
-    nativeCredentialPromptAvailable ? {
-      request: promptForLlmCredential,
-      assertCurrent: (commandDigest) => {
-        const approval = nativeCredentialApproval.getStore();
-        if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
-        approval.assertCurrent();
-      },
-    } : undefined);
+  // .env is loaded before serve(). Retain only inherited desktop session metadata for native input.
+  const unixSessionKeys = ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY",
+    "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"];
+  const unixSessionEnv = Object.fromEntries(unixSessionKeys.filter((key) => inheritedEnvKeys.includes(key))
+    .map((key) => [key, process.env[key]]));
+  const nativePromptEnv = process.platform === "win32" ? process.env : unixSessionEnv;
+  const nativeCredentialPromptAvailable = () => process.env.BLUE_TANUKI_SAFE_MODE !== "1" &&
+    (process.platform !== "linux" || (unixSessionEnv.DBUS_SESSION_BUS_ADDRESS !== undefined &&
+      unixSessionEnv.DBUS_SESSION_BUS_ADDRESS === process.env.DBUS_SESSION_BUS_ADDRESS)) &&
+    nativeLlmCredentialPromptAvailable(nativePromptEnv);
+  const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys, {
+    available: nativeCredentialPromptAvailable,
+    request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
+    assertCurrent: (commandDigest) => {
+      const approval = nativeCredentialApproval.getStore();
+      if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
+      approval.assertCurrent();
+    },
+  });
   tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
@@ -3983,7 +3992,7 @@ async function serveWithOwnerLease(
     const pending = pendingApprovals.get(command_id);
     const requiresNativePrompt = requiresNativeCredentialApproval(pending?.command);
     const requestNativePrompt = ctx.native_credential_prompt === true;
-    if (requestNativePrompt && (!nativeCredentialPromptAvailable || !requiresNativePrompt || verdict !== "approve")) {
+    if (requestNativePrompt && (!nativeCredentialPromptAvailable() || !requiresNativePrompt || verdict !== "approve")) {
       return { executed: false, pending: true, status: "llm_credential_registration_not_authorized" };
     }
     if (verdict === "approve" && requiresNativePrompt && !requestNativePrompt) {
@@ -5124,7 +5133,7 @@ async function serveWithOwnerLease(
         env: process.env,
         plugins,
         mcpRuntimeObservations,
-        ...(nativeCredentialPromptAvailable ? { nativeCredentialPromptAvailable: true as const } : {}),
+        nativeCredentialPromptAvailable,
       }),
       runtime: {
         getSnapshot: async () => {

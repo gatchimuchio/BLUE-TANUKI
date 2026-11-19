@@ -63,7 +63,8 @@ it.runIf(process.platform === "win32")("binds the other native text routes to th
   }
 });
 
-it.runIf(process.platform === "win32")("clears native input and stops before protected storage if authority expires during the prompt", async () => {
+it.runIf(process.platform === "win32" || ((process.platform === "linux" || process.platform === "darwin") && process.geteuid?.() !== 0))(
+  "clears native input and stops before protected storage if authority expires during the prompt", async () => {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "bt-settings-native-authority-"));
   const file = path.join(root, "product.env");
   const initial = "LLM_BACKEND=stub\n";
@@ -71,9 +72,11 @@ it.runIf(process.platform === "win32")("clears native input and stops before pro
   const signal = new AbortController().signal;
   const digest = "a".repeat(64);
   let active = true;
+  let available = true;
   try {
-    await fs.writeFile(file, initial);
+    await fs.writeFile(file, initial, { mode: 0o600 });
     const port = createGatewaySettingsWritePort({ BLUE_TANUKI_ENV_FILE: file, LLM_BACKEND: "stub" }, [], {
+      available: () => available,
       assertCurrent: (commandDigest) => expect(commandDigest).toBe(digest),
       request: async () => {
         active = false;
@@ -84,6 +87,14 @@ it.runIf(process.platform === "win32")("clears native input and stops before pro
       provider: "anthropic", currency: "USD", max_cost_per_attempt_micros: 12_000, max_cost_per_24h_micros: 50_000,
       register_credential: true,
     } } as const;
+    if (process.platform !== "win32") {
+      await fs.chmod(file, 0o640);
+      await expect(port.inspect("stub", llm)).rejects.toThrow("llm_credential_registration_target_unavailable");
+      await fs.chmod(file, 0o600);
+    }
+    available = false;
+    await expect(port.inspect("stub", llm)).rejects.toThrow("llm_credential_registration_unavailable");
+    available = true;
     const target = await port.inspect("stub", llm);
     expect(target.provider_activation_ready).toBe(true);
     await expect(port.apply({ llm }, target.target_state_digest, "stub", {
