@@ -6,6 +6,8 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
 import org.junit.Test;
 
@@ -79,13 +81,20 @@ public final class MobileTaskContractTest {
         String response = "{\"request_id\":\"" + SESSION + "\",\"operation\":\"AgentTask端末状態\"," +
                 "\"status\":\"accepted\",\"evidence_source\":\"LIVE_RUNTIME\",\"audit_event_id\":\"evt-1\"," +
                 "\"error\":null,\"health\":null,\"body\":{\"状態\":\"ok\"},\"shutdown_requested\":false}";
-        Map<String, Object> body = PairingResponseParser.requireAcceptedResponse(response, SESSION,
+        PairingResponseParser.AcceptedResponse live = PairingResponseParser.acceptedResponse(response, SESSION,
                 "AgentTask端末状態", Collections.singleton("LIVE_RUNTIME"));
-        assertEquals("ok", StrictJson.string(body, "状態"));
+        assertEquals("ok", StrictJson.string(live.body, "状態"));
+        assertTrue(live.liveRuntime);
+
+        String internal = response.replace("LIVE_RUNTIME", "INTERNAL_STATE");
+        PairingResponseParser.AcceptedResponse observed = PairingResponseParser.acceptedResponse(internal, SESSION,
+                "AgentTask端末状態", new HashSet<>(Arrays.asList("LIVE_RUNTIME", "INTERNAL_STATE")));
+        assertEquals("ok", StrictJson.string(observed.body, "状態"));
+        assertFalse(observed.liveRuntime);
 
         String fixture = response.replace("LIVE_RUNTIME", "FIXTURE");
         assertThrows(PairingResponseParser.PairingUnknownException.class,
-                () -> PairingResponseParser.requireAcceptedResponse(fixture, SESSION,
+                () -> PairingResponseParser.acceptedResponse(fixture, SESSION,
                         "AgentTask端末状態", Collections.singleton("LIVE_RUNTIME")));
     }
 }

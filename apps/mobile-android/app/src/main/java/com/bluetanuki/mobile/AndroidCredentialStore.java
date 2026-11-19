@@ -28,9 +28,12 @@ final class AndroidCredentialStore {
     private static final String RECOVERY_AUDIT_DIGEST_KEY = "local_recovery_audit_sha256";
     private static final String TASK_PENDING_KEY = "pending_task_session";
     private static final String TASK_PENDING_DIGEST_KEY = "pending_task_session_sha256";
+    private static final String TASK_MUTATION_KEY = "pending_task_mutation";
+    private static final String TASK_MUTATION_DIGEST_KEY = "pending_task_mutation_sha256";
     private static final String AAD = "com.bluetanuki.mobile/device-link/v1";
     private static final String RECOVERY_AUDIT_AAD = "com.bluetanuki.mobile/device-link/recovery-audit/v1";
     private static final String TASK_PENDING_AAD = "com.bluetanuki.mobile/device-link/task-pending/v1";
+    private static final String TASK_MUTATION_AAD = "com.bluetanuki.mobile/device-link/task-mutation/v1";
 
     private final SharedPreferences preferences;
 
@@ -52,7 +55,7 @@ final class AndroidCredentialStore {
             }
             return persistDeviceId(credential.deviceId);
         }
-        if (hasPendingTaskSubmissionCheckpoint()) {
+        if (hasPendingTaskCheckpoint()) {
             throw new CredentialStoreException();
         }
         return persistDeviceId(DeviceInvitation.newDeviceId());
@@ -66,11 +69,16 @@ final class AndroidCredentialStore {
     }
 
     synchronized boolean canRotateDeviceId() {
-        return !contains() && !hasPendingTaskSubmissionCheckpoint();
+        return !contains() && !hasPendingTaskCheckpoint();
     }
 
-    synchronized boolean hasPendingTaskSubmissionCheckpoint() {
-        return preferences.contains(TASK_PENDING_KEY) || preferences.contains(TASK_PENDING_DIGEST_KEY);
+    synchronized boolean hasPendingTaskCheckpoint() {
+        return preferences.contains(TASK_PENDING_KEY) || preferences.contains(TASK_PENDING_DIGEST_KEY) ||
+                hasPendingTaskMutation();
+    }
+
+    synchronized boolean hasPendingTaskMutation() {
+        return preferences.contains(TASK_MUTATION_KEY) || preferences.contains(TASK_MUTATION_DIGEST_KEY);
     }
 
     private String persistDeviceId(String deviceId) throws CredentialStoreException {
@@ -258,7 +266,7 @@ final class AndroidCredentialStore {
             if (existing.equals(sessionID)) return;
             throw new CredentialStoreException();
         }
-        String encrypted = encryptTaskPending(sessionID);
+        String encrypted = encryptTaskCheckpoint(sessionID, TASK_PENDING_AAD);
         if (!preferences.edit().putString(TASK_PENDING_KEY, encrypted)
                 .putString(TASK_PENDING_DIGEST_KEY, digest(encrypted)).commit()) {
             throw new CredentialStoreException();
@@ -273,7 +281,9 @@ final class AndroidCredentialStore {
         if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
             throw new CredentialStoreException();
         }
-        return decryptTaskPending(encoded);
+        String sessionID = decryptTaskCheckpoint(encoded, TASK_PENDING_AAD);
+        if (!MobileTaskContract.validRequestID(sessionID)) throw new CredentialStoreException();
+        return sessionID;
     }
 
     synchronized void clearTaskSubmissionPending(String expectedSessionID) throws CredentialStoreException {
@@ -281,6 +291,39 @@ final class AndroidCredentialStore {
                 !expectedSessionID.equals(pendingTaskSessionID())) throw new CredentialStoreException();
         if (!preferences.edit().remove(TASK_PENDING_KEY).remove(TASK_PENDING_DIGEST_KEY).commit() ||
                 pendingTaskSessionID() != null) throw new CredentialStoreException();
+    }
+
+    synchronized void markTaskMutationPending(PendingTaskMutation mutation) throws CredentialStoreException {
+        if (hasPendingTaskMutation()) throw new CredentialStoreException();
+        String value = mutation.encode();
+        String encrypted = encryptTaskCheckpoint(value, TASK_MUTATION_AAD);
+        if (!preferences.edit().putString(TASK_MUTATION_KEY, encrypted)
+                .putString(TASK_MUTATION_DIGEST_KEY, digest(encrypted)).commit()) {
+            throw new CredentialStoreException();
+        }
+        PendingTaskMutation readBack = pendingTaskMutation();
+        if (readBack == null || !value.equals(readBack.encode())) throw new CredentialStoreException();
+    }
+
+    synchronized PendingTaskMutation pendingTaskMutation() throws CredentialStoreException {
+        String encoded = preferences.getString(TASK_MUTATION_KEY, null);
+        String activeDigest = preferences.getString(TASK_MUTATION_DIGEST_KEY, null);
+        if (encoded == null && activeDigest == null) return null;
+        if (encoded == null || activeDigest == null || !activeDigest.equals(digest(encoded))) {
+            throw new CredentialStoreException();
+        }
+        try {
+            return PendingTaskMutation.decode(decryptTaskCheckpoint(encoded, TASK_MUTATION_AAD));
+        } catch (StrictJson.JsonException exception) {
+            throw new CredentialStoreException();
+        }
+    }
+
+    synchronized void clearTaskMutationPending(PendingTaskMutation expected) throws CredentialStoreException {
+        PendingTaskMutation current = pendingTaskMutation();
+        if (current == null || !expected.encode().equals(current.encode()) ||
+                !preferences.edit().remove(TASK_MUTATION_KEY).remove(TASK_MUTATION_DIGEST_KEY).commit() ||
+                hasPendingTaskMutation()) throw new CredentialStoreException();
     }
 
     private String encryptRecoveryAudit(String value) throws CredentialStoreException {
@@ -333,14 +376,14 @@ final class AndroidCredentialStore {
         }
     }
 
-    private String encryptTaskPending(String value) throws CredentialStoreException {
+    private String encryptTaskCheckpoint(String value, String aad) throws CredentialStoreException {
         byte[] plaintext = null;
         byte[] envelope = null;
         try {
             plaintext = value.getBytes(StandardCharsets.UTF_8);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key());
-            cipher.updateAAD(TASK_PENDING_AAD.getBytes(StandardCharsets.UTF_8));
+            cipher.updateAAD(aad.getBytes(StandardCharsets.UTF_8));
             byte[] iv = cipher.getIV();
             byte[] ciphertext = cipher.doFinal(plaintext);
             envelope = new byte[iv.length + ciphertext.length];
@@ -355,7 +398,7 @@ final class AndroidCredentialStore {
         }
     }
 
-    private String decryptTaskPending(String encoded) throws CredentialStoreException {
+    private String decryptTaskCheckpoint(String encoded, String aad) throws CredentialStoreException {
         byte[] envelope = null;
         byte[] plaintext = null;
         byte[] iv = null;
@@ -367,14 +410,12 @@ final class AndroidCredentialStore {
             ciphertext = Arrays.copyOfRange(envelope, 12, envelope.length);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, iv));
-            cipher.updateAAD(TASK_PENDING_AAD.getBytes(StandardCharsets.UTF_8));
+            cipher.updateAAD(aad.getBytes(StandardCharsets.UTF_8));
             plaintext = cipher.doFinal(ciphertext);
-            String sessionID = StandardCharsets.UTF_8.newDecoder()
+            return StandardCharsets.UTF_8.newDecoder()
                     .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                     .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                     .decode(java.nio.ByteBuffer.wrap(plaintext)).toString();
-            if (!MobileTaskContract.validRequestID(sessionID)) throw new CredentialStoreException();
-            return sessionID;
         } catch (Exception exception) {
             throw new CredentialStoreException();
         } finally {

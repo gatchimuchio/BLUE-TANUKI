@@ -125,8 +125,8 @@ public final class MainActivity extends Activity {
         refreshRecoveryAuditSummary();
         setStatus(identityReady
                 ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
-                : credentialStore.hasPendingTaskSubmissionCheckpoint()
-                        ? "未照合のTask申請記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
+                : credentialStore.hasPendingTaskCheckpoint()
+                        ? "未照合のTask記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
                         : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
     }
 
@@ -244,8 +244,8 @@ public final class MainActivity extends Activity {
             if (busy || !identityReady) return;
             if (!credentialStore.canRotateDeviceId()) {
                 loadTaskCheckpoint();
-                setStatus(taskSubmissionNeedsReconciliation || taskStateUncertain
-                        ? "未照合のTask申請が残っています。Desktopの申請一覧で照合するまで端末IDを変更しません。"
+                setStatus(taskStateUncertain || credentialStore.hasPendingTaskCheckpoint()
+                        ? "未照合のTask記録が残っています。Desktopで照合するまで端末IDを変更しません。"
                         : "既存の端末資格があるため、端末IDを変更しません。先にDesktopとの解除状態を確認してください。");
                 refreshCredentialControls(credentialStore.contains());
                 return;
@@ -256,7 +256,7 @@ public final class MainActivity extends Activity {
                 clearPairingInputs();
                 setStatus("新しい端末IDをこのアプリへ保存し、再読込を確認しました。古い招待は使わず、このID向けの招待を発行してください。");
             } catch (AndroidCredentialStore.CredentialStoreException exception) {
-                if (credentialStore.hasPendingTaskSubmissionCheckpoint() || credentialStore.contains()) {
+                if (credentialStore.hasPendingTaskCheckpoint() || credentialStore.contains()) {
                     loadTaskCheckpoint();
                     setStatus("端末状態が変わったためID変更を停止しました。端末IDは維持され、未照合Taskまたは既存資格を確認してください。");
                     refreshCredentialControls(credentialStore.contains());
@@ -787,7 +787,7 @@ public final class MainActivity extends Activity {
         }
         refreshTaskControls();
         boolean pendingTaskState = taskSubmissionNeedsReconciliation || taskStateUncertain ||
-                credentialStore.hasPendingTaskSubmissionCheckpoint();
+                credentialStore.hasPendingTaskCheckpoint();
         newIdButton.setText(pendingTaskState
                 ? "Task照合まで端末ID変更を停止中"
                 : "未結合時に新しい端末IDを保存");
@@ -928,6 +928,9 @@ public final class MainActivity extends Activity {
             display += "\n照合記録が不明なため、新規申請を停止しています。";
         } else if (taskSubmissionNeedsReconciliation) {
             display += "\n前回の申請sessionをDesktop一覧で照合するまで新規申請を停止しています。再送しないでください。";
+        }
+        if (credentialStore.hasPendingTaskMutation()) {
+            display += "\n開始・取消の照合記録があります。対象の状態を確認してください。照合できるまで開始・取消を停止します。";
         }
         taskStatusView.setText(display);
         refreshCatalogButton.setEnabled(ready);
@@ -1234,12 +1237,16 @@ public final class MainActivity extends Activity {
 
     private void startMobileTask(MobileTaskContract.Draft draft) {
         runMobileTaskOperation("申請状態を再確認してからBrokerへ開始要求を一度だけ送ります。", false,
-                epoch -> taskClient.start(draft, () -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.mutate(PendingTaskMutation.Action.START, draft, () -> canSend(epoch)), (result, error) -> {
                     if (error != null) {
-                        taskMessage = "開始結果を確認できません。再送せず、状態を更新してください。";
+                        taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
+                                ? "未照合の操作があるため、開始要求を送信していません。"
+                                : credentialStore.hasPendingTaskMutation()
+                                ? "開始要求の結果を確定できません。状態を照会してください。"
+                                : "開始結果を確認できません。Desktopの状態を確認してください。";
                         return;
                     }
-                    MobileTaskClient.StartResult startResult = (MobileTaskClient.StartResult) result;
+                    MobileTaskClient.TaskMutationResult startResult = (MobileTaskClient.TaskMutationResult) result;
                     MobileTaskContract.TaskStatus status = startResult.status;
                     taskStatuses.put(draft.id, status);
                     observeTaskStatus(draft.id, status);
@@ -1251,12 +1258,16 @@ public final class MainActivity extends Activity {
 
     private void cancelMobileTask(MobileTaskContract.Draft draft) {
         runMobileTaskOperation("Task状態を照合してから取消要求を一度だけ送ります。", false,
-                epoch -> taskClient.cancel(draft, () -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.mutate(PendingTaskMutation.Action.CANCEL, draft, () -> canSend(epoch)), (result, error) -> {
                     if (error != null) {
-                        taskMessage = "取消結果を確認できません。再送せず、Task状態を更新してください。";
+                        taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
+                                ? "未照合の操作があるため、取消要求を送信していません。"
+                                : credentialStore.hasPendingTaskMutation()
+                                ? "取消要求の結果を確定できません。状態を照会してください。"
+                                : "取消結果を確認できません。Desktopの状態を確認してください。";
                         return;
                     }
-                    MobileTaskClient.Cancellation cancellation = (MobileTaskClient.Cancellation) result;
+                    MobileTaskClient.TaskMutationResult cancellation = (MobileTaskClient.TaskMutationResult) result;
                     taskStatuses.put(draft.id, cancellation.status);
                     observeTaskStatus(draft.id, cancellation.status);
                     taskMessage = cancellation.requestSent
@@ -1345,6 +1356,7 @@ public final class MainActivity extends Activity {
         if (taskListContainer == null) return;
         taskListContainer.removeAllViews();
         boolean ready = canUseMobileTask();
+        boolean mutationReady = ready && !credentialStore.hasPendingTaskMutation();
         if (ownedTaskRequests.isEmpty()) {
             TextView empty = new TextView(this);
             empty.setText("申請は読み込まれていません。Desktop ownerの確認後も一覧を更新してください。");
@@ -1387,7 +1399,7 @@ public final class MainActivity extends Activity {
             if (taskStatus != null && MobileTaskContract.TaskStatus.START_CANDIDATE.equals(taskStatus.kind)) {
                 Button startButton = new Button(this);
                 startButton.setText("開始要求");
-                startButton.setEnabled(ready);
+                startButton.setEnabled(mutationReady);
                 startButton.setOnClickListener(view -> startMobileTask(draft));
                 row.addView(startButton, matchWrap());
             }
@@ -1395,7 +1407,7 @@ public final class MainActivity extends Activity {
                     ("pending".equals(taskStatus.task.state) || "running".equals(taskStatus.task.state))) {
                 Button cancelButton = new Button(this);
                 cancelButton.setText("取消要求");
-                cancelButton.setEnabled(ready);
+                cancelButton.setEnabled(mutationReady);
                 cancelButton.setOnClickListener(view -> cancelMobileTask(draft));
                 row.addView(cancelButton, matchWrap());
             }

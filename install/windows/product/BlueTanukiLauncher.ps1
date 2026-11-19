@@ -870,6 +870,25 @@ function Run-Doctor($OpenLog) {
   }
 }
 
+function Run-RecoveryInspect {
+  $nodeExe = Find-NodeExe
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousEnvFile = $env:BLUE_TANUKI_ENV_FILE
+  Push-Location $installRoot
+  try {
+    $ErrorActionPreference = "Continue"
+    $env:BLUE_TANUKI_ENV_FILE = $envFile
+    # Keep --env-file in Gateway's argv so Node does not preload it.
+    & $nodeExe "--" "apps/gateway/dist/main.js" "--recovery-inspect" "--env-file" $envFile @RemainingArgs
+    $code = $LASTEXITCODE
+  } finally {
+    $env:BLUE_TANUKI_ENV_FILE = $previousEnvFile
+    $ErrorActionPreference = $previousErrorActionPreference
+    Pop-Location
+  }
+  exit $code
+}
+
 function Open-Logs {
   New-Item -ItemType Directory -Force -Path $logDir | Out-Null
   Start-Process $logDir
@@ -974,6 +993,7 @@ switch ($Command.ToLowerInvariant()) {
   "resident-status" { Show-Status }
   "doctor" { Run-Doctor $false }
   "doctor-open" { Run-Doctor $true }
+  "recovery-inspect" { Run-RecoveryInspect }
   "logs" { Open-Logs }
   "resident-logs" { Open-Logs }
   "autostart-enable" { Enable-Autostart }
@@ -983,7 +1003,7 @@ switch ($Command.ToLowerInvariant()) {
   "autostart-status" { Show-AutostartStatus }
   "resident-autostart-status" { Show-AutostartStatus }
   "help" {
-    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|logs|autostart-enable|autostart-disable|autostart-status|help]"
+    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|recovery-inspect|logs|autostart-enable|autostart-disable|autostart-status|help]"
     Write-Host "Autostart is opt-in only and is not enabled by install/setup."
   }
   default { Fail "unknown command: $Command" }

@@ -1,4 +1,4 @@
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -498,6 +498,48 @@ describe("Windows product installer package", () => {
       expect(result.status).not.toBe(0);
       expect(existsSync(sentinel)).toBe(false);
       expect(existsSync(malicious)).toBe(true);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("runs recovery inspection from the product launcher without setup or resident startup", () => {
+    const command = findPowerShell();
+    if (process.platform !== "win32" || !command) {
+      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain('"recovery-inspect" { Run-RecoveryInspect }');
+      return;
+    }
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-product-recovery-inspect-"));
+    try {
+      const install = join(temp, "app");
+      const data = join(temp, "data");
+      const launcher = join(install, "BlueTanukiLauncher.ps1");
+      const dist = join(install, "apps", "gateway", "dist");
+      mkdirSync(join(install, "runtime"), { recursive: true });
+      mkdirSync(dist, { recursive: true });
+      mkdirSync(data);
+      writeProductOwnershipFixture(install, data);
+      writeFileSync(launcher, read("install/windows/product/BlueTanukiLauncher.ps1"), "utf8");
+      copyFileSync(process.execPath, join(install, "runtime", "node.exe"));
+      writeFileSync(join(dist, "main.js"), `
+        const { pathToFileURL } = require("node:url");
+        void import(pathToFileURL(${JSON.stringify(join(root, "apps", "gateway", "dist", "main.js"))}).href);
+      `, "utf8");
+      const arguments_ = ["recovery-inspect", "--backup-id", "absent-backup-id", "--json"];
+      const unavailable = runPowerShellFile(command, launcher, arguments_, temp);
+      expect(unavailable.status, unavailable.stderr).toBe(2);
+      expect(JSON.parse(unavailable.stdout)).toEqual({ status: "configuration_unavailable" });
+      const configPath = join(data, "blue-tanuki.env");
+      expect(existsSync(configPath)).toBe(false);
+      const config = "BLUE_TANUKI_RECOVERY_DIR=" + JSON.stringify(join(data, "recovery")) + "\n";
+      writeFileSync(configPath, config, "utf8");
+      const absent = runPowerShellFile(command, launcher, arguments_, temp);
+      expect(absent.status, absent.stderr).toBe(2);
+      expect(JSON.parse(absent.stdout)).toMatchObject({ status: "not_found", mode: "read_only", may_execute: false });
+      expect(readFileSync(configPath, "utf8")).toBe(config);
+      expect(existsSync(join(data, "blue-tanuki.pid"))).toBe(false);
+      expect(existsSync(join(data, "logs"))).toBe(false);
+      expect(existsSync(join(data, "recovery"))).toBe(false);
     } finally {
       rmSync(temp, { recursive: true, force: true });
     }

@@ -289,6 +289,7 @@ export interface RecoveryBackupInspection {
   mode: "read_only";
   status: "verified" | "not_found" | "invalid";
   backup_id_digest: string | null;
+  manifest_sha256: string | null;
   backup_action: "backup" | "pre_restore" | "pre_factory_reset" | null;
   backup_created_at: string | null;
   coverage: "complete_for_configured_targets" | "partial" | "none_configured" | "unknown";
@@ -1051,7 +1052,10 @@ function actionResult(
   };
 }
 
-async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Promise<RecoveryBackupManifest> {
+async function readManifest(
+  env: NodeJS.ProcessEnv,
+  backupIdValue: string,
+): Promise<RecoveryBackupManifest & { manifest_sha256: string }> {
   assertBackupId(backupIdValue);
   const root = (await runtimeSafeTarget(env, recoveryRoot(env), "recovery_root", {
     allow_under_recovery_root: true,
@@ -1061,14 +1065,14 @@ async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Prom
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
     throw new Error("invalid_backup_id");
   }
-  const raw = await fs.readFile(manifestPath, "utf8");
+  const raw = await fs.readFile(manifestPath);
   const digest = createHash("sha256").update(raw).digest("hex");
   const sidecar = await fs.readFile(`${manifestPath}.sha256`, "utf8").catch(() => "");
   const expectedDigest = sidecar.trim().split(/\s+/)[0] ?? "";
   if (!/^[a-f0-9]{64}$/i.test(expectedDigest) || expectedDigest.toLowerCase() !== digest) {
     throw new Error("invalid_backup_manifest_digest");
   }
-  const parsed = JSON.parse(raw) as RecoveryBackupManifest;
+  const parsed = JSON.parse(raw.toString("utf8")) as RecoveryBackupManifest;
   if (parsed.schema_version !== 1 || parsed.surface !== "recovery" || parsed.backup_id !== backupIdValue) {
     throw new Error("invalid_backup_manifest");
   }
@@ -1082,6 +1086,7 @@ async function readManifest(env: NodeJS.ProcessEnv, backupIdValue: string): Prom
     ...parsed,
     recovery_root: root,
     manifest_path: manifestPath,
+    manifest_sha256: digest,
   };
 }
 
@@ -1398,6 +1403,7 @@ async function inspectRecoveryBackup(
     schema_version: 1 as const,
     surface: "recovery_backup_inspection" as const,
     mode: "read_only" as const,
+    manifest_sha256: null,
     backup_action: null,
     backup_created_at: null,
     canonical_state_coverage: "not_included" as const,
@@ -1453,13 +1459,14 @@ async function inspectRecoveryBackup(
     const operationPlanArchiveDependencies = await inspectBackupOperationPlanDependencies(
       path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot,
     );
-    const configuredRequiredItems = manifest.items.filter((item) => item.backup_required && item.source_path !== null);
-    const copiedRequiredItems = configuredRequiredItems.filter((item) => item.copied);
+    const configuredRequiredItems = sourceSpecs(env).filter((item) => item.backup_required && item.source_path);
+    const copiedRequiredItems = manifest.items.filter((item) => item.backup_required && item.copied);
     const missingRequiredItemCount = configuredRequiredItems.length - copiedRequiredItems.length;
     return {
       ...base,
       status: "verified",
       backup_id_digest: createHash("sha256").update(backupId).digest("hex"),
+      manifest_sha256: manifest.manifest_sha256,
       backup_action: manifest.action,
       backup_created_at: manifest.created_at,
       coverage: configuredRequiredItems.length === 0
@@ -1507,6 +1514,17 @@ export async function inspectLatestRecoveryBackup(
   return inspectRecoveryBackup(env, () => latestBackupId(env));
 }
 
+/** Verify only the explicitly selected pack against the current configured targets. */
+export async function inspectRecoveryBackupById(
+  env: NodeJS.ProcessEnv,
+  backupId: string,
+): Promise<RecoveryBackupInspection> {
+  return inspectRecoveryBackup(env, async () => {
+    assertBackupId(backupId);
+    return backupIdForDigest(env, createHash("sha256").update(backupId).digest("hex"));
+  });
+}
+
 /** Verify the exact recovery pack and manifest path recorded by an update rollback plan. */
 export async function inspectPreUpdateRecoveryBackup(
   env: NodeJS.ProcessEnv,
@@ -1525,8 +1543,7 @@ export async function inspectPreUpdateRecoveryBackup(
     manifestPathMatches = false;
   }
 
-  const requestedDigest = createHash("sha256").update(backupId).digest("hex");
-  const inspection = await inspectRecoveryBackup(env, () => backupIdForDigest(env, requestedDigest));
+  const inspection = await inspectRecoveryBackupById(env, backupId);
   return { inspection, manifest_path_matches: manifestPathMatches };
 }
 

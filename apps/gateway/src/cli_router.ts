@@ -1,5 +1,5 @@
 import { createLogger } from "@blue-tanuki/core";
-import { loadEnvFileFromArgv } from "./env_file.js";
+import { loadEnvFileFromArgv, stripEnvFileArgs } from "./env_file.js";
 import { applyGatewaySafeMode } from "./safe_mode.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
@@ -83,10 +83,51 @@ async function runFailureMemoryVerifyCli(): Promise<void> {
   process.exit(report.unresolved_risks.length > 0 || report.requires_human_review.length > 0 ? 1 : 0);
 }
 
-async function runRecoveryInspectCli(): Promise<void> {
+async function runRecoveryInspectCli(argv: string[]): Promise<void> {
+  const env = { ...process.env };
+  const args = stripEnvFileArgs(argv);
+  const json = args.includes("--json");
+  const backupArg = args.indexOf("--backup-id");
+  const backupId = backupArg === -1 ? undefined : args[backupArg + 1];
+  if (backupArg !== -1 && (backupArg !== args.lastIndexOf("--backup-id") ||
+      !backupId || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) || backupId === "latest")) {
+    writeStdout(json ? JSON.stringify({ status: "invalid_backup_id" }) : "正確なバックアップIDを指定してください。");
+    process.exitCode = 2;
+    return;
+  }
+  if (backupArg !== -1) args.splice(backupArg, 2);
+  if (args.some((arg) => arg !== "--recovery-inspect" && arg !== "--json")) {
+    writeStdout(json ? JSON.stringify({ status: "invalid_arguments" }) : "復旧診断の引数に未対応の項目があります。");
+    process.exitCode = 2;
+    return;
+  }
+  try {
+    await loadEnvFileFromArgv(argv, env);
+  } catch {
+    writeStdout(json ? JSON.stringify({ status: "configuration_unavailable" }) : "診断に使用する環境設定を読み込めません。");
+    process.exitCode = 2;
+    return;
+  }
+  if (backupId !== undefined) {
+    const { inspectRecoveryBackupById } = await import("./recovery_surface.js");
+    const backup = await inspectRecoveryBackupById(env, backupId);
+    if (json) {
+      writeStdout(JSON.stringify(backup, null, 2));
+    } else {
+      writeStdout(`バックアップ検査 ${backup.status}`);
+      writeStdout(`マニフェストSHA-256 ${backup.manifest_sha256 ?? "未確認"}`);
+      writeStdout(`設定対象 ${backup.copied_required_item_count ?? "未確認"}/${backup.configured_required_item_count ?? "未確認"} (${backup.coverage})`);
+      writeStdout(`正本台帳 ${backup.canonical_state_verified_store_count ?? "未確認"}/${backup.canonical_state_expected_store_count ?? "未確認"} (${backup.canonical_state_coverage})`);
+      writeStdout("読み取り専用の検査です。台帳は個別に取得されており、仕事全体の復元可否はこの結果から判定できません。");
+    }
+    process.exitCode = backup.status === "verified" &&
+      (backup.coverage === "complete_for_configured_targets" || backup.coverage === "none_configured") &&
+      backup.canonical_state_coverage === "complete" ? 0 : 2;
+    return;
+  }
   const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } = await import("./recovery_inspection.js");
-  const report = inspectGatewayRecoveryState(process.env);
-  if (process.argv.includes("--json")) {
+  const report = inspectGatewayRecoveryState(env);
+  if (json) {
     writeStdout(JSON.stringify(report, null, 2));
   } else {
     writeStdout(`Recovery inspection: ${report.status}`);
@@ -157,11 +198,12 @@ async function runOneShotCliMode(argv: readonly string[]): Promise<void> {
 }
 
 export async function runGatewayCliRouter(): Promise<void> {
-  if (process.argv.includes("--recovery-inspect")) {
-    await runRecoveryInspectCli();
+  const argv = process.argv.slice(2);
+  if (argv.includes("--recovery-inspect")) {
+    await runRecoveryInspectCli(argv);
     return;
   }
-  const envFile = await loadEnvFileFromArgv(process.argv.slice(2));
+  const envFile = await loadEnvFileFromArgv(argv);
   if (envFile) {
     gatewayLog.info("env file loaded", {
       path: envFile.path,

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { PRODUCT_DATA_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import {
   buildUpdateSnapshot,
   prepareManualUpdate,
@@ -45,6 +46,7 @@ async function writeReleaseCandidate(root: string, version: string, content = "b
       schema_version: 1,
       name: "blue-tanuki",
       version,
+      data_schema_version: PRODUCT_DATA_SCHEMA_VERSION,
       archive: {
         file: path.basename(archivePath),
         size_bytes: bytes.length,
@@ -79,16 +81,20 @@ describe("update surface", () => {
       const sessionDir = path.join(root, "sessions");
       const updateDir = path.join(root, "update");
       const recoveryDir = path.join(root, "recovery");
+      const stateRoot = path.join(root, "state");
       await mkdir(auditDir);
-      await mkdir(sessionDir);
+      await mkdir(path.join(sessionDir, "failure-memory"), { recursive: true });
+      await mkdir(path.join(stateRoot, "schedules"), { recursive: true });
       await writeFile(path.join(auditDir, "audit.jsonl"), "{}\n", "utf8");
       await writeFile(path.join(sessionDir, "session.jsonl"), "session-before\n", "utf8");
+      await writeFile(path.join(sessionDir, "failure-memory", "failure-memory.json"), "{}\n", "utf8");
       await writeFile(envFile, "LLM_BACKEND=stub\nLLM_API_KEY=update-secret-value\n", "utf8");
 
       const env = {
         BLUE_TANUKI_ENV_FILE: envFile,
         BLUE_TANUKI_AUDIT_DIR: auditDir,
         BLUE_TANUKI_SESSION_DIR: sessionDir,
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
         BLUE_TANUKI_UPDATE_DIR: updateDir,
         BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
         BLUE_TANUKI_UPDATE_BUNDLE: archivePath,
@@ -136,6 +142,11 @@ describe("update surface", () => {
       expect(plan.current_git_head).toBe("1".repeat(40));
       expect(plan.candidate_verified).toBe(true);
       expect(plan.authority_boundary?.used_for_authority).toBe(false);
+      const afterPrepare = await buildUpdateSnapshot(root, env);
+      expect(afterPrepare.rollback).toMatchObject({
+        pre_update_backup_available: true,
+        pre_update_backup_status: "verified",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

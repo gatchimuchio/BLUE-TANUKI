@@ -12,6 +12,7 @@ final class MobileTaskClient {
     private static final Set<String> RUNTIME_EVIDENCE = new HashSet<>(Arrays.asList("INTERNAL_STATE", "LIVE_RUNTIME"));
     private static final Set<String> LIVE_OR_INTERNAL_EVIDENCE = new HashSet<>(Arrays.asList("LIVE_RUNTIME", "INTERNAL_STATE"));
     private static final Set<String> LIVE_EVIDENCE = Collections.singleton("LIVE_RUNTIME");
+    private static final Object TASK_MUTATION_LOCK = new Object();
 
     private final AndroidCredentialStore store;
     private final DeviceLinkTransport transport;
@@ -148,39 +149,72 @@ final class MobileTaskClient {
 
     MobileTaskContract.TaskStatus refreshStatus(MobileTaskContract.Draft draft,
                                                  DeviceLinkTransport.SendGuard canSend) throws Exception {
-        DeviceCredential credential = requireCredential();
-        Map<String, Object> response = body(credential, "AgentTask端末状態",
-                Collections.singletonMap("申請ID", draft.id), LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
-        return MobileTaskContract.status(response, draft);
-    }
-
-    StartResult start(MobileTaskContract.Draft draft,
-                      DeviceLinkTransport.SendGuard canSend) throws Exception {
-        MobileTaskContract.TaskStatus status = refreshStatus(draft, canSend);
-        if (!MobileTaskContract.TaskStatus.START_CANDIDATE.equals(status.kind)) return new StartResult(status, false);
-        DeviceCredential credential = requireCredential();
-        Map<String, Object> response = body(credential, "AgentTask端末実行",
-                Collections.singletonMap("申請ID", draft.id), LIVE_EVIDENCE, canSend, null);
-        return new StartResult(MobileTaskContract.TaskStatus.task(
-                MobileTaskContract.started(response, draft)), true);
-    }
-
-    Cancellation cancel(MobileTaskContract.Draft draft, DeviceLinkTransport.SendGuard canSend) throws Exception {
-        MobileTaskContract.TaskStatus status = refreshStatus(draft, canSend);
-        if (!MobileTaskContract.TaskStatus.TASK.equals(status.kind) ||
-                !Arrays.asList("pending", "running").contains(status.task.state)) {
-            return new Cancellation(status, false);
+        synchronized (TASK_MUTATION_LOCK) {
+            return readTaskStatus(requireCredential(), draft, canSend);
         }
-        DeviceCredential credential = requireCredential();
-        Map<String, Object> response = body(credential, "AgentTask端末取消",
-                Collections.singletonMap("申請ID", draft.id), LIVE_EVIDENCE, canSend, null);
-        MobileTaskContract.TaskRecord record = MobileTaskContract.cancellationRequested(response, draft);
-        return new Cancellation(MobileTaskContract.TaskStatus.task(record), true);
+    }
+
+    private MobileTaskContract.TaskStatus readTaskStatus(DeviceCredential credential,
+                                                        MobileTaskContract.Draft draft,
+                                                        DeviceLinkTransport.SendGuard canSend) throws Exception {
+        PairingResponseParser.AcceptedResponse response = exchange(credential, "AgentTask端末状態",
+                Collections.singletonMap("申請ID", draft.id), LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
+        MobileTaskContract.TaskStatus status = MobileTaskContract.status(response.body, draft);
+        try {
+            PendingTaskMutation pending = store.pendingTaskMutation();
+            if (pending != null && pending.resolvedBy(credential, draft, status, response.liveRuntime)) {
+                store.clearTaskMutationPending(pending);
+            }
+        } catch (AndroidCredentialStore.CredentialStoreException ignored) {
+            // Keep read-only status available when the local checkpoint cannot be resolved.
+        }
+        return status;
+    }
+
+    TaskMutationResult mutate(PendingTaskMutation.Action action, MobileTaskContract.Draft draft,
+                              DeviceLinkTransport.SendGuard canSend) throws Exception {
+        synchronized (TASK_MUTATION_LOCK) {
+            if (store.hasPendingTaskMutation()) throw new TaskMutationHeld();
+            DeviceCredential credential = requireCredential();
+            MobileTaskContract.TaskStatus status = readTaskStatus(credential, draft, canSend);
+            boolean eligible = action == PendingTaskMutation.Action.START
+                    ? MobileTaskContract.TaskStatus.START_CANDIDATE.equals(status.kind)
+                    : status.task != null &&
+                      ("pending".equals(status.task.state) || "running".equals(status.task.state));
+            if (!eligible) return new TaskMutationResult(status, false);
+
+            PendingTaskMutation pending = PendingTaskMutation.forRequest(action, credential, draft,
+                    status.task == null ? null : status.task.taskID);
+            store.markTaskMutationPending(pending);
+            Map<String, Object> response;
+            try {
+                response = body(credential, action.operation, Collections.singletonMap("申請ID", draft.id),
+                        LIVE_EVIDENCE, canSend, null);
+            } catch (DeviceLinkTransport.TransportException error) {
+                if (!error.requestMayHaveReachedDesktop) store.clearTaskMutationPending(pending);
+                throw error;
+            }
+            MobileTaskContract.TaskRecord record = action == PendingTaskMutation.Action.START
+                    ? MobileTaskContract.started(response, draft)
+                    : MobileTaskContract.cancellationRequested(response, draft);
+            if (action == PendingTaskMutation.Action.CANCEL && !status.task.taskID.equals(record.taskID)) {
+                throw new StrictJson.JsonException();
+            }
+            store.clearTaskMutationPending(pending);
+            return new TaskMutationResult(MobileTaskContract.TaskStatus.task(record), true);
+        }
     }
 
     private Map<String, Object> body(DeviceCredential credential, String operation, Map<String, Object> content,
                                      Set<String> allowedEvidence, DeviceLinkTransport.SendGuard canSend,
                                      Attempt submissionAttempt) throws Exception {
+        return exchange(credential, operation, content, allowedEvidence, canSend, submissionAttempt).body;
+    }
+
+    private PairingResponseParser.AcceptedResponse exchange(DeviceCredential credential, String operation,
+                                                             Map<String, Object> content, Set<String> allowedEvidence,
+                                                             DeviceLinkTransport.SendGuard canSend,
+                                                             Attempt submissionAttempt) throws Exception {
         DeviceLinkTransport.Exchange exchange;
         try {
             exchange = transport.taskOperation(credential, operation, content, canSend);
@@ -191,7 +225,7 @@ final class MobileTaskClient {
             throw exception;
         }
         if (submissionAttempt != null) submissionAttempt.taskSubmissionMayHaveReachedDesktop = true;
-        Map<String, Object> response = PairingResponseParser.requireAcceptedResponse(
+        PairingResponseParser.AcceptedResponse response = PairingResponseParser.acceptedResponse(
                 exchange.response, exchange.nonce, operation, allowedEvidence);
         if (canSend == null || !canSend.canSend()) {
             throw new DeviceLinkTransport.TransportException(true);
@@ -237,21 +271,15 @@ final class MobileTaskClient {
         }
     }
 
-    static final class Cancellation {
+    static final class TaskMutationResult {
         final MobileTaskContract.TaskStatus status;
         final boolean requestSent;
-        Cancellation(MobileTaskContract.TaskStatus status, boolean requestSent) {
+        TaskMutationResult(MobileTaskContract.TaskStatus status, boolean requestSent) {
             this.status = status; this.requestSent = requestSent;
         }
     }
 
-    static final class StartResult {
-        final MobileTaskContract.TaskStatus status;
-        final boolean requestSent;
-        StartResult(MobileTaskContract.TaskStatus status, boolean requestSent) {
-            this.status = status; this.requestSent = requestSent;
-        }
-    }
+    static final class TaskMutationHeld extends Exception {}
 
     static final class Attempt {
         boolean taskSubmissionMayHaveReachedDesktop;

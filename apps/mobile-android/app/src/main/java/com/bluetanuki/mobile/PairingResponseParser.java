@@ -93,8 +93,8 @@ final class PairingResponseParser {
         }
     }
 
-    static Map<String, Object> requireAcceptedResponse(String json, String nonce, String operation,
-                                                       Set<String> allowedEvidence)
+    static AcceptedResponse acceptedResponse(String json, String nonce, String operation,
+                                             Set<String> allowedEvidence)
             throws PairingRejectedException, PairingUnknownException {
         try {
             Map<String, Object> envelope = StrictJson.object(StrictJson.parse(json));
@@ -102,14 +102,25 @@ final class PairingResponseParser {
             if ("rejected".equals(status) || "suspended".equals(status)) {
                 throw new PairingRejectedException();
             }
-            if (!allowedEvidence.contains(StrictJson.string(envelope, "evidence_source"))) {
+            String evidence = StrictJson.string(envelope, "evidence_source");
+            if (!allowedEvidence.contains(evidence)) {
                 throw new PairingUnknownException();
             }
-            return StrictJson.object(envelope.get("body"));
+            return new AcceptedResponse(StrictJson.object(envelope.get("body")), "LIVE_RUNTIME".equals(evidence));
         } catch (PairingRejectedException | PairingUnknownException exception) {
             throw exception;
         } catch (Exception exception) {
             throw new PairingUnknownException();
+        }
+    }
+
+    static final class AcceptedResponse {
+        final Map<String, Object> body;
+        final boolean liveRuntime;
+
+        private AcceptedResponse(Map<String, Object> body, boolean liveRuntime) {
+            this.body = body;
+            this.liveRuntime = liveRuntime;
         }
     }
 

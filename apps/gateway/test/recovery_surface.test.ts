@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
@@ -1110,6 +1112,60 @@ describe("buildRecoverySnapshot", () => {
       });
       expect(JSON.stringify(invalid)).not.toContain("tampered");
       expect(JSON.stringify(invalid)).not.toContain(archive!.archive_path!);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the configured root to inspect the exact backup via the built CLI without writing or leaking configuration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cli-"));
+    try {
+      const envFile = path.join(root, "product.env");
+      const auditDir = path.join(root, "audit");
+      const env = {
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
+        BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
+      };
+      const configured = { ...env, BLUE_TANUKI_AUDIT_DIR: auditDir, LLM_API_KEY: "private-fixture-value" };
+      const config = Object.entries(configured).map(([key, value]) => key + "=" + JSON.stringify(value)).join("\n") + "\n";
+      await writeFile(envFile, config);
+      const selected = await createRecoveryBackup(env);
+      const baseline = await inspectLatestRecoveryBackup(env);
+      expect(baseline.status).toBe("verified");
+      await mkdir(auditDir);
+      await writeFile(path.join(auditDir, "sample.json"), "{}");
+      const latest = await createRecoveryBackup(configured);
+      expect(selected.backup_id).not.toBe(latest.backup_id);
+
+      const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("BLUE_TANUKI_")));
+      const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
+      const run = (...args: string[]) => spawnSync(process.execPath, ["--", main, "--recovery-inspect", "--json", ...args], {
+        cwd: root, encoding: "utf8", env: inherited, timeout: 15_000, windowsHide: true,
+      });
+      const before = await readFile(selected.backup_manifest_path!);
+      const result = run("--env-file", envFile, "--backup-id", selected.backup_id!);
+      expect(result.status, result.stderr).toBe(2);
+      const report = JSON.parse(result.stdout);
+      expect(report).toMatchObject({
+        status: "verified",
+        manifest_sha256: createHash("sha256").update(before).digest("hex"),
+        backup_id_digest: createHash("sha256").update(selected.backup_id!).digest("hex"),
+        coverage: "partial",
+        missing_required_item_count: baseline.missing_required_item_count! + 1,
+        canonical_state_coverage: "none_present",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(result.stdout).not.toContain("private-fixture-value");
+      expect(result.stdout).not.toContain(envFile);
+      expect(JSON.parse(run("--env-file", envFile, "--backup-id", "absent-backup-id").stdout).status).toBe("not_found");
+      expect(JSON.parse(run("--env-file", envFile, "--backup-id", "latest").stdout).status).toBe("invalid_backup_id");
+      expect(JSON.parse(run("--env-file", path.join(root, "missing.env"), "--backup-id", selected.backup_id!).stdout))
+        .toEqual({ status: "configuration_unavailable" });
+      expect(await readFile(selected.backup_manifest_path!)).toEqual(before);
+      expect(await readFile(envFile, "utf8")).toBe(config);
+      await expect(stat(env.BLUE_TANUKI_STATE_ROOT)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -394,6 +394,23 @@ Installers run `doctor` after setup by default. Exit code `2` blocks the
 install, while exit code `1` is treated as warnings so optional Slack/Discord
 or live LLM credentials can remain unset during local setup.
 
+## 復旧診断
+
+インストール時の構成で現在の台帳を読み取るには `recovery-inspect` を使います。
+特定のバックアップを検査する場合は、Control Centerで確認した具体的なIDを指定します。
+
+```powershell
+powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLauncher.ps1" recovery-inspect --backup-id 'backup-id' --json
+```
+
+```sh
+~/.local/bin/blue-tanuki recovery-inspect --backup-id 'backup-id' --json
+```
+
+検査ではマニフェストのSHA-256、現在設定されている対象の収録状況、個別台帳の収録状況を返します。
+終了コード2は未確認・欠落・不一致など確認が必要な状態です。診断は常駐プロセスの起動・停止、復元、承認要求を行いません。
+各台帳の取得時点は独立しているため、すべて揃っていても仕事全体を同じ時点へ復元できるとは限りません。
+
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
