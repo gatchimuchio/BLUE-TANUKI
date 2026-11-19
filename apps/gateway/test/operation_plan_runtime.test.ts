@@ -2813,6 +2813,74 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     expect(hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
   });
 
+  it.each(["audit_before_state_write", "legacy_interrupted", "feedback_conflict", "later_approval"] as const)(
+    "待機再開の実行前承認終了を起動時に照合する %s", async (scenario) => {
+      const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-approval-stop-"));
+      const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+      const auditPath = join(root, "audit.jsonl");
+      const seed = plan(randomUUID(), "synthetic-root");
+      const revision = operationPlanDigest(seed);
+      let hds: HDSUpperController | undefined;
+      try {
+        store.compareAndSet(null, OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1",
+          plans: [{ owner: "fixture-owner", channel: "webchat", goal: "Wait for a synthetic owner reply.",
+            revisions: [{ digest: revision, plan: seed }], bindings: [], results: [] }],
+        }));
+        hds = new HDSUpperController({ operation_plan_state: store, audit: new AuditLog({ filepath: auditPath }) });
+        expect(hds.decide(request(`plan:wait ${JSON.stringify({ plan_id: seed.plan_id,
+          revision_digest: revision, deadline_at_ms: Date.now() + 60_000 })}`)).command?.type).toBe("noop");
+        const reply = request("Synthetic owner reply");
+        const issued = hds.decide(reply);
+        if (issued.command?.type !== "llm_call") throw new Error("Missing the wait's compute command");
+        const commandId = issued.command.id;
+        hds.onCommandLifecycle(commandId, "approval_pending");
+        const pending = store.load()!;
+        const beforeStop = pending.waits![0]!;
+
+        if (scenario === "audit_before_state_write" || scenario === "later_approval") {
+          const write = vi.spyOn(store, "compareAndSet").mockImplementationOnce(() => { throw new Error("fixture state write failure"); });
+          try {
+            expect(() => hds!.onCommandLifecycle(commandId, "approval_cancelled", { actor: "webchat-owner-token-holder",
+              reason: "owner_task_approval_withdrawn" })).toThrow("fixture state write failure");
+          } finally { write.mockRestore(); }
+          expect(store.load()?.waits?.[0]?.compute_outcome).toBe("pending");
+          expect(hds.getAudit().list().at(-1)?.log).toMatchObject({ kind: "command_lifecycle", phase: "approval_cancelled",
+            wait_compute_approval_stop: { wait_id: beforeStop.wait_id, wait_projection_digest: operationPlanDigest(beforeStop),
+              used_for_authority: false, may_execute: false } });
+          if (scenario === "later_approval") {
+            hds.getAudit().append({ kind: "command_lifecycle", phase: "approval_approved", command_id: commandId,
+              request_id: reply.id, upstream_commit_hash: issued.log.commit.hash, upstream_decision: "ASSERT",
+              actor: "webchat-resume-token-holder", reason: "human_approval:approve", timestamp: Date.now() });
+          }
+        } else {
+          if (scenario === "feedback_conflict") {
+            hds.onFeedback({ command_id: commandId, status: "failed", error: "synthetic observed feedback", metrics: { duration_ms: 1 } });
+            store.compareAndSet(operationPlanDigest(store.load()), pending);
+          } else {
+            store.compareAndSet(operationPlanDigest(pending), { ...pending,
+              waits: [{ ...beforeStop, compute_outcome: "interrupted", compute_interrupted_at_ms: Date.now() }],
+            });
+          }
+          hds.getAudit().append({ kind: "command_lifecycle", phase: "approval_rejected", command_id: commandId,
+            request_id: reply.id, upstream_commit_hash: issued.log.commit.hash, upstream_decision: "ASSERT",
+            actor: "webchat-resume-token-holder", reason: "human_approval:reject", timestamp: Date.now() });
+        }
+
+        hds.close();
+        hds = new HDSUpperController({ operation_plan_state: store, audit: new AuditLog({ filepath: auditPath }) });
+        hds.reconcileOperationPlanWaitComputations();
+        const settled = store.load()?.waits?.[0];
+        const outcome = scenario === "audit_before_state_write" ? "approval_cancelled"
+          : scenario === "legacy_interrupted" ? "approval_rejected" : "interrupted";
+        expect(settled?.compute_outcome).toBe(outcome);
+        expect(settled?.resume_command_id_digest).toBe(operationPlanDigest(commandId));
+        expect(settled?.compute_result_digest).toBeUndefined();
+        expect(settled?.compute_resource_use).toBeUndefined();
+        expect(settled?.candidate_plan_id_digest).toBeUndefined();
+        expect(settled?.compute_completed_at_ms === undefined).toBe(scenario === "feedback_conflict" || scenario === "later_approval");
+      } finally { hds?.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+    });
+
   it("取消済みと同じowner・sessionの新しいwaitは明示された現行wait IDだけで再開する", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-id-replacement-"));
     const store = new OperationPlanStateStore(join(root, "state.sqlite"));

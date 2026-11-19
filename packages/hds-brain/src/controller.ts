@@ -137,6 +137,7 @@ import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, 
   type OperationPlanGatewayReceiptRechecker,
   type OperationPlanSavedResultReturnProjection,
   type OwnerTaskWaitCancellationScope,
+  type WaitComputeApprovalStopObservation,
   operationPlanGoalPurposeRelationReviewAuditDigest,
   mergeOperationPlanMemoryInterpretationDependencies } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
@@ -3367,6 +3368,18 @@ ${planControl.question}`,
     request_id?: string | null;
   } = {}): void {
     const sourceLog = this.inflight.get(command_id);
+    const approvalStop = phase === "approval_rejected" || phase === "approval_cancelled" ? phase : undefined;
+    const issued = approvalStop ? this.issuedLLM.get(command_id) : undefined;
+    const exactCommand = issued?.wait_resume ? this.issuedExecutionCommandsById.get(command_id)?.command : undefined;
+    const pendingWait = issued?.wait_resume && exactCommand && sourceLog?.commit.decision === "ASSERT" &&
+      this.issuedExecutionCommands.get(exactCommand) === sourceLog && exactCommand.type === "llm_call" &&
+      issued.origin.id === sourceLog.request_id && issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+      sourceLog.request_id === exactCommand.upstream_decision.request_id &&
+      sourceLog.request_id === (opts.request_id ?? sourceLog.request_id) &&
+      sourceLog.commit.hash === exactCommand.upstream_decision.commit_hash &&
+      !HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.has(exactCommand) && this.audit.isPersistent() && this.audit.verify() &&
+      !this.audit.list().some(({ log }) => "kind" in log && log.kind === "executor_feedback" && log.command_id === command_id)
+      ? this.operationPlans.pendingWaitCompute(issued.wait_resume.wait_id, sourceLog.request_id, command_id) : null;
     const lifecycleLog: CommandLifecycleLog = {
       kind: "command_lifecycle",
       phase,
@@ -3377,14 +3390,21 @@ ${planControl.question}`,
       actor: opts.actor?.trim() || "system",
       reason: opts.reason ?? phase,
       timestamp: this.nowMs(),
+      ...(pendingWait ? { wait_compute_approval_stop: { wait_id: pendingWait.wait_id,
+        wait_projection_digest: operationPlanDigest(pendingWait), used_for_authority: false, may_execute: false } } : {}),
     };
     this.audit.append(lifecycleLog);
-    if (phase === "approval_rejected" || phase === "approval_cancelled") {
-      this.operationPlans.abandon(command_id);
-      this.operationPlans.forgetReflection(command_id);
-      this.issuedLLM.delete(command_id);
-      this.issuedLLMFeedbackCommands.delete(command_id);
-      this.inflight.delete(command_id);
+    if (approvalStop) {
+      try {
+        if (pendingWait) this.operationPlans.recordWaitComputeOutcome(pendingWait.wait_id, command_id, approvalStop,
+          undefined, undefined, undefined, Math.max(lifecycleLog.timestamp, pendingWait.resumed_at_ms!));
+      } finally {
+        this.operationPlans.abandon(command_id);
+        this.operationPlans.forgetReflection(command_id);
+        this.issuedLLM.delete(command_id);
+        this.issuedLLMFeedbackCommands.delete(command_id);
+        this.inflight.delete(command_id);
+      }
     }
   }
 
@@ -5191,12 +5211,21 @@ ${planControl.question}`,
   }
   reconcileOperationPlanMemory(): boolean { return this.operationPlans.reconcileMemory(); }
   reconcileOperationPlanWaitComputations(): { readonly candidate_reconciled: number; readonly interrupted: number } {
-    const updates = this.operationPlans.reconcilePendingWaitComputations();
+    const evidence = this.audit.isPersistent() && this.audit.verify() ? this.audit.list() : undefined;
+    const updates = this.operationPlans.reconcilePendingWaitComputations(this.nowMs(), evidence
+      ? wait => waitComputeApprovalStopFromAudit(wait, evidence) : undefined);
     let candidateReconciled = 0;
     let interrupted = 0;
     for (const update of updates) {
       if (update.disposition === "candidate_reconciled") candidateReconciled++;
-      else interrupted++;
+      if (update.disposition === "interrupted") interrupted++;
+      if (update.disposition === "approval_stop_reconciled") {
+        this.audit.append({ kind: "operation_plan", event: "wait_compute_approval_stop_reconciled", request_id: null,
+          command_id: update.stop.command_id, projection_digest: operationPlanDigest(update.wait),
+          proposal_digest: update.wait.wake_event_id_digest, candidate_digest: update.wait.task_identity_digest,
+          target_digest: update.wait.wait_id, reason: update.stop.outcome, used_for_authority: false, timestamp: this.nowMs() });
+        continue;
+      }
       this.audit.append({ kind: "operation_plan",
         event: update.disposition === "candidate_reconciled" ? "wait_compute_candidate_reconciled" : "wait_compute_interrupted",
         request_id: null, command_id: update.wait.resume_command_id_digest!,
@@ -6402,6 +6431,57 @@ function ownerTaskComputeCancellationBinding(
     return { ...binding, kind: "initial" };
   }
   return undefined;
+}
+
+function waitComputeApprovalStopFromAudit(wait: OperationPlanWaitState, entries: readonly AuditEntry[]):
+  WaitComputeApprovalStopObservation | undefined {
+  // Older startup recovery may have changed only the outcome and interruption timestamp.
+  const pending = structuredClone(wait);
+  pending.compute_outcome = "pending";
+  delete pending.compute_interrupted_at_ms;
+  const pendingDigest = operationPlanDigest(pending);
+  const resumes = entries.flatMap(({ log, index }) => "kind" in log && log.kind === "operation_plan" &&
+    log.event === (wait.wake_reason === "recovery" ? "wait_compute_recovery_requested" : "wait_resumed") &&
+    log.request_id !== null && operationPlanDigest(log.command_id) === wait.resume_command_id_digest &&
+    operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: log.request_id }) === wait.wake_event_id_digest &&
+    log.projection_digest === pendingDigest && log.target_digest === wait.plan_id_digest &&
+    log.candidate_digest === wait.task_identity_digest && log.reason === wait.wake_reason && log.used_for_authority === false
+    ? [{ log, index }] : []);
+  const [resume] = resumes;
+  if (resumes.length !== 1 || !resume) return undefined;
+
+  const commandId = resume.log.command_id;
+  if (entries.some(({ log }) => "kind" in log && log.kind === "executor_feedback" && log.command_id === commandId)) return undefined;
+  const lifecycle = entries.flatMap(({ log, index }) => "kind" in log && log.kind === "command_lifecycle" &&
+    log.command_id === commandId ? [{ log, index }] : []);
+  const stops = lifecycle.filter(({ log }) => log.phase === "approval_cancelled" || log.phase === "approval_rejected");
+  const [stop] = stops;
+  if (stops.length !== 1 || !stop || stop.log.request_id !== resume.log.request_id || stop.log.upstream_decision !== "ASSERT" ||
+      !Number.isSafeInteger(stop.log.timestamp) || stop.log.timestamp < 0 ||
+      lifecycle.some(({ log, index }) => index > stop.index && log.phase === "approval_approved")) return undefined;
+  const decisions = entries.filter(({ log, index }) => !("kind" in log) && index > resume.index && index < stop.index &&
+    log.request_id === resume.log.request_id && log.commit.decision === "ASSERT" && log.commit.hash === stop.log.upstream_commit_hash &&
+    log.memory_capture_suppressed_for === "operation_plan_wait_resume");
+  if (decisions.length !== 1) return undefined;
+
+  const outcome = stop.log.phase;
+  if (outcome !== "approval_cancelled" && outcome !== "approval_rejected") return undefined;
+  const binding = stop.log.wait_compute_approval_stop;
+  if (binding) {
+    if (binding.wait_id !== wait.wait_id || binding.wait_projection_digest !== pendingDigest ||
+        binding.used_for_authority !== false || binding.may_execute !== false) return undefined;
+  } else {
+    const legacyWithdrawal = outcome === "approval_cancelled" && stop.log.reason === "owner_task_approval_withdrawn" &&
+      stop.log.actor === GOAL_OWNER_ACTOR;
+    const legacyRejection = outcome === "approval_rejected" && stop.log.actor === "webchat-resume-token-holder" &&
+      (stop.log.reason === "human_approval:reject" || stop.log.reason === "human_approval:block");
+    const pendingEvents = lifecycle.filter(({ log, index }) => log.phase === "approval_pending" &&
+      index > decisions[0]!.index && index < stop.index && log.request_id === stop.log.request_id &&
+      log.upstream_commit_hash === stop.log.upstream_commit_hash && log.upstream_decision === "ASSERT");
+    if ((!legacyWithdrawal && !legacyRejection) || pendingEvents.length !== 1 ||
+        lifecycle.some(({ log }) => log.phase === "approval_approved")) return undefined;
+  }
+  return { outcome, command_id: commandId, observed_at_ms: stop.log.timestamp };
 }
 
 function failureReviewProjectionFromRequest(req: InboundRequest): FailureReviewProjection | undefined {

@@ -744,7 +744,8 @@ export const OperationPlanWaitStateSchema = z.object({
   wake_reason: z.enum(["reply", "deadline", "recovery"]).optional(),
   wake_event_id_digest: Digest.optional(),
   resume_command_id_digest: Digest.optional(),
-  compute_outcome: z.enum(["pending", "interrupted", "candidate_retained", "candidate_rejected", "failed"]).optional(),
+  compute_outcome: z.enum(["pending", "interrupted", "candidate_retained", "candidate_rejected", "failed",
+    "approval_cancelled", "approval_rejected"]).optional(),
   compute_result_digest: Digest.optional(),
   candidate_plan_id_digest: Digest.optional(),
   compute_completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
@@ -758,6 +759,7 @@ export const OperationPlanWaitStateSchema = z.object({
   const computeOutcomeFieldsPresent = wait.resume_command_id_digest !== undefined || wait.compute_outcome !== undefined ||
     wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined || wait.compute_completed_at_ms !== undefined ||
     wait.compute_interrupted_at_ms !== undefined || wait.compute_resource_use !== undefined;
+  const approvalTerminated = wait.compute_outcome === "approval_cancelled" || wait.compute_outcome === "approval_rejected";
   if (wait.deadline_at_ms <= wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
   }
@@ -775,8 +777,10 @@ export const OperationPlanWaitStateSchema = z.object({
       (wait.compute_outcome === "interrupted" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id_digest !== undefined ||
         wait.compute_completed_at_ms !== undefined || wait.compute_interrupted_at_ms === undefined || wait.compute_resource_use !== undefined)) ||
       (wait.compute_outcome !== "interrupted" && wait.compute_interrupted_at_ms !== undefined) ||
-      ((wait.compute_outcome === "candidate_retained" || wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
+      ((approvalTerminated || wait.compute_outcome === "candidate_retained" ||
+        wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
         wait.compute_completed_at_ms === undefined) ||
+      (approvalTerminated && (wait.compute_result_digest !== undefined || wait.compute_resource_use !== undefined)) ||
       (wait.compute_outcome === "candidate_retained" && wait.candidate_plan_id_digest === undefined) ||
       (wait.compute_outcome !== undefined && wait.compute_outcome !== "candidate_retained" && wait.candidate_plan_id_digest !== undefined)) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_compute_outcome_fields_mismatch" });

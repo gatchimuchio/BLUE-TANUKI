@@ -7917,10 +7917,17 @@ async function serveWithOwnerLease(
     return [...pendingApprovals.values()].filter(pending => {
       const { command, log, origin } = pending;
       if (!isGatewayInternalInboundRequest(origin) || origin.channel !== "webchat" || origin.user !== OWNER_TASK_APPROVAL_ACTOR ||
-          origin.metadata?.["blue_tanuki.actor_kind"] !== "owner" || origin.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
           origin.id !== log.request_id || command.upstream_decision.request_id !== origin.id) return false;
+      const scopedCompute = computeCommandIds?.has(command.id) === true && command.type === "llm_call";
+      if (origin.metadata?.["blue_tanuki.actor_kind"] !== "owner" || origin.metadata?.["blue_tanuki.trust_level"] !== "owner") {
+        // Jが同じWork受付の待機再開として記録した期限起動だけを含める。
+        const binding = log.owner_task_compute_cancellation_binding;
+        return scopedCompute && !pending.cron_event && binding?.kind === "wait_resume" && binding.command_id === command.id &&
+          command.upstream_decision.commit_hash === log.commit.hash && origin.metadata?.["blue_tanuki.actor_kind"] === "system" &&
+          origin.metadata["blue_tanuki.trust_level"] === "trusted" && origin.metadata["blue_tanuki.process_kind"] === "cron";
+      }
       return (origin.id === requestId && origin.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan") ||
-        (computeCommandIds?.has(command.id) === true && command.type === "llm_call") ||
+        scopedCompute ||
         (commandIds.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command))) ||
         ownerTaskRelationReviewMatches(pending, plans);
     });

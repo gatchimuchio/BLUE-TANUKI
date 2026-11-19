@@ -83,6 +83,7 @@ import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryI
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
 import type { ReadonlyGoalGovernanceProjection } from "./goal_governance.js";
 import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_j_projection.js";
+import type { WaitComputeApprovalOutcome } from "./types.js";
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
@@ -91,6 +92,11 @@ export type OwnerTaskWaitCancellationScope =
   | { readonly status: "cancelled"; readonly cancelled_at_ms: number }
   | { readonly status: "ambiguous" }
   | null;
+export interface WaitComputeApprovalStopObservation {
+  readonly outcome: WaitComputeApprovalOutcome;
+  readonly command_id: string;
+  readonly observed_at_ms: number;
+}
 export interface OperationPlanExecutionGoalIdentity {
   readonly operation_plan_binding_digest: string;
   readonly target_id: string;
@@ -3290,7 +3296,7 @@ export class OperationPlanLedger {
 
   /** Bind the returned C candidate or failure to the exact resumed wait in J's durable state. */
   recordWaitComputeOutcome(waitId: string, commandId: string,
-    outcome: "candidate_retained" | "candidate_rejected" | "failed", resultDigest?: string,
+    outcome: "candidate_retained" | "candidate_rejected" | "failed" | WaitComputeApprovalOutcome, resultDigest?: string,
     candidatePlanIdDigest?: string, computeResourceUse?: ComputeResourceUse, nowMs = this.nowMs()): OperationPlanWaitState {
     if (!/^[a-f0-9]{64}$/.test(waitId) || !commandId.trim() ||
         (resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
@@ -3344,49 +3350,70 @@ export class OperationPlanLedger {
     return structuredClone(updated);
   }
 
-  /** Startup reconciliation: bind an already-retained exact candidate or expose an interrupted C computation. */
-  reconcilePendingWaitComputations(nowMs = this.nowMs()): readonly {
-    readonly disposition: "candidate_reconciled" | "interrupted";
-    readonly wait: OperationPlanWaitState;
-  }[] {
+  pendingWaitCompute(waitId: string, eventId: string, commandId: string): OperationPlanWaitState | null {
+    const commandDigest = operationPlanDigest(commandId);
+    const wakeDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: eventId });
+    const matches = (this.state.waits ?? []).filter(wait => wait.wait_id === waitId && wait.state === "resumed" &&
+      wait.compute_outcome === "pending" && wait.resume_command_id_digest === commandDigest && wait.wake_event_id_digest === wakeDigest);
+    return matches.length === 1 ? structuredClone(matches[0]!) : null;
+  }
+
+  /** Startup reconciliation of known approval closure, a retained candidate, or a C interruption. */
+  reconcilePendingWaitComputations(nowMs = this.nowMs(),
+    inspectApprovalStop?: (wait: OperationPlanWaitState) => WaitComputeApprovalStopObservation | undefined): readonly (
+      { readonly disposition: "candidate_reconciled" | "interrupted"; readonly wait: OperationPlanWaitState } |
+      { readonly disposition: "approval_stop_reconciled"; readonly wait: OperationPlanWaitState;
+        readonly stop: WaitComputeApprovalStopObservation })[] {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("plan_wait_compute_recovery_time_invalid");
-    if (!this.port || !(this.state.waits ?? []).some((wait) => wait.state === "resumed" && wait.compute_outcome === "pending")) {
-      return [];
-    }
+    const unresolved = (this.state.waits ?? []).filter(wait => wait.state === "resumed" &&
+      (wait.compute_outcome === "pending" || (inspectApprovalStop && wait.compute_outcome === "interrupted")));
+    if (!this.port || unresolved.length === 0) return [];
     if (this.recoveryRefreshPending || this.activePlanAttempts.size > 0 || !this.savedDigest ||
         operationPlanDigest(this.port.load()) !== this.savedDigest) throw new Error("plan_wait_compute_recovery_state_unavailable");
-    const updates = (this.state.waits ?? []).filter((wait) => wait.state === "resumed" && wait.compute_outcome === "pending")
-      .map((wait) => {
-        const candidates = this.state.plans.filter((candidate) => {
-          const first = candidate.revisions[0]?.plan;
-          return first !== undefined &&
-            operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: first.request_id }) === wait.wake_event_id_digest &&
-            operationPlanTaskIdentityDigest(candidate) === wait.task_identity_digest &&
-            operationPlanDigest(candidate.owner) === wait.owner_digest &&
-            operationPlanDigest(candidate.channel) === wait.channel_digest;
-        });
-        const updated = structuredClone(wait);
-        const terminalAt = Math.max(nowMs, wait.resumed_at_ms!);
-        if (candidates.length === 1) {
-          updated.compute_outcome = "candidate_retained";
-          updated.candidate_plan_id_digest = operationPlanDigest(candidates[0]!.revisions[0]!.plan.plan_id);
-          updated.compute_completed_at_ms = terminalAt;
-          return { disposition: "candidate_reconciled" as const, wait: OperationPlanWaitStateSchema.parse(updated) };
-        }
-        updated.compute_outcome = "interrupted";
-        updated.compute_interrupted_at_ms = terminalAt;
-        return { disposition: "interrupted" as const, wait: OperationPlanWaitStateSchema.parse(updated) };
+    const updates = unresolved.map((wait) => {
+      const stop = inspectApprovalStop?.(wait);
+      if (wait.compute_outcome === "interrupted" && !stop) return null;
+      const candidates = this.state.plans.filter((candidate) => {
+        const first = candidate.revisions[0]?.plan;
+        return first !== undefined &&
+          operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: first.request_id }) === wait.wake_event_id_digest &&
+          operationPlanTaskIdentityDigest(candidate) === wait.task_identity_digest &&
+          operationPlanDigest(candidate.owner) === wait.owner_digest &&
+          operationPlanDigest(candidate.channel) === wait.channel_digest;
       });
+      const updated = structuredClone(wait);
+      if (stop && candidates.length === 0) {
+        delete updated.compute_interrupted_at_ms;
+        updated.compute_outcome = stop.outcome;
+        updated.compute_completed_at_ms = Math.max(stop.observed_at_ms, wait.resumed_at_ms!);
+        return { disposition: "approval_stop_reconciled" as const, wait: OperationPlanWaitStateSchema.parse(updated), stop,
+          original_outcome: wait.compute_outcome };
+      }
+      if (wait.compute_outcome === "interrupted") return null;
+      const terminalAt = Math.max(nowMs, wait.resumed_at_ms!);
+      if (candidates.length === 1) {
+        updated.compute_outcome = "candidate_retained";
+        updated.candidate_plan_id_digest = operationPlanDigest(candidates[0]!.revisions[0]!.plan.plan_id);
+        updated.compute_completed_at_ms = terminalAt;
+        return { disposition: "candidate_reconciled" as const, wait: OperationPlanWaitStateSchema.parse(updated),
+          original_outcome: wait.compute_outcome };
+      }
+      updated.compute_outcome = "interrupted";
+      updated.compute_interrupted_at_ms = terminalAt;
+      return { disposition: "interrupted" as const, wait: OperationPlanWaitStateSchema.parse(updated),
+        original_outcome: wait.compute_outcome };
+    }).filter(update => update !== null);
+    if (updates.length === 0) return [];
     this.change((state) => {
       for (const update of updates) {
         const index = (state.waits ?? []).findIndex((wait) => wait.wait_id === update.wait.wait_id &&
-          wait.state === "resumed" && wait.compute_outcome === "pending" &&
+          wait.state === "resumed" && wait.compute_outcome === update.original_outcome &&
           wait.resume_command_id_digest === update.wait.resume_command_id_digest);
         if (index < 0) throw new Error("plan_wait_compute_recovery_state_changed");
         state.waits![index] = update.wait;
       }
     });
-    return updates.map((update) => ({ disposition: update.disposition, wait: structuredClone(update.wait) }));
+    return updates.map(({ original_outcome: _originalOutcome, ...update }) => ({ ...update, wait: structuredClone(update.wait) }));
   }
 
   inspectInterruptedWaitForResume(control: OperationPlanWaitResumeControl, caller: InboundRequest): {

@@ -3323,14 +3323,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             candidate_retained: "計画候補をJ台帳へ保存（採用・実行未許可）",
             candidate_rejected: "C候補はJへ保存されず",
             failed: "C計算失敗",
+            approval_cancelled: "計算開始前に取り消し",
+            approval_rejected: "計算開始前に拒否",
             not_recorded: "再開結果未記録",
           };
           if (!Object.prototype.hasOwnProperty.call(outcomeLabels, wait.compute_outcome)) return "";
           const resultDigest = wait.compute_result_digest;
           const candidateDigest = wait.candidate_plan_id;
           const resourceUse = wait.compute_resource_use;
+          const approvalTerminated = wait.compute_outcome === "approval_cancelled" || wait.compute_outcome === "approval_rejected";
           if ((resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
               (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest)) ||
+              (approvalTerminated && (wait.state !== "resumed" || !Number.isSafeInteger(wait.resumed_at_ms) ||
+                !Number.isSafeInteger(wait.compute_completed_at_ms) ||
+                wait.compute_completed_at_ms < wait.resumed_at_ms || resultDigest !== undefined ||
+                candidateDigest !== undefined || resourceUse !== undefined)) ||
               (wait.compute_outcome === "interrupted" && !Number.isSafeInteger(wait.compute_interrupted_at_ms)) ||
               (wait.compute_outcome !== "interrupted" && wait.compute_interrupted_at_ms !== undefined) ||
               typeof wait.resource_review_required !== "boolean" ||

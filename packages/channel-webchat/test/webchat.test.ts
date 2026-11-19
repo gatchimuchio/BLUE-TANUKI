@@ -1927,6 +1927,13 @@ describe("WebChatChannel — Control Center shell", () => {
           state: "cancelled", deadline_at_ms: nowMs + 120_000, cancelled_at_ms: nowMs, compute_outcome: "not_started",
           resource_review_required: false,
           used_for_authority: false, may_execute: false },
+        ...(["approval_cancelled", "approval_rejected"] as const).map((computeOutcome, index) => ({
+          wait_id: ["ad", "ae"][index]!.repeat(32), plan_id: "3".repeat(64), revision_digest: "e".repeat(64),
+          task_identity_digest: "2".repeat(64), owner_authentication_required: true,
+          state: "resumed", deadline_at_ms: nowMs + 120_000, resumed_at_ms: nowMs, wake_reason: "reply",
+          compute_outcome: computeOutcome, compute_completed_at_ms: nowMs + 1, resource_review_required: false,
+          used_for_authority: false, may_execute: false,
+        })),
         { wait_id: "1".repeat(64), plan_id: "0".repeat(64), revision_digest: "c".repeat(64),
           task_identity_digest: "f".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
@@ -2032,6 +2039,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("返信／期限待機の取消済み");
     expect(rendered).toContain("取消時刻");
     expect(rendered).not.toContain('data-plan-id="' + "f".repeat(64) + '"');
+    expect(rendered).toContain("計算開始前に取り消し");
+    expect(rendered).toContain("計算開始前に拒否");
+    expect(rendered).not.toContain('data-wait-id="' + "ad".repeat(32) + '"');
+    expect(rendered).not.toContain('data-wait-id="' + "ae".repeat(32) + '"');
     expect(rendered).toContain("C計算中断・新しい返信が必要");
     expect(rendered).toContain('data-operation-plan-resume-wait="true"');
     expect(rendered).toContain('data-operation-plan-resume-input="true"');

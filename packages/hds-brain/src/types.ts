@@ -741,6 +741,8 @@ export type CommandLifecyclePhase =
   | "approval_rejected"
   | "approval_cancelled";
 
+export type WaitComputeApprovalOutcome = "approval_cancelled" | "approval_rejected";
+
 export interface CommandLifecycleLog {
   kind: "command_lifecycle";
   phase: CommandLifecyclePhase;
@@ -751,6 +753,13 @@ export interface CommandLifecycleLog {
   actor: string;
   reason: string;
   timestamp: number;
+  /** Exact issued wait at its pre-executor approval closure. */
+  readonly wait_compute_approval_stop?: {
+    readonly wait_id: string;
+    readonly wait_projection_digest: string;
+    readonly used_for_authority: false;
+    readonly may_execute: false;
+  };
 }
 
 export type AuditRecord =

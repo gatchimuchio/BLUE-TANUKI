@@ -1843,6 +1843,54 @@ describe("delegated goal purpose owner review", () => {
       expect(await interruptedDuplicateResponse.json()).toMatchObject({ accepted: false,
         status: "owner_task_submission_outcome_unknown", request_id: interruptedAccepted.request_id });
       expect(providerCalls).toBe(providerCallsAtCrash);
+
+      taskWebSocket = await connectTaskWebSocket();
+      const stoppedWaitControl = { ...waitControl, deadline_at_ms: Date.now() + 60_000 };
+      const stoppedWaitRegistered = waitForWebChatSend(taskWebSocket, "wait registration before emergency stop");
+      expect((await ownerPost("/operators/developer/invoke", {
+        user: "c0802-owner", content: `plan:wait ${JSON.stringify(stoppedWaitControl)}`,
+      })).status).toBe(202);
+      await stoppedWaitRegistered;
+      const readStoppedWait = async () => (await readPlanSnapshot()).operation_plan_status?.waits?.find((wait) =>
+        wait.plan_id === stoppedWaitControl.plan_id && wait.revision_digest === stoppedWaitControl.revision_digest &&
+        wait.deadline_at_ms === stoppedWaitControl.deadline_at_ms);
+      const stoppedWait = await readStoppedWait();
+      expect(stoppedWait).toMatchObject({ state: "waiting", wait_id: expect.any(String) });
+      const activateStop = await ownerPost("/approval/emergency-stop", {
+        action: "activate", reason: "Isolated wait-compute pre-admission fixture",
+      }, resumeToken);
+      expect(activateStop.status).toBe(200);
+      expect(await activateStop.json()).toMatchObject({ ok: true, result: { active: true, used_for_authority: false } });
+      const stoppedWakeReply = waitForWebChatSend(taskWebSocket, "wait wake while emergency stop is active");
+      expect((await ownerPost("/owner/inbound", {
+        user: "c0802-owner", plan_id: stoppedWaitControl.plan_id, revision_digest: stoppedWaitControl.revision_digest,
+        wait_id: stoppedWait?.wait_id, content: "Please continue the original read-only fixture work.",
+      })).status).toBe(202);
+      expect(await stoppedWakeReply).toContain("[emergency-stop-active]");
+      const terminalWait = await readStoppedWait();
+      expect(terminalWait).toMatchObject({ state: "resumed", wake_reason: "reply", compute_outcome: "approval_cancelled",
+        used_for_authority: false, may_execute: false });
+      expect(terminalWait).not.toHaveProperty("candidate_plan_id");
+      expect(terminalWait).not.toHaveProperty("compute_interrupted_at_ms");
+      expect(providerCalls).toBe(providerCallsAtCrash);
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await readStoppedWait()).toEqual(terminalWait);
+      const clearStop = await ownerPost("/approval/emergency-stop", { action: "clear" }, resumeToken);
+      expect(clearStop.status).toBe(200);
+      expect(await clearStop.json()).toMatchObject({ ok: true, result: { active: false } });
+      taskWebSocket = await connectTaskWebSocket();
+      const retryReply = waitForWebChatSend(taskWebSocket, "recovery request for the terminated wait");
+      expect((await ownerPost("/operators/developer/invoke", { user: "c0802-owner",
+        content: `plan:resume_wait ${JSON.stringify({ wait_id: stoppedWait?.wait_id, response: "Resume this fixture wait." })}`,
+      })).status).toBe(202);
+      expect(await retryReply).toContain("plan_control_denied:plan_wait_resume_stale");
+      expect(await readStoppedWait()).toEqual(terminalWait);
+      expect(providerCalls).toBe(providerCallsAtCrash);
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);

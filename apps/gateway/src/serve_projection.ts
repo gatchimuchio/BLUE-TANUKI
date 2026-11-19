@@ -278,7 +278,8 @@ export interface OperationPlanStatusProjection {
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     resumed_at_ms?: number;
     wake_reason?: "reply" | "deadline" | "recovery";
-    compute_outcome: "not_started" | "pending" | "interrupted" | "candidate_retained" | "candidate_rejected" | "failed" | "not_recorded";
+    compute_outcome: "not_started" | "pending" | "interrupted" | "candidate_retained" | "candidate_rejected" | "failed" |
+      "approval_cancelled" | "approval_rejected" | "not_recorded";
     compute_result_digest?: string;
     candidate_plan_id?: string;
     compute_completed_at_ms?: number;
@@ -426,6 +427,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const outcome = wait.compute_outcome;
     const resumed = state === "resumed";
     const cancelled = state === "cancelled";
+    const approvalTerminated = outcome === "approval_cancelled" || outcome === "approval_rejected";
     const cancelledAt = wait.cancelled_at_ms;
     const resumedAt = wait.resumed_at_ms;
     const completedAt = wait.compute_completed_at_ms;
@@ -450,14 +452,16 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           !["reply", "deadline", "recovery"].includes(String(wait.wake_reason)))) ||
         (!resumed && (resumedAt !== undefined || wait.wake_reason !== undefined)) ||
         (outcome !== "not_started" && outcome !== "pending" && outcome !== "interrupted" && outcome !== "candidate_retained" &&
-          outcome !== "candidate_rejected" && outcome !== "failed" && outcome !== "not_recorded") ||
+          outcome !== "candidate_rejected" && outcome !== "failed" && !approvalTerminated && outcome !== "not_recorded") ||
         (resumed ? outcome === "not_started" : outcome !== "not_started") ||
         (wait.compute_result_digest !== undefined && !isDigest(wait.compute_result_digest)) ||
         (wait.candidate_plan_id !== undefined && !isDigest(wait.candidate_plan_id)) ||
         (completedAt !== undefined && (!Number.isSafeInteger(completedAt) || (completedAt as number) < (resumedAt as number))) ||
         (interruptedAt !== undefined && (!Number.isSafeInteger(interruptedAt) || (interruptedAt as number) < (resumedAt as number))) ||
         ((outcome === "interrupted") !== (interruptedAt !== undefined)) ||
-        ((outcome === "candidate_retained" || outcome === "candidate_rejected" || outcome === "failed") !== (completedAt !== undefined)) ||
+        ((approvalTerminated || outcome === "candidate_retained" || outcome === "candidate_rejected" || outcome === "failed") !==
+          (completedAt !== undefined)) ||
+        (approvalTerminated && (wait.compute_result_digest !== undefined || wait.compute_resource_use !== undefined)) ||
         ((outcome === "candidate_retained") !== (wait.candidate_plan_id !== undefined)) ||
         (outcome === "pending" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
         (outcome === "interrupted" && (wait.compute_result_digest !== undefined || wait.candidate_plan_id !== undefined || completedAt !== undefined)) ||
