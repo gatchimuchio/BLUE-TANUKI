@@ -435,8 +435,9 @@ final class DeviceLinkViewModel: ObservableObject {
             currentMcpHash = snapshot.hash
           }
           let sessionBody = try self.deviceLinkBody(
-            credential, operation: "対話開始", payload: ["実行系ID": runtimeID],
-            allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
+            credential, operation: "対話開始",
+            payload: MobileTaskContract.sessionStartPayload(runtimeID: runtimeID, workspaceID: workspaceID),
+            allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
           )
           let createdSessionID = try MobileTaskContract.sessionID(sessionBody, runtimeID: runtimeID)
           sessionID = createdSessionID
@@ -451,7 +452,7 @@ final class DeviceLinkViewModel: ObservableObject {
           _ = try self.store.markTaskSubmissionPending(sessionID: createdSessionID)
           evidence.taskSubmissionPendingRecorded = true
           let body = try self.deviceLinkBody(
-            credential, operation: "AgentTask端末申請", payload: payload, allowedEvidence: ["LIVE_RUNTIME"],
+            credential, operation: "AgentTask端末申請", payload: payload, allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
             epoch: epoch, evidence: evidence
           )
           return try MobileTaskContract.submission(
@@ -464,7 +465,7 @@ final class DeviceLinkViewModel: ObservableObject {
             do {
               let closeBody = try self.deviceLinkBody(
                 credential, operation: "対話終了", payload: ["対話セッションID": sessionID],
-                allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
+                allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
               )
               guard DeviceLinkJSON.exactKeys(closeBody, ["対話セッションID", "状態"]),
                     DeviceLinkJSON.string(closeBody["対話セッションID"]) == sessionID,
@@ -560,7 +561,7 @@ final class DeviceLinkViewModel: ObservableObject {
         do {
           body = try self.deviceLinkBody(
             credential, operation: kind.operation, payload: ["申請ID": draft.id],
-            allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
+            allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
           )
         } catch let failure as DeviceLinkFailure {
           if case .transport(let mayHaveReachedDesktop) = failure, !mayHaveReachedDesktop {
@@ -576,7 +577,7 @@ final class DeviceLinkViewModel: ObservableObject {
           record = try MobileTaskContract.cancellationRequested(body, draft: draft)
           guard record.taskID == taskID else { throw DeviceLinkFailure.invalid }
         }
-        _ = try self.store.clearTaskMutationPending(pending)
+        // 保留の解除は、受付応答の後に同じTaskを独立した状態照会で確認してから行う。
         return MobileTaskMutationResult(status: .task(record), requestSent: true)
       },
       onSuccess: { result in
@@ -606,7 +607,7 @@ final class DeviceLinkViewModel: ObservableObject {
     )
     let status = try MobileTaskContract.status(response.body, draft: draft)
     if let pending, pending.isResolved(
-      credential: credential, draft: draft, status: status, liveRuntime: response.source == "LIVE_RUNTIME"
+      credential: credential, draft: draft, status: status, evidenceSource: response.source
     ) {
       // Keep the observation available if the Keychain record cannot be cleared.
       _ = try? store.clearTaskMutationPending(pending)

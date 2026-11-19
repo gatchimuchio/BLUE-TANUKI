@@ -12,37 +12,45 @@ struct PendingTaskMutationTests {
   static func main() throws {
     let desktop = credential()
     let request = draft()
+    try sessionStartScope()
     let start = try PendingMobileTaskMutation(kind: .start, credential: desktop, draft: request, taskID: nil)
     let restarted = try PendingMobileTaskMutation(stored: start.storageObject())
     try check(restarted == start, "restart round trip")
-    try check(!restarted.isResolved(credential: desktop, draft: request, status: .startCandidate, liveRuntime: true),
+    try check(!restarted.isResolved(credential: desktop, draft: request, status: .startCandidate, evidenceSource: "INTERNAL_STATE"),
               "an unchanged start candidate must hold")
-    try check(!restarted.isResolved(credential: desktop, draft: request, status: status("running"), liveRuntime: false),
-              "internal state must not clear a hold")
+    for state in ["pending", "blocked", "quarantined"] {
+      try check(!restarted.isResolved(credential: desktop, draft: request, status: status(state),
+                                      evidenceSource: "INTERNAL_STATE"), "start is unresolved")
+    }
+    try check(!restarted.isResolved(credential: desktop, draft: request, status: status("running"), evidenceSource: "FIXTURE"),
+              "untrusted evidence may not clear a hold")
     try check(!restarted.isResolved(credential: credential(hostID: otherID), draft: request,
-                                   status: status("running"), liveRuntime: true), "different host")
+                                   status: status("running"), evidenceSource: "INTERNAL_STATE"), "different host")
     try check(!restarted.isResolved(credential: credential(deviceID: otherID), draft: request,
-                                   status: status("running"), liveRuntime: true), "different device")
+                                   status: status("running"), evidenceSource: "INTERNAL_STATE"), "different device")
     try check(!restarted.isResolved(credential: credential(pin: String(repeating: "d", count: 64)), draft: request,
-                                   status: status("running"), liveRuntime: true), "changed certificate")
+                                   status: status("running"), evidenceSource: "INTERNAL_STATE"), "changed certificate")
     try check(!restarted.isResolved(credential: desktop, draft: draft(id: otherID), status: status("running"),
-                                   liveRuntime: true), "different request")
+                                   evidenceSource: "INTERNAL_STATE"), "different request")
     try check(restarted.isResolved(credential: desktop, draft: draft(selectedTaskID: taskID),
-                                  status: status("running"), liveRuntime: true), "verified started task")
+                                  status: status("running"), evidenceSource: "INTERNAL_STATE"), "verified started task")
+    try check(restarted.isResolved(credential: desktop, draft: draft(selectedTaskID: taskID),
+                                  status: status("completed"), evidenceSource: "LIVE_RUNTIME"), "verified terminal task")
 
     let cancellation = try PendingMobileTaskMutation(kind: .cancel, credential: desktop, draft: request, taskID: taskID)
     for state in ["pending", "running", "blocked", "quarantined"] {
       try check(!cancellation.isResolved(credential: desktop, draft: request, status: status(state),
-                                        liveRuntime: true), "unresolved cancellation remains held")
+                                        evidenceSource: "INTERNAL_STATE"), "unresolved cancellation remains held")
     }
     try check(!cancellation.isResolved(credential: desktop, draft: request, status: status("cancelled", id: otherID),
-                                      liveRuntime: true), "different task cannot resolve cancellation")
+                                      evidenceSource: "INTERNAL_STATE"), "different task cannot resolve cancellation")
     try check(!cancellation.isResolved(credential: desktop, draft: request, status: status("cancelled"),
-                                      liveRuntime: false), "internal cancellation projection")
+                                      evidenceSource: "FIXTURE"), "untrusted evidence may not resolve cancellation")
     for state in ["cancelled", "completed", "failed"] {
       try check(cancellation.isResolved(credential: desktop, draft: request, status: status(state),
-                                       liveRuntime: true), "matching terminal task resolves the hold")
+                                       evidenceSource: "INTERNAL_STATE"), "matching terminal task resolves the hold")
     }
+    try acceptedCancellation(credential: desktop, draft: draft(selectedTaskID: taskID), pending: cancellation)
 
     do {
       _ = try PendingMobileTaskMutation(stored: ["kind": "start", "scope_digest": fingerprint, "extra": true])
@@ -55,6 +63,65 @@ struct PendingTaskMutationTests {
     try listRefresh(credential: desktop, pending: cancellation)
     try desktopNotifications()
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func sessionStartScope() throws {
+    let body = try MobileTaskContract.sessionStartPayload(runtimeID: "runtime", workspaceID: "workspace")
+    try check(DeviceLinkJSON.exactKeys(body, ["実行系ID", "作業領域ID"]) &&
+              DeviceLinkJSON.string(body["実行系ID"]) == "runtime" && DeviceLinkJSON.string(body["作業領域ID"]) == "workspace",
+              "session start binds both registered identifiers")
+    for invalid in ["", "../workspace"] {
+      do {
+        _ = try MobileTaskContract.sessionStartPayload(runtimeID: "runtime", workspaceID: invalid)
+        throw SmokeFailure(label: "invalid workspace accepted")
+      } catch DeviceLinkFailure.invalid {}
+    }
+  }
+
+  private static func acceptedCancellation(credential: DeviceLinkCredential, draft: MobileTaskDraft,
+                                           pending: PendingMobileTaskMutation) throws {
+    let record: [String: Any] = [
+      "task_id": taskID, "実行系ID": "runtime", "対話セッションID": sessionID, "作業領域ID": "workspace",
+      "指示hash": instructionHash, "状態": "running", "結果hash": NSNull(), "結果本文あり": false,
+    ]
+    let body: [String: Any] = ["申請ID": requestID, "状態": "Task取消要求済み", "Task": record]
+    let envelope: [String: Any] = [
+      "request_id": sessionID, "operation": "AgentTask端末取消", "status": "accepted",
+      "evidence_source": "INTERNAL_STATE", "audit_event_id": "fixture-audit", "error": NSNull(),
+      "health": NSNull(), "body": body, "shutdown_requested": false,
+    ]
+    let accepted = try DeviceLinkProtocol.acceptedBody(envelope, nonce: sessionID, operation: "AgentTask端末取消")
+    let acknowledgement = try MobileTaskContract.cancellationRequested(accepted, draft: draft)
+    try check(!pending.isResolved(credential: credential, draft: draft, status: .task(acknowledgement),
+                                  evidenceSource: "INTERNAL_STATE"),
+              "accepted cancellation still awaits a terminal state")
+    let restored = try PendingMobileTaskMutation(stored: pending.storageObject())
+    try check(!restored.isResolved(credential: credential, draft: draft, status: .task(acknowledgement),
+                                   evidenceSource: "INTERNAL_STATE"),
+              "accepted cancellation stays held after reload")
+    try check(restored.isResolved(credential: credential, draft: draft, status: status("cancelled"),
+                                  evidenceSource: "INTERNAL_STATE"),
+              "a matching terminal state resolves an accepted cancellation")
+    for (nonce, operation) in [(otherID, "AgentTask端末取消"), (sessionID, "AgentTask端末状態")] {
+      do {
+        _ = try DeviceLinkProtocol.acceptedBody(envelope, nonce: nonce, operation: operation)
+        throw SmokeFailure(label: "foreign cancellation envelope")
+      } catch DeviceLinkFailure.invalid {}
+    }
+    let mismatches: [(String, Any)] = [
+      ("task_id", otherID), ("実行系ID", "other-runtime"), ("対話セッションID", otherID),
+      ("作業領域ID", "other-workspace"), ("指示hash", "sha256:" + fingerprint), ("余分", NSNull()),
+    ]
+    for (key, value) in mismatches {
+      var alteredRecord = record
+      alteredRecord[key] = value
+      var alteredBody = body
+      alteredBody["Task"] = alteredRecord
+      do {
+        _ = try MobileTaskContract.cancellationRequested(alteredBody, draft: draft)
+        throw SmokeFailure(label: "invalid cancellation response was accepted for \(key)")
+      } catch DeviceLinkFailure.invalid {}
+    }
   }
 
   private static func desktopNotifications() throws {
@@ -119,13 +186,13 @@ struct PendingTaskMutationTests {
       queried.append(entry.id)
       if entry.id == otherID { throw DeviceLinkFailure.rejected }
       let observation = entry.id == requestID ? status("cancelled") : .startCandidate
-      if pending.isResolved(credential: credential, draft: entry, status: observation, liveRuntime: true) {
+      if pending.isResolved(credential: credential, draft: entry, status: observation, evidenceSource: "INTERNAL_STATE") {
         resolved.append(entry.id)
       }
       return observation
     }
     try check(queried == [requestID, otherID, laterID], "prioritize exact pending request")
-    try check(resolved == [requestID], "reconcile only the matched live task")
+    try check(resolved == [requestID], "reconcile only the matched broker task")
     try check(Set(observations.keys) == Set([requestID, laterID]), "other tasks survive a row rejection")
     try check(!pending.matchesListedRequest(credential: credential, draft: draft(selectedTaskID: otherID)),
               "different task is not prioritized")

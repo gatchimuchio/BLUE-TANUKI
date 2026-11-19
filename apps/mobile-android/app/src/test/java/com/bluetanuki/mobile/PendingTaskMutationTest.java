@@ -17,19 +17,23 @@ public final class PendingTaskMutationTest {
     private static final DeviceCredential DESKTOP = credential(ID, ID, "a".repeat(64));
 
     @Test
-    public void restartRecordRetainsHoldUntilSameLiveTaskIsObserved() throws Exception {
+    public void restartRecordRetainsHoldUntilSameBrokerTaskIsObserved() throws Exception {
         MobileTaskContract.Draft draft = draft(ID, null);
         PendingTaskMutation beforeRestart = PendingTaskMutation.forRequest(
                 PendingTaskMutation.Action.START, DESKTOP, draft, null);
         PendingTaskMutation restored = PendingTaskMutation.decode(beforeRestart.encode());
         assertEquals(beforeRestart.encode(), restored.encode());
-        assertFalse(restored.resolvedBy(DESKTOP, draft, MobileTaskContract.TaskStatus.startCandidate(), true));
-        assertFalse(restored.resolvedBy(DESKTOP, draft, task("running", ID), false));
-        assertFalse(restored.resolvedBy(DESKTOP, draft(OTHER, ID), task("running", ID), true));
-        assertFalse(restored.resolvedBy(credential(OTHER, ID, "a".repeat(64)), draft, task("running", ID), true));
-        assertFalse(restored.resolvedBy(credential(ID, OTHER, "a".repeat(64)), draft, task("running", ID), true));
-        assertFalse(restored.resolvedBy(credential(ID, ID, "b".repeat(64)), draft, task("running", ID), true));
-        assertTrue(restored.resolvedBy(DESKTOP, draft(ID, ID), task("running", ID), true));
+        assertFalse(restored.resolvedBy(DESKTOP, draft, MobileTaskContract.TaskStatus.startCandidate(), "INTERNAL_STATE"));
+        for (String state : List.of("pending", "blocked", "quarantined")) {
+            assertFalse(restored.resolvedBy(DESKTOP, draft, task(state, ID), "INTERNAL_STATE"));
+        }
+        assertFalse(restored.resolvedBy(DESKTOP, draft, task("running", ID), "FIXTURE"));
+        assertFalse(restored.resolvedBy(DESKTOP, draft(OTHER, ID), task("running", ID), "INTERNAL_STATE"));
+        assertFalse(restored.resolvedBy(credential(OTHER, ID, "a".repeat(64)), draft, task("running", ID), "INTERNAL_STATE"));
+        assertFalse(restored.resolvedBy(credential(ID, OTHER, "a".repeat(64)), draft, task("running", ID), "INTERNAL_STATE"));
+        assertFalse(restored.resolvedBy(credential(ID, ID, "b".repeat(64)), draft, task("running", ID), "INTERNAL_STATE"));
+        assertTrue(restored.resolvedBy(DESKTOP, draft(ID, ID), task("running", ID), "INTERNAL_STATE"));
+        assertTrue(restored.resolvedBy(DESKTOP, draft(ID, ID), task("completed", ID), "LIVE_RUNTIME"));
     }
 
     @Test
@@ -37,13 +41,43 @@ public final class PendingTaskMutationTest {
         MobileTaskContract.Draft draft = draft(ID, ID);
         PendingTaskMutation pending = PendingTaskMutation.forRequest(
                 PendingTaskMutation.Action.CANCEL, DESKTOP, draft, ID);
-        assertFalse(pending.resolvedBy(DESKTOP, draft, task("pending", ID), true));
-        assertFalse(pending.resolvedBy(DESKTOP, draft, task("running", ID), true));
-        assertFalse(pending.resolvedBy(DESKTOP, draft, task("quarantined", ID), true));
-        assertFalse(pending.resolvedBy(DESKTOP, draft, task("cancelled", ID), false));
-        assertFalse(pending.resolvedBy(DESKTOP, draft, task("cancelled", OTHER), true));
-        assertTrue(pending.resolvedBy(DESKTOP, draft, task("cancelled", ID), true));
-        assertTrue(pending.resolvedBy(DESKTOP, draft, task("completed", ID), true));
+        for (String state : List.of("pending", "running", "blocked", "quarantined")) {
+            assertFalse(pending.resolvedBy(DESKTOP, draft, task(state, ID), "INTERNAL_STATE"));
+        }
+        assertFalse(pending.resolvedBy(DESKTOP, draft, task("cancelled", ID), "FIXTURE"));
+        assertFalse(pending.resolvedBy(DESKTOP, draft, task("cancelled", OTHER), "INTERNAL_STATE"));
+        for (String state : List.of("cancelled", "completed", "failed")) {
+            assertTrue(pending.resolvedBy(DESKTOP, draft, task(state, ID), "INTERNAL_STATE"));
+        }
+    }
+
+    @Test
+    public void acceptedCancellationOfRunningTaskRemainsPendingAcrossReload() throws Exception {
+        MobileTaskContract.Draft draft = draft(ID, ID);
+        PendingTaskMutation pending = PendingTaskMutation.forRequest(
+                PendingTaskMutation.Action.CANCEL, DESKTOP, draft, ID);
+        String reply = "{\"申請ID\":\"" + ID + "\",\"状態\":\"Task取消要求済み\",\"Task\":{" +
+                "\"task_id\":\"" + ID + "\",\"実行系ID\":\"runtime\",\"対話セッションID\":\"" + OTHER + "\"," +
+                "\"作業領域ID\":\"workspace\",\"指示hash\":\"" + HASH + "\",\"状態\":\"running\"," +
+                "\"結果hash\":null,\"結果本文あり\":false}}";
+        var response = StrictJson.object(StrictJson.parse(reply));
+        MobileTaskContract.TaskStatus acknowledgement = MobileTaskContract.TaskStatus.task(
+                MobileTaskContract.cancellationRequested(response, draft));
+        assertFalse(pending.resolvedBy(DESKTOP, draft, acknowledgement, "INTERNAL_STATE"));
+        PendingTaskMutation restored = PendingTaskMutation.decode(pending.encode());
+        assertFalse(restored.resolvedBy(DESKTOP, draft, acknowledgement, "INTERNAL_STATE"));
+        assertTrue(restored.resolvedBy(DESKTOP, draft, task("cancelled", ID), "INTERNAL_STATE"));
+        for (String altered : List.of(
+                reply.replace("Task取消要求済み", "Task状態"),
+                reply.replace("\"runtime\"", "\"other-runtime\""),
+                reply.replace("\"workspace\"", "\"other-workspace\""),
+                reply.replace(OTHER, ID),
+                reply.replace(HASH, "sha256:" + "b".repeat(64)),
+                reply.replace("\"task_id\":\"" + ID, "\"task_id\":\"" + OTHER),
+                reply.replace("\"結果hash\":null", "\"余分\":null,\"結果hash\":null"))) {
+            assertThrows(StrictJson.JsonException.class, () ->
+                    MobileTaskContract.cancellationRequested(StrictJson.object(StrictJson.parse(altered)), draft));
+        }
     }
 
     @Test
@@ -67,7 +101,7 @@ public final class PendingTaskMutationTest {
                     if (OTHER.equals(entry.id)) throw new PairingResponseParser.PairingRejectedException();
                     MobileTaskContract.TaskStatus status = ID.equals(entry.id)
                             ? task("cancelled", ID) : MobileTaskContract.TaskStatus.startCandidate();
-                    if (pending.resolvedBy(DESKTOP, entry, status, true)) resolved.add(entry.id);
+                    if (pending.resolvedBy(DESKTOP, entry, status, "INTERNAL_STATE")) resolved.add(entry.id);
                     return status;
                 });
         assertEquals(List.of(ID, OTHER, laterID), queried);

@@ -99,12 +99,14 @@ struct PendingMobileTaskMutation: Equatable {
   }
 
   func isResolved(credential: DeviceLinkCredential, draft: MobileTaskDraft,
-                  status: MobileTaskStatus, liveRuntime: Bool) -> Bool {
-    guard liveRuntime, case .task(let record) = status, MobileTaskContract.matches(record, draft: draft),
+                  status: MobileTaskStatus, evidenceSource: String) -> Bool {
+    guard ["INTERNAL_STATE", "LIVE_RUNTIME"].contains(evidenceSource),
+          case .task(let record) = status, MobileTaskContract.matches(record, draft: draft),
           matchesRequest(credential: credential, draft: draft, taskID: record.taskID) else {
       return false
     }
-    return kind == .start || ["cancelled", "completed", "failed"].contains(record.state)
+    return (kind == .start && record.state == "running") ||
+      ["cancelled", "completed", "failed"].contains(record.state)
   }
 }
 
@@ -120,6 +122,13 @@ enum MobileTaskContract {
   private static let requestIDPattern = #"^[a-f0-9]{32}$"#
   private static let hashPattern = #"^sha256:[a-f0-9]{64}$"#
   static let maximumInstructionUnicodeScalars = 32_768
+
+  static func sessionStartPayload(runtimeID: String, workspaceID: String) throws -> [String: Any] {
+    guard validRegisteredIdentifier(runtimeID), validRegisteredIdentifier(workspaceID) else {
+      throw DeviceLinkFailure.invalid
+    }
+    return ["実行系ID": runtimeID, "作業領域ID": workspaceID]
+  }
 
   static func requestPayload(
     runtimeID: String,

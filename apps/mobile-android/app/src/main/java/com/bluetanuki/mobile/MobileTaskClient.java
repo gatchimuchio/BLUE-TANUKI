@@ -12,7 +12,6 @@ import java.util.Set;
 final class MobileTaskClient {
     private static final Set<String> RUNTIME_EVIDENCE = new HashSet<>(Arrays.asList("INTERNAL_STATE", "LIVE_RUNTIME"));
     private static final Set<String> LIVE_OR_INTERNAL_EVIDENCE = new HashSet<>(Arrays.asList("LIVE_RUNTIME", "INTERNAL_STATE"));
-    private static final Set<String> LIVE_EVIDENCE = Collections.singleton("LIVE_RUNTIME");
     private static final Object TASK_MUTATION_LOCK = new Object();
 
     private final AndroidCredentialStore store;
@@ -135,14 +134,14 @@ final class MobileTaskClient {
             }
 
             Map<String, Object> sessionBody = body(credential, "対話開始",
-                    Collections.singletonMap("実行系ID", runtimeID), LIVE_EVIDENCE, canSend, null);
+                    MobileTaskContract.sessionStartPayload(runtimeID, workspaceID), LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
             sessionID = MobileTaskContract.sessionID(sessionBody, runtimeID);
             Map<String, Object> request = MobileTaskContract.requestPayload(
                     runtimeID, sessionID, workspaceID, instruction, mcpHash);
             store.markTaskSubmissionPending(sessionID);
             checkpointRecorded = true;
             Map<String, Object> response = body(credential, "AgentTask端末申請", request,
-                    LIVE_EVIDENCE, canSend, attempt);
+                    LIVE_OR_INTERNAL_EVIDENCE, canSend, attempt);
             MobileTaskContract.Draft draft = MobileTaskContract.submission(
                     response, runtimeID, sessionID, workspaceID);
             return new Submission(draft, sessionID);
@@ -155,7 +154,7 @@ final class MobileTaskClient {
                 try {
                     DeviceCredential credential = requireCredential();
                     Map<String, Object> close = body(credential, "対話終了",
-                            Collections.singletonMap("対話セッションID", sessionID), LIVE_EVIDENCE, canSend, null);
+                            Collections.singletonMap("対話セッションID", sessionID), LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
                     sessionCloseConfirmed = StrictJson.hasExactKeys(close, "対話セッションID", "状態") &&
                             sessionID.equals(StrictJson.string(close, "対話セッションID")) &&
                             "終了".equals(StrictJson.string(close, "状態"));
@@ -191,7 +190,7 @@ final class MobileTaskClient {
         MobileTaskContract.TaskStatus status = MobileTaskContract.status(response.body, draft);
         try {
             PendingTaskMutation pending = store.pendingTaskMutation();
-            if (pending != null && pending.resolvedBy(credential, draft, status, response.liveRuntime)) {
+            if (pending != null && pending.resolvedBy(credential, draft, status, response.evidenceSource)) {
                 store.clearTaskMutationPending(pending);
             }
         } catch (AndroidCredentialStore.CredentialStoreException ignored) {
@@ -218,7 +217,7 @@ final class MobileTaskClient {
             Map<String, Object> response;
             try {
                 response = body(credential, action.operation, Collections.singletonMap("申請ID", draft.id),
-                        LIVE_EVIDENCE, canSend, null);
+                        LIVE_OR_INTERNAL_EVIDENCE, canSend, null);
             } catch (DeviceLinkTransport.TransportException error) {
                 if (!error.requestMayHaveReachedDesktop) store.clearTaskMutationPending(pending);
                 throw error;
@@ -229,7 +228,7 @@ final class MobileTaskClient {
             if (action == PendingTaskMutation.Action.CANCEL && !status.task.taskID.equals(record.taskID)) {
                 throw new StrictJson.JsonException();
             }
-            store.clearTaskMutationPending(pending);
+            // 保留の解除は、受付応答の後に同じTaskを独立した状態照会で確認してから行う。
             return new TaskMutationResult(MobileTaskContract.TaskStatus.task(record), true);
         }
     }

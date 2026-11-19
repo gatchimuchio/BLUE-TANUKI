@@ -5736,6 +5736,57 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
+  it("reserves D4 Runtime session audiences from generic WebChat tickets and reply targets", async () => {
+    const runtimeCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      webhook_token: WEBHOOK_TOKEN,
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      onOwnerTaskGoalOptions: async () => [],
+      operators: { daily: { getSnapshot: async () => ({}) } },
+    });
+    let ws: WebSocket | undefined;
+    try {
+      await runtimeCtx.ch.start(async req => { runtimeCtx.received.push(req); });
+      const sessionId = "isolated-d4-audience-session";
+      const issued = await postJson(runtimeCtx.port, "/runtime/ws-ticket", {
+        runtime_id: "blue_tanuki", session_id: sessionId,
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(issued.status).toBe(200);
+      const { ticket, session_ref_digest } = issued.body as { ticket: string; session_ref_digest: string };
+      const audience = `d4-runtime:${session_ref_digest}`;
+      const canonicalizingAudience = `ｄ４－ｒｕｎｔｉｍｅ：${session_ref_digest}`;
+      ws = await openWsWithTicket(runtimeCtx.port, ticket);
+      await waitForConnectionCount(runtimeCtx.ch, audience, 1);
+
+      const genericRequests = [
+        { route: "/ws-ticket", token: TOKEN, body: { user: audience } },
+        { route: "/inbound", token: TOKEN, body: { user: canonicalizingAudience, content: "fixture" } },
+        { route: "/owner/inbound", token: OWNER_TOKEN, body: { user: audience, content: "fixture" } },
+        { route: "/owner/audio-transcribe", token: OWNER_TOKEN, body: { user: audience } },
+        { route: "/owner/task-compute", token: OWNER_TOKEN, body: {
+          user: audience, task: "fixture", goal_ref: "goal_abcdefabcdefabcd", submission_id: D4_SUBMISSION_ID_3,
+        } },
+        { route: "/webhook", token: WEBHOOK_TOKEN, body: { user: "other-user", reply_to: audience, content: "fixture" } },
+        { route: "/webhook", token: WEBHOOK_TOKEN, body: { user: audience, content: "fixture" } },
+        { route: "/operators/daily/invoke", token: TOKEN, body: { user: audience, content: "fixture" } },
+      ];
+      for (const { route, token, body } of genericRequests) {
+        const response = await postJson(runtimeCtx.port, route, body, { authorization: `Bearer ${token}` });
+        expect(response.status, route).toBe(403);
+        expect(response.body).toEqual({ error: "reserved_runtime_audience" });
+      }
+      expect(runtimeCtx.received).toHaveLength(0);
+      expect(runtimeCtx.ch.connectionCount(audience)).toBe(1);
+
+      const ordinaryTicket = await postJson(runtimeCtx.port, "/ws-ticket", { user: "ordinary-webchat-user" },
+        { authorization: `Bearer ${TOKEN}` });
+      expect(ordinaryTicket.status).toBe(200);
+    } finally {
+      ws?.close();
+      await runtimeCtx.teardown();
+    }
+  });
+
   it("notifies the D4 Runtime session when an accepted intent handler fails without leaking input", async () => {
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },

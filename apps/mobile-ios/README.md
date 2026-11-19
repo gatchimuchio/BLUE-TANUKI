@@ -14,7 +14,7 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 - Desktop Brokerから実行系と登録Workspaceを読み、Workspaceに束縛した新しい対話sessionからTask申請を一度だけ送る。申請はDesktop owner確認待ちとして扱う。
 - この端末のTask申請一覧とrequest-bound状態を明示照会できる。開始候補の場合だけ直前に状態を再照会して開始要求を出し、Broker側のApproval／Permission再検査に委ねる。
 - アプリ起動時とbackgroundからforegroundへ戻ったときにTask申請一覧をread-onlyで取得し、Keychainの保留中session IDと一致する申請が見つかった場合だけ申請checkpointを解除する。既存Taskの状態は開始・取消の保留記録と一致する申請から先に照会する。確認できない個別応答は不明と表示し、他の申請は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。
-- 取消はTaskの現在状態を照会してから一度だけ要求する。取消要求受付をworker停止・外部処理停止と同一視しない。
+- 取消はTaskの現在状態を照会してから一度だけ要求する。D4 Brokerの認証済み `INTERNAL_STATE` は対応するTaskの台帳状態を表す。開始・取消への応答を受けたあとも保留を維持し、同じTaskを別の状態照会で確認する。取消は終端状態を再確認するまで保留し、外部処理が停止したかは未確認とする。
 - Task投影は識別子・状態・hash・結果本文の有無に限り、依頼本文・結果本文・Tool名・schema・credential・Approval情報・監査識別子を表示しない。
 - MCPを使う申請は明示取得した`metadata_only`能力snapshot hashを任意で添付する。能力名・接続先・schema・credential・結果はMobileへ返さず、hashは権限にならない。
 - BLUE Gatewayを直接呼び出さず、Owner承認やPermissionを発行せず、device metadataを権限へ変換しない。

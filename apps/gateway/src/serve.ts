@@ -184,7 +184,7 @@ import type {
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
-  projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
+  projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
   projectOwnerTaskOutcome, projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
@@ -5079,6 +5079,20 @@ async function serveWithOwnerLease(
               } catch {
                 return projectD4RuntimeTaskOutcome(undefined, request_id);
               }
+            },
+            onD4RuntimeIntentExecutionObservation: async (scope: WebChatD4RuntimeCancellationScope) => {
+              const audit = hds.getAudit();
+              if (!audit.isPersistent() || !audit.verify()) {
+                return { status: "unknown" as const, used_for_authority: false as const, may_execute: false as const };
+              }
+              return projectD4RuntimeExecutionObservation({
+                requestId: scope.request_id,
+                verifiedAudit: audit.list(),
+                pendingCommandIds: [...pendingApprovals.values()].filter(item => pendingD4ApprovalMatchesScope(item, scope))
+                  .map(item => item.command.id),
+                activeCommandIds: activeTaskExecutions.d4RuntimeCommands(scope),
+                lookupCommand: key => executionStore.lookupCommand(key),
+              });
             },
             onD4RuntimeIntentCancellationStatus: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeCancellationStatus> => {
               try {

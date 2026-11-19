@@ -14,6 +14,17 @@ final class MobileTaskContract {
 
     private MobileTaskContract() {}
 
+    static Map<String, Object> sessionStartPayload(String runtimeID, String workspaceID)
+            throws StrictJson.JsonException {
+        if (!validRegisteredIdentifier(runtimeID) || !validRegisteredIdentifier(workspaceID)) {
+            throw new StrictJson.JsonException();
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("実行系ID", runtimeID);
+        payload.put("作業領域ID", workspaceID);
+        return payload;
+    }
+
     static List<String> runtimes(Map<String, Object> body) throws StrictJson.JsonException {
         if (!StrictJson.hasExactKeys(body, "実行系") || !(body.get("実行系") instanceof List<?>)) {
             throw new StrictJson.JsonException();
@@ -236,7 +247,7 @@ final class MobileTaskContract {
                 resultHash, (Boolean) resultContent);
     }
 
-    private static boolean matches(TaskRecord record, Draft draft) {
+    static boolean matches(TaskRecord record, Draft draft) {
         return record.runtimeID.equals(draft.runtimeID) && record.sessionID.equals(draft.sessionID) &&
                 record.workspaceID.equals(draft.workspaceID) && record.instructionHash.equals(draft.instructionHash) &&
                 (draft.taskID == null || draft.taskID.equals(record.taskID));

@@ -66,12 +66,14 @@ final class PendingTaskMutation {
     }
 
     boolean resolvedBy(DeviceCredential credential, MobileTaskContract.Draft draft,
-                       MobileTaskContract.TaskStatus status, boolean liveRuntime) {
-        if (!liveRuntime || status.task == null ||
+                       MobileTaskContract.TaskStatus status, String evidenceSource) {
+        if (!("INTERNAL_STATE".equals(evidenceSource) || "LIVE_RUNTIME".equals(evidenceSource)) ||
+                status.task == null || !MobileTaskContract.matches(status.task, draft) ||
                 !matchesRequest(credential, draft, status.task.taskID)) {
             return false;
         }
-        return action == Action.START || "cancelled".equals(status.task.state) ||
-                "completed".equals(status.task.state) || "failed".equals(status.task.state);
+        String state = status.task.state;
+        return (action == Action.START && "running".equals(state)) ||
+                "cancelled".equals(state) || "completed".equals(state) || "failed".equals(state);
     }
 }

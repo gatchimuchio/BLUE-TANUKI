@@ -89,7 +89,7 @@ D4 Runtime は専用 bearer と BLUE 側で登録された単一の `runtime_id`
 - `POST /runtime/intent` は `RuntimeIntentInputSchema` に従う `runtime_id`、`session_id`、`submission_id`、`intent` を受け付ける。画像／音声は一要求限りの上限付き一時入力として受け、保存済み message に媒体 bytes を追加しない。`submission_id` は payload と session scope に結び付いた重複防止識別子であり、権限ではない。
 - 応答先となる同一 session の WebSocket が未接続なら HTTP 409 `runtime_response_channel_not_connected` を返し、dispatch しない。同じ `submission_id` と同一 payload の再要求は既存 request に結び付け、payload または scope が異なる場合は HTTP 409 で拒否する。通信結果が不明な場合、adapter は新しい submission として再送しない。
 - Gateway へ渡す主体は `d4-runtime-adapter-token-holder` による権限限定の user ingress であり、直接の tool call ではない。request は通常の HDS／Approval／Broker 経路を通る。`goal_completion_rules` を含む Owner 限定入力や、shortcut 形式の tool 命令は拒否する。
-- `POST /runtime/intent/status` は同じ runtime／session／submission scope で処理状態を照会する。応答には J／M による task outcome、非権威の cancel 状態、および保持中に限る同一 request の上限付き結果内容・SHA-256・取得時刻が含まれる場合がある。結果本文を runtime snapshot や通知一覧へ混ぜず、承認の詳細、HDS 内部状態、実行権限を含めない。
+- `POST /runtime/intent/status` は同じ runtime／session／submission scope で処理状態を照会する。応答には J／M による task outcome、非権威の cancel 状態、および保持中に限る同一 request の上限付き結果内容・SHA-256・取得時刻が含まれる場合がある。`execution_observation` は同じ受付の承認待ち、保留、Gatewayの実行中、またはBrokerとHDSを照合できたアダプター応答等を示す。照合不能な場合は `unknown` とし、実行観測から仕事の達成や結果の配送を判定しない。結果本文を runtime snapshot や通知一覧へ混ぜず、承認の詳細、HDS 内部状態、実行権限を含めない。
 - `POST /runtime/intent/cancel` は同じ scope の未解決 submission だけを対象とする。HTTP 202 と `cancel_request_accepted=true` は Gateway 内の AbortSignal 要求が受理されたことを示すが、executor 終了、OS process tree 停止、外部 provider 処理停止、作用結果の取消を証明しない。`external_processing_stop` は `unknown` のまま扱い、結果不明なら自動再送しない。
 
 これらは BLUE 側 producer の API 契約であり、D4 側 Adapter／Mobile UI の実装、Device Link 接続、OS 上の秘密保管、installed 実動を証明しない。D4 repository への実装は別の限定委任に従う。

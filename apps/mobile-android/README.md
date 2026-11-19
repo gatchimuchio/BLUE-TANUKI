@@ -24,12 +24,12 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - 通信不能時の端末内資格削除は、Desktop側の失効と別の回復操作として明示する。資格の削除と、Desktop失効未確認・権限影響なしを固定した最大32件の非権威回復記録を同じKeystore保護状態へ保存し、両方のreadback後にだけ完了表示する。
 - foreground世代が変わった場合、TLS handshake後・要求送信前に再確認し、backgroundから新しい要求を送らない。
 - Desktop Brokerから実行系・登録Workspace・この端末の申請を取得し、MCPはsnapshot hash・件数・利用可否だけを取得する。能力名・schema・credentialは表示しない。
-- Task申請はDesktopの作業先を送信直前に再照合し、新しい対話sessionを作成する。申請POSTの前にsession IDだけをAES-GCM／Android Keystoreで暗号化保存・readbackし、応答が不明な場合は再送を止める。
+- Task申請はDesktopの実行系と作業領域を送信直前に再照合し、両方を指定して新しい対話セッションを作成する。申請POSTの前にセッションIDだけをAES-GCM／Android Keystoreで暗号化保存・読戻しし、応答が不明な場合は再送を止める。
 - 申請一覧に同じsessionが現れたことを確認するまで次の申請を拒否する。開始・取消は毎回最新Task状態を再取得し、開始候補／`pending`／`running`に合致する場合だけ一度要求する。開始許可はBroker側の再検査に委ね、取消要求を実停止と扱わない。
 - Task一覧は申請ID・指示hash・状態・結果hash・結果本文の有無だけを扱い、結果本文・監査識別子をMobileへ返さない。
 - アプリがforegroundを離れると未送信の依頼本文を入力欄から消去し、次回起動・再表示で復元しない。申請中の本文は新しいTaskとして自動再送しない。
 
-Task一覧の再取得では既存Taskの状態を読み取り、開始・取消の保留記録と一致する申請を先に照会する。個別応答を確認できない行は不明と表示し、他の行の状態は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。通知を明示有効化した場合は、同一プロセス内で前回確認済みTaskの状態変化を再照会で観測したときだけ、Task本文・IDを含まない端末内通知を出す。初回観測・未照会状態では通知せず、background通信やpush受信はしない。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。更新、installed package削除は未成立。Android emulator・実機、Keystore実動は未確認。
+Task一覧の再取得では既存Taskの状態を読み取り、開始・取消の保留記録と一致する申請を先に照会する。D4 Brokerの認証済み `INTERNAL_STATE` は対応するTaskの台帳状態を表す。開始・取消への応答からは保留を解除せず、同じTaskの状態を別の照会で確認する。取消の保留は終端状態を再確認するまで維持する。個別応答を確認できない行は不明と表示し、他の行の状態は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。通知を明示有効化した場合は、同一プロセス内で前回確認済みTaskの状態変化を再照会で観測したときだけ、Task本文・IDを含まない端末内通知を出す。初回観測・未照会状態では通知せず、background通信やpush受信はしない。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。更新、installed package削除は未成立。Android emulator・実機、Keystore実動は未確認。
 
 未照合のTask申請checkpointが残る間は、資格がローカル削除された後も端末IDの再生成を停止する。Desktop一覧で同じsessionを照合してcheckpointが消えるまで、旧端末との対応を維持する。
 

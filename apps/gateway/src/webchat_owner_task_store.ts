@@ -94,6 +94,9 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
         PRIMARY KEY(scope_digest,event_digest)
       ) STRICT;`);
+      // 過去に別セッションで受理された同一IDも照合できるようにする。旧環境の重複行は保持する。
+      this.db.exec(`CREATE INDEX IF NOT EXISTS webchat_owner_task_inbox_by_event
+        ON webchat_owner_task_inbox(event_digest);`);
       this.db.exec(`CREATE TABLE IF NOT EXISTS webchat_d4_cancellation_commands (
         request_id TEXT NOT NULL REFERENCES webchat_owner_task_inbox(request_id),
         command_id TEXT NOT NULL CHECK(length(command_id) BETWEEN 1 AND 256),
@@ -322,6 +325,15 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
         return current.payload_digest === payloadDigest
           ? { status: "duplicate", request_id: current.request_id, state: current.delivery_state } as const
           : { status: "identity_conflict", request_id: current.request_id } as const;
+      }
+      if (scopeDigest !== OWNER_TASK_SCOPE) {
+        const otherScope = this.db.prepare(`SELECT payload_digest,request_id,delivery_state
+          FROM webchat_owner_task_inbox WHERE event_digest=? AND scope_digest NOT IN (?,?) LIMIT 1`)
+          .get(eventDigest, scopeDigest, OWNER_TASK_SCOPE) as SubmissionRow | undefined;
+        if (otherScope) {
+          validateSubmissionRow(otherScope);
+          return { status: "identity_conflict", request_id: otherScope.request_id } as const;
+        }
       }
       if (!dispatchAvailable) return { status: "not_dispatched" } as const;
       const now = Date.now();

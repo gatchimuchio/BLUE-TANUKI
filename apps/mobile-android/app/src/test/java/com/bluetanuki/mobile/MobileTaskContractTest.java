@@ -6,15 +6,24 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import org.junit.Test;
 
 public final class MobileTaskContractTest {
     private static final String SESSION = "0123456789abcdef0123456789abcdef";
     private static final String REQUEST = "abcdef0123456789abcdef0123456789";
     private static final String HASH = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    @Test
+    public void dialogueSessionStartsWithTheRegisteredRuntimeAndWorkspace() throws Exception {
+        Map<String, Object> scope = MobileTaskContract.sessionStartPayload("runtime-1", "workspace-2");
+        assertEquals(Map.of("実行系ID", "runtime-1", "作業領域ID", "workspace-2"), scope);
+        assertThrows(StrictJson.JsonException.class,
+                () -> MobileTaskContract.sessionStartPayload("runtime-1", ""));
+        assertThrows(StrictJson.JsonException.class,
+                () -> MobileTaskContract.sessionStartPayload("runtime-1", "../workspace"));
+    }
 
     @Test
     public void requestContainsOnlyBoundTaskFieldsAndPreservesUnicode() throws Exception {
@@ -77,24 +86,29 @@ public final class MobileTaskContractTest {
     }
 
     @Test
-    public void acceptedOperationRequiresExactNonceOperationAndLiveEvidence() throws Exception {
+    public void acceptedOperationRequiresExactNonceOperationAndAllowedEvidence() throws Exception {
         String response = "{\"request_id\":\"" + SESSION + "\",\"operation\":\"AgentTask端末状態\"," +
                 "\"status\":\"accepted\",\"evidence_source\":\"LIVE_RUNTIME\",\"audit_event_id\":\"evt-1\"," +
                 "\"error\":null,\"health\":null,\"body\":{\"状態\":\"ok\"},\"shutdown_requested\":false}";
         PairingResponseParser.AcceptedResponse live = PairingResponseParser.acceptedResponse(response, SESSION,
                 "AgentTask端末状態", Collections.singleton("LIVE_RUNTIME"));
         assertEquals("ok", StrictJson.string(live.body, "状態"));
-        assertTrue(live.liveRuntime);
+        assertEquals("LIVE_RUNTIME", live.evidenceSource);
 
         String internal = response.replace("LIVE_RUNTIME", "INTERNAL_STATE");
+        Set<String> allowedEvidence = Set.of("LIVE_RUNTIME", "INTERNAL_STATE");
         PairingResponseParser.AcceptedResponse observed = PairingResponseParser.acceptedResponse(internal, SESSION,
-                "AgentTask端末状態", new HashSet<>(Arrays.asList("LIVE_RUNTIME", "INTERNAL_STATE")));
+                "AgentTask端末状態", allowedEvidence);
         assertEquals("ok", StrictJson.string(observed.body, "状態"));
-        assertFalse(observed.liveRuntime);
+        assertEquals("INTERNAL_STATE", observed.evidenceSource);
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.acceptedResponse(internal, REQUEST, "AgentTask端末状態", allowedEvidence));
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.acceptedResponse(internal, SESSION, "AgentTask端末取消", allowedEvidence));
 
         String fixture = response.replace("LIVE_RUNTIME", "FIXTURE");
         assertThrows(PairingResponseParser.PairingUnknownException.class,
                 () -> PairingResponseParser.acceptedResponse(fixture, SESSION,
-                        "AgentTask端末状態", Collections.singleton("LIVE_RUNTIME")));
+                        "AgentTask端末状態", allowedEvidence));
     }
 }

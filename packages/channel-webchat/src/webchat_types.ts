@@ -56,6 +56,13 @@ export interface WebChatTaskOutcome {
 /** Backwards-compatible name for the D4 Runtime status projection. */
 export type WebChatD4RuntimeTaskOutcome = WebChatTaskOutcome;
 
+/** Observation of the scoped Gateway request. J's task achievement remains a separate projection. */
+export type WebChatD4RuntimeExecutionObservation = {
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+} & ({ readonly status: "awaiting_approval" | "active" | "held" | "not_attempted" | "outcome_unknown" | "unknown" } |
+  { readonly status: "adapter_returned"; readonly feedback_status: "success" | "failed" | "suspended" });
+
 export interface WebChatD4RuntimeCancellationScope {
   readonly request_id: string;
   readonly scope_digest: string;
@@ -2002,6 +2009,7 @@ export interface WebChatOptions {
   d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+  onD4RuntimeIntentExecutionObservation?: (scope: WebChatD4RuntimeCancellationScope) => Promise<WebChatD4RuntimeExecutionObservation>;
   /** Read-only, content-free cancellation evidence for the exact authenticated D4 Runtime request. */
   onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) => Promise<WebChatD4RuntimeCancellationStatus>;
   /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */

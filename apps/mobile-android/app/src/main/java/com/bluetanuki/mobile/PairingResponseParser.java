@@ -106,7 +106,7 @@ final class PairingResponseParser {
             if (!allowedEvidence.contains(evidence)) {
                 throw new PairingUnknownException();
             }
-            return new AcceptedResponse(StrictJson.object(envelope.get("body")), "LIVE_RUNTIME".equals(evidence));
+            return new AcceptedResponse(StrictJson.object(envelope.get("body")), evidence);
         } catch (PairingRejectedException | PairingUnknownException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -116,11 +116,11 @@ final class PairingResponseParser {
 
     static final class AcceptedResponse {
         final Map<String, Object> body;
-        final boolean liveRuntime;
+        final String evidenceSource;
 
-        private AcceptedResponse(Map<String, Object> body, boolean liveRuntime) {
+        private AcceptedResponse(Map<String, Object> body, String evidenceSource) {
             this.body = body;
-            this.liveRuntime = liveRuntime;
+            this.evidenceSource = evidenceSource;
         }
     }
 

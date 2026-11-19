@@ -82,6 +82,7 @@ import {
 } from "./webchat_request_helpers.js";
 
 import type {
+  WebChatD4RuntimeExecutionObservation,
   WebChatAboutSurface,
   WebChatTaskOutcome,
   WebChatTaskApprovalWithdrawal,
@@ -539,6 +540,16 @@ function d4RuntimeReferenceDigest(token: string, kind: "runtime" | "session", va
     .digest("hex");
 }
 
+const D4_RUNTIME_SESSION_PREFIX = "d4-runtime:";
+
+// 一般の利用者名や返信先は専用D4セッションの受信資格にしない。
+function rejectReservedWebChatAudience(res: ServerResponse, target: string): boolean {
+  if (!target.normalize("NFKC").trim().startsWith(D4_RUNTIME_SESSION_PREFIX)) return false;
+  res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+  res.end(JSON.stringify({ error: "reserved_runtime_audience" }));
+  return true;
+}
+
 function d4RuntimeIntentScopeDigest(runtimeId: string, sessionId: string): string {
   return createHash("sha256")
     .update("blue-tanuki.d4-runtime.intent-submission-scope.v1\0", "utf8")
@@ -623,6 +634,22 @@ function normalizeTaskOutcome(value: unknown): WebChatTaskOutcome {
     used_for_authority: false,
     may_execute: false,
   };
+}
+
+function normalizeD4ExecutionObservation(value: unknown): WebChatD4RuntimeExecutionObservation {
+  const noAuthority = { used_for_authority: false, may_execute: false } as const;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { status: "unknown", ...noAuthority };
+  const observation = value as Record<string, unknown>;
+  if (observation.used_for_authority !== false || observation.may_execute !== false) return { status: "unknown", ...noAuthority };
+  const { status, feedback_status } = observation;
+  const fields = ["status", "used_for_authority", "may_execute"];
+  if (status === "adapter_returned" && hasExactKeys(observation, [...fields, "feedback_status"]) &&
+      (feedback_status === "success" || feedback_status === "failed" || feedback_status === "suspended")) {
+    return { status, feedback_status, ...noAuthority };
+  }
+  if (hasExactKeys(observation, fields) && (status === "awaiting_approval" || status === "active" || status === "held" ||
+      status === "not_attempted" || status === "outcome_unknown")) return { status, ...noAuthority };
+  return { status: "unknown", ...noAuthority };
 }
 
 function normalizeTaskApprovalWithdrawal(value: unknown): WebChatTaskApprovalWithdrawal | null {
@@ -1645,6 +1672,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_audio_transcription_input" }));
         return;
       }
+      if (rejectReservedWebChatAudience(res, replyTo)) return;
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-audio-transcription-token-holder", res)) return;
       const handler = this.handler;
       if (!handler) {
@@ -1737,6 +1765,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_task_input" }));
         return;
       }
+      if (rejectReservedWebChatAudience(res, replyTo)) return;
       const hasGoalCompletionRules = body !== null && Object.prototype.hasOwnProperty.call(body, "goal_completion_rules");
       let goalCompletionRules: GoalCompletionRules | undefined;
       if (hasGoalCompletionRules) {
@@ -1984,7 +2013,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
-      const sessionScope = `d4-runtime:${sessionIdDigest}`;
+      const sessionScope = `${D4_RUNTIME_SESSION_PREFIX}${sessionIdDigest}`;
       if (!this.rateLimitOr429(this.buckets.ws_ticket, D4_RUNTIME_TOKEN_ACTOR, res)) return;
       const issued = await this.ticketStore.issue(sessionScope, this.ticketTtlMs);
       res.writeHead(200, {
@@ -2066,7 +2095,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       try {
         const runtimeIdDigest = d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id);
         const sessionIdDigest = d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id);
-        const sessionScope = `d4-runtime:${sessionIdDigest}`;
+        const sessionScope = `${D4_RUNTIME_SESSION_PREFIX}${sessionIdDigest}`;
         const scopeDigest = d4RuntimeIntentScopeDigest(parsed.data.runtime_id, parsed.data.session_id);
         const payloadDigest = d4RuntimeIntentPayloadDigest(
           config.token, parsed.data.runtime_id, parsed.data.session_id, parsed.data.intent,
@@ -2230,6 +2259,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           submission_id: parsed.data.submission_id,
           scope_digest: scopeDigest,
         });
+        const scope = status ? { request_id: status.request_id, scope_digest: scopeDigest,
+          runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
+          session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id) } : null;
         const taskOutcome = status && this.opts.onD4RuntimeIntentTaskOutcome
           ? normalizeTaskOutcome(await this.opts.onD4RuntimeIntentTaskOutcome({ request_id: status.request_id }).catch(() => ({
               status: "unknown" as const,
@@ -2238,15 +2270,13 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               may_execute: false as const,
             })))
           : undefined;
-        const cancellationStatus = status && this.opts.onD4RuntimeIntentCancellationStatus
-          ? normalizeTaskCancellationStatus(await this.opts.onD4RuntimeIntentCancellationStatus({
-              request_id: status.request_id,
-              scope_digest: scopeDigest,
-              runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
-              session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id),
-            })
+        const cancellationStatus = scope && this.opts.onD4RuntimeIntentCancellationStatus
+          ? normalizeTaskCancellationStatus(await this.opts.onD4RuntimeIntentCancellationStatus(scope)
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
                 used_for_authority: false as const, may_execute: false as const })))
+          : undefined;
+        const executionObservation = scope && this.opts.onD4RuntimeIntentExecutionObservation
+          ? normalizeD4ExecutionObservation(await this.opts.onD4RuntimeIntentExecutionObservation(scope).catch(() => undefined))
           : undefined;
         const result = status
           ? submissionStore.getD4RuntimeIntentResult?.({ request_id: status.request_id, scope_digest: scopeDigest }) ?? {
@@ -2265,6 +2295,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           ? { found: true, request_id: status.request_id, state: status.state,
               ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
               ...(cancellationStatus ? { cancellation: cancellationStatus } : {}),
+              ...(executionObservation ? { execution_observation: executionObservation } : {}),
               ...(result ? { result } : {}) }
           : { found: false }));
       } catch {
@@ -2473,6 +2504,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "user is required string" }));
         return;
       }
+      if (rejectReservedWebChatAudience(res, user)) return;
       if (!this.rateLimitOr429(this.buckets.ws_ticket, user, res)) return;
       const issued = await this.ticketStore.issue(user, this.ticketTtlMs);
       const expires_in_sec = Math.max(
@@ -2494,6 +2526,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         );
         return;
       }
+      if (rejectReservedWebChatAudience(res, user)) return;
       if (!this.rateLimitOr429(this.buckets.inbound, user, res)) return;
       if (isDirectToolShortcutContent(content)) {
         res.writeHead(400, { "content-type": "application/json" });
@@ -2537,6 +2570,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "user and content are required strings" }));
         return;
       }
+      if (rejectReservedWebChatAudience(res, replyTo)) return;
       if ((planId === undefined) !== (revisionDigest === undefined) ||
           (planId !== undefined && (!/^[a-f0-9]{64}$/.test(planId) || !/^[a-f0-9]{64}$/.test(revisionDigest!)))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -2607,6 +2641,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const replyUser = nonEmptyString(body?.user) ?? "webhook";
       const source = nonEmptyString(body?.source) ?? "generic";
       const reply_to = nonEmptyString(body?.reply_to) ?? replyUser;
+      if (rejectReservedWebChatAudience(res, reply_to)) return;
       if (
         !this.rateLimitOr429(
           this.buckets.inbound,
@@ -3856,6 +3891,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "user and content are required strings" }));
         return;
       }
+      if (rejectReservedWebChatAudience(res, user)) return;
       const ownerOperationPlanAction = ownerOperationPlanControlAction(content);
       if (ownerAuthenticated && !ownerOperationPlanAction) {
         res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
