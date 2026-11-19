@@ -888,6 +888,7 @@ describe("WebChatChannel — Control Center shell", () => {
     ];
     const result = await harness.runInNewContext({
       nodes, submitted,
+      AbortController,
       crypto: { randomUUID: () => nextId },
       sessionStorage: storage(sessionValues), localStorage: storage(localValues),
       CANVAS_OPERATION_TASK_PREFIX: "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n",
@@ -1045,6 +1046,116 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(summary(withdrawal)).toBe("承認待ちを取り消しました。この承認での実行は開始していません。");
     expect(summary({ ...withdrawal, execution_token: "private-fixture" })).toContain("不正");
     expect(summary({ ...withdrawal, executor_started: true })).toContain("不正");
+  });
+
+  it("lets owner cancellation preempt both status reads without rendering a retired response", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskApprovalWithdrawn(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskExecutionEvidenceSummary(", start);
+    const runtimeStart = CONTROL_CENTER_SCRIPT.indexOf("async function loadRuntime(");
+    const runtimeEnd = CONTROL_CENTER_SCRIPT.indexOf("async function reconcileRuntimeResults(", runtimeStart);
+    expect(end).toBeGreaterThan(start);
+    expect(runtimeEnd).toBeGreaterThan(runtimeStart);
+    const submissionId = "01a119c0-5b35-4491-ae00-000000000808";
+    const posted: Array<{ route: string; body: unknown }> = [];
+    const result = await new Script(`
+      let ownerTaskSavedResultGeneration = 0;
+      let ownerTaskStatusRequest = null;
+      let resolveStatus;
+      let resolveCancel;
+      let resolveRuntime;
+      let statusSignal;
+      let runtimeSignal;
+      let runtimeRenders = 0;
+      const state = { runtimeSnapshotRequestId: 0 };
+      const sessionStorage = { setItem() {} };
+      const setRuntimeSnapshotObservation = () => {};
+      const renderRuntime = () => { runtimeRenders += 1; };
+      const nodes = Object.fromEntries([
+        "owner-task-token", "check-owner-task-status", "cancel-owner-task-submission", "owner-task-new-submission",
+        "owner-task-status", "owner-task-status-submission-id", "owner-task-result", "owner-task-result-status", "runtime-token"
+      ].map(id => [id, { value: "", disabled: false, hidden: false, textContent: "" }]));
+      const byId = id => nodes[id];
+      const isObject = value => !!value && typeof value === "object" && !Array.isArray(value);
+      const clearOwnerTaskSavedResult = () => {};
+      const ownerTaskStatusSubmissionId = () => submissionId;
+      const authHeaders = token => ({ Authorization: "Bearer " + token });
+      const postJson = (route, _token, body, signal) => {
+        posted.push({ route, body });
+        statusSignal = signal;
+        return new Promise(resolve => { resolveStatus = resolve; });
+      };
+      const fetchJson = (route, _token, options) => {
+        posted.push({ route, body: null });
+        runtimeSignal = options.signal;
+        return new Promise(resolve => { resolveRuntime = resolve; });
+      };
+      const fetch = (route, options) => {
+        posted.push({ route, body: JSON.parse(options.body) });
+        return new Promise(resolve => { resolveCancel = resolve; });
+      };
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      ${CONTROL_CENTER_SCRIPT.slice(runtimeStart, runtimeEnd)}
+      (async function() {
+        const token = byId("owner-task-token");
+        const status = byId("owner-task-status");
+        const select = byId("owner-task-status-submission-id");
+        const controls = () => [byId("check-owner-task-status").disabled, byId("cancel-owner-task-submission").disabled];
+        const cancellation = { status: "cancel_requested", cancel_request_accepted: true, executor_settled: false,
+          execution_signal_aborted: true, executor_state: "cancel_requested", local_worker_stop: "not_observed",
+          external_processing_stop: "unknown", used_for_authority: false, may_execute: false };
+        const resolveAcknowledgement = () => resolveCancel({ ok: true, status: 202,
+          json: async () => ({ found: true, accepted: true, cancellation }) });
+
+        token.value = "owner-token";
+        const statusInFlight = checkOwnerTaskSubmissionStatus();
+        const statusControls = controls();
+        byId("owner-task-new-submission").hidden = false;
+        const cancelInFlight = cancelOwnerTaskSubmission();
+        const cancelControls = controls();
+        const newSubmissionHidden = byId("owner-task-new-submission").hidden;
+        await checkOwnerTaskSubmissionStatus();
+        resolveStatus({ found: false });
+        await statusInFlight;
+        const staleStatus = { token: token.value, text: status.textContent, controls: controls(), selectionDisabled: select.disabled,
+          signalAborted: statusSignal.aborted };
+        resolveAcknowledgement();
+        await cancelInFlight;
+        const acknowledged = { text: status.textContent, selectionDisabled: select.disabled };
+
+        token.value = "owner-token";
+        select.disabled = true;
+        byId("runtime-token").value = "runtime-token";
+        const runtimeStatusInFlight = checkOwnerTaskSubmissionStatus();
+        resolveStatus({ found: false });
+        await Promise.resolve();
+        const cancelDuringRuntime = cancelOwnerTaskSubmission();
+        token.value = "replacement-token";
+        status.textContent = "新しい表示";
+        resolveRuntime({});
+        await runtimeStatusInFlight;
+        const staleRuntime = { token: token.value, text: status.textContent, controls: controls(),
+          signalAborted: runtimeSignal.aborted, renders: runtimeRenders };
+        resolveAcknowledgement();
+        await cancelDuringRuntime;
+        const restored = { token: token.value, text: status.textContent, controls: controls(), selectionDisabled: select.disabled };
+        return { statusControls, cancelControls, newSubmissionHidden, staleStatus, acknowledged, staleRuntime, restored };
+      })()
+    `).runInNewContext({ submissionId, posted, AbortController });
+    expect(result).toMatchObject({ statusControls: [true, false], cancelControls: [true, true], newSubmissionHidden: true,
+      staleStatus: { token: "owner-token", controls: [true, true], selectionDisabled: true, signalAborted: true },
+      acknowledged: { selectionDisabled: false },
+      staleRuntime: { token: "replacement-token", text: "新しい表示", controls: [true, true], signalAborted: true, renders: 0 },
+      restored: { token: "replacement-token", text: "新しい表示", controls: [false, false], selectionDisabled: true } });
+    expect(result.staleStatus.text).toContain("中止可能な実行を照合しています");
+    expect(result.acknowledged.text).toContain("中止要求を受理しました");
+    expect(result.acknowledged.text).toContain("外部処理停止は別途未確定");
+    expect(posted).toEqual([
+      { route: "/owner/task-submission-status", body: { submission_id: submissionId } },
+      { route: "/owner/task-submission-cancel", body: { submission_id: submissionId } },
+      { route: "/owner/task-submission-status", body: { submission_id: submissionId } },
+      { route: "/runtime/snapshot", body: null },
+      { route: "/owner/task-submission-cancel", body: { submission_id: submissionId } },
+    ]);
   });
 
   it("sends audio for owner-reviewed transcription separately from task planning", async () => {

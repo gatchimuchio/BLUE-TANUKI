@@ -492,11 +492,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return response.json();
       }
 
-      async function postJson(path, token, body) {
+      async function postJson(path, token, body, signal) {
         const response = await fetch(path, {
           method: "POST",
           headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
-          body: JSON.stringify(body)
+          body: JSON.stringify(body), signal: signal
         });
         if (!response.ok) throw new Error(path + " failed: HTTP " + response.status);
         return response.json();
@@ -1162,6 +1162,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       let ownerTaskSubmissionIdMemory = null;
       let ownerTaskStatusSubmissionIdsMemory = [];
       let ownerTaskSavedResultGeneration = 0;
+      let ownerTaskStatusRequest = null;
       const OWNER_TASK_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       const OWNER_TASK_STATUS_SUBMISSION_IDS_KEY = "blue-tanuki.owner-task-status-submission-ids.v1";
 
@@ -1665,10 +1666,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function checkOwnerTaskSubmissionStatus() {
+        const button = byId("check-owner-task-status");
+        const cancelButton = byId("cancel-owner-task-submission");
+        if (button.disabled || cancelButton.disabled) return;
         clearOwnerTaskSavedResult(true);
         const savedResultGeneration = ownerTaskSavedResultGeneration;
         const ownerTokenInput = byId("owner-task-token");
-        const button = byId("check-owner-task-status");
         const status = byId("owner-task-status");
         const submissionSelect = byId("owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
@@ -1681,17 +1684,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         resultStatus.hidden = true;
         if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
         if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
-        const wasSubmissionSelectDisabled = submissionSelect.disabled;
+        const request = { controller: new AbortController(), wasSubmissionSelectDisabled: submissionSelect.disabled };
+        ownerTaskStatusRequest = request;
         const selectionChanged = function () {
-          return ownerTaskStatusSubmissionId() !== submissionId || ownerTokenInput.value.trim() !== ownerToken;
+          return ownerTaskStatusRequest !== request || ownerTaskStatusSubmissionId() !== submissionId ||
+            ownerTokenInput.value.trim() !== ownerToken;
         };
+        const runtimeRead = { signal: request.controller.signal, isCurrent: function () { return !selectionChanged(); } };
         button.disabled = true;
         submissionSelect.disabled = true;
         byId("owner-task-new-submission").hidden = true;
         status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " のGateway受付記録を照会しています";
         status.className = "badge warn";
         try {
-          const result = await postJson("/owner/task-submission-status", ownerToken, { submission_id: submissionId });
+          const result = await postJson("/owner/task-submission-status", ownerToken, { submission_id: submissionId }, request.controller.signal);
           if (selectionChanged()) return;
           if (!result || typeof result !== "object" || Array.isArray(result)) {
             throw new Error("依頼状態の応答形式が不正です");
@@ -1700,7 +1706,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " の受付記録がありません。これは未送信の証明ではありません。Tasks／RuntimeとGateway状態を確認し、同じ依頼IDを維持してください。";
             status.className = "badge warn";
             if (byId("runtime-token").value.trim()) {
-              await loadRuntime("owner-task-status");
+              await loadRuntime("owner-task-status", runtimeRead);
               if (selectionChanged()) return;
             }
             return;
@@ -1743,7 +1749,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (cancellationSummary ? " " + cancellationSummary : "");
           } else {
             status.textContent = receiptSummary + " Runtime planを照合しています。";
-            const runtimeSnapshot = await loadRuntime("owner-task-status");
+            const runtimeSnapshot = await loadRuntime("owner-task-status", runtimeRead);
             if (selectionChanged() || byId("runtime-token").value.trim() !== runtimeToken) return;
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
             if (selectionChanged() || byId("runtime-token").value.trim() !== runtimeToken) return;
@@ -1762,26 +1768,37 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (selectionChanged()) return;
           throw error;
         } finally {
-          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
-          submissionSelect.disabled = wasSubmissionSelectDisabled;
-          button.disabled = false;
+          if (ownerTaskStatusRequest === request) {
+            ownerTaskStatusRequest = null;
+            if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+            submissionSelect.disabled = request.wasSubmissionSelectDisabled;
+            button.disabled = false;
+          }
         }
       }
 
       async function cancelOwnerTaskSubmission() {
-        const ownerTokenInput = byId("owner-task-token");
         const button = byId("cancel-owner-task-submission");
+        const statusButton = byId("check-owner-task-status");
+        if (button.disabled) return;
+        const ownerTokenInput = byId("owner-task-token");
         const status = byId("owner-task-status");
         const submissionSelect = byId("owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
         const submissionId = ownerTaskStatusSubmissionId();
         if (!ownerToken) throw new Error("中止要求にはowner tokenを入力してください");
         if (!submissionId) throw new Error("中止対象のowner task依頼IDがありません");
-        const wasSubmissionSelectDisabled = submissionSelect.disabled;
-        const selectionChanged = function () { return ownerTaskStatusSubmissionId() !== submissionId; };
+        const previousStatus = ownerTaskStatusRequest;
+        const wasSubmissionSelectDisabled = previousStatus?.wasSubmissionSelectDisabled ?? submissionSelect.disabled;
+        ownerTaskStatusRequest = null;
+        previousStatus?.controller.abort();
+        const selectionChanged = function () {
+          return ownerTaskStatusSubmissionId() !== submissionId || ownerTokenInput.value.trim() !== ownerToken;
+        };
         button.disabled = true;
         submissionSelect.disabled = true;
-        byId("check-owner-task-status").disabled = true;
+        statusButton.disabled = true;
+        byId("owner-task-new-submission").hidden = true;
         status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " の中止可能な実行を照合しています";
         status.className = "badge warn";
         try {
@@ -1821,10 +1838,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (cancellation.status === "already_requested" ? "既に受理済みです" : "受理しました") +
             "。executor終了・worker停止・外部処理停止は別途未確定です。状態を再照会してください。";
           status.className = "badge warn";
+        } catch (error) {
+          if (selectionChanged()) return;
+          throw error;
         } finally {
           if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
           submissionSelect.disabled = wasSubmissionSelectDisabled;
-          byId("check-owner-task-status").disabled = false;
+          statusButton.disabled = false;
           button.disabled = false;
         }
       }
@@ -6765,11 +6785,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge " + (tone || "warn");
       }
 
-      async function loadRuntime(source) {
+      async function loadRuntime(source, read) {
         const token = byId("runtime-token").value.trim();
         state.runtimeToken = token;
         sessionStorage.setItem("bt.runtimeToken", token);
         const requestId = ++state.runtimeSnapshotRequestId;
+        const isCurrent = function () {
+          return requestId === state.runtimeSnapshotRequestId && (!read || read.isCurrent());
+        };
         if (!token) {
           setText("gateway-status", "unknown");
           byId("gateway-status").className = "badge warn";
@@ -6781,13 +6804,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         setRuntimeSnapshotObservation("refreshing" + (source === "webchat-connected" ? " after WebChat connection" : ""), "warn");
         try {
-          const body = await fetchJson("/runtime/snapshot", token, { cache: "no-store" });
-          if (requestId !== state.runtimeSnapshotRequestId) return null;
+          const body = await fetchJson("/runtime/snapshot", token, { cache: "no-store", signal: read?.signal });
+          if (!isCurrent()) return null;
           renderRuntime(body);
           setRuntimeSnapshotObservation("received " + new Date().toISOString(), "good");
           return body;
         } catch (error) {
-          if (requestId !== state.runtimeSnapshotRequestId) return null;
+          if (!isCurrent()) return null;
           setText("gateway-status", "unknown");
           byId("gateway-status").className = "badge warn";
           setText("runtime-json", error.message);

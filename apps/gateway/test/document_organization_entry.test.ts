@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY, SYNTHETIC_CANVAS_GENERATION_HTML, SYNTHETIC_CANVAS_GENERATION_TASK } from "@blue-tanuki/core";
 import { HDSUpperController, LongTermMemoryStore, operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import type { OperationPlanStatusProjection } from "../src/serve_projection.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -2563,6 +2564,7 @@ describe("delegated goal purpose owner review", () => {
       const dynamicTaskFileName = "owner-task-note.txt";
       const dynamicTaskBody = "WebChatのowner task入力から作成した記録。";
       const dynamicOwnerTask = `次の内容で新しいテキストファイルを作成してください。\nファイル名: ${dynamicTaskFileName}\n本文: ${dynamicTaskBody}`;
+      const syntheticSubmissionId = "01a119c0-5b35-4491-ae00-000000000802";
       await stopChild(gateway.child);
       runtimeEnv.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
       runtimeEnv.LLM_BACKEND = "synthetic-file-write-plan";
@@ -2587,7 +2589,7 @@ describe("delegated goal purpose owner review", () => {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", task: dynamicOwnerTask,
-          submission_id: "01a119c0-5b35-4491-ae00-000000000802",
+          submission_id: syntheticSubmissionId,
           goal_ref: goalRef, purpose_version: 2 }),
       });
       expect(syntheticTaskSubmission.status).toBe(202);
@@ -2744,15 +2746,18 @@ describe("delegated goal purpose owner review", () => {
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
 
-      const resumedTicketResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/ws-ticket", {
-        method: "POST",
-        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner" }),
-      });
-      expect(resumedTicketResponse.status).toBe(200);
-      const { ticket: resumedTicket } = await resumedTicketResponse.json() as { ticket: string };
-      taskWebSocket = new WebSocket("ws://127.0.0.1:" + gatewayPort + "/ws?ticket=" + encodeURIComponent(resumedTicket));
-      await once(taskWebSocket, "open");
+      const reconnectSyntheticTaskSocket = async () => {
+        const ticketResponse = await fetch(`http://127.0.0.1:${gatewayPort}/ws-ticket`, {
+          method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ user: "c0802-owner" }),
+        });
+        expect(ticketResponse.status).toBe(200);
+        const { ticket } = await ticketResponse.json() as { ticket: string };
+        const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+        await once(socket, "open");
+        return socket;
+      };
+      taskWebSocket = await reconnectSyntheticTaskSocket();
 
       const restoredWritePlan = await waitFor(async () => {
         const response = await fetch("http://127.0.0.1:" + gatewayPort + "/runtime/snapshot", {
@@ -2807,14 +2812,51 @@ describe("delegated goal purpose owner review", () => {
       const verificationPlanId = String(verificationPlan.plan_id);
       const verificationRevision = String(verificationPlan.revision_digest);
       const verificationStepId = String(verificationStep?.step_id);
-      const verificationRelationResponse = await fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
+      const requestVerificationRelation = () => fetch("http://127.0.0.1:" + gatewayPort + "/owner/goal-purpose-relation-review", {
         method: "POST",
         headers: { authorization: "Bearer " + ownerToken, "content-type": "application/json" },
         body: JSON.stringify({ plan_id_digest: verificationPlanId, revision_digest: verificationRevision, outcome: "supports" }),
       });
+      const firstChildReviewResponse = await requestVerificationRelation();
+      expect(firstChildReviewResponse.status).toBe(202);
+      const firstChildReview = await firstChildReviewResponse.json() as { command_id: string };
+      const firstChildPending = (await loadQueue()).pending_approvals.find((item) => item.command_id === firstChildReview.command_id);
+      expect(firstChildPending?.approval_token).toBeTruthy();
+      const parentResultBeforeCancel = readFileSync(join(fileRoot, dynamicTaskFileName));
+      const ownerTaskReceipt = (suffix: "status" | "cancel", bearer = ownerToken) =>
+        fetch(`http://127.0.0.1:${gatewayPort}/owner/task-submission-${suffix}`, {
+          method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+          body: JSON.stringify({ submission_id: syntheticSubmissionId }),
+        });
+      expect((await ownerTaskReceipt("cancel", token)).status).toBe(401);
+      const withdrawnChild = await ownerTaskReceipt("cancel");
+      expect(withdrawnChild.status).toBe(202);
+      const withdrawn = await withdrawnChild.json() as { cancellation: unknown };
+      expect(withdrawn.cancellation).toMatchObject({ status: "approval_withdrawn", executor_started: false,
+        external_processing_stop: "unknown", used_for_authority: false, may_execute: false });
+      expect((await loadQueue()).pending_approvals.some((item) => item.command_id === firstChildReview.command_id)).toBe(false);
+      const obsoleteVerdict = await fetch(`http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(firstChildReview.command_id)}`, {
+        method: "POST", headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ verdict: "approve", approval_token: firstChildPending?.approval_token }),
+      });
+      expect(obsoleteVerdict.ok).toBe(false);
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      taskWebSocket = await reconnectSyntheticTaskSocket();
+      expect(await (await ownerTaskReceipt("status")).json()).toMatchObject({ found: true, cancellation: withdrawn.cancellation });
+      expect(readFileSync(join(fileRoot, dynamicTaskFileName))).toEqual(parentResultBeforeCancel);
+
+      const verificationRelationResponse = await requestVerificationRelation();
       expect(verificationRelationResponse.status).toBe(202);
       const verificationRelation = await verificationRelationResponse.json() as { command_id?: string; status?: string };
       expect(verificationRelation.status).toBe("approval_required");
+      expect(verificationRelation.command_id).not.toBe(firstChildReview.command_id);
+      expect(await (await ownerTaskReceipt("status")).json()).toMatchObject({ found: true,
+        cancellation: { status: "unknown" } });
       const verificationQueue = await loadQueue();
       const verificationPending = verificationQueue.pending_approvals
         .find((item) => item.command_id === verificationRelation.command_id);
@@ -3596,7 +3638,22 @@ describe("delegated goal purpose owner review", () => {
       expect(completedOwnerObservationSearch.plan).toMatchObject({ status: "results_verified",
         goal_purpose_relation: { status: "owner_reviewed_supports", owner_review_outcome: "supports" } });
       expect(completedOwnerObservationSearch.step).toMatchObject({ operation: "file.search", status: "verified",
-        binding: { memory_status: "receipt_confirmed" }, parameters: { query: "", file_path: uncertainFile } });
+        binding: { memory_status: "receipt_confirmed" } });
+      expect(completedOwnerObservationSearch.step).not.toHaveProperty("parameters");
+      const observedPlanDb = new DatabaseSync(join(stateRoot, "private-state", "operation-plans", "j-state.sqlite"), { readOnly: true });
+      try {
+        const row = observedPlanDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as
+          { checkpoint_json: string } | undefined;
+        if (!row) throw new Error("owner-selected observation plan was not persisted");
+        const checkpoint = OperationPlanCheckpointSchema.parse(JSON.parse(row.checkpoint_json));
+        const current = checkpoint.plans.find(({ revisions }) => operationPlanDigest(revisions[0]!.plan.plan_id) === ownerObservationPlanId)
+          ?.revisions.at(-1);
+        expect(current?.digest).toBe(ownerObservationRevision);
+        const step = current?.plan.steps.find(({ step_id }) => operationPlanDigest(step_id) === ownerObservationStepId);
+        expect(step?.parameters).toMatchObject({ query: "", file_path: uncertainFile });
+      } finally {
+        observedPlanDb.close();
+      }
 
       let resolveOwnerObservationSavedResultRequestId!: (requestId: string) => void;
       const ownerObservationSavedResultRequestId = new Promise<string>((resolve) => {

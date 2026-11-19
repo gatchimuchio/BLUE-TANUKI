@@ -4,7 +4,7 @@ import { MAX_OWNER_TASK_PLAN_STEPS } from "@blue-tanuki/channel-webchat";
 import { createHash } from "node:crypto";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { operationPlanDigest, type AuditEntry, type DecisionLog, type HDSRuntimeSnapshot } from "@blue-tanuki/hds-brain";
-import { getOperationDescriptor } from "@blue-tanuki/protocol";
+import { getOperationDescriptor, OperationPlanGoalPurposeBindingSchema, type OperationPlanGoalPurposeBinding } from "@blue-tanuki/protocol";
 import type { ApprovalRecoveryState } from "./approval_recovery_store.js";
 import type { TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 
@@ -59,6 +59,17 @@ export type D4RuntimeRequestCommandIdsProjection =
   | { readonly status: "not_found" }
   | { readonly status: "ambiguous" }
   | { readonly status: "invalid" };
+
+export interface OwnerTaskCancellationPlanReference {
+  readonly plan_id: string;
+  readonly revision_digest: string;
+  readonly previous_revision_digests: readonly string[];
+  readonly goal_purpose_binding: OperationPlanGoalPurposeBinding;
+}
+
+export type OwnerTaskCancellationScopeProjection =
+  | { readonly status: "matched"; readonly command_ids: readonly string[]; readonly plans: readonly OwnerTaskCancellationPlanReference[] }
+  | Exclude<D4RuntimeRequestCommandIdsProjection, { status: "matched" }>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -396,6 +407,9 @@ function projectRequestCommandIds(
   requestId: string,
   ownerIdentityDigest: string,
 ): D4RuntimeRequestCommandIdsProjection {
+  if (ownerIdentityDigest === WEBCHAT_OWNER_TASK_DIGEST) {
+    return projectOwnerTaskRequestCommandIds(operationPlans, requestId);
+  }
   if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
     return { status: "invalid" };
   }
@@ -411,10 +425,7 @@ function projectRequestCommandIds(
         !COMMAND_ID.test(binding.command_id)) {
       return { status: "invalid" };
     }
-    // The authenticated owner can follow later review requests issued for the same J plan.
-    if (binding.request_id === requestId || ownerIdentityDigest === WEBCHAT_OWNER_TASK_DIGEST) {
-      commandIds.add(binding.command_id);
-    }
+    if (binding.request_id === requestId) commandIds.add(binding.command_id);
   }
   return { status: "matched", command_ids: [...commandIds] };
 }
@@ -423,8 +434,62 @@ export function projectD4RuntimeRequestCommandIds(operationPlans: unknown, reque
   return projectRequestCommandIds(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
 }
 
-export function projectOwnerTaskRequestCommandIds(operationPlans: unknown, requestId: string): D4RuntimeRequestCommandIdsProjection {
-  return projectRequestCommandIds(operationPlans, requestId, WEBCHAT_OWNER_TASK_DIGEST);
+/** 元の受付からJが同じ仕事として保持した計画・審査だけを取消範囲へ含める。 */
+export function projectOwnerTaskRequestCommandIds(operationPlans: unknown, requestId: string): OwnerTaskCancellationScopeProjection {
+  if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
+    return { status: "invalid" };
+  }
+  const unversioned = ["schema_version", "used_for_authority", "raw_payload_exposed", "recovery_refresh_status"]
+    .every((key) => !Object.hasOwn(operationPlans, key));
+  if (!unversioned && (operationPlans.schema_version !== "operation-plan-projection.v1" ||
+      operationPlans.used_for_authority !== false || operationPlans.raw_payload_exposed !== false ||
+      operationPlans.recovery_refresh_status !== "ready")) return { status: "invalid" };
+
+  const original = operationPlans.plans.filter((plan) => matchesWebChatTaskPlan(plan, requestId, WEBCHAT_OWNER_TASK_DIGEST));
+  if (original.length === 0) return { status: "not_found" };
+  if (original.length !== 1) return { status: "ambiguous" };
+  const root = original[0]!;
+  const scope = [root];
+  const plans: OwnerTaskCancellationPlanReference[] = [];
+  if (!unversioned && root.goal_purpose_binding !== undefined) {
+    const purpose = OperationPlanGoalPurposeBindingSchema.safeParse(root.goal_purpose_binding);
+    const taskIdentity = root.task_identity_digest;
+    if (!purpose.success || typeof taskIdentity !== "string" || !DIGEST.test(taskIdentity)) return { status: "invalid" };
+    const { goal_ref, purpose_version, purpose_digest } = purpose.data;
+    const planIds = new Set<string>();
+    const requestIds = new Set<string>();
+    for (const plan of operationPlans.plans) {
+      if (!isRecord(plan) || plan.task_identity_digest !== taskIdentity ||
+          plan.owner_identity_digest !== WEBCHAT_OWNER_TASK_DIGEST || plan.channel_identity_digest !== WEBCHAT_CHANNEL_DIGEST) continue;
+      const binding = OperationPlanGoalPurposeBindingSchema.safeParse(plan.goal_purpose_binding);
+      if (!binding.success || binding.data.goal_ref !== goal_ref || binding.data.purpose_version !== purpose_version ||
+          binding.data.purpose_digest !== purpose_digest) return { status: "invalid" };
+      const { plan_id, request_id, revision_digest, previous_revision_digests } = plan;
+      if (typeof plan_id !== "string" || !DIGEST.test(plan_id) || typeof request_id !== "string" || !COMMAND_ID.test(request_id) ||
+          typeof revision_digest !== "string" || !DIGEST.test(revision_digest) || !Array.isArray(previous_revision_digests) ||
+          previous_revision_digests.some((value) => typeof value !== "string" || !DIGEST.test(value)) ||
+          new Set([revision_digest, ...previous_revision_digests]).size !== previous_revision_digests.length + 1) {
+        return { status: "invalid" };
+      }
+      if (planIds.has(plan_id) || requestIds.has(request_id)) return { status: "ambiguous" };
+      planIds.add(plan_id);
+      requestIds.add(request_id);
+      plans.push({ plan_id, revision_digest, previous_revision_digests, goal_purpose_binding: binding.data });
+      if (plan !== root) scope.push(plan);
+    }
+  }
+
+  const commandIds = new Set<string>();
+  for (const { bindings } of scope) {
+    if (!Array.isArray(bindings)) return { status: "invalid" };
+    for (const binding of bindings) {
+      if (!isRecord(binding) || typeof binding.request_id !== "string" || typeof binding.command_id !== "string" ||
+          !COMMAND_ID.test(binding.command_id)) return { status: "invalid" };
+      if (!unversioned && commandIds.has(binding.command_id)) return { status: "ambiguous" };
+      commandIds.add(binding.command_id);
+    }
+  }
+  return { status: "matched", command_ids: [...commandIds], plans };
 }
 
 function unknownCancellationStatus(

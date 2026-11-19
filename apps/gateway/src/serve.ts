@@ -22,6 +22,7 @@ import {
   runPeriodicFailureMemoryVerification,
 } from "@blue-tanuki/hds-brain";
 import type {
+  AuditEntry,
   ApprovalEvaluation,
   CompleteHistoryAppendInput,
   CompleteHistoryEntry,
@@ -186,7 +187,7 @@ import type {
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
   projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
-  projectOwnerTaskRequestCommandIds, resolveOwnerTaskSavedResult } from "./task_outcome_projection.js";
+  projectOwnerTaskRequestCommandIds, resolveOwnerTaskSavedResult, type OwnerTaskCancellationPlanReference } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -5083,7 +5084,8 @@ async function serveWithOwnerLease(
         }
         try {
           const commandIds = new Set(binding.status === "matched" ? binding.command_ids : []);
-          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds);
+          const plans = binding.status === "matched" ? binding.plans : [];
+          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans);
           const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
             [...commandIds], undefined, ["owner_task", "resume"],
           );
@@ -5106,16 +5108,22 @@ async function serveWithOwnerLease(
         const plan = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
         if (plan.status === "ambiguous" || plan.status === "invalid") return null;
         const planCommands = new Set(plan.status === "matched" ? plan.command_ids : []);
-        const pending = ownerTaskPendingApprovals(request_id, planCommands);
+        const plans = plan.status === "matched" ? plan.plans : [];
+        const pending = ownerTaskPendingApprovals(request_id, planCommands, plans);
         const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
         const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds);
         if (binding.status === "ambiguous" || binding.status === "invalid" || pending.length > 1) return null;
+        if (plans.length && activeCommandIds.size) {
+          const audit = hds.getAudit();
+          if (!audit.isPersistent() || !audit.verify() || ownerTaskRelationReviewApprovalGates(audit.list(), plans)
+            .some(review => activeCommandIds.has(review.command_id) && review.command_id !== pending[0]?.command.id)) return null;
+        }
         if (pending.length === 1) {
           const [approval] = pending;
           if (binding.status === "matched" && binding.command_id !== approval!.command.id) return null;
-          return withdrawPendingTaskApproval(approval!, OWNER_TASK_APPROVAL_ACTOR, OWNER_TASK_WITHDRAWAL_REASON);
+          return withdrawPendingTaskApproval(approval!, OWNER_TASK_APPROVAL_ACTOR, OWNER_TASK_WITHDRAWAL_REASON, { ownerTaskPlans: plans });
         }
-        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, planCommands);
+        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, planCommands, plans);
         if (binding.status !== "matched") return null;
         const cancellation = requestTaskExecutionCancellation(binding.command_id, {
           actor: OWNER_TASK_APPROVAL_ACTOR,
@@ -7847,27 +7855,106 @@ async function serveWithOwnerLease(
       binding.runtime_ref_digest === scope.runtime_ref_digest && binding.session_ref_digest === scope.session_ref_digest;
   }
 
-  function ownerTaskPendingApprovals(requestId: string, planCommands: ReadonlySet<string>): PendingApproval[] {
-    return [...pendingApprovals.values()].filter(({ command, log, origin }) =>
-      isGatewayInternalInboundRequest(origin) && origin.channel === "webchat" && origin.user === OWNER_TASK_APPROVAL_ACTOR &&
-      origin.metadata?.["blue_tanuki.actor_kind"] === "owner" && origin.metadata?.["blue_tanuki.trust_level"] === "owner" &&
-      origin.id === log.request_id && command.upstream_decision.request_id === origin.id &&
-      ((origin.id === requestId && origin.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan") ||
-        (planCommands.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command)))));
+  function ownerTaskRelationReviewMatchesPlan(
+    args: OperationPlanGoalPurposeRelationReviewArguments, plans: readonly OwnerTaskCancellationPlanReference[], historical = false,
+  ): boolean {
+    return plans.some(plan => plan.plan_id === args.plan_id_digest &&
+      (plan.revision_digest === args.revision_digest || (historical && plan.previous_revision_digests.includes(args.revision_digest))) &&
+      plan.goal_purpose_binding.goal_ref === args.goal_ref && plan.goal_purpose_binding.purpose_version === args.purpose_version &&
+      plan.goal_purpose_binding.purpose_digest === args.purpose_digest);
   }
 
-  function readOwnerTaskApprovalWithdrawal(requestId: string, planCommands: ReadonlySet<string>): WebChatTaskApprovalWithdrawal | null {
-    if (ownerTaskPendingApprovals(requestId, planCommands).length > 0 ||
-        activeTaskExecutions.snapshot().some(item => planCommands.has(item.command_id))) return null;
+  function ownerTaskRelationReviewMatches(
+    pending: PendingApproval, plans: readonly OwnerTaskCancellationPlanReference[],
+  ): boolean {
+    const { command, log, evaluation, goal_purpose_relation_review_proposal: proposal } = pending;
+    if (!proposal || proposal.proposal_actor !== OWNER_TASK_APPROVAL_ACTOR || log.commit.decision !== "ASSERT" ||
+        command.upstream_decision.commit_hash !== log.commit.hash || evaluation.decision !== "ask" ||
+        evaluation.context.actor !== OWNER_TASK_APPROVAL_ACTOR || evaluation.context.command_id !== command.id ||
+        evaluation.context.operation !== "tool.call" || evaluation.approval_level !== "L3_final_review" ||
+        !evaluation.final_review_required) return false;
+    const args = getGoalPurposeRelationReviewArguments(command);
+    return args !== null && JSON.stringify(args) === JSON.stringify(proposal.args) &&
+      ownerTaskRelationReviewMatchesPlan(args, plans) && evaluation.context.target === goalPurposeRelationReviewApprovalTarget(args);
+  }
+
+  function ownerTaskPendingApprovals(
+    requestId: string, planCommands: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[] = [],
+  ): PendingApproval[] {
+    return [...pendingApprovals.values()].filter(pending => {
+      const { command, log, origin } = pending;
+      if (!isGatewayInternalInboundRequest(origin) || origin.channel !== "webchat" || origin.user !== OWNER_TASK_APPROVAL_ACTOR ||
+          origin.metadata?.["blue_tanuki.actor_kind"] !== "owner" || origin.metadata?.["blue_tanuki.trust_level"] !== "owner" ||
+          origin.id !== log.request_id || command.upstream_decision.request_id !== origin.id) return false;
+      return (origin.id === requestId && origin.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan") ||
+        (planCommands.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command))) ||
+        ownerTaskRelationReviewMatches(pending, plans);
+    });
+  }
+
+  function readOwnerTaskApprovalWithdrawal(
+    requestId: string, planCommands: ReadonlySet<string>, plans: readonly OwnerTaskCancellationPlanReference[],
+  ): WebChatTaskApprovalWithdrawal | null {
+    if (ownerTaskPendingApprovals(requestId, planCommands, plans).length > 0) return null;
     const audit = hds.getAudit();
-    const matches = audit.list().flatMap(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
-      (log.request_id === requestId || planCommands.has(log.command_id)) && log.phase === "approval_cancelled" &&
-      log.actor === OWNER_TASK_APPROVAL_ACTOR && log.reason === OWNER_TASK_WITHDRAWAL_REASON ? [log] : []);
-    if (!matches.length || !audit.isPersistent() || !audit.verify()) return null;
+    if (!audit.isPersistent() || !audit.verify()) return null;
+    const entries = audit.list();
+    const relatedReviews = ownerTaskRelationReviewApprovalGates(entries, plans);
+    const scopedCommandIds = new Set([...planCommands, ...relatedReviews.map(review => review.command_id)]);
+    if (activeTaskExecutions.snapshot().some(item => scopedCommandIds.has(item.command_id))) return null;
+    const relationEvidence = new Set(relatedReviews.map(review =>
+      JSON.stringify([review.command_id, review.request_id, review.upstream_commit_hash])));
+    const matches = entries.flatMap(({ log }) => {
+      if (!("kind" in log) || log.kind !== "command_lifecycle" || log.phase !== "approval_cancelled" ||
+          log.actor !== OWNER_TASK_APPROVAL_ACTOR || log.reason !== OWNER_TASK_WITHDRAWAL_REASON) return [];
+      const relationKey = JSON.stringify([log.command_id, log.request_id, log.upstream_commit_hash]);
+      return log.request_id === requestId || planCommands.has(log.command_id) ||
+        (log.upstream_decision === "ASSERT" && relationEvidence.has(relationKey)) ? [log] : [];
+    });
+    if (!matches.length) return null;
     const latest = Math.max(...matches.map(log => log.timestamp));
     const matching = matches.filter(log => log.timestamp === latest);
     if (matching.length !== 1 || approvalRecoveryStore.state(matching[0]!.command_id) !== null) return null;
+
+    const interrupted = new Set<string>();
+    for (const commandId of scopedCommandIds) {
+      const state = approvalRecoveryStore.state(commandId);
+      if (state === "interrupted") interrupted.add(commandId);
+      else if (state !== null) return null;
+    }
+    // An interruption before verdict cannot override a later, verified withdrawal.
+    if (interrupted.size) {
+      const pendingAt = new Map<string, number>();
+      for (const { log } of entries) {
+        if (!("kind" in log) || log.kind !== "command_lifecycle" || log.phase !== "approval_pending" ||
+            !interrupted.has(log.command_id)) continue;
+        if (!Number.isSafeInteger(log.timestamp) || log.timestamp <= 0) return null;
+        pendingAt.set(log.command_id, Math.max(log.timestamp, pendingAt.get(log.command_id) ?? 0));
+      }
+      if ([...interrupted].some(commandId => (pendingAt.get(commandId) ?? Infinity) >= latest)) return null;
+    }
     return taskApprovalWithdrawal(latest);
+  }
+
+  function ownerTaskRelationReviewApprovalGates(
+    entries: readonly AuditEntry[], plans: readonly OwnerTaskCancellationPlanReference[],
+  ) {
+    if (!plans.length) return [];
+    // Relation reviews use their own commands. Recover their association from the exact audited L3 target.
+    return entries.flatMap(({ log }) => {
+      if (!("kind" in log) || log.kind !== "approval_gate" || log.evaluation.decision !== "ask" ||
+          log.request_id === null || log.evaluation.context.actor !== OWNER_TASK_APPROVAL_ACTOR ||
+          log.evaluation.context.command_id !== log.command_id || log.evaluation.context.operation !== "tool.call" ||
+          log.evaluation.approval_level !== "L3_final_review" || !log.evaluation.final_review_required) return [];
+      const target = log.evaluation.context.target;
+      if (!target?.startsWith("goal.governance.review_task_purpose:")) return [];
+      const [, plan_id_digest, task_digest, revision_digest, goal_ref, purposeVersion, purpose_digest, outcome] = target.split(":");
+      const args = OperationPlanGoalPurposeRelationReviewArgumentsSchema.safeParse({
+        plan_id_digest, task_digest, revision_digest, goal_ref, purpose_version: Number(purposeVersion), purpose_digest, outcome,
+      });
+      return args.success && goalPurposeRelationReviewApprovalTarget(args.data) === target &&
+        ownerTaskRelationReviewMatchesPlan(args.data, plans, true) ? [log] : [];
+    });
   }
 
   function taskApprovalWithdrawal(timestamp: number): WebChatTaskApprovalWithdrawal | null {
@@ -7904,23 +7991,27 @@ async function serveWithOwnerLease(
   function withdrawD4PendingApproval(
     scope: WebChatD4RuntimeCancellationScope, pending: PendingApproval,
   ): WebChatD4RuntimeApprovalWithdrawal | null {
-    return withdrawPendingTaskApproval(pending, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON, () => {
+    return withdrawPendingTaskApproval(pending, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON, { persistBinding: () => {
       ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, pending.command.id);
       if (!ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope).matching.includes(pending.command.id)) {
         throw new Error("d4_approval_withdrawal_binding_unavailable");
       }
-    });
+    } });
   }
 
   function withdrawPendingTaskApproval(
-    pending: PendingApproval, actor: string, reason: string, persistBinding?: () => void,
+    pending: PendingApproval, actor: string, reason: string, options: {
+      persistBinding?: () => void; ownerTaskPlans?: readonly OwnerTaskCancellationPlanReference[];
+    } = {},
   ): WebChatTaskApprovalWithdrawal | null {
     const commandId = pending.command.id;
     const requestId = pending.log.request_id;
     if (pendingApprovals.get(commandId) !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command) || pending.cron_event ||
-        pending.goal_purpose_adoption || pending.goal_purpose_proposal || pending.goal_purpose_relation_review_proposal ||
+        pending.goal_purpose_adoption || pending.goal_purpose_proposal ||
         pending.meaning_update_proposal || pending.memory_judgment_reassessment_proposal) return null;
+    if (pending.goal_purpose_relation_review_proposal && (actor !== OWNER_TASK_APPROVAL_ACTOR || reason !== OWNER_TASK_WITHDRAWAL_REASON ||
+        !ownerTaskRelationReviewMatches(pending, options.ownerTaskPlans ?? []) || !goalPurposeRelationReviewProposalIsCurrent(pending))) return null;
     // Race approval admission on the same durable journal transition before touching the pending entry.
     if (!approvalRecoveryStore.beginResolution(commandId)) return null;
     try {
@@ -7929,7 +8020,7 @@ async function serveWithOwnerLease(
       hds.onCommandLifecycle(commandId, "approval_cancelled", { actor, reason, request_id: requestId });
       const evidence = pendingWithdrawalEvidence(requestId, commandId, actor, reason);
       if (!evidence) throw new Error("approval_withdrawal_unverified");
-      persistBinding?.();
+      options.persistBinding?.();
       approvalRecoveryStore.completeResolution(commandId);
       return evidence;
     } catch {

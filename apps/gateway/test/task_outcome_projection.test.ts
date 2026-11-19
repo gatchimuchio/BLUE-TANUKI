@@ -8,10 +8,12 @@ import {
   projectD4RuntimeActiveCommand,
   projectD4RuntimeCancellationStatus,
   projectD4RuntimeTaskOutcome,
+  projectOwnerTaskActiveCommand,
   projectOwnerTaskCancellationStatus,
   projectOwnerTaskExecutionObservation,
   projectOwnerTaskOutcome,
   projectOwnerTaskPlanSteps,
+  projectOwnerTaskRequestCommandIds,
   resolveOwnerTaskSavedResult,
 } from "../src/task_outcome_projection.js";
 
@@ -230,6 +232,78 @@ const recordedCancellation: TaskExecutionCancellationEvidence = {
   used_for_authority: false,
   may_execute: false,
 };
+
+describe("owner task cancellation across durable replans", () => {
+  const purpose = { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "2".repeat(64) };
+  const root = {
+    plan_id: "3".repeat(64),
+    request_id: `operation-request:${requestId}`,
+    revision_digest: "4".repeat(64),
+    previous_revision_digests: ["5".repeat(64)],
+    task_identity_digest: "6".repeat(64),
+    owner_identity_digest: operationPlanDigest("webchat-owner-token-holder"),
+    channel_identity_digest: operationPlanDigest("webchat"),
+    goal_purpose_binding: purpose,
+    goal_purpose_binding_status: "stale",
+    bindings: [{ request_id: "parent-review", command_id: "parent-command" }],
+  };
+  const child = {
+    ...root,
+    plan_id: "7".repeat(64),
+    request_id: "same-task-replan-request",
+    revision_digest: "8".repeat(64),
+    previous_revision_digests: ["9".repeat(64)],
+    bindings: [{ request_id: "child-review", command_id: "child-command" }],
+  };
+  const projection = (...planRows: unknown[]) => ({
+    schema_version: "operation-plan-projection.v1",
+    used_for_authority: false,
+    raw_payload_exposed: false,
+    recovery_refresh_status: "ready",
+    plans: planRows,
+  });
+
+  it("finds the same owner's child step and readback while excluding other owner, channel, and task evidence", () => {
+    const otherOwner = { ...child, owner_identity_digest: "a".repeat(64), bindings: [{ request_id: "other", command_id: "foreign" }] };
+    const otherChannel = { ...child, channel_identity_digest: "a".repeat(64), bindings: [{ request_id: "other", command_id: "channel" }] };
+    const otherTask = { ...child, task_identity_digest: "a".repeat(64), bindings: [{ request_id: "other", command_id: "task" }] };
+    const snapshot = projection(root, otherOwner, child, otherChannel, otherTask);
+    expect(projectOwnerTaskRequestCommandIds(snapshot, requestId)).toEqual({ status: "matched",
+      command_ids: ["parent-command", "child-command"], plans: [root, child].map((plan) => ({
+        plan_id: plan.plan_id, revision_digest: plan.revision_digest, previous_revision_digests: plan.previous_revision_digests,
+        goal_purpose_binding: purpose,
+      })),
+    });
+    expect(projectOwnerTaskActiveCommand(snapshot, requestId, new Set(["child-command", "foreign", "channel", "task"])))
+      .toEqual({ status: "matched", command_id: "child-command" });
+    expect(projectOwnerTaskActiveCommand(snapshot, requestId, new Set(["parent-command", "child-command"])))
+      .toEqual({ status: "ambiguous" });
+    expect(projectOwnerTaskCancellationStatus(snapshot, requestId, [{ ...recordedCancellation,
+      actor: "webchat-owner-token-holder", token_kind: "owner_task", command_id: "child-command",
+    }])).toMatchObject({ status: "request_recorded", local_worker_stop: "not_observed", external_processing_stop: "unknown" });
+  });
+
+  it("blocks incomplete recovery, duplicate selection, and inconsistent persisted purpose or revisions", () => {
+    expect(projectOwnerTaskRequestCommandIds({ ...projection(root, child), recovery_refresh_status: "pending" }, requestId))
+      .toEqual({ status: "invalid" });
+    expect(projectOwnerTaskRequestCommandIds(projection(root, child, child), requestId)).toEqual({ status: "ambiguous" });
+    expect(projectOwnerTaskRequestCommandIds(projection(root, { ...child, bindings: root.bindings }), requestId))
+      .toEqual({ status: "ambiguous" });
+    expect(projectOwnerTaskRequestCommandIds(projection(root, { ...child,
+      goal_purpose_binding: { ...purpose, purpose_version: 3 },
+    }), requestId)).toEqual({ status: "invalid" });
+    expect(projectOwnerTaskRequestCommandIds(projection(root, { ...child, previous_revision_digests: [child.revision_digest] }), requestId))
+      .toEqual({ status: "invalid" });
+    expect(projectOwnerTaskRequestCommandIds(projection(child), requestId)).toEqual({ status: "not_found" });
+  });
+
+  it("keeps a legacy receipt without a dependable purpose limited to its direct bound command", () => {
+    expect(projectOwnerTaskRequestCommandIds({ plans: [root, child] }, requestId))
+      .toEqual({ status: "matched", command_ids: ["parent-command"], plans: [] });
+    expect(projectOwnerTaskRequestCommandIds(projection({ ...root, goal_purpose_binding: undefined }, child), requestId))
+      .toEqual({ status: "matched", command_ids: ["parent-command"], plans: [] });
+  });
+});
 
 describe("D4 Runtime cancellation projection", () => {
   it("reports the exact durable scope without an operation plan and separates local observations from external stop", () => {
