@@ -23,7 +23,9 @@ import {
 } from "../src/canonical_state_backup.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
-import { GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
+import {
+  GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type RuntimeRecoveryFenceEvidence,
+} from "../src/runtime_owner_lease.js";
 import {
   buildRecoverySnapshot,
   correlateTaskMemoryRestorePoints,
@@ -1537,20 +1539,26 @@ describe("buildRecoverySnapshot", () => {
     }
   });
 
-  it("keeps the verified pre-reset backup and blocks runtime restart on deletion failure", async () => {
+  it.each([
+    { interruption: "deletion failure", partial: true, matches: "pre_action_state_matched" },
+    { interruption: "failed settlement", partial: false, matches: "postconditions_matched" },
+  ])("reconciles factory-reset effects after $interruption without replay", async (fixture) => {
     const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-factory-reset-partial-"));
     const sessionDir = path.join(root, "sessions");
     const sessionFile = path.join(sessionDir, "session.jsonl");
     const envFile = path.join(root, "product.env");
     const fsRm = fs.rm;
     const denyRemoval = vi.spyOn(fs, "rm").mockImplementation(async (filepath, options) => {
-      if (filepath === sessionDir) throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+      if (fixture.partial && filepath === sessionDir) {
+        throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+      }
       return fsRm(filepath, options);
     });
     try {
       await mkdir(sessionDir);
       await writeFile(sessionFile, "session fixture\n");
-      await writeFile(envFile, "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n");
+      const originalEnv = "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n";
+      await writeFile(envFile, originalEnv);
       const env = {
         BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
         BLUE_TANUKI_ENV_FILE: envFile,
@@ -1558,23 +1566,24 @@ describe("buildRecoverySnapshot", () => {
         BLUE_TANUKI_SESSION_DIR: sessionDir,
       };
       const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
-      const evidence = (backupId: string, manifestSha256: string) => ({
+      const evidence = (backupId: string, manifestSha256: string, verification: RuntimeRecoveryFenceEvidence["verification"]) => ({
         operation: "recovery.factory_reset" as const,
-        command_digest: "a".repeat(64), backup_id: backupId, manifest_sha256: manifestSha256,
+        command_digest: "a".repeat(64), backup_id: backupId, manifest_sha256: manifestSha256, verification,
       });
       try {
         await expect(factoryResetRecovery(env, {
           confirm: "FACTORY_RESET",
           fence: {
-            begin: (id, digest) => lease.beginRecoveryMutation(evidence(id, digest)),
-            finish: (id, digest) => lease.finishRecoveryMutation(evidence(id, digest)),
+            begin: (id, digest, verification) => lease.beginRecoveryMutation(evidence(id, digest, verification)),
+            finish: () => { throw new Error("fixture interrupted before settlement"); },
           },
         })).rejects.toThrow("factory_reset_outcome_unknown");
       } finally {
         lease.close();
       }
       expect(await readFile(envFile, "utf8")).toContain("COMPOSIO_DRY_RUN=true");
-      expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
+      if (fixture.partial) expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
+      else await expect(stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
       const backup = await inspectLatestRecoveryBackup(env);
       expect(backup).toMatchObject({
         status: "verified",
@@ -1602,11 +1611,41 @@ describe("buildRecoverySnapshot", () => {
       expect(diagnostic.status, diagnostic.stderr).toBe(2);
       expect(JSON.parse(diagnostic.stdout)).toMatchObject({ runtime_recovery_fence: pending });
       expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
+
+      const reconcile = () => run("--recovery-reconcile", "--backup-id", pending.backup_id,
+        "--manifest-sha256", pending.manifest_sha256, "--json");
+      if (fixture.partial) {
+        const mixed = reconcile();
+        expect(mixed.status, mixed.stderr).toBe(2);
+        expect(JSON.parse(mixed.stdout)).toMatchObject({ status: "unresolved", used_for_authority: false });
+        expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
+        await writeFile(envFile, originalEnv);
+      }
+      const manifestPath = path.join(env.BLUE_TANUKI_RECOVERY_DIR, pending.backup_id, "manifest.json");
+      const manifest = await readFile(manifestPath);
+      const checksum = await readFile(`${manifestPath}.sha256`);
+      const tampered = Buffer.concat([manifest, Buffer.from("\n")]);
+      await writeFile(manifestPath, tampered);
+      await writeFile(`${manifestPath}.sha256`, `${createHash("sha256").update(tampered).digest("hex")}  manifest.json\n`);
+      expect(JSON.parse(reconcile().stdout)).toMatchObject({ status: "unresolved" });
+      expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
+      await writeFile(manifestPath, manifest);
+      await writeFile(`${manifestPath}.sha256`, checksum);
+
+      const currentEnvBytes = await readFile(envFile);
+      const matched = reconcile();
+      expect(matched.status, matched.stderr).toBe(0);
+      expect(JSON.parse(matched.stdout)).toMatchObject({ status: fixture.matches, used_for_authority: false });
+      expect(inspectRuntimeRecoveryFence(env).status).toBe("clear");
+      expect(await readFile(envFile)).toEqual(currentEnvBytes);
+      if (fixture.partial) expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
+      else await expect(stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(JSON.parse(reconcile().stdout)).toMatchObject({ status: "no_pending" });
     } finally {
       denyRemoval.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 90_000);
 
   it("rejects restore manifests that rewrite source_path outside configured runtime targets", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-manifest-"));

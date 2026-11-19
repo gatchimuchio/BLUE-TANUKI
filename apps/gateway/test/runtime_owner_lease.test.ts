@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type RuntimeRecoveryFenceEvidence } from "../src/runtime_owner_lease.js";
+import {
+  GatewayRuntimeOwnerLease,
+  inspectRuntimeRecoveryFence,
+  reconcileRuntimeRecoveryFence,
+  type RuntimeRecoveryFenceEvidence,
+} from "../src/runtime_owner_lease.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -16,6 +21,9 @@ const recoveryEvidence: RuntimeRecoveryFenceEvidence = {
   backup_id: "2026-11-19T14-18-15-560Z.pre_factory_reset.12345678-1234-4123-8123-123456789abc",
   manifest_sha256: "2".repeat(64),
 };
+const verification = { before_sha256: "3".repeat(64), after_sha256: "4".repeat(64) };
+const verifiableEvidence = { ...recoveryEvidence, verification };
+const expectedBackup = { backup_id: recoveryEvidence.backup_id, manifest_sha256: recoveryEvidence.manifest_sha256 };
 function temporaryStateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-"));
   roots.push(root);
@@ -34,6 +42,105 @@ afterEach(() => {
 });
 
 describe("Gateway runtime owner lease", () => {
+  it.each([
+    [verification.before_sha256, "pre_action_state_matched"],
+    [verification.after_sha256, "postconditions_matched"],
+  ])("settles only twice-matched recovery evidence and retains the result as %s", async (digest, terminalStatus) => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      lease.beginRecoveryMutation(verifiableEvidence);
+      let observedWhileActive = false;
+      const blocked = await reconcileRuntimeRecoveryFence(env, expectedBackup, async () => {
+        observedWhileActive = true;
+        return digest;
+      });
+      expect(blocked).toEqual({ status: "unresolved" });
+      expect(observedWhileActive).toBe(false);
+    } finally {
+      lease.close();
+    }
+    let observations = 0;
+    const result = await reconcileRuntimeRecoveryFence(env, expectedBackup, async (evidence) => {
+      observations += 1;
+      expect(evidence).toEqual(verifiableEvidence);
+      expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
+      return digest;
+    });
+    expect(result).toEqual({ status: terminalStatus });
+    expect(observations).toBe(2);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, async () => null)).toEqual({ status: "no_pending" });
+    const filepath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const state = new DatabaseSync(filepath, { readOnly: true });
+    try {
+      expect(state.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(state.prepare("SELECT generation,execution_epoch FROM gateway_owner_state").get()).toEqual({
+        generation: lease.generation, execution_epoch: lease.executionEpoch,
+      });
+      expect(state.prepare("SELECT * FROM gateway_recovery_settlements").all()).toEqual([{
+        generation: lease.generation, ...recoveryEvidence, observed_sha256: digest, status: terminalStatus,
+      }]);
+    } finally {
+      state.close();
+    }
+    const restarted = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(restarted.generation).toBe(lease.generation + 1);
+      expect(restarted.executionEpoch).not.toBe(lease.executionEpoch);
+    } finally {
+      restarted.close();
+    }
+  });
+
+  it("leaves the fence byte-for-byte unchanged for mismatched or unstable observations", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      lease.beginRecoveryMutation(verifiableEvidence);
+    } finally {
+      lease.close();
+    }
+    const filepath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const original = readFileSync(filepath);
+    let observations = 0;
+    const observe = async () => {
+      observations += 1;
+      return observations === 1 ? verification.after_sha256 : verification.before_sha256;
+    };
+    expect(await reconcileRuntimeRecoveryFence(env, { ...expectedBackup, manifest_sha256: "a".repeat(64) }, observe))
+      .toEqual({ status: "unresolved" });
+    expect(observations).toBe(0);
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, observe)).toEqual({ status: "unresolved" });
+    expect(observations).toBe(2);
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, async () => { throw new Error("read failure"); }))
+      .toEqual({ status: "unresolved" });
+    expect(readFileSync(filepath)).toEqual(original);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", ...recoveryEvidence });
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_recovery_pending");
+  });
+
+  it("keeps legacy evidence pending and does not create storage for an absent installation", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
+    let observations = 0;
+    const observe = async () => { observations += 1; return verification.before_sha256; };
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, observe)).toEqual({ status: "no_pending" });
+    expect(existsSync(env.BLUE_TANUKI_STATE_ROOT)).toBe(false);
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(() => lease.beginRecoveryMutation({ ...recoveryEvidence, verification: {
+        ...verification, after_sha256: "not-a-digest",
+      } })).toThrow("gateway_runtime_recovery_fence_invalid");
+      lease.beginRecoveryMutation(recoveryEvidence);
+    } finally {
+      lease.close();
+    }
+    expect(await reconcileRuntimeRecoveryFence(env, expectedBackup, observe)).toEqual({ status: "unresolved" });
+    expect(observations).toBe(0);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", ...recoveryEvidence });
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_recovery_pending");
+  });
+
   it("surfaces a pending fence read-only and leaves a stopped mutation's generation unchanged", () => {
     const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
     expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { currentHostAudienceDigest, isHostAudienceDigest } from "./host_audience_identity.js";
 
@@ -17,6 +18,7 @@ export interface RuntimeRecoveryFenceEvidence {
   readonly command_digest: string;
   readonly backup_id: string;
   readonly manifest_sha256: string;
+  readonly verification?: { readonly before_sha256: string; readonly after_sha256: string };
 }
 
 export type RuntimeRecoveryFenceInspection =
@@ -26,6 +28,9 @@ export type RuntimeRecoveryFenceInspection =
 
 type OwnerGeneration = { generation: number; execution_epoch: string; updated_at_ms: number };
 type OwnerStateRow = OwnerGeneration & { host_audience_digest: string };
+type RecoveryFenceTerminalStatus = "pre_action_state_matched" | "postconditions_matched";
+export type RuntimeRecoveryFenceReconciliation =
+  { readonly status: RecoveryFenceTerminalStatus | "unresolved" | "no_pending" };
 
 /** Same-state-root Gateway processes are serialized by an OS-released SQLite transaction. */
 export class GatewayRuntimeOwnerLease {
@@ -123,7 +128,7 @@ export class GatewayRuntimeOwnerLease {
       ) STRICT;
       PRAGMA user_version=${RECOVERY_FENCE_SCHEMA_VERSION};`);
       this.stateDb.prepare("INSERT INTO gateway_recovery_fence VALUES(1,?,?)").run(
-        JSON.stringify(record), recoveryFenceDigest(record, this.generation, this.executionEpoch),
+        JSON.stringify(record), recoveryFenceDigest(record, this.generation, this.executionEpoch, this.hostAudienceDigest),
       );
     });
   }
@@ -134,11 +139,11 @@ export class GatewayRuntimeOwnerLease {
     const expected = parseRecoveryFenceEvidence(evidence);
     ownerStateTransaction(this.stateDb, () => {
       if (pragmaInteger(this.stateDb, "user_version") !== RECOVERY_FENCE_SCHEMA_VERSION ||
-          JSON.stringify(readRecoveryFence(this.stateDb, this.generation, this.executionEpoch)) !== JSON.stringify(expected)) {
+          JSON.stringify(readRecoveryFence(this.stateDb, this.generation, this.executionEpoch, this.hostAudienceDigest)) !==
+            JSON.stringify(expected)) {
         throw new Error("gateway_runtime_recovery_fence_mismatch");
       }
-      this.stateDb.exec(`DROP TABLE gateway_recovery_fence;
-        PRAGMA user_version=${OWNER_STATE_SCHEMA_VERSION};`);
+      clearRecoveryFence(this.stateDb);
     });
   }
 
@@ -154,25 +159,12 @@ export class GatewayRuntimeOwnerLease {
 export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env): RuntimeRecoveryFenceInspection {
   let db: DatabaseType | undefined;
   try {
-    const configuredRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
-    if (!statIfPresent(configuredRoot)) return { status: "clear" };
-    const root = realpathSync(configuredRoot);
-    const privateRoot = join(root, "private-state");
-    const directory = join(privateRoot, "gateway-runtime");
-    for (const dir of [privateRoot, directory]) {
-      const stat = statIfPresent(dir);
-      if (!stat) return { status: "clear" };
-      if (!stat.isDirectory() || stat.isSymbolicLink()) return { status: "unavailable" };
-    }
-    const filepath = join(directory, "owner-state.sqlite");
-    const stat = statIfPresent(filepath);
-    if (!stat) return { status: statIfPresent(join(directory, "owner-lock.sqlite")) ? "unavailable" : "clear" };
-    if (!stat.isFile() || stat.isSymbolicLink()) return { status: "unavailable" };
-    if (["-journal", "-wal", "-shm"].some(suffix => statIfPresent(filepath + suffix))) return { status: "unavailable" };
-    db = new DatabaseSync(filepath, { readOnly: true });
+    const files = existingRuntimeOwnerFiles(env);
+    if (!files) return { status: "clear" };
+    assertNoOwnerSidecars(files.statePath);
+    db = new DatabaseSync(files.statePath, { readOnly: true });
     db.exec("PRAGMA busy_timeout=0; PRAGMA query_only=ON; BEGIN");
-    const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
-    if (mode?.journal_mode !== "delete") return { status: "unavailable" };
+    assertOwnerDeleteJournal(db);
     assertIntegrity(db);
     const version = pragmaInteger(db, "user_version");
     if (version === 1 && hasOwnerStateSchemaV1(db) && !hasRecoveryFence(db)) {
@@ -187,13 +179,135 @@ export function inspectRuntimeRecoveryFence(env: NodeJS.ProcessEnv = process.env
     }
     if (version === OWNER_STATE_SCHEMA_VERSION && !hasRecoveryFence(db)) return { status: "clear" };
     if (version !== RECOVERY_FENCE_SCHEMA_VERSION) return { status: "unavailable" };
-    const evidence = readRecoveryFence(db, owner.generation, owner.execution_epoch);
-    return { status: "pending", ...evidence };
+    const { operation, command_digest, backup_id, manifest_sha256 } = readRecoveryFence(
+      db, owner.generation, owner.execution_epoch, owner.host_audience_digest,
+    );
+    return { status: "pending", operation, command_digest, backup_id, manifest_sha256 };
   } catch {
     return { status: "unavailable" };
   } finally {
     closeDatabase(db);
   }
+}
+
+/** Settle existing evidence under the regular Gateway lock, without obtaining a runtime lease or replaying work. */
+export async function reconcileRuntimeRecoveryFence(
+  env: NodeJS.ProcessEnv,
+  expected: Pick<RuntimeRecoveryFenceEvidence, "backup_id" | "manifest_sha256">,
+  observe: (evidence: RuntimeRecoveryFenceEvidence) => Promise<string | null>,
+): Promise<RuntimeRecoveryFenceReconciliation> {
+  let lockDb: DatabaseType | undefined;
+  let stateDb: DatabaseType | undefined;
+  try {
+    const files = existingRuntimeOwnerFiles(env);
+    if (!files) return { status: "no_pending" };
+    if (!files.lockPath) return { status: "unresolved" };
+    assertNoOwnerSidecars(files.lockPath);
+    lockDb = openExistingOwnerDatabase(files.lockPath);
+    lockDb.exec("PRAGMA busy_timeout=0");
+    assertOwnerDeleteJournal(lockDb);
+    lockDb.exec("BEGIN EXCLUSIVE");
+    assertIntegrity(lockDb);
+
+    assertNoOwnerSidecars(files.statePath);
+    stateDb = openExistingOwnerDatabase(files.statePath);
+    stateDb.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE");
+    assertOwnerDeleteJournal(stateDb);
+    assertIntegrity(stateDb);
+    const version = pragmaInteger(stateDb, "user_version");
+    if (version === 1 && hasOwnerStateSchemaV1(stateDb) && !hasRecoveryFence(stateDb)) {
+      const legacy = stateDb.prepare("SELECT generation, execution_epoch, updated_at_ms FROM gateway_owner_state WHERE singleton=1")
+        .get() as OwnerGeneration | undefined;
+      return { status: legacy && validOwnerGeneration(legacy) ? "no_pending" : "unresolved" };
+    }
+    if (!hasOwnerStateSchema(stateDb)) return { status: "unresolved" };
+    const owner = readOwnerState(stateDb);
+    if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== currentHostAudienceDigest()) {
+      return { status: "unresolved" };
+    }
+    if (version === OWNER_STATE_SCHEMA_VERSION && !hasRecoveryFence(stateDb)) return { status: "no_pending" };
+    if (version !== RECOVERY_FENCE_SCHEMA_VERSION) return { status: "unresolved" };
+    const evidence = readRecoveryFence(stateDb, owner.generation, owner.execution_epoch, owner.host_audience_digest);
+    if (!evidence.verification || evidence.backup_id !== expected.backup_id ||
+        evidence.manifest_sha256 !== expected.manifest_sha256) return { status: "unresolved" };
+
+    const observed = await observe(evidence);
+    if (observed === null) return { status: "unresolved" };
+    // A reset can be a no-op. Matching both proofs cannot establish that it ran.
+    const status = observed === evidence.verification.before_sha256 ? "pre_action_state_matched"
+      : observed === evidence.verification.after_sha256 ? "postconditions_matched" : null;
+    if (!status || await observe(evidence) !== observed) return { status: "unresolved" };
+    persistRecoverySettlement(stateDb, owner.generation, evidence, observed, status);
+    clearRecoveryFence(stateDb);
+    stateDb.exec("COMMIT");
+    return { status };
+  } catch {
+    return { status: "unresolved" };
+  } finally {
+    closeDatabase(stateDb);
+    closeDatabase(lockDb);
+  }
+}
+
+function existingRuntimeOwnerFiles(env: NodeJS.ProcessEnv): { statePath: string; lockPath: string | null } | null {
+  const configuredRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
+  if (!statIfPresent(configuredRoot)) return null;
+  const root = realpathSync(configuredRoot);
+  const privateRoot = join(root, "private-state");
+  const directory = join(privateRoot, "gateway-runtime");
+  for (const dir of [privateRoot, directory]) {
+    const stat = statIfPresent(dir);
+    if (!stat) return null;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("gateway_runtime_owner_state_unavailable");
+  }
+  const statePath = join(directory, "owner-state.sqlite");
+  const lockPath = join(directory, "owner-lock.sqlite");
+  const state = statIfPresent(statePath);
+  const lock = statIfPresent(lockPath);
+  if (!state && !lock) return null;
+  if (!state?.isFile() || state.isSymbolicLink() || (lock && (!lock.isFile() || lock.isSymbolicLink()))) {
+    throw new Error("gateway_runtime_owner_state_unavailable");
+  }
+  return { statePath, lockPath: lock ? lockPath : null };
+}
+
+function assertNoOwnerSidecars(filepath: string): void {
+  if (["-journal", "-wal", "-shm"].some(suffix => statIfPresent(filepath + suffix))) {
+    throw new Error("gateway_runtime_owner_state_unavailable");
+  }
+}
+
+function assertOwnerDeleteJournal(db: DatabaseType): void {
+  const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined;
+  if (mode?.journal_mode !== "delete") throw new Error("gateway_runtime_owner_state_unavailable");
+}
+
+function openExistingOwnerDatabase(filepath: string): DatabaseType {
+  const url = pathToFileURL(filepath);
+  url.searchParams.set("mode", "rw");
+  return new DatabaseSync(url.href);
+}
+
+function persistRecoverySettlement(
+  db: DatabaseType,
+  generation: number,
+  evidence: RuntimeRecoveryFenceEvidence,
+  observed: string,
+  status: RecoveryFenceTerminalStatus,
+): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS gateway_recovery_settlements (
+    generation INTEGER NOT NULL, operation TEXT NOT NULL, command_digest TEXT NOT NULL,
+    backup_id TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, observed_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pre_action_state_matched','postconditions_matched')),
+    PRIMARY KEY(generation, backup_id)
+  ) STRICT;`);
+  db.prepare("INSERT INTO gateway_recovery_settlements VALUES(?,?,?,?,?,?,?)").run(
+    generation, evidence.operation, evidence.command_digest, evidence.backup_id, evidence.manifest_sha256, observed, status,
+  );
+}
+
+function clearRecoveryFence(db: DatabaseType): void {
+  db.exec(`DROP TABLE gateway_recovery_fence; PRAGMA user_version=${OWNER_STATE_SCHEMA_VERSION};`);
 }
 
 function statIfPresent(filepath: string): ReturnType<typeof lstatSync> | null {
@@ -205,35 +319,56 @@ function statIfPresent(filepath: string): ReturnType<typeof lstatSync> | null {
 }
 
 function parseRecoveryFenceEvidence(value: unknown): RuntimeRecoveryFenceEvidence {
-  if (!value || typeof value !== "object" || Object.keys(value).length !== 4) {
+  if (!value || typeof value !== "object") {
     throw new Error("gateway_runtime_recovery_fence_invalid");
   }
   const row = value as Record<string, unknown>;
   if (row.operation !== "recovery.factory_reset" || typeof row.command_digest !== "string" || !DIGEST.test(row.command_digest) ||
       typeof row.manifest_sha256 !== "string" || !DIGEST.test(row.manifest_sha256) ||
       typeof row.backup_id !== "string" || !FACTORY_BACKUP_ID.test(row.backup_id) ||
+      Object.keys(row).length !== (Object.hasOwn(row, "verification") ? 5 : 4) ||
       !["operation", "command_digest", "backup_id", "manifest_sha256"].every(key => Object.hasOwn(row, key))) {
     throw new Error("gateway_runtime_recovery_fence_invalid");
   }
-  return { operation: row.operation, command_digest: row.command_digest, backup_id: row.backup_id, manifest_sha256: row.manifest_sha256 };
+  const evidence = { operation: row.operation, command_digest: row.command_digest, backup_id: row.backup_id,
+    manifest_sha256: row.manifest_sha256 } as const;
+  if (!Object.hasOwn(row, "verification")) return Object.freeze(evidence);
+  const verification = row.verification as Record<string, unknown> | null | undefined;
+  if (!verification || typeof verification !== "object" || Object.keys(verification).length !== 2 ||
+      !Object.hasOwn(verification, "before_sha256") || typeof verification.before_sha256 !== "string" ||
+      !DIGEST.test(verification.before_sha256) || !Object.hasOwn(verification, "after_sha256") ||
+      typeof verification.after_sha256 !== "string" || !DIGEST.test(verification.after_sha256)) {
+    throw new Error("gateway_runtime_recovery_fence_invalid");
+  }
+  return Object.freeze({ ...evidence, verification: Object.freeze({
+    before_sha256: verification.before_sha256, after_sha256: verification.after_sha256,
+  }) });
 }
 
-function recoveryFenceDigest(evidence: RuntimeRecoveryFenceEvidence, generation: number, epoch: string): string {
-  return createHash("sha256").update(JSON.stringify(["gateway-recovery-fence.v1", generation, epoch, evidence])).digest("hex");
+function recoveryFenceDigest(
+  evidence: RuntimeRecoveryFenceEvidence, generation: number, epoch: string, hostAudienceDigest: string,
+): string {
+  const bound = evidence.verification ? ["gateway-recovery-fence.v2", generation, epoch, hostAudienceDigest, evidence]
+    : ["gateway-recovery-fence.v1", generation, epoch, evidence];
+  return createHash("sha256").update(JSON.stringify(bound)).digest("hex");
 }
 
 function hasRecoveryFence(db: DatabaseType): boolean {
   return !!db.prepare("SELECT 1 FROM sqlite_schema WHERE name='gateway_recovery_fence'").get();
 }
 
-function readRecoveryFence(db: DatabaseType, generation: number, epoch: string): RuntimeRecoveryFenceEvidence {
+function readRecoveryFence(
+  db: DatabaseType, generation: number, epoch: string, hostAudienceDigest: string,
+): RuntimeRecoveryFenceEvidence {
   const rows = db.prepare("SELECT singleton,evidence_json,digest FROM gateway_recovery_fence LIMIT 2").all() as Array<{
     singleton: number; evidence_json: string; digest: string;
   }>;
   const [row] = rows;
   if (rows.length !== 1 || row?.singleton !== 1) throw new Error("gateway_runtime_recovery_fence_invalid");
   const evidence = parseRecoveryFenceEvidence(JSON.parse(row.evidence_json));
-  if (row.digest !== recoveryFenceDigest(evidence, generation, epoch)) throw new Error("gateway_runtime_recovery_fence_invalid");
+  if (row.digest !== recoveryFenceDigest(evidence, generation, epoch, hostAudienceDigest)) {
+    throw new Error("gateway_runtime_recovery_fence_invalid");
+  }
   return evidence;
 }
 
@@ -274,7 +409,7 @@ function advanceOwnerState(db: DatabaseType, hostAudienceDigest: string): OwnerS
         throw new Error("owner generation invalid");
       }
       if (owner.host_audience_digest !== hostAudienceDigest) throw new Error("gateway_runtime_owner_host_identity_mismatch");
-      readRecoveryFence(db, owner.generation, owner.execution_epoch);
+      readRecoveryFence(db, owner.generation, owner.execution_epoch, owner.host_audience_digest);
       // Version 3 is reserved for unsettled mutations. Older gateways also reject it.
       throw new Error("gateway_runtime_recovery_pending");
     }

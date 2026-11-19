@@ -1277,13 +1277,13 @@ async function serveWithOwnerLease(
     factoryResetFence: (commandId) => {
       const commandDigest = createHash("sha256").update(commandId, "utf8").digest("hex");
       return {
-        begin: (backupId, manifestSha256) => ownerLease.beginRecoveryMutation({
+        begin: (backupId, manifestSha256, verification) => ownerLease.beginRecoveryMutation({
           operation: "recovery.factory_reset", command_digest: commandDigest,
-          backup_id: backupId, manifest_sha256: manifestSha256,
+          backup_id: backupId, manifest_sha256: manifestSha256, verification,
         }),
-        finish: (backupId, manifestSha256) => ownerLease.finishRecoveryMutation({
+        finish: (backupId, manifestSha256, verification) => ownerLease.finishRecoveryMutation({
           operation: "recovery.factory_reset", command_digest: commandDigest,
-          backup_id: backupId, manifest_sha256: manifestSha256,
+          backup_id: backupId, manifest_sha256: manifestSha256, verification,
         }),
       };
     },

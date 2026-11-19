@@ -851,6 +851,10 @@ case "$COMMAND" in
     cd "$INSTALL_ROOT"
     BLUE_TANUKI_ENV_FILE="$ENV_FILE" exec "$NODE_EXE" -- apps/gateway/dist/main.js --recovery-inspect --env-file "$ENV_FILE" "$@"
     ;;
+  recovery-reconcile)
+    cd "$INSTALL_ROOT"
+    BLUE_TANUKI_ENV_FILE="$ENV_FILE" exec "$NODE_EXE" -- apps/gateway/dist/main.js --recovery-reconcile --env-file "$ENV_FILE" "$@"
+    ;;
   setup)
     cd "$INSTALL_ROOT"
     exec "$NODE_EXE" apps/gateway/dist/main.js --setup --output "$ENV_FILE" --base-dir "$DATA_ROOT/data" --force "$@"
@@ -863,7 +867,7 @@ case "$COMMAND" in
     ;;
   help|-h|--help)
     cat <<'HELP'
-Usage: blue-tanuki [launch|start|stop|restart|status|doctor|recovery-inspect|safe-mode|logs|env|uninstall|resident-autostart-enable|resident-autostart-disable|resident-autostart-status|help]
+Usage: blue-tanuki [launch|start|stop|restart|status|doctor|recovery-inspect|recovery-reconcile|safe-mode|logs|env|uninstall|resident-autostart-enable|resident-autostart-disable|resident-autostart-status|help]
 HELP
     ;;
   *)

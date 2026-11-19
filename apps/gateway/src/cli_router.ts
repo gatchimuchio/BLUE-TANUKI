@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { createLogger } from "@blue-tanuki/core";
 import { loadEnvFileFromArgv, stripEnvFileArgs } from "./env_file.js";
 import { applyGatewaySafeMode } from "./safe_mode.js";
@@ -191,6 +192,60 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   process.exitCode = runtimeRecoveryFence.status === "clear" && report.status === "verified" ? 0 : 2;
 }
 
+async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
+  const args = stripEnvFileArgs(argv);
+  const json = args.includes("--json");
+  function writeResult(status: string, successful = false): void {
+    writeStdout(json ? JSON.stringify({ status, used_for_authority: false })
+      : `初期化の照合結果 ${status}`);
+    process.exitCode = successful ? 0 : 2;
+  }
+
+  const inputs = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]!;
+    if (flag === "--recovery-reconcile" || flag === "--json") continue;
+    const value = args[index + 1];
+    if ((flag !== "--backup-id" && flag !== "--manifest-sha256") || !value || inputs.has(flag)) {
+      writeResult("invalid_arguments");
+      return;
+    }
+    inputs.set(flag, value);
+    index += 1;
+  }
+  const backupId = inputs.get("--backup-id");
+  const manifestSha256 = inputs.get("--manifest-sha256")?.toLowerCase();
+  if (!backupId || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) ||
+      !manifestSha256 || !/^[a-f0-9]{64}$/.test(manifestSha256)) {
+    writeResult("invalid_arguments");
+    return;
+  }
+
+  const env = { ...process.env };
+  try {
+    const config = await loadEnvFileFromArgv(argv, env);
+    if (!config || (env.BLUE_TANUKI_ENV_FILE && relative(config.path, env.BLUE_TANUKI_ENV_FILE) !== "")) {
+      writeResult("configuration_unavailable");
+      return;
+    }
+    env.BLUE_TANUKI_ENV_FILE = config.path;
+  } catch {
+    writeResult("configuration_unavailable");
+    return;
+  }
+
+  try {
+    const { reconcileRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
+    const { observeFactoryResetRecoveryState } = await import("./recovery_surface.js");
+    const result = await reconcileRuntimeRecoveryFence(env, {
+      backup_id: backupId, manifest_sha256: manifestSha256,
+    }, evidence => observeFactoryResetRecoveryState(env, evidence));
+    writeResult(result.status, result.status !== "unresolved");
+  } catch {
+    writeResult("unresolved");
+  }
+}
+
 async function runSetupCliMode(): Promise<void> {
   const { runSetupCli } = await import("./setup.js");
   await runSetupCli(process.argv.slice(2));
@@ -210,6 +265,10 @@ export async function runGatewayCliRouter(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes("--recovery-inspect")) {
     await runRecoveryInspectCli(argv);
+    return;
+  }
+  if (argv.includes("--recovery-reconcile")) {
+    await runRecoveryReconcileCli(argv);
     return;
   }
   const envFile = await loadEnvFileFromArgv(argv);

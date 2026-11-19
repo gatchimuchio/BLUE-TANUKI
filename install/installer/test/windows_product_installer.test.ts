@@ -2,6 +2,9 @@ import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { lookup } from "node:dns";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
@@ -52,12 +55,18 @@ function runPowerShellFile(
   file: string,
   args: readonly string[],
   cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): ReturnType<typeof spawnSync> {
   return spawnSync(command, powerShellFileArgs(command, file, args), {
     cwd,
-    env: { ...process.env, BLUE_TANUKI_NO_PAUSE: "1" },
+    env: { ...env, BLUE_TANUKI_NO_PAUSE: "1" },
     encoding: "utf8",
   });
+}
+
+function windowsFixtureEnvironment(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    /^(systemroot|systemdrive|windir|path|pathext|comspec|temp|tmp|userprofile|localappdata|appdata)$/iu.test(name)));
 }
 
 async function waitForPath(path: string, timeoutMs: number): Promise<boolean> {
@@ -503,10 +512,174 @@ describe("Windows product installer package", () => {
     }
   });
 
-  it("runs recovery inspection from the product launcher without setup or resident startup", () => {
+  it("uses the bundled Gateway configuration for installed WebChat routing and withholds unowned handoff", async () => {
+    const command = findPowerShell();
+    const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
+    if (process.platform !== "win32" || !command) {
+      expect(launcher).toContain('import { loadEnvFile } from "./apps/gateway/dist/env_file.js";');
+      return;
+    }
+    const helperStart = launcher.indexOf("$script:installedWebChatConfiguration = $null");
+    const helperEnd = launcher.indexOf("\nfunction Test-ResidentRunning", helperStart);
+    const openStart = launcher.indexOf("function Open-ControlCenter {");
+    const openEnd = launcher.indexOf("\nfunction Start-SafeMode", openStart);
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    expect(openStart).toBeGreaterThanOrEqual(0);
+    expect(openEnd).toBeGreaterThan(openStart);
+
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-installed-webchat-config-"));
+    const harness = join(temp, "check.ps1");
+    const envFile = join(temp, "blue-tanuki.env");
+    const fixtureChatToken = "synthetic-launch-config-token";
+    const psQuote = (value: string) => value.replace(/'/gu, "''");
+    try {
+      writeFileSync(envFile, [
+        'WEBCHAT_HOST="localhost"',
+        "WEBCHAT_PORT=41871",
+        "WEBCHAT_PORT='41872'",
+        "WEBCHAT_TOKEN=" + fixtureChatToken,
+      ].join("\n"), "utf8");
+      writeFileSync(harness, "\ufeff" + [
+        "Set-StrictMode -Version Latest",
+        "$ErrorActionPreference = 'Stop'",
+        `$installRoot = '${psQuote(root)}'`,
+        `$envFile = '${psQuote(envFile)}'`,
+        `function Find-NodeExe { return '${psQuote(process.execPath)}' }`,
+        "function Fail($Message) { throw $Message }",
+        "function Read-ResidentPid { return 5001 }",
+        "function Get-ManagedProcessSnapshot($PidValue, $Kind) { return @{ state = 'running'; process = [pscustomobject]@{ StartTime = [DateTime]::UtcNow } } }",
+        "function Get-NetTCPConnection { [CmdletBinding()] param([int]$LocalPort, [string]$State); if ($LocalPort -ne $config.port -or $State -ne 'Listen') { throw 'wrong socket query' }; [pscustomobject]@{ LocalAddress = $config.loopbackAddresses[0]; OwningProcess = $script:observedOwner } }",
+        "function Start-Resident($SafeMode) { return $true }",
+        "function Start-Process($Url) { $script:opened = $Url }",
+        launcher.slice(helperStart, helperEnd),
+        launcher.slice(openStart, openEnd),
+        "$config = Get-InstalledWebChatConfiguration",
+        "$script:observedOwner = 5001",
+        "$owned = Get-VerifiedControlCenterListener $config",
+        "$script:observedOwner = 5002",
+        "$foreign = Get-VerifiedControlCenterListener $config",
+        "function Invoke-InstalledWebChatHelper($Action, $TargetAddress, $ExpectedDigest) { throw 'unverified listener reached credential handoff' }",
+        "Open-ControlCenter",
+        "[pscustomobject]@{scheme=$config.scheme; health=(Get-HealthUrl); app=(Get-ControlCenterUrl); owned=$owned.address; foreign=$foreign; opened=$script:opened } | ConvertTo-Json -Compress",
+      ].join("\r\n"), "utf8");
+      const check = (configEnv: Record<string, string> = {}) => spawnSync(command, powerShellFileArgs(command, harness, []), {
+        cwd: temp,
+        env: { ...windowsFixtureEnvironment(), ...configEnv },
+        encoding: "utf8",
+      });
+      const http = check();
+      expect(http.status, http.stderr).toBe(0);
+      const loopback = await new Promise<string>((resolve, reject) =>
+        lookup("localhost", (err, addr) => err ? reject(err) : resolve(addr)));
+      expect(JSON.parse(http.stdout.trim().split(/\r?\n/u).at(-1)!)).toEqual({
+        scheme: "http", health: "http://localhost:41872/healthz", app: "http://localhost:41872/app",
+        owned: loopback, foreign: null, opened: "http://localhost:41872/app",
+      });
+      const tls = check({
+        WEBCHAT_HOST: "::1", WEBCHAT_PORT: "41873", WEBCHAT_TLS_CERT_FILE: "fixture.pem",
+        WEBCHAT_TLS_KEY_FILE: "fixture.key",
+      });
+      expect(tls.status, tls.stderr).toBe(0);
+      expect(JSON.parse(tls.stdout.trim().split(/\r?\n/u).at(-1)!)).toEqual({
+        scheme: "https", health: "https://[::1]:41873/healthz", app: "https://[::1]:41873/app",
+        owned: "::1", foreign: null, opened: "https://[::1]:41873/app",
+      });
+      expect((http.stdout ?? "") + (tls.stdout ?? "")).not.toContain(fixtureChatToken);
+      expect(check({ WEBCHAT_TLS_CERT_FILE: "fixture.pem" }).status).not.toBe(0);
+      writeFileSync(envFile, 'WEBCHAT_TOKEN="' + fixtureChatToken, "utf8");
+      const malformed = check();
+      expect(malformed.status).not.toBe(0);
+      expect(malformed.stdout + malformed.stderr).not.toContain(fixtureChatToken);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("sends the launch ticket request only on the exact established socket owned by the expected resident", async () => {
+    const command = findPowerShell();
+    const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
+    if (process.platform !== "win32" || !command) {
+      expect(launcher).toContain("await verifyResidentPeer(socket, residentPid, residentStart);");
+      expect(launcher).toContain("agent.createConnection = () => socket;");
+      return;
+    }
+    const start = launcher.indexOf("$script:installedWebChatConfiguration = $null");
+    const end = launcher.indexOf("\nfunction Test-ResidentRunning", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-installed-webchat-peer-"));
+    const harness = join(temp, "check.ps1");
+    const envFile = join(temp, "blue-tanuki.env");
+    const psQuote = (value: string) => value.replace(/'/gu, "''");
+    const token = "synthetic-peer-test-webchat-token";
+    const ticket = "a".repeat(43);
+    const received: { path?: string; credential?: string; secondaryCredentialsPresent: boolean }[] = [];
+    let accepts = 0;
+    const server = createServer((req, res) => {
+      received.push({ path: req.url, credential: req.headers.authorization,
+        secondaryCredentialsPresent: ["resume", "owner", "settings", "maintenance"]
+          .some((name) => req.headers["x-blue-tanuki-launch-" + name] !== undefined) });
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ticket }));
+    });
+    server.on("connection", () => { accepts += 1; });
+    try {
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("synthetic listener has no port");
+      writeFileSync(envFile, [
+        "WEBCHAT_HOST=127.0.0.1", "WEBCHAT_PORT=" + address.port, "WEBCHAT_TOKEN=" + token,
+      ].join("\n"), "utf8");
+      writeFileSync(harness, "\ufeff" + [
+        "Set-StrictMode -Version Latest",
+        "$ErrorActionPreference = 'Stop'",
+        `$installRoot = '${psQuote(root)}'`,
+        `$envFile = '${psQuote(envFile)}'`,
+        `function Find-NodeExe { return '${psQuote(process.execPath)}' }`,
+        "function Fail($Message) { throw $Message }",
+        `function Read-ResidentPid { return ${process.pid} }`,
+        "function Get-ManagedProcessSnapshot($PidValue, $Kind) { return @{ state = 'running'; process = (Get-Process -Id $PidValue) } }",
+        launcher.slice(start, end),
+        "$config = Get-InstalledWebChatConfiguration",
+        "$listener = Get-VerifiedControlCenterListener $config",
+        "if (-not $listener) { throw 'the fixture listener was not verified' }",
+        "Invoke-InstalledWebChatHelper 'ticket' $listener.address $config.digest $listener.processId '1'",
+        "Invoke-InstalledWebChatHelper 'ticket' $listener.address $config.digest $listener.processId $listener.startTime",
+      ].join("\r\n"), "utf8");
+      const child = spawn(command, powerShellFileArgs(command, harness, []), {
+        cwd: temp, env: windowsFixtureEnvironment(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+      });
+      const completion = once(child, "close");
+      let out = "";
+      let errors = "";
+      try {
+        child.stdout.on("data", (chunk) => { out += String(chunk); });
+        child.stderr.on("data", (chunk) => { errors += String(chunk); });
+        await expect(waitForProcessExit(child, 20_000)).resolves.toBe(true);
+        await completion;
+        expect(child.exitCode, errors).toBe(0);
+        expect(accepts).toBe(2);
+        expect(received).toEqual([{ path: "/control-center/launch-handoff", credential: `Bearer ${token}`,
+          secondaryCredentialsPresent: false }]);
+        expect(out.trim()).toBe(ticket);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      }
+    } finally {
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 25_000);
+
+  it("runs recovery inspection and reconciliation from the product launcher without setup or resident startup", () => {
     const command = findPowerShell();
     if (process.platform !== "win32" || !command) {
-      expect(read("install/windows/product/BlueTanukiLauncher.ps1")).toContain('"recovery-inspect" { Run-RecoveryInspect }');
+      const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
+      expect(launcher).toContain('"recovery-inspect" { Run-RecoveryDiagnostic "--recovery-inspect" }');
+      expect(launcher).toContain('"recovery-reconcile" { Run-RecoveryDiagnostic "--recovery-reconcile" }');
       return;
     }
     const temp = mkdtempSync(join(tmpdir(), "blue-tanuki-product-recovery-inspect-"));
@@ -526,16 +699,21 @@ describe("Windows product installer package", () => {
         void import(pathToFileURL(${JSON.stringify(join(root, "apps", "gateway", "dist", "main.js"))}).href);
       `, "utf8");
       const arguments_ = ["recovery-inspect", "--backup-id", "absent-backup-id", "--json"];
-      const unavailable = runPowerShellFile(command, launcher, arguments_, temp);
+      const env = windowsFixtureEnvironment();
+      const unavailable = runPowerShellFile(command, launcher, arguments_, temp, env);
       expect(unavailable.status, unavailable.stderr).toBe(2);
       expect(JSON.parse(unavailable.stdout)).toEqual({ status: "configuration_unavailable" });
       const configPath = join(data, "blue-tanuki.env");
       expect(existsSync(configPath)).toBe(false);
       const config = "BLUE_TANUKI_RECOVERY_DIR=" + JSON.stringify(join(data, "recovery")) + "\n";
       writeFileSync(configPath, config, "utf8");
-      const absent = runPowerShellFile(command, launcher, arguments_, temp);
+      const absent = runPowerShellFile(command, launcher, arguments_, temp, env);
       expect(absent.status, absent.stderr).toBe(2);
       expect(JSON.parse(absent.stdout)).toMatchObject({ status: "not_found", mode: "read_only", may_execute: false });
+      writeFileSync(join(dist, "main.js"), "console.log(JSON.stringify(process.argv.slice(2)))\n", "utf8");
+      const reconcile = runPowerShellFile(command, launcher, ["recovery-reconcile", "--json"], temp, env);
+      expect(reconcile.status, reconcile.stderr).toBe(0);
+      expect(JSON.parse(reconcile.stdout)).toEqual(["--recovery-reconcile", "--env-file", configPath, "--json"]);
       expect(readFileSync(configPath, "utf8")).toBe(config);
       expect(existsSync(join(data, "blue-tanuki.pid"))).toBe(false);
       expect(existsSync(join(data, "logs"))).toBe(false);

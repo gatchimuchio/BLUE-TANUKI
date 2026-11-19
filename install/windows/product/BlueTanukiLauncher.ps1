@@ -287,145 +287,217 @@ function Read-ResidentPid {
   Fail "The resident PID record is invalid, so process ownership cannot be verified."
 }
 
-function Parse-EnvValue($RawValue) {
-  $trimmed = $RawValue.Trim()
-  if ($trimmed.StartsWith('"')) {
+$script:installedWebChatConfiguration = $null
+
+function Invoke-InstalledWebChatHelper($Action, $TargetAddress = "", $ExpectedDigest = "", $ResidentPid = "", $ResidentStart = "") {
+  $nodeExe = Find-NodeExe
+  $helper = @'
+import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { lookup } from "node:dns/promises";
+import { once } from "node:events";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { connect as connectTcp, isIP } from "node:net";
+import { join } from "node:path";
+import { connect as connectTls } from "node:tls";
+import { promisify } from "node:util";
+import { loadEnvFile } from "./apps/gateway/dist/env_file.js";
+
+async function verifyResidentPeer(socket, residentPid, residentStart) {
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot || !/^[1-9][0-9]*$/.test(residentPid) || !/^[1-9][0-9]*$/.test(residentStart) ||
+      !socket.localAddress || !socket.localPort || !socket.remoteAddress || !socket.remotePort) {
+    throw new Error("launch_resident_peer_unverified");
+  }
+  const powershellRoot = join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
+  const verifyScript = [
+    "$ErrorActionPreference = 'Stop'",
+    "Import-Module (Join-Path $PSHOME 'Modules/NetTCPIP/NetTCPIP.psd1')",
+    "function Normalize-Address($Address) {",
+    "  $ip = [Net.IPAddress]::Parse($Address)",
+    "  if ($ip.IsIPv4MappedToIPv6) { return $ip.MapToIPv4().ToString() }",
+    "  return $ip.ToString()",
+    "}",
+    "$server = Normalize-Address $env:BT_HANDOFF_SERVER_ADDRESS",
+    "$client = Normalize-Address $env:BT_HANDOFF_CLIENT_ADDRESS",
+    "$rows = @(Get-NetTCPConnection -State Established -LocalPort ([int]$env:BT_HANDOFF_SERVER_PORT) -RemotePort ([int]$env:BT_HANDOFF_CLIENT_PORT) | Where-Object {",
+    "  (Normalize-Address $_.LocalAddress) -eq $server -and (Normalize-Address $_.RemoteAddress) -eq $client",
+    "})",
+    "if ($rows.Count -ne 1 -or $rows[0].OwningProcess -ne [int]$env:BT_HANDOFF_RESIDENT_PID) { exit 2 }",
+    "$resident = Get-Process -Id ([int]$env:BT_HANDOFF_RESIDENT_PID)",
+    "if ([string]$resident.StartTime.ToUniversalTime().Ticks -cne $env:BT_HANDOFF_RESIDENT_START) { exit 2 }",
+  ].join("\n");
+  await promisify(execFile)(join(powershellRoot, "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", verifyScript], {
+      windowsHide: true, timeout: 5000, maxBuffer: 4096,
+      env: {
+        SystemRoot: systemRoot,
+        BT_HANDOFF_SERVER_ADDRESS: socket.remoteAddress,
+        BT_HANDOFF_SERVER_PORT: String(socket.remotePort),
+        BT_HANDOFF_CLIENT_ADDRESS: socket.localAddress,
+        BT_HANDOFF_CLIENT_PORT: String(socket.localPort),
+        BT_HANDOFF_RESIDENT_PID: residentPid,
+        BT_HANDOFF_RESIDENT_START: residentStart,
+      },
+    });
+}
+
+try {
+  const [, , envFile, action, targetAddress, expectedDigest, residentPid, residentStart] = process.argv;
+  await loadEnvFile(envFile);
+  const env = process.env;
+  const host = env.WEBCHAT_HOST?.trim() || "127.0.0.1";
+  const port = Number.parseInt(env.WEBCHAT_PORT ?? "8787", 10);
+  const cert = env.WEBCHAT_TLS_CERT_FILE?.trim() || "";
+  const key = env.WEBCHAT_TLS_KEY_FILE?.trim() || "";
+  if ((!isIP(host) && !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.?$/i.test(host)) ||
+      !Number.isInteger(port) || port < 1 || port > 65535 || Boolean(cert) !== Boolean(key)) {
+    throw new Error("installed_webchat_configuration_invalid");
+  }
+  const scheme = cert ? "https" : "http";
+  const normalizedHost = host.toLowerCase();
+  const listenAddress = isIP(host) ? host : (await lookup(host)).address;
+  let loopbackAddresses = [];
+  let openHost = host;
+  if (normalizedHost === "localhost" || normalizedHost === "localhost.") {
+    if (listenAddress === "::1" || listenAddress.startsWith("127.")) loopbackAddresses = [listenAddress];
+  } else if (normalizedHost === "0.0.0.0") {
+    openHost = "127.0.0.1";
+    loopbackAddresses = [openHost];
+  } else if (normalizedHost === "::") {
+    openHost = "::1";
+    loopbackAddresses = [openHost];
+  } else if (normalizedHost === "::1" || (isIP(host) === 4 && host.startsWith("127."))) {
+    loopbackAddresses = [host];
+  }
+  const credentials = [
+    env.WEBCHAT_TOKEN, env.WEBCHAT_RESUME_TOKEN, env.BLUE_TANUKI_OWNER_TOKEN,
+    env.BLUE_TANUKI_SETTINGS_TOKEN, env.BLUE_TANUKI_MAINTENANCE_TOKEN,
+  ];
+  const digest = createHash("sha256").update(JSON.stringify([
+    host, listenAddress, port, env.WEBCHAT_PUBLIC_HOST, scheme, cert, key,
+  ])).digest("hex");
+  if (action === "describe") {
+    process.stdout.write(JSON.stringify({ host, listenAddress, port, scheme, openHost, loopbackAddresses, digest }));
+  } else if (action === "ticket" && digest === expectedDigest &&
+             loopbackAddresses.includes(targetAddress) && credentials[0]) {
+    const [chat, resume, owner, settings, maintenance] = credentials;
+    const headers = { authorization: "Bearer " + chat, "content-type": "application/json" };
+    if (resume) headers["x-blue-tanuki-launch-resume"] = resume;
+    if (owner) headers["x-blue-tanuki-launch-owner"] = owner;
+    if (settings) headers["x-blue-tanuki-launch-settings"] = settings;
+    if (maintenance) headers["x-blue-tanuki-launch-maintenance"] = maintenance;
+    const secure = scheme === "https";
+    const socket = secure
+      ? connectTls({ host: targetAddress, port, rejectUnauthorized: true })
+      : connectTcp({ host: targetAddress, port });
+    socket.on("error", () => {});
+    const agent = secure ? new HttpsAgent({ keepAlive: false }) : new HttpAgent({ keepAlive: false });
     try {
-      return [string]($trimmed | ConvertFrom-Json)
-    } catch {
-      return $trimmed.Trim('"')
+      await once(socket, secure ? "secureConnect" : "connect", { signal: AbortSignal.timeout(2500) });
+      await verifyResidentPeer(socket, residentPid, residentStart);
+      if (socket.destroyed || !socket.writable || socket.readableEnded) throw new Error("launch_resident_peer_closed");
+
+      // Send only through the exact connected socket whose reverse tuple was verified.
+      agent.createConnection = () => socket;
+      const request = secure ? httpsRequest : httpRequest;
+      const body = await new Promise((resolve, reject) => {
+        const client = request({
+          hostname: targetAddress, port, path: "/control-center/launch-handoff", method: "POST",
+          headers: { ...headers, "content-length": 2 }, agent, signal: AbortSignal.timeout(5000),
+        }, (response) => {
+          if (response.statusCode !== 200) {
+            response.resume();
+            resolve(null);
+            return;
+          }
+          const chunks = [];
+          let size = 0;
+          response.on("error", reject);
+          response.on("data", (chunk) => {
+            size += chunk.length;
+            if (size > 4096) response.destroy(new Error("launch_handoff_response_too_large"));
+            else chunks.push(chunk);
+          });
+          response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        });
+        client.on("error", reject);
+        client.end("{}");
+      });
+      if (body) {
+        const response = JSON.parse(body);
+        if (typeof response.ticket === "string" && /^[A-Za-z0-9_-]{43}$/.test(response.ticket)) {
+          process.stdout.write(response.ticket);
+        }
+      }
+    } finally {
+      agent.destroy();
+      socket.destroy();
     }
   }
-  if ($trimmed.StartsWith("'") -and $trimmed.EndsWith("'") -and $trimmed.Length -ge 2) {
-    return $trimmed.Substring(1, $trimmed.Length - 2)
+} catch {
+  process.exitCode = 2;
+}
+'@
+  $previousErrorActionPreference = $ErrorActionPreference
+  Push-Location $installRoot
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = $helper | & $nodeExe "--input-type=module" "-" $envFile $Action $TargetAddress $ExpectedDigest $ResidentPid $ResidentStart 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return $output
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    Pop-Location
   }
-  return $trimmed
 }
 
-function Get-EnvFileValue($Name, $DefaultValue) {
-  if (-not (Test-Path -LiteralPath $envFile)) {
-    return $DefaultValue
+function Get-InstalledWebChatConfiguration {
+  if ($null -eq $script:installedWebChatConfiguration) {
+    $description = Invoke-InstalledWebChatHelper "describe"
+    if (-not $description) { Fail "The installed WebChat configuration could not be read by the bundled Gateway." }
+    try { $script:installedWebChatConfiguration = $description | ConvertFrom-Json }
+    catch { Fail "The bundled Gateway returned invalid WebChat routing metadata." }
   }
-  foreach ($line in Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue) {
-    $trimmed = $line.Trim()
-    if (-not $trimmed -or $trimmed.StartsWith("#")) {
-      continue
-    }
-    $idx = $trimmed.IndexOf("=")
-    if ($idx -le 0) {
-      continue
-    }
-    $key = $trimmed.Substring(0, $idx).Trim()
-    if ($key -eq $Name) {
-      return Parse-EnvValue $trimmed.Substring($idx + 1)
-    }
-  }
-  return $DefaultValue
-}
-
-function Get-WebHost {
-  return Get-EnvFileValue "WEBCHAT_HOST" "127.0.0.1"
-}
-
-function Get-WebPort {
-  $rawPort = Get-EnvFileValue "WEBCHAT_PORT" "8787"
-  $port = 8787
-  if ([int]::TryParse($rawPort, [ref]$port) -and $port -gt 0 -and $port -lt 65536) {
-    return $port
-  }
-  return 8787
-}
-
-function Get-ControlCenterUrl {
-  return "http://$(Get-WebHost):$(Get-WebPort)/app"
-}
-
-function Get-ControlCenterLoopbackHost {
-  $configuredHost = (Get-WebHost).Trim().ToLowerInvariant()
-  if ($configuredHost -in @("0.0.0.0", "::")) { return "127.0.0.1" }
-  if ($configuredHost -in @("127.0.0.1", "localhost", "::1")) { return $configuredHost }
-  return $null
+  return $script:installedWebChatConfiguration
 }
 
 function Format-ControlCenterHost($HostValue) {
-  if ($HostValue -eq "::1") { return "[::1]" }
+  if ($HostValue.Contains(":")) { return "[$HostValue]" }
   return $HostValue
 }
 
-function Get-ControlCenterOpenUrl {
-  $loopbackHost = Get-ControlCenterLoopbackHost
-  if (-not $loopbackHost) { return Get-ControlCenterUrl }
-  return "http://$(Format-ControlCenterHost $loopbackHost):$(Get-WebPort)/app"
+function Get-ControlCenterUrl($TargetAddress = "") {
+  $config = Get-InstalledWebChatConfiguration
+  if (-not $TargetAddress) { $TargetAddress = $config.openHost }
+  return "$($config.scheme)://$(Format-ControlCenterHost $TargetAddress):$($config.port)/app"
 }
 
-function New-ControlCenterLaunchTicket {
-  $loopbackHost = Get-ControlCenterLoopbackHost
-  if (-not $loopbackHost) { return $null }
-  $webchatToken = Get-EnvFileValue "WEBCHAT_TOKEN" ""
-  if (-not $webchatToken) { return $null }
-  $headers = @{ Authorization = "Bearer $webchatToken" }
-  foreach ($credential in @(
-    @{ Name = "WEBCHAT_RESUME_TOKEN"; Header = "x-blue-tanuki-launch-resume" },
-    @{ Name = "BLUE_TANUKI_OWNER_TOKEN"; Header = "x-blue-tanuki-launch-owner" },
-    @{ Name = "BLUE_TANUKI_SETTINGS_TOKEN"; Header = "x-blue-tanuki-launch-settings" },
-    @{ Name = "BLUE_TANUKI_MAINTENANCE_TOKEN"; Header = "x-blue-tanuki-launch-maintenance" }
-  )) {
-    $value = Get-EnvFileValue $credential.Name ""
-    if ($value) { $headers[$credential.Header] = $value }
-  }
-  $hostText = Format-ControlCenterHost $loopbackHost
-  $handoffUri = "http://${hostText}:$(Get-WebPort)/control-center/launch-handoff"
-  $request = $null
-  $requestStream = $null
-  $response = $null
-  $reader = $null
+function Get-VerifiedControlCenterListener($Config) {
   try {
-    $request = [System.Net.HttpWebRequest]::Create($handoffUri)
-    $request.Method = "POST"
-    $request.Proxy = $null
-    $request.AllowAutoRedirect = $false
-    $request.Timeout = 5000
-    $request.ReadWriteTimeout = 5000
-    $request.ContentType = "application/json"
-    foreach ($name in $headers.Keys) { $request.Headers[$name] = [string]$headers[$name] }
-    $payload = [System.Text.Encoding]::UTF8.GetBytes("{}")
-    $request.ContentLength = $payload.Length
-    $requestStream = $request.GetRequestStream()
-    $requestStream.Write($payload, 0, $payload.Length)
-    $requestStream.Dispose()
-    $requestStream = $null
-    $response = $request.GetResponse()
-    $reader = [System.IO.StreamReader]::new($response.GetResponseStream())
-    $responseBody = $reader.ReadToEnd() | ConvertFrom-Json
-    $ticket = [string]$responseBody.ticket
-    if ($ticket -match '^[A-Za-z0-9_-]{43}$') { return $ticket }
-  } catch {
-    return $null
-  } finally {
-    if ($reader) { $reader.Dispose() }
-    if ($response) { $response.Dispose() }
-    if ($requestStream) { $requestStream.Dispose() }
-  }
+    $residentPid = Read-ResidentPid
+    if (-not $residentPid) { return $null }
+    $resident = Get-ManagedProcessSnapshot $residentPid "resident"
+    if ($resident.state -ne "running") { return $null }
+    $startTime = [string]$resident.process.StartTime.ToUniversalTime().Ticks
+    $listeners = @(Get-NetTCPConnection -LocalPort $Config.port -State Listen -ErrorAction Stop)
+    foreach ($address in $Config.loopbackAddresses) {
+      $wildcard = if ($address.Contains(":")) { "::" } else { "0.0.0.0" }
+      $bound = @($listeners | Where-Object { $_.LocalAddress -in @($address, $wildcard) })
+      if ($bound.Count -eq 1 -and $bound[0].OwningProcess -eq $residentPid) {
+        return [pscustomobject]@{ address = $address; processId = [string]$residentPid; startTime = $startTime }
+      }
+    }
+  } catch { return $null }
   return $null
 }
 
-function Get-HealthUrl {
-  return "http://$(Get-WebHost):$(Get-WebPort)/healthz"
-}
-
-function Get-ControlCenterLoopbackHealthUrl {
-  $loopbackHost = Get-ControlCenterLoopbackHost
-  if (-not $loopbackHost) { return $null }
-  return "http://$(Format-ControlCenterHost $loopbackHost):$(Get-WebPort)/healthz"
-}
-
-function Test-ControlCenterLoopbackHealth($TimeoutMs) {
-  $healthUrl = Get-ControlCenterLoopbackHealthUrl
-  if (-not $healthUrl) { return $false }
+function Test-ControlCenterHealth($HealthUrl, $TimeoutMs) {
   $request = $null
   $response = $null
   try {
-    $request = [System.Net.HttpWebRequest]::Create($healthUrl)
+    $request = [System.Net.HttpWebRequest]::Create($HealthUrl)
     $request.Method = "GET"
     $request.Proxy = $null
     $request.AllowAutoRedirect = $false
@@ -438,6 +510,11 @@ function Test-ControlCenterLoopbackHealth($TimeoutMs) {
   } finally {
     if ($response) { $response.Dispose() }
   }
+}
+
+function Get-HealthUrl {
+  $config = Get-InstalledWebChatConfiguration
+  return "$($config.scheme)://$(Format-ControlCenterHost $config.openHost):$($config.port)/healthz"
 }
 
 function Test-ResidentRunning {
@@ -515,22 +592,12 @@ function Quote-Arg($Value) {
   return $Value
 }
 
-function Resolve-ListenAddress($HostName) {
-  $address = [System.Net.IPAddress]::Loopback
-  if ([System.Net.IPAddress]::TryParse($HostName, [ref]$address)) {
-    return $address
-  }
-  if ($HostName -eq "localhost") {
-    return [System.Net.IPAddress]::Loopback
-  }
-  return [System.Net.IPAddress]::Loopback
-}
-
-function Test-PortBindable($HostName, $Port) {
+function Test-PortBindable($ListenAddress, $Port) {
   $listener = $null
   try {
-    $address = Resolve-ListenAddress $HostName
+    $address = [System.Net.IPAddress]::Parse($ListenAddress)
     $listener = [System.Net.Sockets.TcpListener]::new($address, $Port)
+    if ($address.Equals([System.Net.IPAddress]::IPv6Any)) { $listener.Server.DualMode = $true }
     $listener.Start()
     return $true
   } catch {
@@ -543,24 +610,20 @@ function Test-PortBindable($HostName, $Port) {
 }
 
 function Assert-PortAvailable {
-  $hostName = Get-WebHost
-  $port = Get-WebPort
-  if (-not (Test-PortBindable $hostName $port)) {
+  $config = Get-InstalledWebChatConfiguration
+  $hostName = $config.host
+  $port = $config.port
+  if (-not (Test-PortBindable $config.listenAddress $port)) {
     Fail "port_conflict=${hostName}:$port. Stop the process using this port, change WEBCHAT_PORT in $envFile, or launch BLUE-TANUKI Safe Mode after repair. Logs: $logDir"
   }
 }
 
 function Wait-Health($TimeoutMs) {
   $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+  $healthUrl = Get-HealthUrl
   while ((Get-Date) -lt $deadline) {
-    try {
-      $response = Invoke-WebRequest -UseBasicParsing -Uri (Get-HealthUrl) -TimeoutSec 2
-      if ($response.StatusCode -eq 200) {
-        return $true
-      }
-    } catch {
-      Start-Sleep -Milliseconds 250
-    }
+    if (Test-ControlCenterHealth $healthUrl 2000) { return $true }
+    Start-Sleep -Milliseconds 250
   }
   return $false
 }
@@ -603,6 +666,7 @@ function Set-SafeModeEnvironment {
 
 function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
   Ensure-EnvFile
+  if ($Reason -eq "watchdog") { $script:installedWebChatConfiguration = $null }
   Assert-PortAvailable
   if ($SafeMode) {
     Set-SafeModeEnvironment
@@ -613,7 +677,7 @@ function Start-ResidentProcess($SafeMode = $false, $Reason = "manual") {
   $env:BLUE_TANUKI_ENV_FILE = $envFile
   $env:BLUE_TANUKI_INSTALL_ROOT = $installRoot
   $env:BLUE_TANUKI_DATA_ROOT = $dataRoot
-  $rawArgs = @("apps/gateway/dist/main.js", "--serve", "--env-file", $envFile)
+  $rawArgs = @("--", "apps/gateway/dist/main.js", "--serve", "--env-file", $envFile)
   if ($RemainingArgs) {
     $rawArgs += $RemainingArgs
   }
@@ -776,9 +840,10 @@ function Stop-Resident {
 function Show-Status {
   if (Test-ResidentRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
-    if (-not (Get-ControlCenterLoopbackHealthUrl)) {
+    $config = Get-InstalledWebChatConfiguration
+    if ($config.loopbackAddresses.Count -eq 0) {
       Write-Host "resident_health=unobserved_non_loopback_binding"
-    } elseif (Test-ControlCenterLoopbackHealth 1000) {
+    } elseif (Test-ControlCenterHealth (Get-HealthUrl) 1000) {
       Write-Host "resident_health=ready"
     } else {
       Write-Host "resident_health=not_ready"
@@ -793,7 +858,9 @@ function Show-Status {
   } else {
     Write-Host "watchdog_status=stopped"
   }
-  Write-Host "control_center=$(Get-ControlCenterUrl)"
+  if (Test-Path -LiteralPath $envFile -PathType Leaf) {
+    Write-Host "control_center=$(Get-ControlCenterUrl)"
+  }
   Write-Host "env_file=$envFile"
   Write-Host "logs=$logDir"
 }
@@ -821,11 +888,15 @@ function Open-ControlCenter {
   if (-not (Start-Resident $false)) {
     Fail "The Control Center was not opened because Gateway health is not ready. Run BlueTanukiDoctor.cmd and review $logDir."
   }
-  $url = Get-ControlCenterOpenUrl
-  $ticket = New-ControlCenterLaunchTicket
-  if ($ticket) {
-    $url += "#bt-launch-handoff=$ticket"
-  } elseif (Get-ControlCenterLoopbackHost) {
+  $config = Get-InstalledWebChatConfiguration
+  $listener = Get-VerifiedControlCenterListener $config
+  $url = Get-ControlCenterUrl
+  $ticket = if ($listener) {
+    Invoke-InstalledWebChatHelper "ticket" $listener.address $config.digest $listener.processId $listener.startTime
+  } else { $null }
+  if ($ticket -and $ticket -cmatch '^[A-Za-z0-9_-]{43}$') {
+    $url = "$(Get-ControlCenterUrl $listener.address)#bt-launch-handoff=$ticket"
+  } elseif ($config.loopbackAddresses.Count -gt 0) {
     Write-Warning "The local Control Center session could not be connected automatically. No credential was added to the browser URL."
   }
   Start-Process $url
@@ -870,7 +941,7 @@ function Run-Doctor($OpenLog) {
   }
 }
 
-function Run-RecoveryInspect {
+function Run-RecoveryDiagnostic($Operation) {
   $nodeExe = Find-NodeExe
   $previousErrorActionPreference = $ErrorActionPreference
   $previousEnvFile = $env:BLUE_TANUKI_ENV_FILE
@@ -879,7 +950,7 @@ function Run-RecoveryInspect {
     $ErrorActionPreference = "Continue"
     $env:BLUE_TANUKI_ENV_FILE = $envFile
     # Keep --env-file in Gateway's argv so Node does not preload it.
-    & $nodeExe "--" "apps/gateway/dist/main.js" "--recovery-inspect" "--env-file" $envFile @RemainingArgs
+    & $nodeExe "--" "apps/gateway/dist/main.js" $Operation "--env-file" $envFile @RemainingArgs
     $code = $LASTEXITCODE
   } finally {
     $env:BLUE_TANUKI_ENV_FILE = $previousEnvFile
@@ -993,7 +1064,8 @@ switch ($Command.ToLowerInvariant()) {
   "resident-status" { Show-Status }
   "doctor" { Run-Doctor $false }
   "doctor-open" { Run-Doctor $true }
-  "recovery-inspect" { Run-RecoveryInspect }
+  "recovery-inspect" { Run-RecoveryDiagnostic "--recovery-inspect" }
+  "recovery-reconcile" { Run-RecoveryDiagnostic "--recovery-reconcile" }
   "logs" { Open-Logs }
   "resident-logs" { Open-Logs }
   "autostart-enable" { Enable-Autostart }
@@ -1003,7 +1075,7 @@ switch ($Command.ToLowerInvariant()) {
   "autostart-status" { Show-AutostartStatus }
   "resident-autostart-status" { Show-AutostartStatus }
   "help" {
-    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|recovery-inspect|logs|autostart-enable|autostart-disable|autostart-status|help]"
+    Write-Host "Usage: BlueTanukiLauncher.ps1 [open|start|safe-mode|stop|restart|status|doctor|doctor-open|recovery-inspect|recovery-reconcile|logs|autostart-enable|autostart-disable|autostart-status|help]"
     Write-Host "Autostart is opt-in only and is not enabled by install/setup."
   }
   default { Fail "unknown command: $Command" }

@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
   CANONICAL_STATE_STORE_PATHS,
@@ -33,6 +32,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
+import type { RuntimeRecoveryFenceEvidence } from "./runtime_owner_lease.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -442,9 +442,11 @@ export interface RecoveryResetOptions {
   confirm?: string;
 }
 
+type FactoryResetVerification = NonNullable<RuntimeRecoveryFenceEvidence["verification"]>;
+
 export interface FactoryResetRecoveryFence {
-  begin(backupId: string, manifestSha256: string): void;
-  finish(backupId: string, manifestSha256: string): void;
+  begin(backupId: string, manifestSha256: string, verification: FactoryResetVerification): void;
+  finish(backupId: string, manifestSha256: string, verification: FactoryResetVerification): void;
 }
 
 interface RecoveryAuthorityBoundary {
@@ -890,7 +892,11 @@ async function sha256File(filePath: string): Promise<{ sha256: string; bytes: nu
   };
 }
 
-async function sha256Path(itemPath: string, kind: RecoveryPathKind): Promise<{ sha256: string; bytes: number }> {
+async function sha256Path(
+  itemPath: string,
+  kind: RecoveryPathKind,
+  format: "backup" | "state" = "backup",
+): Promise<{ sha256: string; bytes: number }> {
   if (kind === "file") return sha256File(itemPath);
   if (kind !== "directory") return { sha256: "", bytes: 0 };
 
@@ -898,16 +904,21 @@ async function sha256Path(itemPath: string, kind: RecoveryPathKind): Promise<{ s
   let bytes = 0;
   const walk = async (dir: string): Promise<void> => {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const sorted = entries.sort((a, b) => format === "backup" ? a.name.localeCompare(b.name)
+      : a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of sorted) {
       const fullPath = path.join(dir, entry.name);
       const rel = path.relative(itemPath, fullPath);
       if (entry.isDirectory()) {
-        hash.update(`dir:${rel}\n`);
+        hash.update(format === "backup" ? `dir:${rel}\n` : JSON.stringify(["directory", rel]) + "\n");
         await walk(fullPath);
       } else if (entry.isFile()) {
         const file = await sha256File(fullPath);
-        hash.update(`file:${rel}:${file.sha256}:${file.bytes}\n`);
+        hash.update(format === "backup" ? `file:${rel}:${file.sha256}:${file.bytes}\n`
+          : JSON.stringify(["file", rel, file.sha256, file.bytes]) + "\n");
         bytes += file.bytes;
+      } else if (format === "state") {
+        throw new Error("factory_reset_target_unverified");
       }
     }
   };
@@ -3086,6 +3097,97 @@ async function verifyFactoryResetTarget(
   if (current.sha256 !== entry.sha256 || current.bytes !== entry.bytes) throw new Error("factory_reset_target_changed");
 }
 
+type FactoryResetPathProof = { kind: "file" | "directory"; sha256: string; bytes: number } | null;
+
+async function factoryResetPathProof(filepath: string): Promise<FactoryResetPathProof> {
+  const kind = await factoryResetPathKind(filepath);
+  if (!kind) return null;
+  await assertArchiveTreeHasNoSymlinks(filepath, kind);
+  return { kind, ...await sha256Path(filepath, kind, "state") };
+}
+
+function factoryResetStateDigest(
+  envFile: string,
+  envProof: FactoryResetPathProof,
+  targetProofs: readonly (readonly [string, FactoryResetPathProof])[],
+): string {
+  const sorted = [...targetProofs].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return createHash("sha256").update(JSON.stringify(["factory-reset-state.v1", envFile, envProof, sorted])).digest("hex");
+}
+
+async function readFactoryResetStateDigest(envFile: string, targets: readonly FactoryResetTarget[]): Promise<string> {
+  const envProof = await factoryResetPathProof(envFile);
+  const targetProofs: Array<[string, FactoryResetPathProof]> = [];
+  for (const target of targets) targetProofs.push([target.path, await factoryResetPathProof(target.path)]);
+  return factoryResetStateDigest(envFile, envProof, targetProofs);
+}
+
+async function factoryResetBackupItem(snapshot: RecoveryBackupManifest, source: string): Promise<{
+  archive: string | null;
+  proof: FactoryResetPathProof;
+}> {
+  const item = snapshot.items.find(entry => entry.source_path && path.relative(entry.source_path, source) === "");
+  if (item?.kind === "missing" && !item.copied) return { archive: null, proof: null };
+  if (!item?.copied || !item.archive_rel_path || (item.kind !== "file" && item.kind !== "directory")) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  const pack = path.dirname(snapshot.manifest_path);
+  const archive = await assertArchivePath(pack, path.resolve(pack, item.archive_rel_path), "factory_reset_backup");
+  const proof = await factoryResetPathProof(archive);
+  if (!proof || proof.kind !== item.kind || proof.bytes !== item.bytes ||
+      (proof.kind === "file" && proof.sha256 !== item.sha256)) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  return { archive, proof };
+}
+
+function factoryResetValues(values: Record<string, string>): Record<string, string> {
+  for (const key of [...PROVIDER_RESET_KEYS, ...CONNECTOR_RESET_KEYS]) delete values[key];
+  return Object.assign(values, { LLM_BACKEND: "stub", COMPOSIO_DRY_RUN: "true", COMPOSIO_LIVE_EXECUTION: "false" });
+}
+
+async function prepareFactoryResetVerification(
+  envFile: string,
+  targets: readonly FactoryResetTarget[],
+  snapshot: RecoveryBackupManifest,
+): Promise<{ values: Record<string, string>; verification: FactoryResetVerification }> {
+  const savedEnv = await factoryResetBackupItem(snapshot, envFile);
+  if (savedEnv.proof?.kind === "directory") throw new Error("factory_reset_backup_unverified");
+  const envBytes = savedEnv.archive === null ? Buffer.alloc(0) : await fs.readFile(savedEnv.archive);
+  if (savedEnv.proof && (envBytes.length !== savedEnv.proof.bytes ||
+      createHash("sha256").update(envBytes).digest("hex") !== savedEnv.proof.sha256)) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  const beforeTargets: Array<[string, FactoryResetPathProof]> = [];
+  for (const target of targets) beforeTargets.push([target.path, (await factoryResetBackupItem(snapshot, target.path)).proof]);
+  const beforeSha256 = factoryResetStateDigest(envFile, savedEnv.proof, beforeTargets);
+  if (await readFactoryResetStateDigest(envFile, targets) !== beforeSha256) {
+    throw new Error("factory_reset_target_changed");
+  }
+  const values = factoryResetValues(parseEnvFile(envBytes.toString("utf8")).values);
+  const rendered = Buffer.from(renderEnvValues(values), "utf8");
+  const afterSha256 = factoryResetStateDigest(
+    envFile,
+    { kind: "file", sha256: createHash("sha256").update(rendered).digest("hex"), bytes: rendered.length },
+    targets.map(target => [target.path, null]),
+  );
+  return { values, verification: { before_sha256: beforeSha256, after_sha256: afterSha256 } };
+}
+
+/** Read current local effects only, for settlement under the existing exclusive owner lock. */
+export async function observeFactoryResetRecoveryState(
+  env: NodeJS.ProcessEnv,
+  evidence: RuntimeRecoveryFenceEvidence,
+): Promise<string> {
+  const targets = await preflightFactoryReset(env);
+  const snapshot = await readManifest(env, evidence.backup_id);
+  if (snapshot.action !== "pre_factory_reset" || snapshot.manifest_sha256 !== evidence.manifest_sha256) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  await preflightRestoreManifest(env, snapshot);
+  return readFactoryResetStateDigest(path.resolve(env.BLUE_TANUKI_ENV_FILE!), targets);
+}
+
 export async function factoryResetRecovery(
   env: NodeJS.ProcessEnv = process.env,
   options: RecoveryResetOptions & { fence?: FactoryResetRecoveryFence } = {},
@@ -3093,7 +3195,7 @@ export async function factoryResetRecovery(
   assertConfirmation(options.confirm, "FACTORY_RESET");
   const config = { ...env };
   const targets = await preflightFactoryReset(config);
-  const values = await readEnvValues(config);
+  const envFile = path.resolve(config.BLUE_TANUKI_ENV_FILE!);
   const preFactory = await createBackupManifest(config, "pre_factory_reset");
   const manifestDigest = createHash("sha256").update(`${JSON.stringify(preFactory, null, 2)}\n`).digest("hex");
   if ((await readManifest(config, preFactory.backup_id)).manifest_sha256 !== manifestDigest) {
@@ -3102,14 +3204,11 @@ export async function factoryResetRecovery(
   await preflightRestoreManifest(config, preFactory);
   for (const target of targets) await verifyFactoryResetTarget(target, preFactory);
 
-  for (const key of [...PROVIDER_RESET_KEYS, ...CONNECTOR_RESET_KEYS]) {
-    delete values[key];
-  }
-  values.LLM_BACKEND = "stub";
-  values.COMPOSIO_DRY_RUN = "true";
-  values.COMPOSIO_LIVE_EXECUTION = "false";
+  const fence = options.fence;
+  const prepared = fence ? await prepareFactoryResetVerification(envFile, targets, preFactory) : undefined;
+  const values = prepared?.values ?? factoryResetValues(await readEnvValues(config));
   let removed = 0;
-  options.fence?.begin(preFactory.backup_id, manifestDigest);
+  if (fence && prepared) fence.begin(preFactory.backup_id, manifestDigest, prepared.verification);
   try {
     await writeEnvValues({ ...config }, values, "factory-reset");
     Object.assign(env, values);
@@ -3121,14 +3220,11 @@ export async function factoryResetRecovery(
       if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
       removed += 1;
     }
-    if (options.fence) {
-      if (!isDeepStrictEqual(await readEnvValues(config), values)) {
-        throw new Error("factory_reset_configuration_unverified");
+    if (fence && prepared) {
+      if (await readFactoryResetStateDigest(envFile, targets) !== prepared.verification.after_sha256) {
+        throw new Error("factory_reset_postconditions_unverified");
       }
-      for (const target of targets) {
-        if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
-      }
-      options.fence.finish(preFactory.backup_id, manifestDigest);
+      fence.finish(preFactory.backup_id, manifestDigest, prepared.verification);
     }
   } catch {
     // Earlier effects may have committed. Leave the pre-action backup and let the

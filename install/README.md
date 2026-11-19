@@ -415,6 +415,20 @@ powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLau
 `recovery-inspect --json` を実行します。`runtime_recovery_fence` の事前バックアップIDと
 マニフェストSHA-256を確認できます。照合状態が `pending` の間は初期化の再送が停止されます。
 
+Gatewayが停止した状態で、診断に表示されたIDとSHA-256を `recovery-reconcile` に指定します。
+
+```powershell
+powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLauncher.ps1" recovery-reconcile --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --json
+```
+
+```sh
+~/.local/bin/blue-tanuki recovery-reconcile --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --json
+```
+
+設定と全対象が事前状態または予定した初期化後の状態と一致した場合、照合結果を記録して起動保留を閉じます。
+途中状態、異なるバックアップ、照合用情報のない旧形式の保留は `unresolved` です。
+このコマンドが更新するのは保留と照合記録です。次回は通常の起動操作から再開します。
+
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
