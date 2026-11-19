@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   detectTransientAudioFormat,
   detectTransientImageMediaType,
@@ -91,6 +92,13 @@ interface NormalizedTelegramInbound {
   readonly context?: InboundEphemeralContext;
 }
 
+interface TelegramPollingSession {
+  readonly controller: AbortController;
+  offset: number;
+  loop?: Promise<void>;
+  claim?: { readonly updateId: number; readonly payloadDigest: string };
+}
+
 const MAX_TELEGRAM_TEXT_ATTACHMENT_BYTES = 64 * 1024;
 const MAX_TELEGRAM_IMAGE_BYTES = TRANSIENT_IMAGE_MAX_BYTES;
 const MAX_TELEGRAM_AUDIO_BYTES = TRANSIENT_AUDIO_MAX_BYTES;
@@ -117,9 +125,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   readonly name = "telegram";
   private started = false;
   private silent = false;
-  private stopped = false;
-  private offset = 0;
-  private loop: Promise<void> | null = null;
+  private polling?: TelegramPollingSession;
   private readonly history: SentRecord[] = [];
   private counter = 0;
 
@@ -129,7 +135,6 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     if (this.started) return;
     if (!this.opts.bot_token) {
       this.started = true;
-      this.stopped = false;
       this.silent = true;
       this.log("[telegram] WARN TELEGRAM_BOT_TOKEN unset — running in silent mode");
       return;
@@ -138,22 +143,34 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     if (!this.opts.inbound_grants?.length) {
       this.log("[telegram] WARN TELEGRAM_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
     }
-    this.started = true;
-    this.stopped = false;
     const latestUpdateId = this.opts.inbox.latestUpdateId();
-    this.offset = latestUpdateId === null ? 0 : latestUpdateId + 1;
-    this.loop = this.pollLoop(handler);
+    const polling: TelegramPollingSession = {
+      controller: new AbortController(),
+      offset: latestUpdateId === null ? 0 : latestUpdateId + 1,
+    };
+    this.started = true;
+    this.polling = polling;
+    polling.loop = this.pollLoop(polling, handler);
     this.log("[telegram] polling started");
   }
 
   async stop(): Promise<void> {
     if (!this.started) return;
-    this.stopped = true;
     this.started = false;
-    if (this.loop) {
-      await Promise.race([this.loop.catch(() => undefined), sleep(250)]);
-      this.loop = null;
+    const polling = this.polling;
+    this.polling = undefined;
+    if (!polling) return;
+    polling.controller.abort();
+    const claim = polling.claim;
+    // Gateway closes the inbox after stop. Record incomplete claims while it is still open.
+    if (claim) {
+      try {
+        this.opts.inbox?.settle(claim.updateId, claim.payloadDigest, "outcome_unknown");
+      } catch {
+        this.log("[telegram] incomplete update could not be settled during stop");
+      }
     }
+    if (polling.loop) await Promise.race([polling.loop.catch(() => undefined), delay(250)]);
   }
 
   async send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult> {
@@ -225,16 +242,19 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   getHistory(): readonly SentRecord[] { return [...this.history]; }
   isSilent(): boolean { return this.silent; }
 
-  private async pollLoop(handler: InboundHandler): Promise<void> {
-    while (!this.stopped) {
+  private async pollLoop(polling: TelegramPollingSession, handler: InboundHandler): Promise<void> {
+    const { signal } = polling.controller;
+    while (!signal.aborted) {
       try {
         const r = await this.call("getUpdates", {
-          offset: this.offset > 0 ? this.offset : undefined,
+          offset: polling.offset > 0 ? polling.offset : undefined,
           timeout: this.opts.poll_timeout_sec ?? 25,
           allowed_updates: ["message", "edited_message"],
-        });
+        }, signal);
+        if (signal.aborted) return;
         if (r.ok && Array.isArray(r.result)) {
           for (const update of r.result as TelegramUpdate[]) {
+            if (signal.aborted) return;
             if (!Number.isSafeInteger(update.update_id) || update.update_id < 0 || update.update_id >= Number.MAX_SAFE_INTEGER) {
               throw new Error("telegram_update_id_invalid");
             }
@@ -243,43 +263,49 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
             if (claim && claim.status !== "accepted") {
               this.log(`[telegram] update admission suppressed id=${update.update_id} status=${claim.status}`);
               if (claim.status === "blocked_unresolved") {
-                await sleep(this.opts.poll_interval_ms ?? 1500);
+                await delay(this.opts.poll_interval_ms ?? 1500, undefined, { signal });
                 break;
               }
-              this.offset = Math.max(this.offset, update.update_id + 1);
+              polling.offset = Math.max(polling.offset, update.update_id + 1);
               continue;
             }
-            if (!claim && update.update_id < this.offset) continue;
-            const inbound = await this.normalize(update);
-            if (!inbound) {
-              this.opts.inbox?.settle(update.update_id, payloadDigest, "handler_returned");
-              this.offset = Math.max(this.offset, update.update_id + 1);
-              continue;
-            }
+            if (!claim && update.update_id < polling.offset) continue;
+            if (claim?.status === "accepted") polling.claim = { updateId: update.update_id, payloadDigest };
+            const inbound = await this.normalize(update, signal);
             try {
-              await handler(inbound.request, inbound.context);
-              this.opts.inbox?.settle(update.update_id, payloadDigest, "handler_returned");
-            } catch (error) {
-              this.opts.inbox?.settle(update.update_id, payloadDigest, "outcome_unknown");
-              this.log(`[telegram] inbound handler failed; outcome unknown id=${update.update_id}`);
+              if (signal.aborted) return;
+              let outcome: "handler_returned" | "outcome_unknown" = "handler_returned";
+              if (inbound) {
+                try {
+                  await handler(inbound.request, inbound.context);
+                } catch {
+                  outcome = "outcome_unknown";
+                }
+              }
+              if (signal.aborted) return;
+              this.opts.inbox?.settle(update.update_id, payloadDigest, outcome);
+              polling.claim = undefined;
+              polling.offset = Math.max(polling.offset, update.update_id + 1);
+              if (outcome === "outcome_unknown") {
+                this.log(`[telegram] inbound handler failed; outcome unknown id=${update.update_id}`);
+              }
             } finally {
-              for (const image of inbound.context?.ephemeral_images ?? []) image.data.fill(0);
-              for (const audio of inbound.context?.ephemeral_audio ?? []) audio.data.fill(0);
+              for (const image of inbound?.context?.ephemeral_images ?? []) image.data.fill(0);
+              for (const audio of inbound?.context?.ephemeral_audio ?? []) audio.data.fill(0);
             }
-            this.offset = Math.max(this.offset, update.update_id + 1);
           }
-        } else if (!r.ok) {
-          this.log(`[telegram] getUpdates failed: ${r.description ?? "unknown"}`);
-          await sleep(this.opts.poll_interval_ms ?? 1500);
         }
+        if (r.ok) continue;
+        this.log(`[telegram] getUpdates failed: ${r.description ?? "unknown"}`);
       } catch (e) {
+        if (signal.aborted) return;
         this.log(`[telegram] poll error: ${e instanceof Error ? e.message : String(e)}`);
-        await sleep(this.opts.poll_interval_ms ?? 1500);
       }
+      await delay(this.opts.poll_interval_ms ?? 1500, undefined, { signal }).catch(() => undefined);
     }
   }
 
-  private async normalize(update: TelegramUpdate): Promise<NormalizedTelegramInbound | null> {
+  private async normalize(update: TelegramUpdate, signal: AbortSignal): Promise<NormalizedTelegramInbound | null> {
     const msg = update.message ?? update.edited_message;
     if (!msg) return null;
     if (msg.from?.is_bot) return null;
@@ -310,14 +336,14 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     const hasImageAttachment = attachmentKinds.includes("photo") ||
       (attachmentKinds.includes("document") && isSupportedImageMimeType(msg.document?.mime_type));
     const imageAttachment = hasImageAttachment
-      ? await this.readImageAttachment(msg, attachmentKinds)
+      ? await this.readImageAttachment(msg, attachmentKinds, signal)
       : null;
     const hasAudioAttachment = attachmentKinds.includes("audio") || attachmentKinds.includes("voice");
     const audioAttachment = hasAudioAttachment
-      ? await this.readAudioAttachment(msg, attachmentKinds)
+      ? await this.readAudioAttachment(msg, attachmentKinds, signal)
       : null;
     const textAttachment = attachmentKinds.length > 0 && imageAttachment === null && audioAttachment === null
-      ? await this.readTextAttachment(msg.document, attachmentKinds)
+      ? await this.readTextAttachment(msg.document, attachmentKinds, signal)
       : null;
     const contentParts = text ? [text] : [];
     if (textAttachment) {
@@ -382,6 +408,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   private async readTextAttachment(
     document: TelegramMessage["document"],
     attachmentKinds: readonly string[],
+    signal: AbortSignal,
   ): Promise<TelegramTextAttachmentResult> {
     if (!document || attachmentKinds.length !== 1 || attachmentKinds[0] !== "document") {
       return { status: "unsupported_type" };
@@ -402,7 +429,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
     let fileInfo: { ok: boolean; result?: unknown };
     try {
-      fileInfo = await this.call("getFile", { file_id: document.file_id });
+      fileInfo = await this.call("getFile", { file_id: document.file_id }, signal);
     } catch {
       return { status: "unavailable" };
     }
@@ -420,12 +447,13 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     }
     if (typeof filePath !== "string" || !isSafeTelegramFilePath(filePath)) return { status: "unavailable" };
 
-    return this.downloadTextAttachment(filePath);
+    return this.downloadTextAttachment(filePath, signal);
   }
 
   private async readImageAttachment(
     message: TelegramMessage,
     attachmentKinds: readonly string[],
+    signal: AbortSignal,
   ): Promise<TelegramImageAttachmentResult> {
     if (attachmentKinds.length !== 1) return { status: "unsupported_type" };
     let fileId: string | undefined;
@@ -460,7 +488,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
     let fileInfo: { ok: boolean; result?: unknown };
     try {
-      fileInfo = await this.call("getFile", { file_id: fileId });
+      fileInfo = await this.call("getFile", { file_id: fileId }, signal);
     } catch {
       return { status: "unavailable" };
     }
@@ -476,7 +504,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     }
     if (typeof filePath !== "string" || !isSafeTelegramFilePath(filePath)) return { status: "unavailable" };
 
-    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_IMAGE_BYTES);
+    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_IMAGE_BYTES, signal);
     if (downloaded.status !== "read") return downloaded;
     const mediaType = detectTransientImageMediaType(downloaded.bytes);
     if (!mediaType || (declaredMime !== undefined && declaredMime !== mediaType)) {
@@ -489,6 +517,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   private async readAudioAttachment(
     message: TelegramMessage,
     attachmentKinds: readonly string[],
+    signal: AbortSignal,
   ): Promise<TelegramAudioAttachmentResult> {
     if (attachmentKinds.length !== 1 || (attachmentKinds[0] !== "audio" && attachmentKinds[0] !== "voice")) {
       return { status: "unsupported_type" };
@@ -506,7 +535,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
     let fileInfo: { ok: boolean; result?: unknown };
     try {
-      fileInfo = await this.call("getFile", { file_id: attachment.file_id });
+      fileInfo = await this.call("getFile", { file_id: attachment.file_id }, signal);
     } catch {
       return { status: "unavailable" };
     }
@@ -522,7 +551,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     }
     if (typeof filePath !== "string" || !isSafeTelegramFilePath(filePath)) return { status: "unavailable" };
 
-    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_AUDIO_BYTES);
+    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_AUDIO_BYTES, signal);
     if (downloaded.status !== "read") return downloaded;
     const format = detectTransientAudioFormat(downloaded.bytes);
     if (!format || !transientAudioMimeMatches(attachment.mime_type, format)) {
@@ -532,8 +561,8 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     return { status: "read", audio: { format, data: downloaded.bytes } };
   }
 
-  private async downloadTextAttachment(filePath: string): Promise<TelegramTextAttachmentResult> {
-    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_TEXT_ATTACHMENT_BYTES);
+  private async downloadTextAttachment(filePath: string, signal: AbortSignal): Promise<TelegramTextAttachmentResult> {
+    const downloaded = await this.downloadBinaryFile(filePath, MAX_TELEGRAM_TEXT_ATTACHMENT_BYTES, signal);
     if (downloaded.status !== "read") return downloaded;
     let content: string;
     try {
@@ -549,20 +578,23 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     return { status: "read", content };
   }
 
-  private async downloadBinaryFile(filePath: string, maxBytes: number): Promise<TelegramBinaryDownloadResult> {
+  private async downloadBinaryFile(filePath: string, maxBytes: number, callerSignal: AbortSignal): Promise<TelegramBinaryDownloadResult> {
     const token = this.opts.bot_token;
     const fetchImpl = this.opts.fetch ?? globalThis.fetch;
-    if (!token || !fetchImpl) return { status: "unavailable" };
+    if (!token || !fetchImpl || callerSignal.aborted) return { status: "unavailable" };
     const path = filePath.split("/").map((segment) => encodeURIComponent(segment)).join("/");
     const url = `https://api.telegram.org/file/bot${token}/${path}`;
     const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, callerSignal]);
     const timeoutMs = this.opts.request_timeout_ms ?? 15_000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const chunks: Uint8Array[] = [];
+    const cancelRead = () => { void reader?.cancel().catch(() => undefined); };
+    signal.addEventListener("abort", cancelRead, { once: true });
     try {
-      const response = await fetchImpl(url, { method: "GET", redirect: "error", signal: controller.signal });
-      if (!response.ok || !response.body) {
+      const response = await fetchImpl(url, { method: "GET", redirect: "error", signal });
+      if (signal.aborted || !response.ok || !response.body) {
         await response.body?.cancel().catch(() => undefined);
         return { status: "unavailable" };
       }
@@ -575,6 +607,10 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       let totalBytes = 0;
       while (true) {
         const part = await reader.read();
+        if (signal.aborted) {
+          if (!part.done) part.value.fill(0);
+          return { status: "unavailable" };
+        }
         if (part.done) break;
         totalBytes += part.value.byteLength;
         if (totalBytes > maxBytes) {
@@ -594,6 +630,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     } catch {
       return { status: "unavailable" };
     } finally {
+      signal.removeEventListener("abort", cancelRead);
       for (const chunk of chunks) chunk.fill(0);
       reader?.releaseLock();
       clearTimeout(timer);
@@ -612,15 +649,34 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         ? ((this.opts.poll_timeout_sec ?? 25) * 1000) + 5000
         : 15_000);
     const controller = new AbortController();
+    const signal = callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let res: Response;
     try {
-      res = await fetchImpl(url, {
+      signal.throwIfAborted();
+      const res = await fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(stripUndefined(body)),
-        signal: callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal,
+        signal,
       });
+      // Keep the send deadline on the dispatch request and bound inbound body reads as well.
+      if (method === "sendMessage") clearTimeout(timer);
+      if (signal.aborted) {
+        void res.body?.cancel().catch(() => undefined);
+        signal.throwIfAborted();
+      }
+      const text = await res.text();
+      signal.throwIfAborted();
+      let parsed: unknown;
+      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { ok: false, description: text }; }
+      if (isRecord(parsed)) {
+        return {
+          ok: parsed.ok === true,
+          result: parsed.result,
+          description: typeof parsed.description === "string" ? parsed.description : res.ok ? undefined : `http_${res.status}`,
+        };
+      }
+      return { ok: false, description: `http_${res.status}` };
     } catch (error) {
       if (isAbortError(error)) {
         return { ok: false, description: `telegram_${method}_timeout_${timeoutMs}ms` };
@@ -629,17 +685,6 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     } finally {
       clearTimeout(timer);
     }
-    const text = await res.text();
-    let parsed: unknown;
-    try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { ok: false, description: text }; }
-    if (isRecord(parsed)) {
-      return {
-        ok: parsed.ok === true,
-        result: parsed.result,
-        description: typeof parsed.description === "string" ? parsed.description : res.ok ? undefined : `http_${res.status}`,
-      };
-    }
-    return { ok: false, description: `http_${res.status}` };
   }
 
   private log(line: string): void { (this.opts.log ?? console.log)(line); }
@@ -801,5 +846,3 @@ function isAbortError(error: unknown): boolean {
       (error as { name?: unknown }).name === "AbortError",
   );
 }
-
-function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }

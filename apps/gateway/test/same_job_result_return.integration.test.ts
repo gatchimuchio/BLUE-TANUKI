@@ -495,6 +495,81 @@ describe("served Telegram result return and request-bound media ingress", () => 
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it("preserves Telegram admission as outcome unknown when Gateway stops during getFile", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-shutdown-"));
+    const stateRoot = join(tempRoot, "state");
+    const historyFile = join(tempRoot, "complete-history.jsonl");
+    const captureFile = join(tempRoot, "telegram-capture.jsonl");
+    const restartedCaptureFile = join(tempRoot, "restarted-capture.jsonl");
+    const preloadFile = join(tempRoot, "telegram-fetch-fixture.cjs");
+    const shutdownFile = join(tempRoot, "request-shutdown");
+    const envFile = join(tempRoot, "blue-tanuki.env");
+    const attachment = Buffer.from("synthetic attachment for interrupted Telegram intake", "utf8");
+    const fileId = "synthetic-shutdown-text-file-id";
+    const update = { update_id: 764, message: { message_id: 764, message_thread_id: TELEGRAM_THREAD_ID,
+      caption: "合成添付を読んでください。", document: { file_id: fileId, mime_type: "text/plain", file_size: attachment.length },
+      chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" }, from: { id: Number(TELEGRAM_USER_ID), is_bot: false } } };
+    const updateDigest = createHash("sha256").update(JSON.stringify(update)).digest("hex");
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+    const readCursor = () => {
+      const database = new DatabaseSync(join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite"),
+        { readOnly: true });
+      try {
+        return database.prepare("SELECT update_id, payload_digest, delivery_state FROM telegram_update_cursor").all();
+      } finally {
+        database.close();
+      }
+    };
+    let providerRequests = 0;
+    const provider = createServer((_request, response) => {
+      providerRequests += 1;
+      response.writeHead(500).end();
+    });
+    let gateway: CapturedProcess | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const env = isolatedEnvironment(providerPort, gatewayPort, join(tempRoot, "audit"), stateRoot,
+        join(tempRoot, "memory.jsonl"), historyFile, join(tempRoot, "sessions"), captureFile, JSON.stringify([update]));
+      env.BLUE_TANUKI_ENV_FILE = envFile;
+      env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
+      env.BT_F1003_TELEGRAM_FILES = JSON.stringify({ [fileId]: {
+        file_path: "documents/synthetic-shutdown.txt", bytes_base64: attachment.toString("base64"),
+      } });
+      writeFileSync(envFile, "# 隔離済みの合成試験\n", "utf8");
+      writeFileSync(preloadFile, telegramFetchPreload(), "utf8");
+      gateway = spawnGateway(env, preloadFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      await waitFor(() => readCaptureEvents(captureFile).find((event) => event.method === "getFile") ?? null,
+        gateway, "Telegramの添付照会が永続受付後に開始されなかった");
+      expect(readCursor()).toEqual([{ update_id: update.update_id, payload_digest: updateDigest, delivery_state: "dispatching" }]);
+
+      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
+      writeFileSync(shutdownFile, "stop\n", "utf8");
+      expect(await stopped).toEqual([0, null]);
+      gateway = undefined;
+      expect(readCaptureEvents(captureFile).map((event) => event.method))
+        .toEqual(["getUpdates", "getFile", "getFileAborted"]);
+      expect(readCursor()).toEqual([{ update_id: update.update_id, payload_digest: updateDigest, delivery_state: "outcome_unknown" }]);
+
+      delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
+      env.BT_F1003_TELEGRAM_CAPTURE = restartedCaptureFile;
+      gateway = spawnGateway(env, preloadFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const firstPoll = await waitFor(() => readCaptureEvents(restartedCaptureFile)
+        .find((event) => event.method === "getUpdates") ?? null, gateway, "再起動後のTelegram照会を観測できなかった");
+      expect(firstPoll).toMatchObject({ offset: update.update_id + 1, update_ids: [] });
+      expect(readCaptureEvents(restartedCaptureFile).every((event) => event.method === "getUpdates")).toBe(true);
+      expect(providerRequests).toBe(0);
+      expect(readCaptureText(historyFile) ?? "").not.toContain(`telegram-${update.update_id}`);
+    } finally {
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 describe("Webhookの永続受付", () => {
@@ -1664,6 +1739,15 @@ function telegramFetchPreload(): string {
 const fs = require("node:fs");
 const originalFetch = globalThis.fetch.bind(globalThis);
 function append(event) { fs.appendFileSync(process.env.BT_F1003_TELEGRAM_CAPTURE, JSON.stringify(event) + "\\n", "utf8"); }
+const shutdownFile = process.env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
+if (shutdownFile) {
+  const timer = setInterval(() => {
+    if (process.listenerCount("SIGTERM") === 0 || !fs.existsSync(shutdownFile)) return;
+    clearInterval(timer);
+    process.emit("SIGTERM");
+  }, 20);
+  timer.unref();
+}
 globalThis.fetch = async (input, init) => {
   const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const url = new URL(rawUrl);
@@ -1701,6 +1785,16 @@ globalThis.fetch = async (input, init) => {
       if (!file) throw new Error("synthetic Telegram fixture rejected an unconfigured getFile request");
       const byteLength = Buffer.from(file.bytes_base64, "base64").byteLength;
       append({ method, byte_count: byteLength });
+      if (shutdownFile) {
+        await new Promise((_resolve, reject) => {
+          const abort = () => {
+            append({ method: "getFileAborted" });
+            reject(new DOMException("synthetic Telegram getFile interrupted", "AbortError"));
+          };
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener("abort", abort, { once: true });
+        });
+      }
       return new Response(JSON.stringify({ ok: true, result: { file_path: file.file_path, file_size: byteLength } }),
         { status: 200, headers: { "content-type": "application/json" } });
     }

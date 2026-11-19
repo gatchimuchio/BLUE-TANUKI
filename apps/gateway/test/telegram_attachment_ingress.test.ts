@@ -142,8 +142,11 @@ describe("Telegram text attachment Gateway ingress", () => {
       timestamp: 1,
       metadata: {
         "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
         "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.projection_id": "owner-task:operation-plan",
+        "blue_tanuki.operation_core.used_for_authority": false,
       },
     });
     const boundary = planGatewayInboundBoundary(request);

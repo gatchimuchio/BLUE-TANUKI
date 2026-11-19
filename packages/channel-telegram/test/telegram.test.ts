@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { InboundEphemeralContext } from "@blue-tanuki/channel-base";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import {
@@ -156,6 +156,30 @@ class MemoryTelegramInbox implements TelegramUpdateInbox {
   }
   state(): string | null { return this.current?.state ?? null; }
 }
+
+function deferred<Value>(): { promise: Promise<Value>; resolve: (value: Value) => void } {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((finish) => { resolve = finish; });
+  return { promise, resolve };
+}
+
+function telegramResult(result: unknown): Response {
+  return Response.json({ ok: true, result });
+}
+
+async function idlePoll(signal?: AbortSignal | null): Promise<Response> {
+  if (signal && !signal.aborted) {
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  }
+  return telegramResult([]);
+}
+
+function fixtureMessage(updateId: number, text: string): FixtureUpdate {
+  return { update_id: updateId, message: { message_id: updateId, text,
+    chat: { id: 12345, type: "private" }, from: { id: 12345 } } };
+}
+
+const lifecycleGrant = { user_id: "12345", chat_id: "12345", message_thread_id: null } as const;
 
 describe("Telegram inbound identity and update handoff", () => {
   it("refuses live polling without the Gateway durable inbox", async () => {
@@ -400,6 +424,170 @@ describe("Telegram inbound identity and update handoff", () => {
     await channel.stop();
     expect(inbox.state()).toBe("outcome_unknown");
     expect(offsets[1]).toBe(32);
+  });
+});
+
+describe("Telegram inbound stop and restart", () => {
+  it("aborts the old long poll and claims a late reply only when replayed into the restarted poll", async () => {
+    const update = fixtureMessage(71, "synthetic restart update");
+    const oldRequest = deferred<AbortSignal | null | undefined>();
+    const oldResponse = deferred<Response>();
+    const restartedRequest = deferred<void>();
+    const restartedResponse = deferred<Response>();
+    const afterDispatch = deferred<void>();
+    const offsets: Array<number | null> = [];
+    const inbox = new MemoryTelegramInbox();
+    const claim = vi.spyOn(inbox, "claim");
+    const oldHandler = vi.fn(async () => {});
+    const currentHandler = vi.fn(async () => {});
+    const fetch: TelegramFetch = async (input, init) => {
+      expect(String(input)).toMatch(/\/getUpdates$/u);
+      const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number };
+      offsets.push(body.offset ?? null);
+      if (offsets.length === 1) {
+        oldRequest.resolve(init?.signal);
+        return oldResponse.promise;
+      }
+      if (offsets.length === 2) {
+        restartedRequest.resolve();
+        return restartedResponse.promise;
+      }
+      afterDispatch.resolve();
+      return idlePoll(init?.signal);
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", request_timeout_ms: 2000,
+      inbound_grants: [lifecycleGrant], fetch, inbox });
+    try {
+      await channel.start(oldHandler);
+      const signal = await oldRequest.promise;
+      expect(signal?.aborted).toBe(false);
+      const stopping = channel.stop();
+      await channel.start(currentHandler);
+      await restartedRequest.promise;
+      await stopping;
+      expect(signal?.aborted).toBe(true);
+
+      // Simulate an HTTP producer that returns even after its signal is canceled.
+      oldResponse.resolve(telegramResult([update]));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(offsets).toEqual([null, null]);
+      expect(claim).not.toHaveBeenCalled();
+      expect(oldHandler).not.toHaveBeenCalled();
+
+      restartedResponse.resolve(telegramResult([update]));
+      await afterDispatch.promise;
+      expect(claim.mock.calls).toEqual([[71, expect.any(String)]]);
+      expect(currentHandler.mock.calls).toEqual([[expect.objectContaining({ id: "telegram-71" }), undefined]]);
+      expect(inbox.state()).toBe("handler_returned");
+      expect(offsets[2]).toBe(72);
+    } finally {
+      await channel.stop();
+      oldResponse.resolve(telegramResult([]));
+      restartedResponse.resolve(telegramResult([]));
+    }
+  });
+
+  it("preserves a claimed attachment as outcome unknown and refuses a download after stop", async () => {
+    const update: FixtureUpdate = { update_id: 81, message: { message_id: 81,
+      chat: { id: 12345, type: "private" }, from: { id: 12345 },
+      document: { file_id: "synthetic-text", file_name: "note.txt", mime_type: "text/plain", file_size: 8 } } };
+    const fileRequest = deferred<AbortSignal | null | undefined>();
+    const fileResponse = deferred<Response>();
+    const inbox = new MemoryTelegramInbox();
+    const settle = vi.spyOn(inbox, "settle");
+    const handler = vi.fn(async () => {});
+    let pollCount = 0;
+    let downloads = 0;
+    const fetch: TelegramFetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/getUpdates")) {
+        pollCount += 1;
+        return pollCount === 1 ? telegramResult([update]) : idlePoll(init?.signal);
+      }
+      if (url.endsWith("/getFile")) {
+        fileRequest.resolve(init?.signal);
+        return fileResponse.promise;
+      }
+      downloads += 1;
+      return new Response("fixture!", { headers: { "content-type": "text/plain" } });
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", request_timeout_ms: 2000,
+      inbound_grants: [lifecycleGrant], fetch, inbox });
+    try {
+      await channel.start(handler);
+      const signal = await fileRequest.promise;
+      expect(signal?.aborted).toBe(false);
+      expect(inbox.latestUpdateId()).toBe(81);
+      expect(inbox.state()).toBe("dispatching");
+
+      await channel.stop();
+      expect(signal?.aborted).toBe(true);
+      expect(inbox.state()).toBe("outcome_unknown");
+      fileResponse.resolve(telegramResult({ file_path: "documents/note.txt", file_size: 8 }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(pollCount).toBe(1);
+      expect(downloads).toBe(0);
+      expect(handler).not.toHaveBeenCalled();
+      expect(settle.mock.calls).toEqual([[81, expect.any(String), "outcome_unknown"]]);
+    } finally {
+      await channel.stop();
+      fileResponse.resolve(telegramResult({}));
+    }
+  });
+
+  it("preserves an active handler as outcome unknown and suppresses the old batch after restart", async () => {
+    const first = fixtureMessage(91, "synthetic in-flight handler");
+    const next = fixtureMessage(92, "synthetic following message");
+    const handlerEntered = deferred<void>();
+    const releaseOldHandler = deferred<void>();
+    const afterDispatch = deferred<void>();
+    const oldHandler = vi.fn(async () => {
+      handlerEntered.resolve();
+      await releaseOldHandler.promise;
+    });
+    const currentHandler = vi.fn(async () => {});
+    const inbox = new MemoryTelegramInbox();
+    const claim = vi.spyOn(inbox, "claim");
+    const settle = vi.spyOn(inbox, "settle");
+    const offsets: Array<number | null> = [];
+    const fetch: TelegramFetch = async (input, init) => {
+      expect(String(input)).toMatch(/\/getUpdates$/u);
+      const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number };
+      offsets.push(body.offset ?? null);
+      if (offsets.length <= 2) return telegramResult([first, next]);
+      afterDispatch.resolve();
+      return idlePoll(init?.signal);
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", request_timeout_ms: 2000,
+      inbound_grants: [lifecycleGrant], fetch, inbox });
+    try {
+      await channel.start(oldHandler);
+      await handlerEntered.promise;
+      await channel.stop();
+      expect(inbox.state()).toBe("outcome_unknown");
+      expect(inbox.latestUpdateId()).toBe(91);
+      expect(claim.mock.calls).toEqual([[91, expect.any(String)]]);
+
+      await channel.start(currentHandler);
+      await afterDispatch.promise;
+      expect(offsets).toEqual([null, 92, 93]);
+      expect(currentHandler.mock.calls).toEqual([[expect.objectContaining({ id: "telegram-92" }), undefined]]);
+
+      releaseOldHandler.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(oldHandler.mock.calls).toEqual([[expect.objectContaining({ id: "telegram-91" }), undefined]]);
+      expect(claim.mock.calls.map(([id]) => id)).toEqual([91, 91, 92]);
+      expect(settle.mock.calls).toEqual([
+        [91, expect.any(String), "outcome_unknown"],
+        [92, expect.any(String), "handler_returned"],
+      ]);
+      expect(inbox.latestUpdateId()).toBe(92);
+      expect(inbox.state()).toBe("handler_returned");
+    } finally {
+      await channel.stop();
+      releaseOldHandler.resolve();
+    }
   });
 });
 
