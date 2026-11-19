@@ -27,8 +27,9 @@ import {
 import { goalPurposeMemoryStorage } from "../src/operation_result_memory_config.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { EmergencyStopStateStore } from "../src/emergency_stop_state_store.js";
 import {
-  GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type RuntimeRecoveryFenceEvidence,
+  GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type GoalPurposeRepairFenceEvidence, type RuntimeRecoveryFenceEvidence,
 } from "../src/runtime_owner_lease.js";
 import {
   applyOfflineGoalPurposeRepair,
@@ -39,11 +40,14 @@ import {
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
+  observeOfflineGoalPurposeRepair,
   planOfflineGoalPurposeRepair,
   planOfflineRecoveryRestore,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
+  rollbackInterruptedOfflineGoalPurposeRepair,
+  type OfflineGoalPurposeRepairPlan,
   type RecoveryBackupOperationPlanDependencyInventory,
   type RecoveryBackupOperationPlanInventory,
 } from "../src/recovery_surface.js";
@@ -144,6 +148,32 @@ function setFixtureSqliteApplicationId(filepath: string, applicationId: number):
   } finally {
     database.close();
   }
+}
+
+function goalPurposeRepairFence(plan: OfflineGoalPurposeRepairPlan): GoalPurposeRepairFenceEvidence {
+  return {
+    operation: "recovery.goal_purpose_repair", command_digest: createHash("sha256").update(randomUUID()).digest("hex"),
+    backup_id: plan.backup_id, manifest_sha256: plan.manifest_sha256, repair_sha256: plan.repair_sha256,
+    verification: { before_sha256: plan.before_sha256, after_sha256: plan.after_sha256 },
+  };
+}
+
+function recordFixtureGoalPurposeRepairApproval(auditPath: string, fence: GoalPurposeRepairFenceEvidence): void {
+  const audit = new AuditLog({ filepath: auditPath });
+  const actor = "webchat-resume-token-holder";
+  const requestId = randomUUID();
+  const commandId = randomUUID();
+  const timestamp = Date.now();
+  const receipt = {
+    kind: "authority_event" as const, request_id: requestId, command_id: commandId, actor,
+    operation: "recovery.restore" as const, timestamp,
+    offline_goal_purpose_repair_review: { command_digest: fence.command_digest,
+      review_digest: "a".repeat(64), repair_sha256: fence.repair_sha256 },
+  };
+  audit.append({ ...receipt, event: "offline_goal_purpose_repair_content_reviewed", reason: "fixture_review" });
+  audit.append({ kind: "command_lifecycle", phase: "approval_approved", request_id: requestId, command_id: commandId,
+    upstream_commit_hash: "b".repeat(64), upstream_decision: "ASSERT", actor, reason: "human_approval:approve", timestamp });
+  audit.append({ ...receipt, event: "offline_goal_purpose_repair_authorized", reason: "fixture_approved" });
 }
 
 describe("task-scoped M restore-point correlation", () => {
@@ -1714,7 +1744,7 @@ describe("buildRecoverySnapshot", () => {
           if (interruption === "emergency stop" && firstMemberReplaced) throw new Error("synthetic emergency stop");
         };
         try {
-          const operation = applyOfflineGoalPurposeRepair(env, plan, assertFence, permitsContinuation);
+          const operation = applyOfflineGoalPurposeRepair(env, plan, assertFence, permitsContinuation, goalPurposeRepairFence(plan));
           if (interruption === "target drift" || interruption === "lost fence") {
             await expect(operation).rejects.toThrow();
           } else {
@@ -1743,6 +1773,93 @@ describe("buildRecoverySnapshot", () => {
         }
         expect(await readFile(targets[1])).toEqual(initialM);
         expect(await readFile(auditPath)).toEqual(auditBefore);
+        expect(await readFile(backup.backup_manifest_path!)).toEqual(manifest);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }, 25_000,
+  );
+
+  it.each(["original J", "missing J", "durable stop"] as const)(
+    "rechecks the interrupted staged pair with %s", async (scenario) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-goal-purpose-interrupted-"));
+      try {
+        const { env, auditPath, sourceMemory } = await seedGoalPurposeRecoveryFixture(root);
+        const jPath = sourceMemory.database_path;
+        const mPath = sourceMemory.memory_database_path;
+        const safety = EmergencyStopStateStore.fromEnvironment(env);
+        safety.close();
+        const backup = await createRecoveryBackup(env);
+        const manifest = await readFile(backup.backup_manifest_path!);
+        const pack = path.dirname(backup.backup_manifest_path!);
+        const archivedJ = await readFile(path.join(pack, "canonical-state", "goal_purpose_j_control.sqlite"));
+        if (scenario === "missing J") await unlink(jPath);
+        else setFixtureSqliteApplicationId(jPath, 101);
+        setFixtureSqliteApplicationId(mPath, 102);
+        const beforeJ = scenario === "missing J" ? null : await readFile(jPath);
+        const beforeM = await readFile(mPath);
+        const plan = await planOfflineGoalPurposeRepair(env, { backup_id: backup.backup_id!,
+          manifest_sha256: createHash("sha256").update(manifest).digest("hex") });
+        if (!plan) throw new Error("fixture repair plan unavailable");
+        const fence = goalPurposeRepairFence(plan);
+        recordFixtureGoalPurposeRepairApproval(auditPath, fence);
+        const auditBeforeRollback = await readFile(auditPath);
+
+        let firstProcessCanContinue = true;
+        const rename = fs.rename.bind(fs);
+        const interrupt = vi.spyOn(fs, "rename").mockImplementationOnce(async (source, target) => {
+          expect(target).toBe(jPath);
+          await rename(source, target);
+          firstProcessCanContinue = false;
+        });
+        try {
+          await expect(applyOfflineGoalPurposeRepair(env, plan, () => {
+            if (!firstProcessCanContinue) throw new Error("fixture process was stopped");
+          }, () => {}, fence)).rejects.toThrow("fixture process was stopped");
+        } finally {
+          interrupt.mockRestore();
+        }
+        expect(await readFile(jPath)).toEqual(archivedJ);
+        expect(await readFile(mPath)).toEqual(beforeM);
+        const mixed = await observeOfflineGoalPurposeRepair(env, fence);
+        expect(mixed).toMatch(/^[a-f0-9]{64}$/u);
+        expect(mixed).not.toBe(plan.before_sha256);
+        expect(mixed).not.toBe(plan.after_sha256);
+
+        const stage = path.join(path.dirname(jPath), `.offline-goal-repair-${fence.command_digest}`);
+        const journalPath = path.join(stage, "before-state.json");
+        const journal = await readFile(journalPath, "utf8");
+        expect(JSON.parse(journal)).toMatchObject({ schema_version: 2, command_digest: fence.command_digest,
+          repair_sha256: fence.repair_sha256, before_sha256: plan.before_sha256, after_sha256: plan.after_sha256 });
+        const rollback = (digest: string) => rollbackInterruptedOfflineGoalPurposeRepair(env, fence, digest, () => {});
+        await expect(rollback(plan.before_sha256)).resolves.toBe(false);
+        await writeFile(journalPath, journal.replace('"schema_version":2', '"schema_version":1'));
+        await expect(rollback(mixed!)).rejects.toThrow("offline_goal_purpose_file_changed");
+        expect(await readFile(jPath)).toEqual(archivedJ);
+        expect(await readFile(mPath)).toEqual(beforeM);
+        await writeFile(journalPath, journal);
+
+        if (scenario === "durable stop") {
+          const stop = EmergencyStopStateStore.fromEnvironment(env);
+          try {
+            stop.activate({ control_event_id: randomUUID(), actor: "fixture-stop-owner", occurred_at_ms: Date.now() });
+          } finally { stop.close(); }
+          await expect(rollback(mixed!)).rejects.toThrow("offline_goal_purpose_rollback_authority_unverified");
+          expect(await readFile(jPath)).toEqual(archivedJ);
+          expect(await observeOfflineGoalPurposeRepair(env, fence)).toBe(mixed);
+        } else {
+          await expect(rollback(mixed!)).resolves.toBe(true);
+          expect(await observeOfflineGoalPurposeRepair(env, fence)).toBe(plan.before_sha256);
+          if (beforeJ) expect(await readFile(jPath)).toEqual(beforeJ);
+          else {
+            await expect(stat(jPath)).rejects.toMatchObject({ code: "ENOENT" });
+            expect(await readFile(path.join(stage, "interrupted-j-control.sqlite"))).toEqual(archivedJ);
+          }
+          await expect(rollback(mixed!)).resolves.toBe(false);
+        }
+        expect(await readFile(mPath)).toEqual(beforeM);
+        expect(await readFile(journalPath, "utf8")).toBe(journal);
+        expect(await readFile(auditPath)).toEqual(auditBeforeRollback);
         expect(await readFile(backup.backup_manifest_path!)).toEqual(manifest);
       } finally {
         await rm(root, { recursive: true, force: true });

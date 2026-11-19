@@ -63,7 +63,14 @@ type OwnerIdentity = Pick<OwnerStateRow, "generation" | "execution_epoch" | "hos
 type PreparedGoalPurposeRepair = { readonly binding: OfflineGoalPurposeRepairBinding; readonly issued_at_ms: number };
 type RecoveryFenceTerminalStatus = "pre_action_state_matched" | "postconditions_matched";
 export type RuntimeRecoveryFenceReconciliation =
-  { readonly status: RecoveryFenceTerminalStatus | "unresolved" | "no_pending" };
+  { readonly status: RecoveryFenceTerminalStatus | "rolled_back" | "unresolved" | "no_pending" };
+
+interface GoalPurposeRepairFenceRollback {
+  readonly command_digest: string;
+  readonly repair_sha256: string;
+  readonly apply: (evidence: GoalPurposeRepairFenceEvidence, observedStateSha256: string,
+    assertFenceContinuity: () => void) => Promise<boolean>;
+}
 
 export type OfflineGatewayObservation<T> =
   | { readonly status: "verified"; readonly observation: T }
@@ -446,59 +453,97 @@ export async function applyUnderOfflineGoalPurposeRepairLock(
   }
 }
 
-/** Settle existing evidence under the regular Gateway lock, without obtaining a runtime lease or replaying work. */
+/** 既存の停止境界を照合し、明示された中断修復だけを同じ所有者ロック内で巻き戻す。 */
 export async function reconcileRuntimeRecoveryFence(
   env: NodeJS.ProcessEnv,
   expected: Pick<RuntimeRecoveryFenceEvidence, "backup_id" | "manifest_sha256"> &
     Partial<Pick<RuntimeRecoveryFenceEvidence, "command_digest">>,
   observe: (evidence: RuntimeRecoveryFenceEvidence) => Promise<string | null>,
+  rollback?: GoalPurposeRepairFenceRollback,
 ): Promise<RuntimeRecoveryFenceReconciliation> {
+  if (rollback && (!validExplicitBackupId(expected.backup_id) || !isDigest(expected.manifest_sha256) ||
+      !isDigest(rollback.command_digest) || !isDigest(rollback.repair_sha256) ||
+      (expected.command_digest !== undefined && expected.command_digest !== rollback.command_digest))) {
+    return { status: "unresolved" };
+  }
   let lockDb: DatabaseType | undefined;
   let stateDb: DatabaseType | undefined;
   try {
     const files = existingRuntimeOwnerFiles(env);
     if (!files) return { status: "no_pending" };
     if (!files.lockPath) return { status: "unresolved" };
-    const lockIdentity = ownerFileIdentity(files.lockPath);
-    const stateIdentity = ownerFileIdentity(files.statePath);
-    lockDb = acquireExistingRuntimeOwnerLock(files.lockPath);
+    const { lockPath, statePath } = files;
+    const lockIdentity = ownerFileIdentity(lockPath);
+    const stateIdentity = ownerFileIdentity(statePath);
+    lockDb = acquireExistingRuntimeOwnerLock(lockPath);
+    const lock = lockDb;
 
-    stateDb = openOwnerDatabaseForRecovery(files.statePath);
-    stateDb.exec("BEGIN IMMEDIATE");
-    assertIntegrity(stateDb);
-    const version = pragmaInteger(stateDb, "user_version");
-    if (version === 1 && hasOwnerStateSchemaV1(stateDb) && !hasRecoveryFence(stateDb)) {
-      const legacy = stateDb.prepare("SELECT generation, execution_epoch, updated_at_ms FROM gateway_owner_state WHERE singleton=1")
+    stateDb = openOwnerDatabaseForRecovery(statePath);
+    const db = stateDb;
+    db.exec("BEGIN IMMEDIATE");
+    assertIntegrity(db);
+    const version = pragmaInteger(db, "user_version");
+    if (version === 1 && hasOwnerStateSchemaV1(db) && !hasRecoveryFence(db)) {
+      const legacy = db.prepare("SELECT generation, execution_epoch, updated_at_ms FROM gateway_owner_state WHERE singleton=1")
         .get() as OwnerGeneration | undefined;
       return { status: legacy && validOwnerGeneration(legacy) ? "no_pending" : "unresolved" };
     }
-    if (!hasOwnerStateSchema(stateDb)) return { status: "unresolved" };
-    const owner = readOwnerState(stateDb);
+    if (!hasOwnerStateSchema(db)) return { status: "unresolved" };
+    const owner = readOwnerState(db);
     if (!owner || !validOwnerGeneration(owner) || owner.host_audience_digest !== currentHostAudienceDigest()) {
       return { status: "unresolved" };
     }
-    if (version === OWNER_STATE_SCHEMA_VERSION && !hasRecoveryFence(stateDb)) return { status: "no_pending" };
+    if (version === OWNER_STATE_SCHEMA_VERSION && !hasRecoveryFence(db)) return { status: "no_pending" };
     if (version !== RECOVERY_FENCE_SCHEMA_VERSION) return { status: "unresolved" };
-    const evidence = readRecoveryFence(stateDb, owner.generation, owner.execution_epoch, owner.host_audience_digest);
-    if (!evidence.verification || evidence.backup_id !== expected.backup_id ||
+    const readCurrentFence = () => readRecoveryFence(db, owner.generation, owner.execution_epoch, owner.host_audience_digest);
+    const evidence = readCurrentFence();
+    const verification = evidence.verification;
+    if (!verification || evidence.backup_id !== expected.backup_id ||
         evidence.manifest_sha256 !== expected.manifest_sha256 ||
-        (expected.command_digest !== undefined && evidence.command_digest !== expected.command_digest)) {
+        (expected.command_digest !== undefined && evidence.command_digest !== expected.command_digest) ||
+        (rollback && (evidence.operation !== "recovery.goal_purpose_repair" || evidence.command_digest !== rollback.command_digest ||
+          evidence.repair_sha256 !== rollback.repair_sha256))) {
       return { status: "unresolved" };
     }
 
-    const observed = await observe(evidence);
-    if (observed === null) return { status: "unresolved" };
+    const assertFenceContinuity = (): void => {
+      const current = existingRuntimeOwnerFiles(env);
+      if (current?.lockPath !== lockPath || current.statePath !== statePath || lock.isTransaction === false ||
+          db.isTransaction === false || ownerFileIdentity(lockPath) !== lockIdentity ||
+          ownerFileIdentity(statePath) !== stateIdentity || JSON.stringify(readOwnerState(db)) !== JSON.stringify(owner) ||
+          pragmaInteger(db, "user_version") !== RECOVERY_FENCE_SCHEMA_VERSION ||
+          JSON.stringify(readCurrentFence()) !== JSON.stringify(evidence)) {
+        throw new Error("gateway_runtime_recovery_fence_mismatch");
+      }
+      assertNoOwnerSidecars(lockPath);
+      assertNoOwnerSidecars(statePath);
+    };
+    assertFenceContinuity();
+    let observed = await observe(evidence);
+    if (!isDigest(observed)) return { status: "unresolved" };
     // A reset can be a no-op. Matching both proofs cannot establish that it ran.
-    const status = observed === evidence.verification.before_sha256 ? "pre_action_state_matched"
-      : observed === evidence.verification.after_sha256 ? "postconditions_matched" : null;
-    if (!status || await observe(evidence) !== observed || lockDb.isTransaction === false ||
-        ownerFileIdentity(files.lockPath) !== lockIdentity || ownerFileIdentity(files.statePath) !== stateIdentity) {
-      return { status: "unresolved" };
+    let status: RecoveryFenceTerminalStatus | null = observed === verification.before_sha256 ? "pre_action_state_matched"
+      : observed === verification.after_sha256 ? "postconditions_matched" : null;
+    const requiresRollback = status === null;
+    if (requiresRollback && !rollback) return { status: "unresolved" };
+    assertFenceContinuity();
+    if (await observe(evidence) !== observed) return { status: "unresolved" };
+    if (status === null) {
+      if (!rollback || evidence.operation !== "recovery.goal_purpose_repair") return { status: "unresolved" };
+      assertFenceContinuity();
+      if (await rollback.apply(evidence, observed, assertFenceContinuity) !== true) return { status: "unresolved" };
+      assertFenceContinuity();
+      observed = verification.before_sha256;
+      if (await observe(evidence) !== observed) return { status: "unresolved" };
+      assertFenceContinuity();
+      if (await observe(evidence) !== observed) return { status: "unresolved" };
+      status = "pre_action_state_matched";
     }
-    persistRecoverySettlement(stateDb, owner.generation, evidence, observed, status);
-    clearRecoveryFence(stateDb);
-    stateDb.exec("COMMIT");
-    return { status };
+    assertFenceContinuity();
+    persistRecoverySettlement(db, owner.generation, evidence, observed, status);
+    clearRecoveryFence(db);
+    db.exec("COMMIT");
+    return { status: requiresRollback ? "rolled_back" : status };
   } catch {
     return { status: "unresolved" };
   } finally {

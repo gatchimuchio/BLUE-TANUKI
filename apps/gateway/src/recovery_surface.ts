@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { recoveryRootPath as recoveryRoot } from "@blue-tanuki/core";
 import { AuditLog, inspectGoalPurposeRecovery } from "@blue-tanuki/hds-brain";
 import { AUDIT_FILENAME } from "./audit_config.js";
+import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
@@ -44,7 +45,7 @@ import {
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
-import type { RuntimeRecoveryFenceEvidence } from "./runtime_owner_lease.js";
+import type { GoalPurposeRepairFenceEvidence, RuntimeRecoveryFenceEvidence } from "./runtime_owner_lease.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
 export type RecoveryAction =
@@ -1641,42 +1642,48 @@ type GoalPurposeReplayContext = ReturnType<typeof readGoalPurposeReplayContext>;
 
 export function hasOfflineGoalPurposeRepairAuditReceipt(env: NodeJS.ProcessEnv,
   binding: { readonly command_digest: string; readonly repair_sha256: string }): boolean {
-  if (!/^[a-f0-9]{64}$/.test(binding.command_digest) || !/^[a-f0-9]{64}$/.test(binding.repair_sha256)) return false;
+  return offlineGoalPurposeRepairAuditReceiptTime(env, binding) !== null;
+}
+
+function offlineGoalPurposeRepairAuditReceiptTime(env: NodeJS.ProcessEnv,
+  binding: { readonly command_digest: string; readonly repair_sha256: string }): number | null {
+  if (!/^[a-f0-9]{64}$/.test(binding.command_digest) || !/^[a-f0-9]{64}$/.test(binding.repair_sha256)) return null;
   try {
     const entries = readGoalPurposeReplayContext(env).audit.list();
     const authorizations = entries.filter(({ log }) => "kind" in log && log.kind === "authority_event" &&
       log.event === "offline_goal_purpose_repair_authorized" &&
       log.offline_goal_purpose_repair_review?.command_digest === binding.command_digest &&
       log.offline_goal_purpose_repair_review.repair_sha256 === binding.repair_sha256);
-    if (authorizations.length !== 1) return false;
+    if (authorizations.length !== 1) return null;
     const authorization = authorizations[0]!;
     if (entries.some(({ index, log }) => index > authorization.index && "kind" in log &&
-        log.kind === "authority_event" && log.event === "emergency_stop_activated")) return false;
+        log.kind === "authority_event" && log.event === "emergency_stop_activated")) return null;
     const log = authorization.log;
     const actor = "webchat-resume-token-holder";
     if (!("kind" in log) || log.kind !== "authority_event" || log.actor !== actor || log.operation !== "recovery.restore" ||
         !log.request_id || !log.command_id || !log.offline_goal_purpose_repair_review ||
-        !/^[a-f0-9]{64}$/.test(log.offline_goal_purpose_repair_review.review_digest)) return false;
+        !/^[a-f0-9]{64}$/.test(log.offline_goal_purpose_repair_review.review_digest) ||
+        !Number.isSafeInteger(log.timestamp) || log.timestamp <= 0) return null;
     const reviewDigest = log.offline_goal_purpose_repair_review.review_digest;
     const reviews = entries.filter(({ log: entry }) => "kind" in entry && entry.kind === "authority_event" &&
       entry.event === "offline_goal_purpose_repair_content_reviewed" && entry.request_id === log.request_id &&
       entry.command_id === log.command_id);
-    if (reviews.length !== 1 || reviews[0]!.index >= authorization.index) return false;
+    if (reviews.length !== 1 || reviews[0]!.index >= authorization.index) return null;
     const review = reviews[0]!;
     const evidence = review.log;
     if (!("kind" in evidence) || evidence.kind !== "authority_event" || evidence.actor !== actor ||
         evidence.operation !== "recovery.restore" || evidence.offline_goal_purpose_repair_review?.review_digest !== reviewDigest ||
         evidence.offline_goal_purpose_repair_review.command_digest !== binding.command_digest ||
-        evidence.offline_goal_purpose_repair_review.repair_sha256 !== binding.repair_sha256) return false;
+        evidence.offline_goal_purpose_repair_review.repair_sha256 !== binding.repair_sha256) return null;
     const approvals = entries.filter(({ index, log: entry }) => index > review.index && "kind" in entry &&
       entry.kind === "command_lifecycle" && entry.request_id === log.request_id && entry.command_id === log.command_id &&
       ["approval_approved", "approval_rejected", "approval_cancelled"].includes(entry.phase));
-    if (approvals.length !== 1 || approvals[0]!.index >= authorization.index) return false;
+    if (approvals.length !== 1 || approvals[0]!.index >= authorization.index) return null;
     const approval = approvals[0]!.log;
     return "kind" in approval && approval.kind === "command_lifecycle" && approval.phase === "approval_approved" &&
-      approval.actor === actor && approval.reason === "human_approval:approve";
+      approval.actor === actor && approval.reason === "human_approval:approve" ? log.timestamp : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -1737,7 +1744,7 @@ function sameGoalPurposeProof(left: GoalPurposeFileProof | null, right: GoalPurp
   return left === null || right === null ? left === right : left.bytes === right.bytes && left.sha256 === right.sha256;
 }
 
-async function readGoalPurposeFileProof(filepath: string): Promise<GoalPurposeFileProof | null> {
+async function readGoalPurposeFileProof(filepath: string, expectedBytes?: number): Promise<GoalPurposeFileProof | null> {
   for (const suffix of ["-journal", "-wal", "-shm"]) {
     if (await recoveryPathKind(filepath + suffix)) throw new Error("offline_goal_purpose_target_busy");
   }
@@ -1748,6 +1755,7 @@ async function readGoalPurposeFileProof(filepath: string): Promise<GoalPurposeFi
   try {
     const before = await handle.stat();
     if (!before.isFile() || before.nlink !== 1) throw new Error("offline_goal_purpose_path_unverified");
+    if (expectedBytes !== undefined && before.size !== expectedBytes) throw new Error("offline_goal_purpose_file_changed");
     const header = Buffer.alloc(20);
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
     if (bytesRead === header.length && header.subarray(0, 16).equals(Buffer.from("SQLite format 3\0")) &&
@@ -1769,7 +1777,7 @@ async function readGoalPurposeFileProof(filepath: string): Promise<GoalPurposeFi
 }
 
 async function assertGoalPurposeFileProof(filepath: string, expected: GoalPurposeFileProof | null): Promise<void> {
-  if (!sameGoalPurposeProof(await readGoalPurposeFileProof(filepath), expected)) {
+  if (!sameGoalPurposeProof(await readGoalPurposeFileProof(filepath, expected?.bytes), expected)) {
     throw new Error("offline_goal_purpose_file_changed");
   }
 }
@@ -1918,14 +1926,62 @@ async function copyGoalPurposeRepairFile(source: string, destination: string, pr
   await assertGoalPurposeFileProof(destination, proof);
 }
 
+function goalPurposeRepairDirectory(directory: string, evidence: GoalPurposeRepairFenceEvidence): string {
+  if (!/^[a-f0-9]{64}$/u.test(evidence.command_digest)) throw new Error("offline_goal_purpose_fence_invalid");
+  return path.join(directory, `.offline-goal-repair-${evidence.command_digest}`);
+}
+
+function goalPurposeBeforeCopy(directory: string, targetPath: string): string {
+  return path.join(directory, `before-${path.basename(targetPath)}`);
+}
+
+async function pinGoalPurposeRepairDirectories(targetDirectory: string, preserveDirectory: string): Promise<() => Promise<void>> {
+  const directories = [targetDirectory, preserveDirectory];
+  async function readIdentities(): Promise<string[]> {
+    return Promise.all(directories.map(async directory => {
+      if (await recoveryPathKind(directory) !== "directory") throw new Error("offline_goal_purpose_path_unverified");
+      const entry = await fs.lstat(directory, { bigint: true });
+      if (!entry.isDirectory() || entry.ino <= 0n) throw new Error("offline_goal_purpose_path_unverified");
+      return `${entry.dev}:${entry.ino}`;
+    }));
+  }
+  const identities = await readIdentities();
+  return async () => {
+    const current = await readIdentities();
+    if (identities.some((id, index) => current[index] !== id)) throw new Error("offline_goal_purpose_path_changed");
+  };
+}
+
+function goalPurposeRepairJournal(evidence: GoalPurposeRepairFenceEvidence,
+  targets: readonly [GoalPurposeTarget, GoalPurposeTarget]): string {
+  return JSON.stringify({
+    schema_version: 2,
+    operation: evidence.operation,
+    command_digest: evidence.command_digest,
+    backup_id: evidence.backup_id,
+    manifest_sha256: evidence.manifest_sha256,
+    repair_sha256: evidence.repair_sha256,
+    before_sha256: evidence.verification.before_sha256,
+    after_sha256: evidence.verification.after_sha256,
+    preserved: targets.map(({ filepath, proof }, index) => ({
+      store_key: GOAL_PURPOSE_STORES[index], file: proof ? `before-${path.basename(filepath)}` : null, proof,
+    })),
+  }) + "\n";
+}
+
 /** Called only with the installation lease held and a durable prepared fence for this exact plan. */
 export async function applyOfflineGoalPurposeRepair(
   env: NodeJS.ProcessEnv,
   plan: OfflineGoalPurposeRepairPlan,
   assertFenceContinuity: () => void,
   permitsContinuation: () => void,
+  fence: GoalPurposeRepairFenceEvidence,
 ): Promise<void | "rolled_back"> {
   assertFenceContinuity();
+  if (fence.operation !== "recovery.goal_purpose_repair" || fence.backup_id !== plan.backup_id ||
+      fence.manifest_sha256 !== plan.manifest_sha256 || fence.repair_sha256 !== plan.repair_sha256 ||
+      fence.verification.before_sha256 !== plan.before_sha256 || fence.verification.after_sha256 !== plan.after_sha256 ||
+      !/^[a-f0-9]{64}$/u.test(fence.command_digest)) throw new Error("offline_goal_purpose_fence_invalid");
   const state = await loadOfflineGoalPurposeRepairState(env, plan);
   if (!state || state.plan.repair_sha256 !== plan.repair_sha256 || state.plan.before_sha256 !== plan.before_sha256 ||
       state.plan.after_sha256 !== plan.after_sha256 || !await isGoalPurposeRepairCandidate(env, state)) {
@@ -1933,29 +1989,32 @@ export async function applyOfflineGoalPurposeRepair(
   }
   const directoryKind = await recoveryPathKind(state.directory);
   if (directoryKind === null) {
+    assertFenceContinuity();
+    permitsContinuation();
     await fs.mkdir(state.directory, { mode: 0o700 });
     await syncGoalPurposePath(path.dirname(state.directory), true);
   } else if (directoryKind !== "directory") throw new Error("offline_goal_purpose_path_unverified");
 
-  const preserveDirectory = await fs.mkdtemp(path.join(state.directory, ".offline-goal-repair-"));
-  if (process.platform !== "win32") await fs.chmod(preserveDirectory, 0o700);
+  const preserveDirectory = goalPurposeRepairDirectory(state.directory, fence);
+  assertFenceContinuity();
+  permitsContinuation();
+  await fs.mkdir(preserveDirectory, { mode: 0o700 });
+  const assertDirectories = await pinGoalPurposeRepairDirectories(state.directory, preserveDirectory);
   const staged = [path.join(preserveDirectory, "new-j-control.sqlite"), path.join(preserveDirectory, "new-m-state.sqlite")] as const;
-  const priorCopies = state.before.map(({ filepath }) => path.join(preserveDirectory, `before-${path.basename(filepath)}`));
+  const priorCopies = state.before.map(({ filepath }) => goalPurposeBeforeCopy(preserveDirectory, filepath));
   // Record each attempted rename before calling it: an error can leave the exact replacement on disk.
   const attempted = new Set<number>();
   let keepStagedForInspection = false;
   try {
-    const preserved = [];
     for (const [index, target] of state.before.entries()) {
       const file = state.archive.files[index]!;
       await copyGoalPurposeRepairFile(file.filepath, staged[index]!, file.proof);
       const prior = priorCopies[index]!;
       if (target.proof) await copyGoalPurposeRepairFile(target.filepath, prior, target.proof);
-      preserved.push({ store_key: GOAL_PURPOSE_STORES[index], file: target.proof ? path.basename(prior) : null, proof: target.proof });
     }
     const evidence = await fs.open(path.join(preserveDirectory, "before-state.json"), "wx", 0o600);
     try {
-      await evidence.writeFile(JSON.stringify({ schema_version: 1, ...state.plan, preserved }) + "\n", "utf8");
+      await evidence.writeFile(goalPurposeRepairJournal(fence, state.before), "utf8");
       await evidence.sync();
     } finally {
       await evidence.close();
@@ -1975,6 +2034,7 @@ export async function applyOfflineGoalPurposeRepair(
         await assertGoalPurposeFileProof(member.filepath, position < index ? state.after[position]!.proof : member.proof);
       }
       await assertGoalPurposeFileProof(staged[index]!, state.after[index]!.proof);
+      await assertDirectories();
       assertFenceContinuity();
       permitsContinuation();
       attempted.add(index);
@@ -1982,6 +2042,7 @@ export async function applyOfflineGoalPurposeRepair(
       await syncGoalPurposePath(target.filepath);
       await syncGoalPurposePath(state.directory, true);
       await syncGoalPurposePath(preserveDirectory, true);
+      await assertDirectories();
     }
     assertFenceContinuity();
     if (await observeOfflineGoalPurposeRepair(env, plan) !== plan.after_sha256) {
@@ -2012,6 +2073,7 @@ export async function applyOfflineGoalPurposeRepair(
       for (const [position, member] of state.before.entries()) {
         await assertGoalPurposeFileProof(member.filepath, observed[position]!);
       }
+      await assertDirectories();
       assertFenceContinuity();
       if (proof) {
         await fs.rename(rollbackStage, filepath);
@@ -2023,6 +2085,7 @@ export async function applyOfflineGoalPurposeRepair(
       observed[index] = proof;
       await syncGoalPurposePath(state.directory, true);
       await syncGoalPurposePath(preserveDirectory, true);
+      await assertDirectories();
     }
 
     assertFenceContinuity();
@@ -2033,11 +2096,94 @@ export async function applyOfflineGoalPurposeRepair(
     return "rolled_back";
   } finally {
     for (const file of keepStagedForInspection ? [] : staged) {
+      await assertDirectories();
       await fs.unlink(file).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });
     }
   }
+}
+
+/** 中断した置換のJだけを元へ戻す。新しい置換の実行や承認コードの再消費は行わない。 */
+export async function rollbackInterruptedOfflineGoalPurposeRepair(
+  env: NodeJS.ProcessEnv,
+  evidence: GoalPurposeRepairFenceEvidence,
+  observedStateSha256: string,
+  assertFenceContinuity: () => void,
+): Promise<boolean> {
+  const assertCompensationAuthorized = (): void => {
+    assertFenceContinuity();
+    const approvedAt = offlineGoalPurposeRepairAuditReceiptTime(env, evidence);
+    if (approvedAt === null || !EmergencyStopStateStore.permitsOfflineRepair(env, approvedAt)) {
+      throw new Error("offline_goal_purpose_rollback_authority_unverified");
+    }
+  };
+  assertCompensationAuthorized();
+  const state = await loadOfflineGoalPurposeRepairState(env, evidence);
+  if (!state || state.plan.before_sha256 !== observedStateSha256 ||
+      state.plan.after_sha256 !== evidence.verification.after_sha256 ||
+      evidence.repair_sha256 !== recoveryDigest(["offline-goal-purpose-repair.v1",
+        evidence.verification.before_sha256, evidence.verification.after_sha256])) return false;
+
+  const preserveDirectory = goalPurposeRepairDirectory(state.directory, evidence);
+  if (await recoveryPathKind(preserveDirectory) !== "directory") return false;
+  const assertDirectories = await pinGoalPurposeRepairDirectories(state.directory, preserveDirectory);
+  const [currentJ, currentM] = state.before;
+  const [archiveJ, archiveM] = state.after;
+  const priorJ = goalPurposeBeforeCopy(preserveDirectory, currentJ.filepath);
+  const priorM = goalPurposeBeforeCopy(preserveDirectory, currentM.filepath);
+  const before = [
+    { filepath: currentJ.filepath, proof: await readGoalPurposeFileProof(priorJ) },
+    { filepath: currentM.filepath, proof: await readGoalPurposeFileProof(priorM) },
+  ] as const;
+  const [beforeJ, beforeM] = before;
+  if (goalPurposeStateSha256(evidence, state.archive.context, before) !== evidence.verification.before_sha256 ||
+      !sameGoalPurposeProof(currentJ.proof, archiveJ.proof) || !sameGoalPurposeProof(currentM.proof, beforeM.proof) ||
+      sameGoalPurposeProof(beforeJ.proof, archiveJ.proof) || sameGoalPurposeProof(beforeM.proof, archiveM.proof)) return false;
+
+  const journal = goalPurposeRepairJournal(evidence, before);
+  const assertStagedEvidence = async (): Promise<void> => {
+    await assertGoalPurposeFileProof(path.join(preserveDirectory, "before-state.json"), {
+      bytes: Buffer.byteLength(journal), sha256: createHash("sha256").update(journal).digest("hex"),
+    });
+    await assertGoalPurposeFileProof(priorJ, beforeJ.proof);
+    await assertGoalPurposeFileProof(priorM, beforeM.proof);
+    await assertGoalPurposeFileProof(path.join(preserveDirectory, "new-j-control.sqlite"), null);
+    await assertGoalPurposeFileProof(path.join(preserveDirectory, "new-m-state.sqlite"), archiveM.proof);
+  };
+  await assertStagedEvidence();
+  const replacement = beforeJ.proof
+    ? path.join(preserveDirectory, `rollback-j-control-${randomUUID()}.sqlite`)
+    : path.join(preserveDirectory, "interrupted-j-control.sqlite");
+  await assertDirectories();
+  assertCompensationAuthorized();
+  if (beforeJ.proof) await copyGoalPurposeRepairFile(priorJ, replacement, beforeJ.proof);
+  const latest = await loadOfflineGoalPurposeRepairState(env, evidence);
+  if (!latest || latest.plan.before_sha256 !== observedStateSha256 ||
+      latest.plan.after_sha256 !== evidence.verification.after_sha256) {
+    throw new Error("offline_goal_purpose_rollback_unverified");
+  }
+  await assertStagedEvidence();
+  await assertGoalPurposeFileProof(replacement, beforeJ.proof);
+  await assertGoalPurposeFileProof(currentJ.filepath, archiveJ.proof);
+  await assertGoalPurposeFileProof(currentM.filepath, beforeM.proof);
+  await assertDirectories();
+  assertCompensationAuthorized();
+  if (beforeJ.proof) {
+    await fs.rename(replacement, currentJ.filepath);
+    await syncGoalPurposePath(currentJ.filepath);
+  } else {
+    await fs.rename(currentJ.filepath, replacement);
+    await syncGoalPurposePath(replacement);
+  }
+  await syncGoalPurposePath(state.directory, true);
+  await syncGoalPurposePath(preserveDirectory, true);
+  await assertDirectories();
+  assertCompensationAuthorized();
+  if (await observeOfflineGoalPurposeRepair(env, evidence) !== evidence.verification.before_sha256) {
+    throw new Error("offline_goal_purpose_rollback_unverified");
+  }
+  return true;
 }
 
 /** Plan against one exact pack. The installed CLI also requires the caller's previously observed manifest digest. */

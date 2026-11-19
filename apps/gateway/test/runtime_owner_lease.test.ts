@@ -258,6 +258,93 @@ describe("Gateway runtime owner lease", () => {
     GatewayRuntimeOwnerLease.fromEnvironment(env).close();
   });
 
+  it("rolls back only the exact interrupted purpose repair and settles its original owner generation", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try { lease.prepareOfflineGoalPurposeRepair(binding); } finally { lease.close(); }
+    const mixed = "0".repeat(64);
+    let observed = verification.before_sha256;
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, {
+      prepare: async () => ({
+        apply: async () => { observed = mixed; throw new Error("synthetic interruption"); },
+        observe: async () => observed,
+      }),
+    })).toBe("outcome_unknown");
+
+    const observe = vi.fn(async () => observed);
+    const exactScope = { command_digest: binding.command_digest, repair_sha256: binding.repair_sha256 };
+    const rollback = vi.fn(async (_evidence: RuntimeRecoveryFenceEvidence, initial: string, assertContinuity: () => void) => {
+      expect(initial).toBe(mixed);
+      assertContinuity();
+      expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
+      assertContinuity();
+      observed = verification.before_sha256;
+      return true;
+    });
+    const recovery = { ...exactScope, apply: rollback };
+    expect(await reconcileRuntimeRecoveryFence(env, { ...goalPurposeRepair, backup_id: "different-backup" }, observe, recovery))
+      .toEqual({ status: "unresolved" });
+    expect(await reconcileRuntimeRecoveryFence(env, { ...goalPurposeRepair, manifest_sha256: mixed }, observe, recovery))
+      .toEqual({ status: "unresolved" });
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, { ...recovery, command_digest: mixed }))
+      .toEqual({ status: "unresolved" });
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, { ...recovery, repair_sha256: mixed }))
+      .toEqual({ status: "unresolved" });
+    expect(observe).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+
+    observe.mockResolvedValueOnce(mixed).mockResolvedValueOnce(verification.after_sha256);
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, recovery)).toEqual({ status: "unresolved" });
+    expect(rollback).not.toHaveBeenCalled();
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, { ...exactScope, apply: async () => false }))
+      .toEqual({ status: "unresolved" });
+    expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", ...exactScope });
+
+    const initialRoot = env.BLUE_TANUKI_STATE_ROOT;
+    const otherRoot = temporaryStateRoot();
+    const replaceScope = async () => {
+      env.BLUE_TANUKI_STATE_ROOT = otherRoot;
+      return mixed;
+    };
+    try {
+      expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, replaceScope, recovery)).toEqual({ status: "unresolved" });
+    } finally {
+      env.BLUE_TANUKI_STATE_ROOT = initialRoot;
+    }
+    expect(rollback).not.toHaveBeenCalled();
+
+    observe.mockResolvedValueOnce(mixed).mockResolvedValueOnce(mixed)
+      .mockResolvedValueOnce(verification.before_sha256).mockResolvedValueOnce(verification.after_sha256);
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, recovery)).toEqual({ status: "unresolved" });
+    expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", ...exactScope });
+    expect(rollback).toHaveBeenCalledTimes(1);
+
+    observed = mixed;
+    rollback.mockClear();
+    observe.mockClear();
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, recovery)).toEqual({ status: "rolled_back" });
+    expect(observe).toHaveBeenCalledTimes(4);
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe, recovery)).toEqual({ status: "no_pending" });
+    expect(rollback).toHaveBeenCalledTimes(1);
+    const filepath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const state = new DatabaseSync(filepath, { readOnly: true });
+    try {
+      expect(state.prepare("SELECT generation,execution_epoch FROM gateway_owner_state").get()).toEqual({
+        generation: lease.generation, execution_epoch: lease.executionEpoch,
+      });
+      expect(state.prepare("SELECT * FROM gateway_recovery_settlements").get()).toMatchObject({
+        generation: lease.generation, operation: "recovery.goal_purpose_repair", ...exactScope,
+        backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256,
+        observed_sha256: verification.before_sha256, status: "pre_action_state_matched",
+      });
+    } finally {
+      state.close();
+    }
+  });
+
   it("holds the existing owner lock across an asynchronous offline observation without advancing the generation", async () => {
     const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
     const directory = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime");

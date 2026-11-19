@@ -734,9 +734,11 @@ describe("delegated goal purpose owner review", () => {
   }, 90_000);
 
   it.each([
-    { scenario: "apply succeeds", failSecondRename: false },
-    { scenario: "second rename fails", failSecondRename: true },
-  ])("repairs the exact L3-reviewed goal-purpose pair through the compiled offline recovery CLI ($scenario)", async ({ failSecondRename }) => {
+    { scenario: "apply succeeds", renameFailure: "none" },
+    { scenario: "second rename fails", renameFailure: "throw" },
+    { scenario: "J更新直後の中断を明示操作で戻す", renameFailure: "interrupt" },
+  ])("repairs the exact L3-reviewed goal-purpose pair through the compiled offline recovery CLI ($scenario)", async ({ renameFailure }) => {
+    const changeBothStores = renameFailure !== "none";
     const gatewayPort = await reserveLoopbackPort();
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-offline-repair-"));
     const auditDir = join(tempRoot, "audit");
@@ -824,7 +826,7 @@ describe("delegated goal purpose owner review", () => {
       const archivedPair = archivedPaths.map((archivePath) => readFileSync(archivePath));
 
       await stopChild(gateway.child);
-      for (const target of failSecondRename ? targets : targets.slice(0, 1)) {
+      for (const target of changeBothStores ? targets : targets.slice(0, 1)) {
         const store = new DatabaseSync(target);
         try {
           store.exec("PRAGMA application_id = 123456789");
@@ -837,7 +839,7 @@ describe("delegated goal purpose owner review", () => {
       expect(await observeGoals()).toEqual(goals);
       const changedPair = targets.map((target) => readFileSync(target));
       expect(changedPair[0]!.equals(archivedPair[0]!)).toBe(false);
-      expect(changedPair[1]!.equals(archivedPair[1]!)).toBe(!failSecondRename);
+      expect(changedPair[1]!.equals(archivedPair[1]!)).toBe(!changeBothStores);
 
       const plan = await request("/recovery/restore-plan", maintenanceToken, "POST", { backup_id });
       expect(plan.status).toBe(200);
@@ -847,7 +849,7 @@ describe("delegated goal purpose owner review", () => {
         goal_purpose_replay: { status: "matched", verified_purpose_count: 1 },
         goal_purpose_repair: { repair_sha256: expect.stringMatching(/^[a-f0-9]{64}$/), stores: [
           { store_key: storeKeys[0], target_state: "different" },
-          { store_key: storeKeys[1], target_state: failSecondRename ? "different" : "matched" },
+          { store_key: storeKeys[1], target_state: changeBothStores ? "different" : "matched" },
         ] },
       });
       const repair = planBody.goal_purpose_repair!;
@@ -887,14 +889,24 @@ describe("delegated goal purpose owner review", () => {
       expect(prepared.expires_at_ms).toBeGreaterThan(Date.now());
       expectPair(changedPair);
 
-      const apply = (handoffCode: string, preload?: string) => {
-        const run = spawnSync(process.execPath, [...(preload ? ["--require", preload] : []), gatewayEntry,
-          "--recovery-apply-goal-purpose", "--backup-id", backup_id,
-          "--manifest-sha256", manifest_sha256, "--repair-sha256", repair.repair_sha256, "--env-file", envFile, "--json"], {
-          cwd: repositoryRoot, env, input: `${handoffCode}\n`, encoding: "utf8", timeout: 15_000, windowsHide: true,
+      const runOfflineCli = (args: readonly string[], options: { preload?: string; input?: string } = {}) => {
+        const run = spawnSync(process.execPath, [...(options.preload ? ["--require", options.preload] : []), gatewayEntry,
+          ...args, "--env-file", envFile], {
+          cwd: repositoryRoot, env, input: options.input, encoding: "utf8", timeout: 15_000, windowsHide: true,
         });
         if (run.error) throw run.error;
-        expect(`${run.stdout}\n${run.stderr}`.includes(code)).toBe(false);
+        const output = `${run.stdout}\n${run.stderr}`;
+        for (const value of [code, purpose, pairRoot, recoveryRoot, ownerToken, resumeToken, maintenanceToken]) {
+          expect(output.includes(value) || output.includes(JSON.stringify(value).slice(1, -1))).toBe(false);
+        }
+        return run;
+      };
+      const runApply = (handoffCode: string, preload?: string) => runOfflineCli([
+        "--recovery-apply-goal-purpose", "--backup-id", backup_id,
+        "--manifest-sha256", manifest_sha256, "--repair-sha256", repair.repair_sha256, "--json",
+      ], { preload, input: `${handoffCode}\n` });
+      const apply = (handoffCode: string, preload?: string) => {
+        const run = runApply(handoffCode, preload);
         return { exit: run.status, result: JSON.parse(run.stdout) as { status: string } };
       };
       const blocked = apply(code);
@@ -919,10 +931,11 @@ describe("delegated goal purpose owner review", () => {
       } finally {
         writeFileSync(auditFile, auditBefore);
       }
-      if (failSecondRename) {
+      if (changeBothStores) {
         const injectionPreload = join(tempRoot, "fail-second-rename.cjs");
         const observedFirstRename = join(tempRoot, "first-rename-observed");
         const expectedJDigest = createHash("sha256").update(archivedPair[0]!).digest("hex");
+        const originalMDigest = createHash("sha256").update(changedPair[1]!).digest("hex");
         writeFileSync(injectionPreload, [
           'const { promises, readFileSync, writeFileSync } = require("node:fs");',
           'const { createHash } = require("node:crypto");',
@@ -934,19 +947,69 @@ describe("delegated goal purpose owner review", () => {
           '    return originalRename(source, target);',
           '  }',
           '  failed = true;',
-          `  const currentJ = readFileSync(${JSON.stringify(targets[0])});`,
-          `  if (createHash("sha256").update(currentJ).digest("hex") === ${JSON.stringify(expectedJDigest)}) {`,
+          '  const proof = path => createHash("sha256").update(readFileSync(path)).digest("hex");',
+          `  if (proof(${JSON.stringify(targets[0])}) === ${JSON.stringify(expectedJDigest)} &&`,
+          `      proof(${JSON.stringify(targets[1])}) === ${JSON.stringify(originalMDigest)}) {`,
           `    writeFileSync(${JSON.stringify(observedFirstRename)}, "verified", { flag: "wx" });`,
           '  }',
-          '  throw Object.assign(new Error("synthetic second rename failure"), { code: "EIO" });',
+          renameFailure === "interrupt"
+            ? '  process.exit(75);'
+            : '  throw Object.assign(new Error("synthetic second rename failure"), { code: "EIO" });',
           '};',
         ].join("\n"));
-        expect(apply(code, injectionPreload)).toEqual({ exit: 2, result: { status: "rolled_back" } });
+        if (renameFailure === "interrupt") {
+          const interrupted = runApply(code, injectionPreload);
+          expect(interrupted.status).toBe(75);
+          expect(interrupted.stdout).toBe("");
+          const mixedPair = [archivedPair[0]!, changedPair[1]!];
+          expectPair(mixedPair);
+
+          const ownerStatePath = join(stateRoot, "private-state", "gateway-runtime", "owner-state.sqlite");
+          const interruptedOwnerState = readFileSync(ownerStatePath);
+          const diagnostic = runOfflineCli(["--recovery-inspect", "--json"]);
+          expect(diagnostic.status).toBe(2);
+          const { runtime_recovery_fence: fence } = JSON.parse(diagnostic.stdout) as {
+            runtime_recovery_fence: { command_digest: string };
+          };
+          expect(fence).toMatchObject({ status: "pending", operation: "recovery.goal_purpose_repair",
+            command_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), ...selector });
+
+          const reconcile = (rollbackRepairDigest?: string) => runOfflineCli([
+            "--recovery-reconcile", "--backup-id", backup_id, "--manifest-sha256", manifest_sha256,
+            "--command-sha256", fence.command_digest, "--json",
+            ...(rollbackRepairDigest === undefined ? [] : [
+              "--rollback-interrupted-goal-purpose", "--repair-sha256", rollbackRepairDigest,
+            ]),
+          ]);
+          const observed = reconcile();
+          expect(observed.status).toBe(2);
+          expect(JSON.parse(observed.stdout)).toEqual({ status: "unresolved", used_for_authority: false });
+          const wrongRepairDigest = `${repair.repair_sha256[0] === "0" ? "1" : "0"}${repair.repair_sha256.slice(1)}`;
+          const rejected = reconcile(wrongRepairDigest);
+          expect(rejected.status).toBe(2);
+          expect(JSON.parse(rejected.stdout)).toEqual({ status: "unresolved", used_for_authority: false });
+          expect(apply(code)).toEqual({ exit: 2, result: { status: "recovery_pending" } });
+          const blockedStartup = runOfflineCli(["--serve"]);
+          expect(blockedStartup.status).toBe(1);
+          expect(`${blockedStartup.stdout}\n${blockedStartup.stderr}`).toContain("gateway_runtime_recovery_pending");
+          expectPair(mixedPair);
+          expect(readFileSync(ownerStatePath)).toEqual(interruptedOwnerState);
+
+          const rolledBack = reconcile(repair.repair_sha256);
+          expect(rolledBack.status).toBe(0);
+          expect(JSON.parse(rolledBack.stdout)).toEqual({ status: "rolled_back", used_for_authority: false });
+          expectPair(changedPair);
+          const settled = reconcile();
+          expect(settled.status).toBe(0);
+          expect(JSON.parse(settled.stdout)).toEqual({ status: "no_pending", used_for_authority: false });
+        } else {
+          expect(apply(code, injectionPreload)).toEqual({ exit: 2, result: { status: "rolled_back" } });
+        }
         expect(readFileSync(observedFirstRename, "utf8")).toBe("verified");
       } else {
         expect(apply(code)).toEqual({ exit: 0, result: { status: "applied" } });
       }
-      const expectedPair = failSecondRename ? changedPair : archivedPair;
+      const expectedPair = changeBothStores ? changedPair : archivedPair;
       expectPair(expectedPair);
       const preservedDirectories = readdirSync(pairRoot).filter((name) => name.startsWith(".offline-goal-repair-"));
       expect(preservedDirectories).toHaveLength(1);

@@ -7324,7 +7324,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "マニフェスト SHA-256 " + binding.manifest_sha256,
             "復旧計画 SHA-256 " + binding.repair_sha256,
             ...scope,
-            "承認すると、Gateway停止後の復旧に使う一回限りのコードを発行します。"
+            "承認すると、Gateway停止後の復旧に使う一回限りのコードを発行します。",
+            "書き込みが途中で止まった場合は、停止中の照合で確認できた操作前の状態へ戻せます。"
           ].join("\\n");
           view.replaceChildren(details);
           state.goalPurposeRepairReviews[commandId] = binding;

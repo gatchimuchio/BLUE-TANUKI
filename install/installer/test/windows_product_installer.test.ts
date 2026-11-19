@@ -827,6 +827,14 @@ describe("Windows product installer package", () => {
       expect(unowned.status, unowned.stderr).toBe(2);
       expect(JSON.parse(unowned.stdout)).toEqual({ status: "owner_state_unavailable" });
       expect(unowned.stdout + unowned.stderr).not.toContain(syntheticCode);
+      const rollbackArguments = ["recovery-reconcile", "--rollback-interrupted-goal-purpose", "--backup-id", "absent-backup-id",
+        "--manifest-sha256", "1".repeat(64), "--command-sha256", "3".repeat(64), "--repair-sha256", "2".repeat(64), "--json"];
+      const withoutPending = runPowerShellFile(command, launcher, rollbackArguments, temp, env);
+      expect(withoutPending.status, withoutPending.stderr).toBe(0);
+      expect(JSON.parse(withoutPending.stdout)).toEqual({ status: "no_pending", used_for_authority: false });
+      const withoutRepairPin = runPowerShellFile(command, launcher, rollbackArguments.slice(0, -3).concat("--json"), temp, env);
+      expect(withoutRepairPin.status, withoutRepairPin.stderr).toBe(2);
+      expect(JSON.parse(withoutRepairPin.stdout)).toEqual({ status: "invalid_arguments", used_for_authority: false });
       writeFileSync(join(dist, "main.js"), "console.log(JSON.stringify(process.argv.slice(2)))\n", "utf8");
       const reconcile = runPowerShellFile(command, launcher, ["recovery-reconcile", "--json"], temp, env);
       expect(reconcile.status, reconcile.stderr).toBe(0);

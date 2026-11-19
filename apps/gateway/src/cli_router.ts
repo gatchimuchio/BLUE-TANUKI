@@ -286,21 +286,31 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   process.exitCode = runtimeRecoveryFence.status === "clear" && report.status === "verified" ? 0 : 2;
 }
 
+const rollbackInterruptedGoalPurposeFlag = "--rollback-interrupted-goal-purpose";
+
 async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
   const args = stripEnvFileArgs(argv);
   const json = args.includes("--json");
+  const rollback = argv.includes(rollbackInterruptedGoalPurposeFlag);
   function writeResult(status: string, successful = false): void {
     writeStdout(json ? JSON.stringify({ status, used_for_authority: false })
       : `復旧処理の照合結果 ${status}`);
     process.exitCode = successful ? 0 : 2;
   }
 
+  if (rollback && (args.filter(flag => flag === rollbackInterruptedGoalPurposeFlag).length !== 1 ||
+      args.filter(flag => flag === "--recovery-reconcile").length !== 1 ||
+      argv.filter(flag => flag === "--env-file" || flag.startsWith("--env-file=")).length !== 1)) {
+    writeResult("invalid_arguments");
+    return;
+  }
   const inputs = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
-    if (flag === "--recovery-reconcile" || flag === "--json") continue;
+    if (flag === "--recovery-reconcile" || flag === "--json" || flag === rollbackInterruptedGoalPurposeFlag) continue;
     const value = args[index + 1];
-    if ((flag !== "--backup-id" && flag !== "--manifest-sha256" && flag !== "--command-sha256") ||
+    if ((flag !== "--backup-id" && flag !== "--manifest-sha256" && flag !== "--command-sha256" &&
+        !(rollback && flag === "--repair-sha256")) ||
         !value || inputs.has(flag)) {
       writeResult("invalid_arguments");
       return;
@@ -311,9 +321,11 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
   const backupId = inputs.get("--backup-id");
   const manifestSha256 = inputs.get("--manifest-sha256")?.toLowerCase();
   const commandSha256 = inputs.get("--command-sha256")?.toLowerCase();
+  const repairSha256 = inputs.get("--repair-sha256")?.toLowerCase();
   if (!backupId || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) ||
       !manifestSha256 || !/^[a-f0-9]{64}$/.test(manifestSha256) ||
-      (commandSha256 !== undefined && !/^[a-f0-9]{64}$/.test(commandSha256))) {
+      (commandSha256 !== undefined && !/^[a-f0-9]{64}$/.test(commandSha256)) ||
+      (rollback && (!commandSha256 || !repairSha256 || !/^[a-f0-9]{64}$/.test(repairSha256)))) {
     writeResult("invalid_arguments");
     return;
   }
@@ -333,15 +345,20 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
 
   try {
     const { reconcileRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
-    const { observeFactoryResetRecoveryState, hasOfflineGoalPurposeRepairAuditReceipt, observeOfflineGoalPurposeRepair } =
-      await import("./recovery_surface.js");
+    const { observeFactoryResetRecoveryState, hasOfflineGoalPurposeRepairAuditReceipt, observeOfflineGoalPurposeRepair,
+      rollbackInterruptedOfflineGoalPurposeRepair } = await import("./recovery_surface.js");
     const result = await reconcileRuntimeRecoveryFence(env, {
       backup_id: backupId, manifest_sha256: manifestSha256,
       ...(commandSha256 === undefined ? {} : { command_digest: commandSha256 }),
     }, async (evidence) => {
       if (evidence.operation === "recovery.factory_reset") return observeFactoryResetRecoveryState(env, evidence);
       return hasOfflineGoalPurposeRepairAuditReceipt(env, evidence) ? observeOfflineGoalPurposeRepair(env, evidence) : null;
-    });
+    }, rollback && commandSha256 && repairSha256 ? {
+      command_digest: commandSha256,
+      repair_sha256: repairSha256,
+      apply: (evidence, observed, assertFenceContinuity) =>
+        rollbackInterruptedOfflineGoalPurposeRepair(env, evidence, observed, assertFenceContinuity),
+    } : undefined);
     writeResult(result.status, result.status !== "unresolved");
   } catch {
     writeResult("unresolved");
@@ -404,6 +421,9 @@ async function runRecoveryApplyGoalPurposeCli(argv: string[]): Promise<void> {
           plan.before_sha256 !== binding.verification.before_sha256 || plan.after_sha256 !== binding.verification.after_sha256) {
         return null;
       }
+      const evidence = { operation: "recovery.goal_purpose_repair" as const, command_digest: binding.command_digest,
+        backup_id: binding.backup_id, manifest_sha256: binding.manifest_sha256, repair_sha256: binding.repair_sha256,
+        verification: binding.verification };
       return {
         observe: async () => hasOfflineGoalPurposeRepairAuditReceipt(env, binding)
           ? observeOfflineGoalPurposeRepair(env, selector) : null,
@@ -412,7 +432,7 @@ async function runRecoveryApplyGoalPurposeCli(argv: string[]): Promise<void> {
           if (!hasOfflineGoalPurposeRepairAuditReceipt(env, binding)) throw new Error("offline_repair_receipt_unverified");
         }, () => {
           if (!EmergencyStopStateStore.permitsOfflineRepair(env, issuedAtMs)) throw new Error("offline_repair_stopped");
-        }),
+        }, evidence),
       };
     },
   });
@@ -470,7 +490,7 @@ export async function runGatewayCliRouter(): Promise<void> {
     await runRecoveryInspectCli(argv);
     return;
   }
-  if (argv.includes("--recovery-reconcile")) {
+  if (argv.includes("--recovery-reconcile") || argv.includes(rollbackInterruptedGoalPurposeFlag)) {
     await runRecoveryReconcileCli(argv);
     return;
   }

@@ -440,6 +440,18 @@ powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLau
 途中状態、異なるバックアップ、照合用情報のない旧形式の保留は `unresolved` です。
 このコマンドが更新するのは保留と照合記録です。次回は通常の起動操作から再開します。
 
+委任目的J/Mの復元が途中で止まった場合は、`runtime_recovery_fence.operation` が `recovery.goal_purpose_repair` であることを確認します。標準の `recovery-reconcile` が `unresolved` を返したときは、同じ設置先を停止したまま、診断に表示された `backup_id`、`manifest_sha256`、`command_digest`、`repair_sha256` を指定します。
+
+```powershell
+powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLauncher.ps1" recovery-reconcile --rollback-interrupted-goal-purpose --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --command-sha256 'command-digest' --repair-sha256 'repair-sha256' --json
+```
+
+```sh
+~/.local/bin/blue-tanuki recovery-reconcile --rollback-interrupted-goal-purpose --backup-id 'backup-id' --manifest-sha256 'manifest-sha256' --command-sha256 'command-digest' --repair-sha256 'repair-sha256' --json
+```
+
+元の承認と保全コピーを確認し、Jだけが当初の復元で置き換わっていた場合はJを操作前へ戻します。両方が操作前に一致すると `rolled_back` を返し、起動保留を閉じます。旧形式の保全コピー、対象の変化、現在の監査や排他を検証できない場合は `unresolved` のままとなります。
+
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer
