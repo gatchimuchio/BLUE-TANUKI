@@ -92,6 +92,7 @@ import { parseLineInboundGrants } from "./line_inbound_grants.js";
 import { GatewayLineEventStore } from "./line_event_store.js";
 import { GatewayWebChatOwnerTaskStore } from "./webchat_owner_task_store.js";
 import { developmentHandoffStoreFromEnvironment } from "./development_handoff_store.js";
+import { DAILY_BRIEF_MAX_RESULTS, dailyBriefReadSpec, parseGoogleServices, projectDailyBriefRead } from "./google_daily_brief.js";
 import { prepareFailureReviewInbound } from "./failure_review_runtime.js";
 import {
   inspectMcpToolPlanningCatalogFromEnvironment,
@@ -160,6 +161,7 @@ import type {
   WebChatGoalPurposeAdoptionContentReview,
   WebChatGoalPurposeRepairRequest,
   WebChatOwnerLlmSettingsProposal,
+  WebChatDailyBriefReadContentReview,
   WebChatTaskGoalOption,
   WebChatMeaningUpdateContentReview,
   WebChatMemoryJudgmentReassessmentContentReview,
@@ -352,6 +354,7 @@ interface PendingApproval {
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
+  daily_brief_read?: DailyBriefReadBinding;
   goal_purpose_adoption?: GoalPurposeAdoptionArguments & { purpose_text: string; proposal_actor: string };
   goal_purpose_proposal?: {
     goal_ref: string;
@@ -386,6 +389,21 @@ interface PendingApproval {
     reassesses_judgment_refs: readonly string[];
     proposal_actor: string;
   };
+}
+
+type DailyBriefService = Parameters<typeof dailyBriefReadSpec>[0];
+type DailyBriefReadResult = NonNullable<ReturnType<typeof projectDailyBriefRead>>;
+
+interface DailyBriefReadBinding {
+  occurrence_id_digest: string;
+  schedule_payload_digest: string;
+  scheduled_at_ms: number;
+  service: DailyBriefService;
+}
+
+interface CommandEchoResult {
+  status: string;
+  daily_brief_read?: DailyBriefReadResult;
 }
 
 function browserFormInputStageReceiptMatches(pending: PendingApproval, reserve: boolean): boolean {
@@ -1622,6 +1640,8 @@ async function serveWithOwnerLease(
     throw new Error("BLUE_TANUKI_MAINTENANCE_TOKEN must differ from WebChat tokens");
   }
   const cronTasks = cronSchedulesFromEnv(process.env);
+  const dailyBriefGoogleServices = cronTasks.some(task => task.id === "daily_brief" && task.google_service_scope_digest)
+    ? [...new Set(parseGoogleServices(process.env.BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES))].sort() : [];
   const cronEventStore = GatewayCronEventStore.fromEnvironment(process.env, {
     verifyNoReplayDisposition: (event_id, payload_digest) =>
       hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
@@ -1814,8 +1834,8 @@ async function serveWithOwnerLease(
     actor: string,
     evaluation: ApprovalEvaluation | null,
     extra: Record<string, unknown> = {},
-  ): void {
-    recordCompleteHistory({
+  ): CompleteHistoryEntry | null {
+    return recordCompleteHistory({
       kind: "approval_history",
       request_id: log.request_id,
       command_id: cmd.id,
@@ -2244,6 +2264,7 @@ async function serveWithOwnerLease(
     goal_purpose_relation_review_proposal?: PendingApproval["goal_purpose_relation_review_proposal"];
     meaning_update_proposal?: PendingApproval["meaning_update_proposal"];
     memory_judgment_reassessment_proposal?: PendingApproval["memory_judgment_reassessment_proposal"];
+    daily_brief_read?: DailyBriefReadBinding;
     quiet_approval_notice?: boolean;
     execution_controller?: AbortController;
     execution_registered?: boolean;
@@ -2255,7 +2276,7 @@ async function serveWithOwnerLease(
     origin: InboundRequest,
     opts: ExecuteAndEchoOptions = {},
     ephemeralContext?: InboundEphemeralContext,
-  ): Promise<{ status: string }> {
+  ): Promise<CommandEchoResult> {
     const isBrokerRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "broker" && cmd.payload.arguments.confirm === "RESTORE";
     const executionController = opts.execution_controller ?? new AbortController();
@@ -2264,7 +2285,7 @@ async function serveWithOwnerLease(
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
     const trackFinalization = !isBrokerRestore && !isRuntimeRecoveryMutationCommand(cmd);
     if (trackFinalization) activeCommandFinalizations.add(finalization);
-    let result: { status: string } | undefined;
+    let result: CommandEchoResult | undefined;
     try {
       result = await executeAndEchoCore(cmd, log, origin, finalization, opts, ephemeralContext, executionController,
         () => {
@@ -2307,7 +2328,7 @@ async function serveWithOwnerLease(
     ephemeralContext?: InboundEphemeralContext,
     executionController: AbortController = new AbortController(),
     onTaskExecutionRegistered: () => void = () => undefined,
-  ): Promise<{ status: string }> {
+  ): Promise<CommandEchoResult> {
     const actor = opts.actor ?? origin.user;
     let failureMemoryGateChangedBeforeExecution = false;
     let failureMemoryGateChangedConditions: string[] = [];
@@ -2413,7 +2434,7 @@ async function serveWithOwnerLease(
       });
       recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
-      if (finalized.rendered_output) {
+      if (finalized.rendered_output && !opts.daily_brief_read) {
         await dispatcher.dispatch(
           replyPayload(origin, finalized.rendered_output),
           { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
@@ -2440,7 +2461,7 @@ async function serveWithOwnerLease(
       });
       const content = `[emergency-stop-active] command_id=${cmd.id} executed=false next_action=Clear emergency stop from Control Center approvals only after reviewing the stop reason.`;
       auditGatewayStatusOutput(log, origin, actor, cmd.id, "emergency_stop", content);
-      await dispatcher.dispatch(replyPayload(origin, content), {
+      if (!opts.daily_brief_read) await dispatcher.dispatch(replyPayload(origin, content), {
         command_id: `emergency-stop-blocked-${cmd.id}`,
         upstream_commit_hash: log.commit.hash,
       });
@@ -2481,7 +2502,7 @@ async function serveWithOwnerLease(
       noteFailureMemoryGateChanged(failureGate, "approval_resume_preflight");
       const content = `[failure-memory-reapproval-required] command_id=${cmd.id} executed=false reason=the current failure-memory gate differs from the approved review; no action was invoked. changed_conditions=${failureMemoryGateChangedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`;
       auditGatewayStatusOutput(log, origin, actor, cmd.id, "failure_memory", content);
-      await dispatcher.dispatch(replyPayload(origin, content), {
+      if (!opts.daily_brief_read) await dispatcher.dispatch(replyPayload(origin, content), {
         command_id: `failure-memory-reapproval-required-${cmd.id}`,
         upstream_commit_hash: log.commit.hash,
         request_id: log.request_id,
@@ -2503,7 +2524,7 @@ async function serveWithOwnerLease(
       });
       const content = `[blocked] Failure memory gate blocked execution. command_id=${cmd.id} reason=${failureGate.reason}`;
       auditGatewayStatusOutput(log, origin, actor, cmd.id, "failure_memory", content);
-      await dispatcher.dispatch(
+      if (!opts.daily_brief_read) await dispatcher.dispatch(
         replyPayload(origin, content),
         { command_id: `failure-memory-blocked-${cmd.id}`, upstream_commit_hash: log.commit.hash },
       );
@@ -2521,7 +2542,8 @@ async function serveWithOwnerLease(
         const content = renderCommandOutput(cmd, fb);
         const output = hds.onOutputAudit({ command: cmd, feedback: fb, rendered_output: content, target_surface: "channel", request_id: log.request_id });
         recordFinalOutputHistory(log, origin, actor, output);
-        if (content) await dispatcher.dispatch(replyPayload(origin, content), { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
+        if (content && !opts.daily_brief_read) await dispatcher.dispatch(replyPayload(origin, content),
+          { command_id: cmd.id, upstream_commit_hash: log.commit.hash });
         return { status: "approval_denied" };
       }
       if (isGoalPurposeChangeCommand(cmd) &&
@@ -2577,7 +2599,7 @@ async function serveWithOwnerLease(
           });
           const content = "[busy] approval queue is full; no action was approved or executed. Retry after pending approvals are resolved.";
           auditGatewayStatusOutput(log, origin, actor, cmd.id, "approval_capacity", content);
-          await dispatcher.dispatch(
+          if (!opts.daily_brief_read) await dispatcher.dispatch(
             replyPayload(origin, content),
             { command_id: `approval-capacity-${cmd.id}`, upstream_commit_hash: log.commit.hash },
           );
@@ -2679,6 +2701,7 @@ async function serveWithOwnerLease(
           ...(opts.meaning_update_proposal ? { meaning_update_proposal: opts.meaning_update_proposal } : {}),
           ...(opts.memory_judgment_reassessment_proposal
             ? { memory_judgment_reassessment_proposal: opts.memory_judgment_reassessment_proposal } : {}),
+          ...(opts.daily_brief_read ? { daily_brief_read: opts.daily_brief_read } : {}),
         });
         approvalAdmission.lease.release();
         const changedConditions = [...new Set(
@@ -2810,7 +2833,7 @@ async function serveWithOwnerLease(
       });
       recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason });
-      if (finalized.rendered_output) await dispatcher.dispatch(
+      if (finalized.rendered_output && !opts.daily_brief_read) await dispatcher.dispatch(
         replyPayload(origin, finalized.rendered_output),
         { command_id: cmd.id, upstream_commit_hash: log.commit.hash },
       );
@@ -3227,6 +3250,9 @@ async function serveWithOwnerLease(
           },
           before_action_dispatch: () => {
             recheckFailureMemoryApproval();
+            if (opts.daily_brief_read && !dailyBriefReadIsCurrent(opts.daily_brief_read)) {
+              throw new Error("daily_brief_read_stale_before_dispatch");
+            }
             if (emergencyStop.active) throw new Error("action_dispatch_emergency_stop_active");
           },
           before_browser_form_submit: () => {
@@ -3353,6 +3379,10 @@ async function serveWithOwnerLease(
         },
       });
     }
+    if (opts.daily_brief_read && fb.status === "failed") {
+      // アダプターや外部サービスからの文言を監査や画面へ渡さない。
+      fb = { command_id: fb.command_id, status: fb.status, metrics: fb.metrics, error: "daily_brief_read_failed" };
+    }
     const historyFeedback = googleDriveContentReadRequested(cmd)
       ? {
           command_id: fb.command_id,
@@ -3362,7 +3392,8 @@ async function serveWithOwnerLease(
           metrics: fb.metrics,
         } satisfies ExecuteFeedback
       : fb;
-    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, historyFeedback, executorApproval.receipt(approvedCommand));
+    const executionReceipt = executorApproval.receipt(approvedCommand);
+    const executionHistory = recordExecutionHistory(cmd, log, origin, actor, historyFeedback, executionReceipt);
     const meaningUpdateProposalHistory = buildMeaningUpdateProposalHistoryInput(
       cmd,
       log.request_id,
@@ -3383,6 +3414,19 @@ async function serveWithOwnerLease(
       runFailureMemoryVerification("post_failure");
     }
     coreLog.info("command", { command: cmd.id.slice(0, 8), status: fb.status, duration_ms: fb.metrics.duration_ms });
+    if (opts.daily_brief_read) {
+      const { service, scheduled_at_ms } = opts.daily_brief_read;
+      const executionVerified = executionReceipt?.state === "adapter_returned" && executionReceipt.feedback_status === "success" &&
+        executionReceipt.invocation_boundary === "tool_adapter" && executionReceipt.goal_version_binding !== undefined;
+      const brief = fb.status === "success" && executionVerified && executionHistory && !executionController.signal.aborted &&
+        dailyBriefReadIsCurrent(opts.daily_brief_read) ? projectDailyBriefRead(service, scheduled_at_ms, fb.result) : null;
+      const finalized = finalizeCommandOutput({ hds, command: cmd, feedback: fb,
+        rendered_output_override: brief ? JSON.stringify(brief) : "予定に紐付く読み取り結果を確認できませんでした。",
+        target_surface: "control_center", request_id: log.request_id });
+      const recorded = recordFinalOutputHistory(log, origin, actor, finalized.output_audit, cmd);
+      return brief && recorded && finalized.output_audit.release_decision === "allow" ? { status: "success", daily_brief_read: brief }
+        : { status: fb.status === "success" ? "daily_brief_result_withheld" : "daily_brief_read_failed" };
+    }
     if (googleDriveContentReadRequested(cmd)) {
       const selected = validateGoogleDriveOrganizationFeedback(cmd, origin, fb);
       const safeMessage = selected
@@ -3991,6 +4035,10 @@ async function serveWithOwnerLease(
     ctx: WebChatResumeContext,
   ): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
+    const dailyBriefRead = Boolean(pending?.daily_brief_read);
+    if (dailyBriefRead !== (ctx.daily_brief_read === true)) {
+      return { executed: false, pending: Boolean(pending), status: "daily_brief_read_approval_route_required" };
+    }
     const requiresNativePrompt = requiresNativeCredentialApproval(pending?.command);
     const requestNativePrompt = ctx.native_credential_prompt === true;
     if (requestNativePrompt && (!nativeCredentialPromptAvailable() || !requiresNativePrompt || verdict !== "approve")) {
@@ -4000,7 +4048,7 @@ async function serveWithOwnerLease(
       return { executed: false, pending: true, status: "llm_credential_registration_native_approval_required" };
     }
     const trackFinalization = !pending || !isRecoveryToolCommand(pending.command);
-    if (verdict !== "approve" || !pending || !pendingApprovalNeedsContentReview(pending.command)) {
+    if (verdict !== "approve" || !pending || (!dailyBriefRead && !pendingApprovalNeedsContentReview(pending.command))) {
       let resolveFinalization!: () => void;
       const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
       if (trackFinalization) activeCommandFinalizations.add(finalization);
@@ -4159,7 +4207,7 @@ async function serveWithOwnerLease(
           });
         const content = `[failure-memory-reapproval-required] command_id=${command_id} executed=false reason=the failure-memory gate changed or could not be re-observed; no action was invoked. changed_conditions=${changedConditions.join(",") || "unconfirmed"} next_action=Submit a fresh request after reviewing the current conditions. The previous failure signature was preserved.`;
         auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "failure_memory", content);
-        await dispatcher.dispatch(replyPayload(pending.origin, content), {
+        if (!pending.daily_brief_read) await dispatcher.dispatch(replyPayload(pending.origin, content), {
           command_id: `failure-memory-reapproval-required-${command_id}`,
           upstream_commit_hash: pending.log.commit.hash,
           request_id: pending.log.request_id,
@@ -4167,7 +4215,7 @@ async function serveWithOwnerLease(
         return { approval: "approve", executed: false, status: "failure_memory_gate_changed", fresh_request_required: true };
       }
     }
-    if (verdict === "approve" && pendingApprovalNeedsContentReview(pending.command)) {
+    if (verdict === "approve" && (pending.daily_brief_read || pendingApprovalNeedsContentReview(pending.command))) {
       const contentReview = await validatePendingApprovalContentReview(
         command_id, ctx.content_review_digest, executionController?.signal,
       );
@@ -4270,7 +4318,7 @@ async function serveWithOwnerLease(
       }
       const content = `[emergency-stop-active] command_id=${command_id} approval=approve executed=false pending=true next_action=Clear emergency stop only after reviewing the stop reason, then reload approvals for a fresh token.`;
       auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "emergency_stop", content);
-      await dispatcher.dispatch(replyPayload(pending.origin, content), {
+      if (!pending.daily_brief_read) await dispatcher.dispatch(replyPayload(pending.origin, content), {
         command_id: `emergency-stop-approval-blocked-${command_id}`,
         upstream_commit_hash: pending.log.commit.hash,
       });
@@ -4341,7 +4389,8 @@ async function serveWithOwnerLease(
         });
         const content = `[approval-${verdict}] command_id=${command_id}`;
         auditGatewayStatusOutput(pending.log, pending.origin, approvalActor, command_id, "human_approval", content);
-        await dispatcher.dispatch(replyPayload(pending.origin, content), { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
+        if (!pending.daily_brief_read) await dispatcher.dispatch(replyPayload(pending.origin, content),
+          { command_id: `approval-${verdict}-${command_id}`, upstream_commit_hash: pending.log.commit.hash });
         completeApprovalResolution(command_id);
         return { approval: verdict, executed: false };
       }
@@ -4636,6 +4685,7 @@ async function serveWithOwnerLease(
       }
       const r = await executeAndEcho(pending.command, pending.log, pending.origin, {
         skip_approval: true,
+        ...(pending.daily_brief_read ? { daily_brief_read: pending.daily_brief_read } : {}),
         actor: approvalActor,
         ...(executionController ? {
           execution_controller: executionController,
@@ -4688,7 +4738,8 @@ async function serveWithOwnerLease(
         return { approval: "approve", executed: false, executor_started: false, status: r.status };
       }
       completeApprovalResolution(command_id);
-      return { approval: "approve", executed: true, status: r.status };
+      return { approval: "approve", executed: true, status: r.status,
+        ...(r.daily_brief_read ? { daily_brief_read: r.daily_brief_read } : {}) };
     } catch (error) {
       try {
         approvalRecoveryStore.markOutcomeUnknown(command_id);
@@ -5096,6 +5147,7 @@ async function serveWithOwnerLease(
           }
         : {}),
       onOwnerLlmSettingsProposal: submitOwnerLlmSettingsProposal,
+      onOwnerDailyBriefRead: submitOwnerDailyBriefRead,
       onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
         source_command_id?: string }) =>
@@ -5146,7 +5198,7 @@ async function serveWithOwnerLease(
           const pendingApprovals = pendingApprovalSnapshot();
           const runtimeSchedulesCount = runtimeSchedules.activeCount();
           const pendingScheduleApprovalsCount = runtimeSchedules.pendingCount();
-          const scheduledTasks = cron.snapshot();
+          const scheduledTasks = dailyBriefScheduleSnapshot();
           const runtimeScheduleSnapshot = runtimeSchedules.snapshot();
           return {
             ...buildRuntimeStatusSnapshot({
@@ -5194,7 +5246,8 @@ async function serveWithOwnerLease(
       approval: {
         list: async () => pendingApprovalSnapshot(),
         requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption ||
-          pendingApprovals.get(id)?.goal_purpose_repair),
+          pendingApprovals.get(id)?.goal_purpose_repair || pendingApprovals.get(id)?.daily_brief_read),
+        requiresLocalDailyBriefRead: (id: string) => Boolean(pendingApprovals.get(id)?.daily_brief_read),
         requiresNativeCredentialApproval: (id: string) => requiresNativeCredentialApproval(pendingApprovals.get(id)?.command),
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
@@ -5370,7 +5423,7 @@ async function serveWithOwnerLease(
         daily: {
           getSnapshot: async () => dailySurfaceSnapshot({
             env: process.env,
-            scheduled_tasks: cron.snapshot(),
+            scheduled_tasks: dailyBriefScheduleSnapshot(),
             runtime_schedules: runtimeSchedules.snapshot(),
           }),
         },
@@ -5632,6 +5685,80 @@ async function serveWithOwnerLease(
       actor: "gateway", request_id: log.request_id, reason: "initial_goal_purpose_approval_expired",
     });
     return true;
+  }
+
+  function dailyBriefScheduleSnapshot() {
+    return cron.snapshot().map(task => {
+      if (!task.local_acquisition_due) return task;
+      return { ...task, local_acquisition_due: { ...task.local_acquisition_due, services: dailyBriefGoogleServices } };
+    });
+  }
+
+  function dailyBriefReadIsCurrent(binding: DailyBriefReadBinding): boolean {
+    if (process.env.BLUE_TANUKI_SAFE_MODE === "1" || emergencyStop.active || gatewayShuttingDown ||
+        !completeHistory.verify() || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return false;
+    try {
+      ownerLease.assertActive();
+      return dailyBriefScheduleSnapshot().some(task => task.id === "daily_brief" && task.origin === "boot" && task.enabled &&
+        task.running && task.recovery_hold === null && task.local_acquisition_due?.occurrence_id_digest === binding.occurrence_id_digest &&
+        task.local_acquisition_due.schedule_payload_digest === binding.schedule_payload_digest &&
+        task.local_acquisition_due.scheduled_at_ms === binding.scheduled_at_ms && binding.scheduled_at_ms <= Date.now() &&
+        "services" in task.local_acquisition_due && task.local_acquisition_due.services.includes(binding.service));
+    } catch {
+      return false;
+    }
+  }
+
+  async function submitOwnerDailyBriefRead(input: { actor: string; occurrence_id_digest: string; service: DailyBriefService }) {
+    const unavailable = { accepted: false as const, status: "daily_brief_read_unavailable" as const,
+      used_for_authority: false as const, may_execute: false as const };
+    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR) return unavailable;
+    try {
+      const marker = dailyBriefScheduleSnapshot().find(task => task.id === "daily_brief" && task.origin === "boot")?.local_acquisition_due;
+      if (marker?.occurrence_id_digest !== input.occurrence_id_digest) return unavailable;
+      const binding: DailyBriefReadBinding = { occurrence_id_digest: marker.occurrence_id_digest,
+        schedule_payload_digest: marker.schedule_payload_digest, scheduled_at_ms: marker.scheduled_at_ms, service: input.service };
+      if (!dailyBriefReadIsCurrent(binding)) return unavailable;
+      const requestId = `daily-brief-${operationPlanDigest([binding.occurrence_id_digest, binding.service])}`;
+      if (hds.getAudit().list().some(({ log }) => "request_id" in log && log.request_id === requestId)) {
+        return { ...unavailable, status: "daily_brief_read_already_requested" as const };
+      }
+      const spec = dailyBriefReadSpec(binding.service, binding.scheduled_at_ms);
+      const origin = createGatewayInternalInboundRequest({ id: requestId, user: input.actor, channel: "webchat",
+        content: `Daily Briefの定刻 ${new Date(binding.scheduled_at_ms).toISOString()} に対応する ${binding.service} の要約を一度取得し、本人のControl Centerに表示する。範囲: ${spec.scope}。最大${DAILY_BRIEF_MAX_RESULTS}件。`,
+        timestamp: Date.now(), metadata: { "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "tool",
+          "blue_tanuki.operator_surface": "daily", "blue_tanuki.operation_core.source_interface": "gui",
+          "blue_tanuki.tool_call": { tool_name: spec.tool_name, arguments: spec.arguments } } });
+      const boundary = planGatewayInboundBoundary(origin);
+      if (!boundary.boundary_ok || !recordCompleteHistory({ kind: "user_input", request_id: requestId,
+        actor: input.actor, source: "webchat-owner-daily-brief", timestamp: origin.timestamp,
+        payload: { ...binding, used_for_authority: false, may_execute: false } })) return unavailable;
+      const { log, command } = hds.decide(boundary.hdsBoundaryInput);
+      const recorded = recordCompleteHistory({ kind: "hds_decision", request_id: log.request_id, command_id: command?.id,
+        actor: input.actor, source: "hds-brain", timestamp: log.timestamp, payload: hdsDecisionHistoryPayload(log, command) });
+      if (!recorded || command?.type !== "tool_call" || command.payload.tool_name !== spec.tool_name ||
+          operationPlanDigest(command.payload.arguments) !== operationPlanDigest(spec.arguments)) {
+        if (command) hds.onCommandLifecycle(command.id, "approval_rejected", { actor: input.actor,
+          request_id: requestId, reason: "daily_brief_read_command_mismatch" });
+        return unavailable;
+      }
+      const evaluation = approval.evaluate(command, input.actor);
+      if (evaluation.decision !== "ask" || evaluation.context.operation !== "credential.access" ||
+          evaluation.risk !== "high" || evaluation.approval_level !== "L3_final_review" || !evaluation.final_review_required) {
+        hds.onApprovalEvaluation(evaluation, { request_id: requestId });
+        hds.onCommandLifecycle(command.id, "approval_rejected", { actor: input.actor,
+          request_id: requestId, reason: "daily_brief_read_l3_unavailable" });
+        return unavailable;
+      }
+      const result = await executeAndEcho(command, log, origin, { actor: input.actor, approval_evaluation: evaluation,
+        quiet_approval_notice: true, daily_brief_read: binding });
+      return result.status === "approval_required" && pendingApprovals.get(command.id)?.approval_token
+        ? { accepted: true as const, status: "approval_required" as const, request_id: requestId, command_id: command.id,
+          used_for_authority: false as const, may_execute: false as const } : unavailable;
+    } catch {
+      return unavailable;
+    }
   }
 
   async function submitOwnerLlmSettingsProposal(input: WebChatOwnerLlmSettingsProposal & { actor: string }) {
@@ -6209,8 +6336,33 @@ async function serveWithOwnerLease(
       timestamp: Date.now() });
   }
 
+  function dailyBriefReadContentReview(pending: PendingApproval): WebChatDailyBriefReadContentReview | null {
+    const binding = pending.daily_brief_read;
+    if (!binding || !dailyBriefReadIsCurrent(binding) || pending.command.type !== "tool_call" ||
+        executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+    const spec = dailyBriefReadSpec(binding.service, binding.scheduled_at_ms);
+    if (pending.command.payload.tool_name !== spec.tool_name ||
+        operationPlanDigest(pending.command.payload.arguments) !== operationPlanDigest(spec.arguments)) return null;
+    const review = { kind: "daily_brief_read", command_id: pending.command.id, command_digest: pending.command_digest,
+      occurrence_id_digest: binding.occurrence_id_digest, scheduled_at_ms: binding.scheduled_at_ms, service: binding.service,
+      tool_name: spec.tool_name, api_host: spec.api_host, scope: spec.scope, max_results: DAILY_BRIEF_MAX_RESULTS,
+      no_store: true, used_for_authority: false, may_execute: false } as const;
+    return { ...review, review_digest: operationPlanDigest({ ...review, request_id: pending.log.request_id,
+      schedule_payload_digest: binding.schedule_payload_digest, proposal_actor: pending.origin.user }) };
+  }
+
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
+    if (pending?.daily_brief_read) {
+      const review = dailyBriefReadContentReview(pending);
+      if (!review || approvalRecoveryStore.state(command_id) !== "pending") return null;
+      if (pending.content_review_digest === review.review_digest) return review;
+      if (!recordApprovalHistory("daily_brief_read_content_reviewed", pending.command, pending.log, pending.origin,
+        "webchat-resume-token-holder", pending.evaluation, { content_review_digest: review.review_digest })) return null;
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+      return review;
+    }
     if (pending?.goal_purpose_repair) {
       const review = await guardedGoalPurposeRepairReview(pending);
       if (!review || approvalRecoveryStore.state(command_id) !== "pending") return null;
@@ -6753,6 +6905,11 @@ async function serveWithOwnerLease(
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
     if (signal?.aborted) return "cancelled";
+    if (pending.daily_brief_read) {
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      return dailyBriefReadContentReview(pending)?.review_digest === content_review_digest ? "valid" : "stale";
+    }
     if (pending.goal_purpose_repair) {
       if (!content_review_digest || !pending.content_review_digest) return "required";
       if (content_review_digest !== pending.content_review_digest) return "stale";
@@ -7144,7 +7301,8 @@ async function serveWithOwnerLease(
       ...(p.evaluation.context.operation === "recovery.restore" && p.recovery_archive_sha256 &&
           /^[a-f0-9]{64}$/.test(p.recovery_archive_sha256) ? { recovery_archive_sha256: p.recovery_archive_sha256 } : {}),
       ...(p.goal_purpose_repair ? { goal_purpose_repair: true as const } : {}),
-      content_review_required: pendingApprovalNeedsContentReview(p.command) ||
+      ...(p.daily_brief_read ? { daily_brief_read: true as const } : {}),
+      content_review_required: Boolean(p.daily_brief_read) || pendingApprovalNeedsContentReview(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||
         Boolean(p.memory_judgment_reassessment_proposal),

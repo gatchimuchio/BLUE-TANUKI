@@ -125,6 +125,7 @@ export interface WebChatResumeContext {
   content_review_digest?: string;
   /** Available only for an explicitly reviewed credential enrollment on the local browser route. */
   native_credential_prompt?: true;
+  daily_brief_read?: true;
   approval?: WebChatResumeApprovalOptions;
 }
 
@@ -186,6 +187,7 @@ export interface WebChatApprovalQueueItem {
   reason: string;
   /** True when this approval requires an explicit, digest-bound content review before approval. */
   content_review_required?: boolean;
+  daily_brief_read?: true;
   /** Offline repair handoff for the reconciled delegated-purpose J/M pair. */
   goal_purpose_repair?: true;
   /** Digest-only projection for a delegated goal purpose change requiring explicit review. */
@@ -956,6 +958,35 @@ export interface WebChatMemoryPersonalizationStopContentReview {
   may_execute: false;
 }
 
+export type WebChatDailyBriefReadService = "gmail" | "calendar" | "drive";
+
+export interface WebChatDailyBriefReadRequest {
+  occurrence_id_digest: string;
+  service: WebChatDailyBriefReadService;
+}
+
+export interface WebChatDailyBriefReadContentReview extends WebChatDailyBriefReadRequest {
+  kind: "daily_brief_read";
+  command_id: string;
+  command_digest: string;
+  review_digest: string;
+  scheduled_at_ms: number;
+  tool_name: string;
+  api_host: string;
+  scope: string;
+  max_results: number;
+  no_store: true;
+  used_for_authority: false;
+  may_execute: false;
+}
+
+export interface WebChatDailyBriefReadResult {
+  service: WebChatDailyBriefReadService;
+  items: readonly { title: string; detail?: string }[];
+  incomplete: boolean;
+  used_for_authority: false;
+}
+
 export interface WebChatSettingsWriteContentReview {
   kind: "settings_write";
   command_id: string;
@@ -1467,7 +1498,7 @@ export interface WebChatMcpCallContentReview {
 
 export type WebChatComposioExecuteContentReview = ComposioActionContentReview & { command_id: string };
 
-export type WebChatApprovalContentReview = WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
+export type WebChatApprovalContentReview = WebChatDailyBriefReadContentReview | WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview | WebChatGoalPurposeRepairContentReview |
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
@@ -1599,6 +1630,7 @@ export interface WebChatApprovalSurface {
   requiresApprovalEndpoint?: (approval_id: string) => boolean;
   /** Credential registration approvals require the local browser route before any one-shot token is consumed. */
   requiresNativeCredentialApproval?: (approval_id: string) => boolean;
+  requiresLocalDailyBriefRead?: (approval_id: string) => boolean;
   /** Return redacted metadata for currently executing commands. */
   activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
   /** Request cancellation by exact active command identity; null means no current match. */
@@ -2007,6 +2039,8 @@ export interface WebChatOptions {
   onOwnerTaskGoalOptions?: (input: { actor: string }) => Promise<readonly WebChatTaskGoalOption[]>;
   /** Request preparation of an exact non-secret LLM settings change through J. */
   onOwnerLlmSettingsProposal?: (input: WebChatOwnerLlmSettingsProposal & { actor: string }) =>
+    Promise<Record<string, unknown>>;
+  onOwnerDailyBriefRead?: (input: WebChatDailyBriefReadRequest & { actor: string }) =>
     Promise<Record<string, unknown>>;
   /** Durable idempotency boundary for owner task submissions. Required when task submission is enabled. */
   owner_task_submission_store?: WebChatOwnerTaskSubmissionStore;

@@ -93,6 +93,9 @@ import type {
   WebChatApprovalQueueItem,
   WebChatApprovalContentReviewValidation,
   WebChatApprovalSurface,
+  WebChatDailyBriefReadContentReview,
+  WebChatDailyBriefReadResult,
+  WebChatDailyBriefReadService,
   WebChatAuditSurface,
   WebChatAuthoritySurface,
   WebChatAuthorityTraceItem,
@@ -198,6 +201,11 @@ function isLocalControlCenterBrowserRequest(req: IncomingMessage): boolean {
     !Object.keys(req.headers).some(name => name === "forwarded" || name.startsWith("x-forwarded-"));
 }
 
+function hasDailyBriefOwnerToken(req: IncomingMessage, ownerToken: string | undefined): boolean {
+  const supplied = req.headers["x-blue-tanuki-owner-token"];
+  return typeof supplied === "string" && bearerTokenMatches(supplied, ownerToken);
+}
+
 function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -278,6 +286,44 @@ interface CanvasArtifactReference {
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
+const DAILY_BRIEF_READ_TARGETS = {
+  gmail: { tool_name: "gmail.read", api_host: "gmail.googleapis.com" },
+  calendar: { tool_name: "google.calendar.read", api_host: "www.googleapis.com" },
+  drive: { tool_name: "google.drive.read", api_host: "www.googleapis.com" },
+} as const;
+
+function isDailyBriefReadService(value: unknown): value is WebChatDailyBriefReadService {
+  return typeof value === "string" && Object.hasOwn(DAILY_BRIEF_READ_TARGETS, value);
+}
+
+function validDailyBriefReadReview(review: WebChatDailyBriefReadContentReview, commandId: string): boolean {
+  if (!isDailyBriefReadService(review.service)) return false;
+  const target = DAILY_BRIEF_READ_TARGETS[review.service];
+  return hasExactKeys({ ...review }, ["kind", "command_id", "command_digest", "review_digest", "occurrence_id_digest",
+    "scheduled_at_ms", "service", "tool_name", "api_host", "scope", "max_results", "no_store", "used_for_authority", "may_execute"]) &&
+    review.command_id === commandId && review.tool_name === target.tool_name && review.api_host === target.api_host &&
+    [review.command_digest, review.review_digest, review.occurrence_id_digest]
+      .every(digest => typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) &&
+    Number.isSafeInteger(review.scheduled_at_ms) && review.scheduled_at_ms > 0 &&
+    typeof review.scope === "string" && review.scope.length > 0 && review.scope.length <= 512 &&
+    Number.isSafeInteger(review.max_results) && review.max_results >= 1 && review.max_results <= 5 &&
+    review.no_store === true && review.used_for_authority === false && review.may_execute === false;
+}
+
+function dailyBriefReadResult(value: unknown): WebChatDailyBriefReadResult | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (!isDailyBriefReadService(result.service) || typeof result.incomplete !== "boolean" ||
+      result.used_for_authority !== false || !Array.isArray(result.items) || result.items.length > 5) return null;
+  const items: { title: string; detail?: string }[] = [];
+  for (const item of result.items) {
+    if (!item || typeof item !== "object" || typeof item.title !== "string" || item.title.length > 240 ||
+        (item.detail !== undefined && (typeof item.detail !== "string" || item.detail.length > 240))) return null;
+    items.push({ title: item.title, ...(item.detail !== undefined ? { detail: item.detail } : {}) });
+  }
+  return { service: result.service, items, incomplete: result.incomplete, used_for_authority: false };
 }
 
 function validSettingsProviderReview(review: WebChatSettingsWriteContentReview, commandId: string): boolean {
@@ -705,6 +751,7 @@ function findAotanuAssetRoot(): string {
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
  *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
+ *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
@@ -1274,6 +1321,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/owner/llm-settings-proposal") {
       await this.handleOwnerLlmSettingsProposal(req, res);
+      return;
+    }
+    if (url.pathname === "/owner/daily-brief-read") {
+      await this.handleOwnerDailyBriefRead(req, res, url);
       return;
     }
 
@@ -2615,6 +2666,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
         return;
       if (this.opts.approval?.requiresApprovalEndpoint?.(request_id) ||
+          this.opts.approval?.requiresLocalDailyBriefRead?.(request_id) ||
           (verdict === "approve" && this.opts.approval?.requiresNativeCredentialApproval?.(request_id))) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_endpoint_required" }));
@@ -2630,6 +2682,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           token_kind: "resume",
           approval: readResumeApprovalOptions(body),
         });
+        if (result !== null && typeof result === "object" && "daily_brief_read" in result) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "daily_brief_approval_endpoint_required" }));
+          return;
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, result }));
       } catch (e) {
@@ -2930,9 +2987,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     url: URL,
   ): Promise<void> {
     const nativeCredentialMatch = /^\/approval\/([^/]+)\/native-credential$/.exec(url.pathname);
-    if (nativeCredentialMatch) {
+    const dailyBriefMatch = /^\/approval\/([^/]+)\/daily-brief-read$/.exec(url.pathname);
+    if (nativeCredentialMatch || dailyBriefMatch) {
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-content-type-options", "nosniff");
+    }
+    if (dailyBriefMatch && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+      return;
     }
     if (!this.checkAuth(req, "resume")) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -2961,6 +3024,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_id_invalid" }));
         return;
       }
+      const dailyBriefReview = this.opts.approval.requiresLocalDailyBriefRead?.(command_id) === true;
+      if (dailyBriefReview && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+        res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+        return;
+      }
+      if (dailyBriefReview && !hasDailyBriefOwnerToken(req, this.opts.owner_token)) {
+        res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
       let content: WebChatApprovalContentReview | null;
       try {
         content = await this.opts.approval.reviewContent(command_id);
@@ -2971,6 +3045,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (!content) {
         res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+      if (dailyBriefReview !== (content.kind === "daily_brief_read") ||
+          (content.kind === "daily_brief_read" && !validDailyBriefReadReview(content, command_id))) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
@@ -3247,7 +3327,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     let approval_id: string;
     try {
-      approval_id = decodeURIComponent(nativeCredentialMatch?.[1] ?? url.pathname.slice(prefix.length));
+      approval_id = decodeURIComponent(nativeCredentialMatch?.[1] ?? dailyBriefMatch?.[1] ?? url.pathname.slice(prefix.length));
     } catch {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "approval_id_invalid" }));
@@ -3258,12 +3338,35 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "approval id required" }));
       return;
     }
+    const requiresDailyBriefRead = this.opts.approval?.requiresLocalDailyBriefRead?.(approval_id) === true;
+    if (requiresDailyBriefRead !== Boolean(dailyBriefMatch)) {
+      res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: requiresDailyBriefRead ? "daily_brief_approval_endpoint_required" : "daily_brief_approval_unavailable" }));
+      return;
+    }
+    if (dailyBriefMatch) {
+      if (!hasDailyBriefOwnerToken(req, this.opts.owner_token)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "application_json_required" }));
+        return;
+      }
+      if (!this.resumeApprovalTokenStore || !this.opts.approval?.validateContentReview || !this.opts.approval.reviewContent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "daily_brief_approval_unavailable" }));
+        return;
+      }
+    }
 
     let body: Record<string, unknown> | null;
     try {
-      body = nativeCredentialMatch ? await readJson(req, 1_024, true) : await readJson(req);
+      body = nativeCredentialMatch || dailyBriefMatch ? await readJson(req, 1_024, true) : await readJson(req);
     } catch (error) {
-      if (!nativeCredentialMatch || !(error instanceof Error) || error.message !== "body_too_large") throw error;
+      if ((!nativeCredentialMatch && !dailyBriefMatch) || !(error instanceof Error) || error.message !== "body_too_large") throw error;
       res.writeHead(413, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "request_body_too_large" }));
       return;
@@ -3280,6 +3383,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (verdict !== "approve" && verdict !== "reject" && verdict !== "block") {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "verdict (approve|reject|block) required" }));
+      return;
+    }
+    if (dailyBriefMatch && (!body ||
+        !hasExactKeys(body, verdict === "approve" ? ["verdict", "approval_token", "content_review_digest"] : ["verdict", "approval_token"]) ||
+        !/^[a-zA-Z0-9_-]{1,128}$/.test(approval_id) || typeof body.approval_token !== "string" || !body.approval_token ||
+        (verdict === "approve" && (typeof body.content_review_digest !== "string" || !/^[a-f0-9]{64}$/.test(body.content_review_digest))))) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_daily_brief_approval" }));
       return;
     }
     if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
@@ -3319,7 +3430,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (review !== "valid" && (nativeCredentialMatch || review !== "not_required")) {
+      if (review !== "valid" && (nativeCredentialMatch || dailyBriefMatch || review !== "not_required")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
         return;
@@ -3336,7 +3447,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         actor,
         token_kind: "resume",
         ...(content_review_digest ? { content_review_digest } : {}),
-        ...(nativeCredentialMatch ? { native_credential_prompt: true } : { approval: readResumeApprovalOptions(body) }),
+        ...(nativeCredentialMatch ? { native_credential_prompt: true } : dailyBriefMatch ? { daily_brief_read: true }
+          : { approval: readResumeApprovalOptions(body) }),
       });
       if (nativeCredentialMatch) {
         const candidate = result as Record<string, unknown> | undefined;
@@ -3347,6 +3459,30 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, result: { approval: "approve", executed: true, status: "success" } }));
+        return;
+      }
+      if (dailyBriefMatch) {
+        const candidate = result as Record<string, unknown> | undefined;
+        const read = verdict === "approve" && candidate?.approval === "approve" && candidate.executed === true
+          ? dailyBriefReadResult(candidate.daily_brief_read) : null;
+        const rejected = verdict !== "approve" && candidate?.approval === verdict && candidate.executed === false;
+        if (read || rejected) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, result: {
+            approval: verdict, executed: Boolean(read), status: read ? "success" : "not_executed",
+            ...(read ? { daily_brief_read: read } : {}),
+          } }));
+        } else {
+          res.writeHead(409, { "content-type": "application/json" });
+          const withheld = verdict === "approve" && candidate?.executed === true &&
+            (candidate.status === "success" || candidate.status === "daily_brief_result_withheld");
+          res.end(JSON.stringify({ error: withheld ? "daily_brief_result_withheld" : "daily_brief_result_unavailable" }));
+        }
+        return;
+      }
+      if (result !== null && typeof result === "object" && "daily_brief_read" in result) {
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "daily_brief_approval_endpoint_required" }));
         return;
       }
       if (result !== null && typeof result === "object" &&
@@ -3376,8 +3512,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, result }));
     } catch (e) {
-      const msg = nativeCredentialMatch ? "credential_registration_unconfirmed" : e instanceof Error ? e.message : String(e);
-      res.writeHead(nativeCredentialMatch ? 409 : 400, { "content-type": "application/json" });
+      const msg = nativeCredentialMatch ? "credential_registration_unconfirmed" : dailyBriefMatch ? "daily_brief_result_unavailable"
+        : e instanceof Error ? e.message : String(e);
+      res.writeHead(nativeCredentialMatch || dailyBriefMatch ? 409 : 400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: msg }));
     }
   }
@@ -4154,6 +4291,73 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     } catch (error) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : "recovery_action_failed" }));
+    }
+  }
+
+  private async handleOwnerDailyBriefRead(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+      return;
+    }
+    const submit = this.opts.onOwnerDailyBriefRead;
+    if (!this.opts.owner_token || !submit) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "daily_brief_read_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "owner")) {
+      res.writeHead(401);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      res.writeHead(415);
+      res.end(JSON.stringify({ error: "application_json_required" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, OWNER_TOKEN_ACTOR, res)) return;
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 512, true);
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === "body_too_large";
+      res.writeHead(tooLarge ? 413 : 400);
+      res.end(JSON.stringify({ error: tooLarge ? "request_body_too_large" : "invalid_daily_brief_read" }));
+      return;
+    }
+    const occurrence = body?.occurrence_id_digest;
+    const service = body?.service;
+    if (!body || !hasExactKeys(body, ["occurrence_id_digest", "service"]) ||
+        typeof occurrence !== "string" || !/^[a-f0-9]{64}$/.test(occurrence) || !isDailyBriefReadService(service)) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "invalid_daily_brief_read" }));
+      return;
+    }
+    const projection = { used_for_authority: false, may_execute: false } as const;
+    try {
+      const receipt = await submit({ occurrence_id_digest: occurrence, service, actor: OWNER_TOKEN_ACTOR });
+      const { request_id, command_id } = receipt;
+      if (receipt.accepted !== true || receipt.status !== "approval_required" ||
+          typeof request_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(request_id) ||
+          typeof command_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(command_id)) {
+        res.writeHead(409);
+        res.end(JSON.stringify({ accepted: false, status: "daily_brief_read_unavailable", ...projection }));
+        return;
+      }
+      res.writeHead(202);
+      res.end(JSON.stringify({ accepted: true, status: "approval_required", request_id, command_id, ...projection }));
+    } catch {
+      res.writeHead(503);
+      res.end(JSON.stringify({ accepted: false, status: "daily_brief_read_unavailable", ...projection }));
     }
   }
 

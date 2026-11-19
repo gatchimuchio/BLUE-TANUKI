@@ -753,7 +753,16 @@ ${CONTROL_CENTER_STYLE}    </style>
             <pre id="goal-purpose-repair-handoff-code" aria-label="一回限りの復旧コード"></pre>
             <button id="hide-goal-purpose-repair-handoff" type="button">コードを画面から消す</button>
           </section>
+          <label id="daily-brief-approval-owner" hidden>Daily Brief の本人確認用owner token
+            <input id="daily-brief-review-owner-token" type="password" autocomplete="off" />
+          </label>
           <div id="approval-list" class="queue-list"></div>
+          <section id="daily-brief-result" class="approval-content-review" hidden>
+            <h3>Daily Brief 取得結果</h3>
+            <p id="daily-brief-result-status"></p>
+            <ul id="daily-brief-result-items"></ul>
+            <button id="hide-daily-brief-result" type="button">結果を画面から消す</button>
+          </section>
           <h2>Reusable Grants</h2>
           <div id="approval-grant-list" class="queue-list"></div>
           <h2>Approval History</h2>
@@ -766,6 +775,12 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="schedule-summary" class="badge warn">not loaded</span>
           </div>
           <div id="runtime-schedule-list" class="schedule-list"></div>
+          <section id="daily-brief-read-request" class="approval-content-review" hidden>
+            <label>Daily Brief の取得元<select id="daily-brief-read-service"></select></label>
+            <label>申請用のowner token<input id="daily-brief-owner-token" type="password" autocomplete="off" /></label>
+            <button id="request-daily-brief-read" class="primary" type="button">取得範囲の審査を申請</button>
+            <p id="daily-brief-read-status" aria-live="polite"></p>
+          </section>
         </section>
 
         <section class="card" data-screen-group="activity memory">

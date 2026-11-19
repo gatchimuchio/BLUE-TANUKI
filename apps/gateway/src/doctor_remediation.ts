@@ -141,7 +141,7 @@ export function remediationFor(check: CheckDraft): Remediation {
   if (check.id === "google_daily_brief_source") {
     return {
       cause: check.detail,
-      impact: "Google付きDaily Briefの取得と送信は保留です。サービス設定が有効な場合は定刻の到達を記録します。",
+      impact: "サービス設定が有効な場合は定刻の到達を記録します。個別取得はControl Centerで承認でき、定刻からの自動取得と送信は保留です。",
       next_action: "固定文のDaily Briefを使用する場合は BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED を無効にしてGatewayを再起動してください。",
       doc_ref: "CONFIG.md#Google-read-tools-and-Daily-Brief-source",
       safe_to_ignore: check.level === "warn",

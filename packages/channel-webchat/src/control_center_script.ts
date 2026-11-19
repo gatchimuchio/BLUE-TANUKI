@@ -72,6 +72,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         recoveryGoalPurposeRepair: null,
         goalPurposeRepairReviews: Object.create(null),
         goalPurposeRepairHandoffGeneration: 0,
+        dailyBriefReadMarker: null,
+        dailyBriefResultGeneration: 0,
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: storedActiveScreen && storedActiveScreen !== "home" ? storedActiveScreen : "conversation",
@@ -465,6 +467,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function setActiveScreen(screen) {
         const selected = screen || "conversation";
         if (state.activeScreen === "approvals" && selected !== "approvals") clearGoalPurposeRepairHandoff();
+        if (state.activeScreen === "approvals" && selected !== "approvals") {
+          clearDailyBriefResult();
+          clearDailyBriefReviewOwnerToken();
+        }
         state.activeScreen = selected;
         sessionStorage.setItem("bt.activeScreen", selected);
         document.body.dataset.activeScreen = selected;
@@ -2452,7 +2458,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           syncInputs();
           const ownerToken = typeof tokens.owner === "string" ? tokens.owner : "";
-          for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token", "settings-owner-token"]) {
+          for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token", "settings-owner-token",
+            "daily-brief-owner-token"]) {
             const ownerTokenInput = byId(inputId);
             if (ownerTokenInput) ownerTokenInput.value = ownerToken;
           }
@@ -2508,6 +2515,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         );
       }
 
+      function dailyBriefServiceLabel(service) {
+        return service === "gmail" ? "Gmail" : service === "calendar" ? "Google Calendar" : service === "drive" ? "Google Drive" : "";
+      }
+
       function renderSchedules(body) {
         const runtimeSchedules = Array.isArray(body.runtime_schedules) ? body.runtime_schedules : [];
         const configuredTasks = Array.isArray(body.scheduled_tasks) ? body.scheduled_tasks : [];
@@ -2527,6 +2538,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             item.used_for_authority === false;
         });
         const rows = runtimeSchedules.length > 0 ? runtimeSchedules.concat(heldSources) : configuredTasks;
+        let availableRead = null;
         if (rows.length === 0) {
           setHtml("runtime-schedule-list", '<div class="schedule-item muted">no runtime schedules</div>');
         } else {
@@ -2552,7 +2564,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   ["payload", item.payload_hash || "not recorded", false]
                 ];
                 if (sourceHeld) {
-                  fields.push(["取得元", "Googleの定期取得は未接続です。", false]);
                   const marker = item.local_acquisition_due;
                   if (item.id === "daily_brief" && item.origin === "boot" && isObject(marker) &&
                       marker.status === "awaiting_authorized_acquisition" &&
@@ -2563,7 +2574,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                       Number.isSafeInteger(marker.scheduled_at_ms) && marker.scheduled_at_ms > 0 &&
                       Number.isSafeInteger(marker.recorded_at_ms) && marker.recorded_at_ms > 0) {
                     fields.push(["前回の予定到達", formatDate(marker.scheduled_at_ms), false]);
+                    if (item.recovery_hold === null && Array.isArray(marker.services) &&
+                        marker.services.length > 0 && marker.services.length <= 3 &&
+                        new Set(marker.services).size === marker.services.length && marker.services.every(dailyBriefServiceLabel)) {
+                      availableRead = marker;
+                    }
                   }
+                  fields.push(["取得元", availableRead ? "取得には予定ごとのL3承認が必要です。" : "Googleの定期取得は未接続です。", false]);
                   if (item.running === true && item.recovery_hold === null &&
                       Number.isSafeInteger(item.next_fire_at_ms) && item.next_fire_at_ms > 0) {
                     fields.push(["次の予定", formatDate(item.next_fire_at_ms), false]);
@@ -2583,6 +2600,43 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
 
         setText("schedule-json", compactJson(redactRuntimeValue({ runtime_schedules: runtimeSchedules, scheduled_tasks: configuredTasks })));
+        const nextRead = availableRead && isLocalCredentialControlCenter() ? availableRead : null;
+        if (state.dailyBriefReadMarker?.occurrence_id_digest !== nextRead?.occurrence_id_digest ||
+            JSON.stringify(state.dailyBriefReadMarker?.services) !== JSON.stringify(nextRead?.services)) {
+          state.dailyBriefReadMarker = nextRead;
+          setHtml("daily-brief-read-service", nextRead ? nextRead.services.map(function (service) {
+            return '<option value="' + escapeHtml(service) + '">' + escapeHtml(dailyBriefServiceLabel(service)) + '</option>';
+          }).join("") : "");
+          setText("daily-brief-read-status", "");
+        }
+        const requestPanel = byId("daily-brief-read-request");
+        if (requestPanel) requestPanel.hidden = nextRead === null;
+      }
+
+      async function submitDailyBriefRead() {
+        const input = byId("daily-brief-owner-token");
+        const token = input.value.trim();
+        const service = byId("daily-brief-read-service").value;
+        const marker = state.dailyBriefReadMarker;
+        if (!marker || !isLocalCredentialControlCenter() || !token || !marker.services.includes(service)) {
+          throw new Error("この端末で現行の予定と取得元を選び、owner tokenを入力してください。");
+        }
+        input.value = "";
+        setText("daily-brief-read-status", "取得範囲の審査を申請しています。");
+        const response = await fetch("/owner/daily-brief-read", {
+          method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer",
+          headers: { "content-type": "application/json", ...authHeaders(token) },
+          body: JSON.stringify({ occurrence_id_digest: marker.occurrence_id_digest, service })
+        });
+        const body = response.ok && hasNoStore(response) ? await response.json() : null;
+        if (!body || body.accepted !== true || body.status !== "approval_required" || body.used_for_authority !== false ||
+            body.may_execute !== false || typeof body.command_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.command_id)) {
+          throw new Error("申請を確認できませんでした。再申請の前に承認待ち一覧を確認してください。");
+        }
+        setText("daily-brief-read-status", "審査を申請しました。承認画面で取得元と範囲を確認してください。");
+        byId("daily-brief-review-owner-token").value = token;
+        setActiveScreen("approvals");
+        await loadApprovals();
       }
 
       function operationCoreRiskTone(risk) {
@@ -3683,6 +3737,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         renderApprovalGrants(grants);
         renderApprovalHistory(approvalHistory);
         renderActiveExecutions(activeExecutions);
+        const dailyBriefOwner = byId("daily-brief-approval-owner");
+        if (dailyBriefOwner) {
+          dailyBriefOwner.hidden = !pending.some(function (item) { return item.daily_brief_read === true; });
+          if (dailyBriefOwner.hidden) clearDailyBriefReviewOwnerToken();
+        }
 
         if (pending.length === 0) {
           setHtml("approval-list", '<div class="queue-item muted">no pending approvals</div>');
@@ -3713,9 +3772,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const isRecoveryRestore = item.operation === "recovery.restore";
               const isGoalPurposeRepair = isRecoveryRestore && item.goal_purpose_repair === true;
               const isGoalPurposeAdoption = typeof item.target === "string" && item.target.startsWith("goal.governance.adopt:");
+              const isDailyBriefRead = item.daily_brief_read === true;
               const recoveryArchiveSha = isRecoveryRestore && typeof item.recovery_archive_sha256 === "string" &&
                 /^[a-f0-9]{64}$/.test(item.recovery_archive_sha256) ? item.recovery_archive_sha256 : null;
-              const requiresContentReview = item.content_review_required === true || isGoalPurposeRepair;
+              const requiresContentReview = item.content_review_required === true || isGoalPurposeRepair || isDailyBriefRead;
               const approveBlocked = requiresContentReview || isGoalPurposeAdoption || Boolean(cronReview && cronReview.eligible !== true) ||
                 Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale") ||
                 (isRecoveryRestore && !isGoalPurposeRepair && recoveryArchiveSha === null);
@@ -3725,6 +3785,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               return '<article class="queue-item" data-command="' + escapeHtml(item.command_id || "") + '"' +
                  (isGoalPurposeAdoption ? ' data-goal-purpose-adoption="' + escapeHtml(item.target) + '"' : '') +
                  (isGoalPurposeRepair ? ' data-goal-purpose-repair=""' : '') +
+                 (isDailyBriefRead ? ' data-daily-brief-read=""' : '') +
                  (meaningUpdateReview ? ' data-proposal-digest="' + escapeHtml(meaningUpdateReview.proposal_digest) +
                    '" data-candidate-digest="' + escapeHtml(meaningUpdateReview.candidate_digest) +
                    '" data-target-record-id="' + escapeHtml(meaningUpdateReview.target_record_id) +
@@ -3736,7 +3797,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-purpose-version="' + escapeHtml(goalPurposeRelationReview.purpose_version) +
                   '" data-purpose-digest="' + escapeHtml(goalPurposeRelationReview.purpose_digest) +
                   '" data-relation-outcome="' + escapeHtml(goalPurposeRelationReview.outcome) + '"' : '') + '>' +
-                '<div class="row"><h3>' + escapeHtml(item.operation || "unknown operation") + '</h3><span>' + finalBadge + '</span></div>' +
+                '<div class="row"><h3>' + escapeHtml(isDailyBriefRead ? "Daily Brief の取得" : item.operation || "unknown operation") + '</h3><span>' + finalBadge + '</span></div>' +
                 '<dl class="kv">' +
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
@@ -6765,12 +6826,50 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return true;
       }
 
+      function clearDailyBriefResult() {
+        state.dailyBriefResultGeneration += 1;
+        const result = byId("daily-brief-result");
+        if (!result) return;
+        result.hidden = true;
+        setText("daily-brief-result-status", "");
+        byId("daily-brief-result-items").replaceChildren();
+      }
+
+      function clearDailyBriefReviewOwnerToken() {
+        const input = byId("daily-brief-review-owner-token");
+        if (input) input.value = "";
+      }
+
+      function showDailyBriefResult(summary, reviewedService) {
+        const label = dailyBriefServiceLabel(summary?.service);
+        if (!label || summary.service !== reviewedService || summary.used_for_authority !== false ||
+            typeof summary.incomplete !== "boolean" || !Array.isArray(summary.items) || summary.items.length > 5 ||
+            !summary.items.every(function (item) {
+              return isObject(item) && typeof item.title === "string" && item.title.length <= 240 &&
+                (item.detail === undefined || typeof item.detail === "string" && item.detail.length <= 240);
+            })) return false;
+        const list = byId("daily-brief-result-items");
+        list.replaceChildren();
+        for (const item of summary.items) {
+          const row = document.createElement("li");
+          row.textContent = item.detail ? item.title + " — " + item.detail : item.title;
+          list.appendChild(row);
+        }
+        setText("daily-brief-result-status", label + " · " + summary.items.length + "件" +
+          (summary.incomplete ? " · 取得範囲の一部のみ" : ""));
+        byId("daily-brief-result").hidden = false;
+        return true;
+      }
+
       async function submitApproval(commandId, verdict, approvalToken) {
         const token = byId("approval-token").value.trim();
         const card = Array.from(document.querySelectorAll(".queue-item[data-command]"))
           .find(function (item) { return item.getAttribute("data-command") === commandId; });
         const adoptionCard = card?.getAttribute("data-goal-purpose-adoption") != null;
         const repairCard = card?.getAttribute("data-goal-purpose-repair") != null;
+        const dailyBriefCard = card?.getAttribute("data-daily-brief-read") != null;
+        const dailyBriefOwner = dailyBriefCard ? byId("daily-brief-review-owner-token").value.trim() : "";
+        const dailyBriefService = dailyBriefCard ? card.getAttribute("data-daily-brief-service") : null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
         const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
         const nativeCredential = verdict === "approve" && (nativeCredentialMode === "register" || nativeCredentialMode === "rotate");
@@ -6786,24 +6885,35 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           clearGoalPurposeRepairHandoff();
           if (verdict === "approve" && !reviewedRepair) throw new Error("復旧範囲を確認してから承認してください。");
         }
+        if (dailyBriefCard) {
+          clearDailyBriefResult();
+          if (!dailyBriefOwner || !isLocalCredentialControlCenter() ||
+              (verdict === "approve" && (!state.approvalContentDigests[commandId] || !dailyBriefServiceLabel(dailyBriefService)))) {
+            throw new Error("この端末でDaily Briefのowner tokenを入力し、取得範囲を確認してください。");
+          }
+          clearDailyBriefReviewOwnerToken();
+        }
         const handoffGeneration = state.goalPurposeRepairHandoffGeneration;
-        const response = await fetch("/approval/" + encodeURIComponent(commandId) + (nativeCredential ? "/native-credential" : ""), {
+        const dailyResultGeneration = state.dailyBriefResultGeneration;
+        const response = await fetch("/approval/" + encodeURIComponent(commandId) +
+          (nativeCredential ? "/native-credential" : dailyBriefCard ? "/daily-brief-read" : ""), {
           method: "POST",
           cache: "no-store",
-          ...(nativeCredential ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
+          ...(nativeCredential || dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
           headers: {
             "content-type": "application/json",
-            ...authHeaders(token)
+            ...authHeaders(token),
+            ...(dailyBriefCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner } : {})
           },
           body: JSON.stringify({
             verdict: verdict,
             approval_token: approvalToken,
-            ...(state.approvalContentDigests[commandId]
+            ...(state.approvalContentDigests[commandId] && (!dailyBriefCard || verdict === "approve")
               ? { content_review_digest: state.approvalContentDigests[commandId] }
               : {})
           })
         }).catch(function (error) {
-          if (!nativeCredential) throw error;
+          if (!nativeCredential && !dailyBriefCard) throw error;
           return null;
         });
         if (nativeCredential) {
@@ -6814,6 +6924,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
           setText("native-credential-approval-status", confirmed ? saved
             : "資格情報の保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
+          await loadApprovals();
+          return;
+        }
+        if (dailyBriefCard) {
+          const body = response && hasNoStore(response) ? await response.json().catch(function () { return null; }) : null;
+          const result = response?.ok && body?.ok === true ? body.result : null;
+          if (!result || result.approval !== verdict || result.executed !== (verdict === "approve")) {
+            await loadApprovals();
+            if (body?.error === "daily_brief_result_withheld") throw new Error("取得結果を安全に表示できませんでした。");
+            throw new Error("Daily Briefの処理結果を確認できませんでした。再申請の前に承認状態を確認してください。");
+          }
+          if (verdict === "approve" && state.activeScreen === "approvals" && dailyResultGeneration === state.dailyBriefResultGeneration &&
+              token === byId("approval-token").value.trim() && !showDailyBriefResult(result.daily_brief_read, dailyBriefService)) {
+            await loadApprovals();
+            throw new Error("取得は実行されました。結果を安全に表示できませんでした。");
+          }
           await loadApprovals();
           return;
         }
@@ -6867,7 +6993,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           .find(function (item) { return item.getAttribute("data-command") === commandId; });
         if (!card) throw new Error("approval is no longer shown; reload pending approvals");
         const repairCard = card.getAttribute("data-goal-purpose-repair") != null;
+        const dailyBriefCard = card.getAttribute("data-daily-brief-read") != null;
+        const dailyBriefOwner = dailyBriefCard ? byId("daily-brief-review-owner-token").value.trim() : "";
         if (repairCard) delete state.goalPurposeRepairReviews[commandId];
+        if (dailyBriefCard) {
+          card.removeAttribute("data-daily-brief-service");
+          if (!dailyBriefOwner || !isLocalCredentialControlCenter()) {
+            throw new Error("この端末でDaily Briefのowner tokenを入力し、取得範囲を確認してください。");
+          }
+        }
         const view = card.querySelector("[data-content-review-view]");
         const approve = card.querySelector('[data-verdict="approve"]');
         if (!view || !approve) throw new Error("content review panel is unavailable");
@@ -6880,7 +7014,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
           method: "POST",
           cache: "no-store",
-          headers: authHeaders(token)
+          ...(dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
+          headers: { ...authHeaders(token), ...(dailyBriefCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner } : {}) }
         });
         if (!response.ok) {
           if (repairCard) throw new Error("復旧範囲を取得できません。");
@@ -6892,6 +7027,39 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("委任目的の登録対象と審査内容が一致しません。");
         }
         if (repairCard !== (review.kind === "goal_purpose_repair")) throw new Error("復旧対象と審査内容が一致しません。");
+        if (dailyBriefCard !== (review.kind === "daily_brief_read")) throw new Error("Daily Brief の審査対象が一致しません。");
+        if (dailyBriefCard) {
+          const label = dailyBriefServiceLabel(review.service);
+          const digests = [review.command_digest, review.review_digest, review.occurrence_id_digest];
+          if (!label || review.command_id !== commandId || !hasNoStore(response) || review.no_store !== true ||
+              review.used_for_authority !== false || review.may_execute !== false || !card.isConnected ||
+              token !== byId("approval-token").value.trim() ||
+              dailyBriefOwner !== byId("daily-brief-review-owner-token").value.trim() ||
+              !digests.every(function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); }) ||
+              typeof review.tool_name !== "string" || typeof review.api_host !== "string" ||
+              typeof review.scope !== "string" || review.scope.length === 0 || review.scope.length > 512 ||
+              !Number.isSafeInteger(review.scheduled_at_ms) || review.scheduled_at_ms <= 0 ||
+              !Number.isSafeInteger(review.max_results) || review.max_results < 1 || review.max_results > 5) {
+            throw new Error("Daily Brief の取得範囲を照合できませんでした。");
+          }
+          const details = document.createElement("pre");
+          details.textContent = [
+            label + " の読み取り",
+            "予定到達 " + formatDate(review.scheduled_at_ms),
+            "取得範囲 " + review.scope,
+            "上限 " + review.max_results + "件",
+            "接続先 " + review.api_host,
+            "操作 " + review.tool_name,
+            "予定の識別値 " + review.occurrence_id_digest,
+            "承認すると一度だけ読み取り、この画面に結果を表示します。"
+          ].join("\\n");
+          view.replaceChildren(details);
+          card.setAttribute("data-daily-brief-service", review.service);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "取得範囲を再確認";
+          return;
+        }
         if (repairCard) {
           const binding = goalPurposeRepairBinding(review);
           const scope = goalPurposeRepairStoreLines(review.stores);
@@ -10525,6 +10693,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-notifications").addEventListener("click", loadNotifications);
       byId("load-approvals").addEventListener("click", loadApprovals);
       byId("approval-token").addEventListener("input", clearGoalPurposeRepairHandoff);
+      byId("approval-token").addEventListener("input", clearDailyBriefResult);
+      byId("daily-brief-review-owner-token").addEventListener("input", clearDailyBriefResult);
+      byId("hide-daily-brief-result").addEventListener("click", clearDailyBriefResult);
+      window.addEventListener("pagehide", clearDailyBriefResult);
+      window.addEventListener("pagehide", clearDailyBriefReviewOwnerToken);
+      byId("request-daily-brief-read").addEventListener("click", async function (event) {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          await submitDailyBriefRead();
+        } catch (error) {
+          byId("daily-brief-owner-token").value = "";
+          setText("daily-brief-read-status", error instanceof Error ? error.message : "申請を確認できませんでした。");
+        } finally {
+          button.disabled = false;
+        }
+      });
       byId("hide-goal-purpose-repair-handoff").addEventListener("click", clearGoalPurposeRepairHandoff);
       window.addEventListener("pagehide", clearGoalPurposeRepairHandoff);
       byId("load-owner-task-goals").addEventListener("click", function () {

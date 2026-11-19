@@ -36,6 +36,7 @@ import {
   type WebChatD4RuntimeIntentCancellation,
   type WebChatRuntimeSurface,
   type WebChatSettingsWriteContentReview,
+  type WebChatDailyBriefReadContentReview,
   type WebChatSettingsSurface,
   type WebChatOptions,
   AOTANU_ASSET_ROUTE_PREFIX,
@@ -160,6 +161,7 @@ async function setup(
       onResume?: WebChatOptions["onResume"];
       onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
       onOwnerLlmSettingsProposal?: WebChatOptions["onOwnerLlmSettingsProposal"];
+      onOwnerDailyBriefRead?: WebChatOptions["onOwnerDailyBriefRead"];
       onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }) => Promise<{
         accepted: boolean;
         status: string;
@@ -254,6 +256,7 @@ async function setup(
     onResume: opts.onResume as never,
     onGoalPurposeAdoption: opts.onGoalPurposeAdoption,
     onOwnerLlmSettingsProposal: opts.onOwnerLlmSettingsProposal,
+    onOwnerDailyBriefRead: opts.onOwnerDailyBriefRead,
     onGoalPurposeChangeProposal: opts.onGoalPurposeChangeProposal,
     onGoalPurposeChangeCandidates: opts.onGoalPurposeChangeCandidates,
     onGoalPurposeRelationReviewProposal: opts.onGoalPurposeRelationReviewProposal,
@@ -2326,13 +2329,15 @@ describe("WebChatChannel — Control Center shell", () => {
       .map((match) => match[1] ?? "").find((script) => script.includes("function renderSchedules(")) ?? "";
     expect(inline).not.toBe("");
     new Script(inline);
-    const start = inline.indexOf("function renderSchedules(");
+    const start = inline.indexOf("function dailyBriefServiceLabel(");
     const end = inline.indexOf("\n      function operationCoreRiskTone(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const rendered: Record<string, string> = {};
     const run = new Script(`
-      function byId() { return {}; }
+      const state = { dailyBriefReadMarker: null };
+      function byId(id) { return elements[id] ??= {}; }
+      function isLocalCredentialControlCenter() { return true; }
       function setText(id, value) { output[id] = String(value); }
       function setHtml(id, value) { output[id] = value; }
       function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
@@ -2347,7 +2352,8 @@ describe("WebChatChannel — Control Center shell", () => {
     `);
     const task = { id: "daily_brief", origin: "boot", enabled: true, running: false, recovery_hold: null,
       payload_hash: "a".repeat(64), content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false };
-    const evaluate = (dailyTask: Record<string, unknown>) => run.runInNewContext({ output: rendered, snapshot: {
+    const elements: Record<string, { hidden?: boolean }> = {};
+    const evaluate = (dailyTask: Record<string, unknown>) => run.runInNewContext({ output: rendered, elements, snapshot: {
       runtime_schedules: [{ id: "static-reminder", status: "active" }], scheduled_tasks: [dailyTask],
     } });
     evaluate(task);
@@ -2367,6 +2373,15 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered["runtime-schedule-list"]).toContain("<dt>次の予定</dt><dd>time-20000</dd>");
     expect(rendered["runtime-schedule-list"]).toContain("Googleの定期取得は未接続です。");
     expect(rendered["runtime-schedule-list"]).not.toContain(marker.occurrence_id_digest);
+    expect(elements["daily-brief-read-request"]?.hidden).toBe(true);
+
+    evaluate({ ...scheduled, local_acquisition_due: { ...marker, services: ["gmail", "drive"] } });
+    expect(elements["daily-brief-read-request"]?.hidden).toBe(false);
+    expect(rendered["runtime-schedule-list"]).toContain("予定ごとのL3承認");
+    expect(rendered["daily-brief-read-service"]).toBe('<option value="gmail">Gmail</option><option value="drive">Google Drive</option>');
+
+    evaluate({ ...scheduled, local_acquisition_due: { ...marker, services: ["gmail", "invalid"] } });
+    expect(elements["daily-brief-read-request"]?.hidden).toBe(true);
 
     for (const invalidMarker of [
       { ...marker, status: "acquired" },
@@ -2378,6 +2393,26 @@ describe("WebChatChannel — Control Center shell", () => {
       evaluate({ ...scheduled, local_acquisition_due: invalidMarker });
       expect(rendered["runtime-schedule-list"]).not.toContain("前回の予定到達");
     }
+
+    const resultStart = inline.indexOf("function showDailyBriefResult(");
+    const resultEnd = inline.indexOf("async function submitApproval(", resultStart);
+    const results: string[] = [];
+    const view = new Script(`
+      function dailyBriefServiceLabel(service) { return service === "gmail" ? "Gmail" : ""; }
+      function isObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+      function byId() { return { replaceChildren() {}, appendChild(node) { results.push(node.textContent); } }; }
+      function setText(id, value) { output[id] = String(value); }
+      const document = { createElement() { return { textContent: "" }; } };
+      ${inline.slice(resultStart, resultEnd)}
+      showDailyBriefResult(summary, "gmail");
+    `);
+    const summary = { service: "gmail", used_for_authority: false, incomplete: true,
+      items: [{ title: '<img src="x" onerror="unsafe()">', detail: "fixture" }] };
+    expect(view.runInNewContext({ output: rendered, results, summary: { ...summary, service: "drive" } })).toBe(false);
+    expect(results).toEqual([]);
+    expect(view.runInNewContext({ output: rendered, results, summary })).toBe(true);
+    expect(results).toEqual(['<img src="x" onerror="unsafe()"> — fixture']);
+    expect(rendered["daily-brief-result-status"]).toContain("一部のみ");
   });
 
   it("renders task-purpose relation review against its queued digests without treating it as execution authority", async () => {
@@ -7513,6 +7548,104 @@ describe("WebChatChannel — approval API", () => {
       expect(resumes).toEqual([[commandId, "approve", { actor: "webchat-resume-token-holder", token_kind: "resume",
         content_review_digest: safeReview.review_digest, native_credential_prompt: true }]]);
       expect((await postJson(ctx.port, nativePath, currentDecision, local)).status).toBe(403);
+      expect(resumes).toHaveLength(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("binds a Daily Brief read to its local owner request, reviewed digest and one-shot result route", async () => {
+    const commandId = "daily-brief-gmail-fixture";
+    const approvalPath = `/approval/${commandId}`;
+    const dailyPath = approvalPath + "/daily-brief-read";
+    const ownerPath = "/owner/daily-brief-read";
+    const contentPath = approvalPath + "/content";
+    const readRequest = { occurrence_id_digest: "a".repeat(64), service: "gmail" as const };
+    const safeReview = {
+      kind: "daily_brief_read", ...readRequest, command_id: commandId, command_digest: "b".repeat(64),
+      review_digest: "c".repeat(64), scheduled_at_ms: Date.now(), tool_name: "gmail.read",
+      api_host: "gmail.googleapis.com", scope: "直近24時間の受信一覧", max_results: 5,
+      no_store: true, used_for_authority: false, may_execute: false,
+    } satisfies WebChatDailyBriefReadContentReview;
+    let revealed = false;
+    let revealCount = 0;
+    let review: WebChatDailyBriefReadContentReview = safeReview;
+    const submissions: unknown[] = [];
+    const resumes: unknown[] = [];
+    const ctx = await setup({
+      owner_token: OWNER_TOKEN,
+      resume_approval_tokens: new MemoryResumeApprovalTokenStore(),
+      onOwnerDailyBriefRead: async (input) => {
+        submissions.push(input);
+        return { accepted: true, status: "approval_required", command_id: commandId, request_id: "request-fixture",
+          arbitrary_private_field: "must-not-leak" };
+      },
+      approval: {
+        list: async () => [],
+        requiresLocalDailyBriefRead: id => id === commandId,
+        reviewContent: async () => { revealed = true; revealCount += 1; return review; },
+        validateContentReview: async (id, digest) =>
+          revealed && id === commandId && digest === safeReview.review_digest ? "valid" : "stale",
+      },
+      onResume: async (id, verdict, context) => {
+        resumes.push([id, verdict, context]);
+        return verdict === "approve" ? { approval: verdict, executed: true, status: "success",
+          daily_brief_read: { service: "gmail", used_for_authority: false, incomplete: false,
+            items: [{ title: "<script>fixture</script>", id: "must-not-leak" }], other: "must-not-leak" },
+          feedback: "must-not-leak" } : { approval: verdict, executed: false };
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const origin = `http://127.0.0.1:${ctx.port}`;
+      const owner = { authorization: "Bearer " + OWNER_TOKEN, origin, "sec-fetch-site": "same-origin" };
+      const approver = { ...owner, authorization: "Bearer " + RESUME_TOKEN, "x-blue-tanuki-owner-token": OWNER_TOKEN };
+      const resumeOnly = { ...owner, authorization: approver.authorization };
+      expect((await postJson(ctx.port, ownerPath, readRequest, approver)).status).toBe(401);
+      expect((await postJson(ctx.port, ownerPath, readRequest, { authorization: owner.authorization })).status).toBe(403);
+      expect((await postJson(ctx.port, ownerPath, readRequest, { ...owner, origin: "https://cross-origin.invalid" })).status).toBe(403);
+      expect((await postJson(ctx.port, ownerPath, readRequest, { ...owner, "x-forwarded-host": "127.0.0.1" })).status).toBe(403);
+      expect((await postJson(ctx.port, ownerPath, { ...readRequest, query: "*" }, owner)).status).toBe(400);
+      expect((await postJson(ctx.port, ownerPath, { ...readRequest, service: "all" }, owner)).status).toBe(400);
+      expect(submissions).toEqual([]);
+      const accepted = await postJson(ctx.port, ownerPath, readRequest, owner);
+      expect(accepted.status).toBe(202);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      expect(accepted.body).toEqual({ accepted: true, status: "approval_required", command_id: commandId,
+        request_id: "request-fixture", used_for_authority: false, may_execute: false });
+      expect(submissions).toEqual([{ ...readRequest, actor: "webchat-owner-token-holder" }]);
+
+      const issued = await ctx.ch.issueResumeApprovalToken(commandId);
+      expect(issued?.token).toBeTruthy();
+      const decision = { verdict: "approve", approval_token: issued!.token, content_review_digest: safeReview.review_digest };
+      expect((await postJson(ctx.port, contentPath, {}, { authorization: approver.authorization })).status).toBe(403);
+      expect((await postJson(ctx.port, contentPath, {}, owner)).status).toBe(401);
+      expect((await postJson(ctx.port, contentPath, {}, resumeOnly)).status).toBe(401);
+      expect((await postJson(ctx.port, dailyPath, decision, { ...approver, origin: "https://cross-origin.invalid" })).status).toBe(403);
+      expect((await postJson(ctx.port, dailyPath, decision, resumeOnly)).status).toBe(401);
+      expect((await postJson(ctx.port, dailyPath, decision, approver)).status).toBe(409);
+      expect(revealCount).toBe(0);
+      expect((await postJson(ctx.port, approvalPath, decision, approver)).status).toBe(409);
+      expect((await postJson(ctx.port, "/resume", { ...decision, request_id: commandId }, approver)).status).toBe(409);
+      expect(resumes).toEqual([]);
+
+      review = { ...safeReview, api_host: "fixture.invalid" };
+      expect((await postJson(ctx.port, contentPath, {}, approver)).status).toBe(409);
+      review = safeReview;
+      const content = await postJson(ctx.port, contentPath, {}, approver);
+      expect(content.status).toBe(200);
+      expect(content.headers.get("cache-control")).toBe("no-store");
+      expect(content.body).toEqual(safeReview);
+      expect((await postJson(ctx.port, dailyPath, { ...decision, content_review_digest: "d".repeat(64) }, approver)).status).toBe(409);
+      expect((await postJson(ctx.port, dailyPath, { ...decision, grant: "remember" }, approver)).status).toBe(400);
+      const result = await postJson(ctx.port, dailyPath, decision, approver);
+      expect(result.status).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(result.body).toEqual({ ok: true, result: { approval: "approve", executed: true, status: "success",
+        daily_brief_read: { service: "gmail", used_for_authority: false, incomplete: false, items: [{ title: "<script>fixture</script>" }] } } });
+      expect(resumes).toEqual([[commandId, "approve", { actor: "webchat-resume-token-holder", token_kind: "resume",
+        content_review_digest: safeReview.review_digest, daily_brief_read: true }]]);
+      expect((await postJson(ctx.port, dailyPath, decision, approver)).status).toBe(403);
       expect(resumes).toHaveLength(1);
     } finally {
       await ctx.teardown();

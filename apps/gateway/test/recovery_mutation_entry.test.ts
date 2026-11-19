@@ -12,6 +12,7 @@ import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
+import { cronSchedulesFromEnv } from "../src/cron_channel.js";
 import { createCronEventIdentity, GatewayCronEventStore, GOOGLE_DAILY_BRIEF_DUE_SOURCE } from "../src/cron_event_store.js";
 import { parseEnvFile } from "../src/env_file.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
@@ -1213,6 +1214,7 @@ require("node:module").syncBuiltinESMExports();
         schedule_payload_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
         scheduled_at_ms: expect.any(Number),
         recorded_at_ms: expect.any(Number),
+        services: expect.arrayContaining(["gmail", "calendar", "drive"]),
         used_for_authority: false,
         may_execute: false,
       });
@@ -1228,7 +1230,8 @@ require("node:module").syncBuiltinESMExports();
       expect(JSON.stringify(daily)).not.toContain("synthetic-local-google-token");
       expect(googleRequests).toBe(0);
       await stopChild(gateway.child);
-      const persisted = new DatabaseSync(join(root, "state", "private-state", "cron-events", "cron-events.sqlite"), { readOnly: true });
+      // A forced stop may leave the fixture's rollback journal. SQLite must recover it before these SELECTs.
+      const persisted = new DatabaseSync(join(root, "state", "private-state", "cron-events", "cron-events.sqlite"));
       try {
         expect(persisted.prepare(`SELECT event_id, sequence, payload_digest, delivery_state FROM cron_event_inbox WHERE event_id=?
           UNION ALL SELECT event_id, sequence, payload_digest, delivery_state FROM cron_event_archive WHERE event_id=?`)
@@ -1251,6 +1254,299 @@ require("node:module").syncBuiltinESMExports();
       await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
     }
   }, 30_000);
+
+  it("returns privately reviewed Daily Brief sources and rejects stale or repeated acquisition", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-daily-brief-read-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const preload = join(root, "google-loopback.cjs");
+    const cronStorePath = join(root, "state", "private-state", "cron-events", "cron-events.sqlite");
+    const ownerToken = "synthetic-daily-brief-owner-token";
+    const googleToken = "synthetic-daily-brief-google-token";
+    const privateTitle = "fixture-private-drive-title";
+    const privateId = "fixture-private-drive-id";
+    const calendarTitle = "fixture-private-calendar-title";
+    const calendarId = "fixture-private-calendar-event";
+    const gmailTitle = "fixture-private-gmail-subject";
+    const gmailId = "fixture-private-gmail-message";
+    const undisplayedGmailSnippet = "fixture-private-gmail-snippet";
+    const staticContent = "synthetic reminder outside the private Daily Brief read";
+    const scheduledTarget = "webchat-owner-token-holder";
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const port = await reserveLoopbackPort();
+    const origin = `http://127.0.0.1:${port}`;
+    const env = {
+      ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+      BLUE_TANUKI_OWNER_TOKEN: ownerToken,
+      BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: "gmail,calendar,drive",
+      BLUE_TANUKI_DAILY_BRIEF_TARGET: scheduledTarget,
+      BLUE_TANUKI_DAILY_BRIEF_CHANNEL: "webchat",
+      BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "600000",
+      GOOGLE_ACCESS_TOKEN: googleToken,
+      BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: "static-private-read-fixture", channel: "webchat",
+        target: scheduledTarget, content: staticContent, interval_ms: 250 }]),
+    };
+    const scheduleDigest = cronSchedulesFromEnv(env).find((task) => task.id === "daily_brief")?.payload_hash;
+    if (!scheduleDigest) throw new Error("Daily Brief fixture schedule unavailable");
+    const seedOccurrence = (scheduledAtMs: number) => {
+      const event = createCronEventIdentity(GOOGLE_DAILY_BRIEF_DUE_SOURCE, scheduledAtMs, scheduleDigest);
+      const store = new GatewayCronEventStore(cronStorePath);
+      try {
+        expect(store.claim(event)).toMatchObject({ status: "accepted" });
+        store.recordLocalAcquisitionDue(event);
+      } finally {
+        store.close();
+      }
+      return createHash("sha256").update(event.event_id).digest("hex");
+    };
+    // The preceding Cron E2E exercises the real timer. Seed its durable observation here so it will not advance during L3 review.
+    const scheduledAtMs = Date.now() - 5_000;
+    const occurrence = seedOccurrence(scheduledAtMs);
+    const googleRequests: Array<{ method?: string; host?: string; tokenMatched: boolean; path: string }> = [];
+    const googleFixture = createServer((request, response) => {
+      const path = request.url ?? "";
+      const host = typeof request.headers["x-fixture-provider-host"] === "string"
+        ? request.headers["x-fixture-provider-host"] : undefined;
+      googleRequests.push({ method: request.method, host, path,
+        tokenMatched: request.headers.authorization === `Bearer ${googleToken}` });
+      let payload: unknown;
+      if (request.method === "GET" && host === "www.googleapis.com" && path.startsWith("/drive/v3/files?")) {
+        payload = { files: [{ id: privateId, name: privateTitle, mimeType: "text/plain",
+          modifiedTime: new Date(scheduledAtMs - 60_000).toISOString(), trashed: false }] };
+      } else if (request.method === "GET" && host === "www.googleapis.com" && path.startsWith("/calendar/v3/calendars/primary/events?")) {
+        const start = new URL(path, "https://www.googleapis.com").searchParams.get("timeMin");
+        const time = Date.parse(start ?? "");
+        if (Number.isFinite(time)) payload = { timeZone: "UTC", items: [{ id: calendarId, status: "confirmed", summary: calendarTitle,
+          organizer: { id: "synthetic-calendar-organizer" }, start: { dateTime: new Date(time + 60_000).toISOString() },
+          end: { dateTime: new Date(time + 120_000).toISOString() } }] };
+      } else if (request.method === "GET" && host === "gmail.googleapis.com" && path.startsWith("/gmail/v1/users/me/messages?")) {
+        payload = { messages: [{ id: gmailId }] };
+      } else if (request.method === "GET" && host === "gmail.googleapis.com" &&
+          path.startsWith(`/gmail/v1/users/me/messages/${gmailId}?`)) {
+        payload = { id: gmailId, threadId: "synthetic-private-thread", snippet: undisplayedGmailSnippet,
+          payload: { headers: [{ name: "Subject", value: gmailTitle }, { name: "Date", value: new Date(scheduledAtMs - 60_000).toUTCString() }] } };
+      }
+      if (!payload) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end("{}");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(payload));
+    });
+    const listening = once(googleFixture, "listening");
+    googleFixture.listen(0, "127.0.0.1");
+    await listening;
+    let gateway: ReturnType<typeof spawnGateway> | undefined;
+    let webSocket: WebSocket | undefined;
+    try {
+      const address = googleFixture.address();
+      if (!address || typeof address === "string") throw new Error("Google fixture did not bind loopback");
+      writeFileSync(preload, `
+const https = require("node:https");
+const http = require("node:http");
+function routeGoogle(target, ...args) {
+  if (target.hostname !== "gmail.googleapis.com" && target.hostname !== "www.googleapis.com") {
+    throw new Error("unexpected HTTPS target in private Daily Brief fixture");
+  }
+  return http.request({ ...target, protocol: "http:", hostname: "127.0.0.1", port: ${address.port},
+    headers: { ...target.headers, "x-fixture-provider-host": target.hostname } }, ...args);
+}
+https.request = routeGoogle;
+https.get = function (target, ...args) {
+  const request = routeGoogle(target, ...args);
+  request.end();
+  return request;
+};
+globalThis.fetch = async function () { throw new Error("unexpected fetch in private Daily Brief fixture"); };
+require("node:module").syncBuiltinESMExports();
+`, "utf8");
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 35_000);
+      const ticket = await requestJson(port, "/ws-ticket", {
+        method: "POST", token: inboundToken, body: { user: scheduledTarget },
+      });
+      expect(ticket.status).toBe(200);
+      webSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(String(ticket.body.ticket))}`);
+      const deliveries: unknown[] = [];
+      const webSocketFrames: string[] = [];
+      webSocket.on("message", (data: Buffer) => {
+        const frame = data.toString("utf8");
+        webSocketFrames.push(frame);
+        const message = JSON.parse(frame) as { kind?: unknown; content?: unknown };
+        if (message.kind === "channel_send") deliveries.push(message.content);
+      });
+      await once(webSocket, "open");
+      await expect.poll(() => deliveries.includes(staticContent), { timeout: 5_000 }).toBe(true);
+
+      const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expect(runtime.body.scheduled_tasks).toEqual(expect.arrayContaining([expect.objectContaining({
+        id: "daily_brief", local_acquisition_due: expect.objectContaining({ occurrence_id_digest: occurrence,
+          services: expect.arrayContaining(["gmail", "calendar", "drive"]), used_for_authority: false, may_execute: false }),
+      })]));
+      const post = async (route: string, token: string, body?: Record<string, unknown>, requestOrigin = origin,
+        ownerProof = token === resumeToken ? ownerToken : null) => {
+        const send = () => fetch(origin + route, {
+          method: "POST", signal: AbortSignal.timeout(10_000),
+          headers: { authorization: `Bearer ${token}`, origin: requestOrigin,
+            ...(ownerProof ? { "x-blue-tanuki-owner-token": ownerProof } : {}),
+            ...(body ? { "content-type": "application/json" } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        let response = await send();
+        let data = await response.json() as Record<string, unknown>;
+        if (response.status === 429) {
+          const waitMs = Number(data.retry_after_ms);
+          expect(waitMs).toBeGreaterThanOrEqual(0);
+          expect(waitMs).toBeLessThanOrEqual(2_000);
+          await new Promise((resolve) => setTimeout(resolve, waitMs + 50));
+          response = await send();
+          data = await response.json() as Record<string, unknown>;
+        }
+        return { status: response.status, headers: response.headers, body: data };
+      };
+      const proposalRoute = "/owner/daily-brief-read";
+      const selection = { occurrence_id_digest: occurrence, service: "drive" };
+      expect((await post(proposalRoute, inboundToken, selection)).status).toBe(401);
+      expect((await post(proposalRoute, ownerToken, selection, "http://untrusted.invalid")).status).toBe(403);
+      expect((await post(proposalRoute, ownerToken, { ...selection, query: "unreviewed-scope" })).status).toBe(400);
+      const approvalFor = async (service: "drive" | "calendar" | "gmail", selectedOccurrence = occurrence) => {
+        const proposal = await post(proposalRoute, ownerToken, { occurrence_id_digest: selectedOccurrence, service });
+        expect(proposal.status, JSON.stringify(proposal.body)).toBe(202);
+        expect(proposal.headers.get("cache-control")).toBe("no-store");
+        expect(proposal.body).toMatchObject({ command_id: expect.any(String), request_id: expect.any(String) });
+        const commandId = String(proposal.body.command_id);
+        const requestId = String(proposal.body.request_id);
+        const queue = await requestJson(port, "/approval", { token: resumeToken });
+        const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((entry) => entry.command_id === commandId);
+        expect(pending).toMatchObject({ operation: "credential.access", approval_level: "L3_final_review", risk: "high",
+          final_review_required: true, content_review_required: true, approval_token: expect.any(String) });
+        const route = `/approval/${encodeURIComponent(commandId)}`;
+        return { route, commandId, requestId, verdict: { verdict: "approve", approval_token: pending!.approval_token } };
+      };
+      const drive = await approvalFor("drive");
+      const reviewRoute = `${drive.route}/content`;
+      const executeRoute = `${drive.route}/daily-brief-read`;
+      expect((await post(reviewRoute, ownerToken)).status).toBe(401);
+      expect((await post(reviewRoute, resumeToken, undefined, origin, null)).status).toBe(401);
+      expect((await post(reviewRoute, resumeToken, undefined, "http://untrusted.invalid")).status).toBe(403);
+      expect((await post(executeRoute, resumeToken, { ...drive.verdict, content_review_digest: "f".repeat(64) })).status).toBe(409);
+      const reviewed = await post(reviewRoute, resumeToken);
+      expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
+      expect(reviewed.headers.get("cache-control")).toBe("no-store");
+      expect(reviewed.body).toMatchObject({ kind: "daily_brief_read", occurrence_id_digest: occurrence,
+        service: "drive", tool_name: "google.drive.read", api_host: "www.googleapis.com", max_results: 5,
+        scheduled_at_ms: scheduledAtMs, scope: expect.stringContaining(new Date(scheduledAtMs).toISOString()),
+        review_digest: expect.stringMatching(/^[a-f0-9]{64}$/), no_store: true, used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(reviewed.body)).not.toContain(googleToken);
+      const reviewedVerdict = { ...drive.verdict, content_review_digest: reviewed.body.review_digest };
+      expect((await post(drive.route, resumeToken, reviewedVerdict)).status).toBe(409);
+      expect((await post("/resume", resumeToken, { ...reviewedVerdict, request_id: drive.commandId })).status).toBe(409);
+      expect((await post(executeRoute, resumeToken, reviewedVerdict, "http://untrusted.invalid")).status).toBe(403);
+      expect((await post(executeRoute, resumeToken, reviewedVerdict, origin, null)).status).toBe(401);
+      expect(googleRequests).toEqual([]);
+
+      const approved = await post(executeRoute, resumeToken, reviewedVerdict);
+      expect(approved.status, `${JSON.stringify(approved.body)}\n${gateway.output.join("")}`).toBe(200);
+      expect(approved.headers.get("cache-control")).toBe("no-store");
+      expect(approved.body).toMatchObject({ result: { daily_brief_read: { service: "drive",
+        items: [{ title: privateTitle }], incomplete: false, used_for_authority: false } } });
+      expect(JSON.stringify(approved.body)).not.toContain(googleToken);
+      expect(JSON.stringify(approved.body)).not.toContain(privateId);
+      expect(googleRequests).toEqual([{ method: "GET", host: "www.googleapis.com", tokenMatched: true,
+        path: expect.stringMatching(/^\/drive\/v3\/files\?/) }]);
+      const actualQuery = new URL(googleRequests[0]!.path, "https://www.googleapis.com").searchParams;
+      expect(actualQuery.get("q")).toMatch(/trashed\s*=\s*false/);
+      expect(actualQuery.get("q")).toContain(`modifiedTime <= '${new Date(scheduledAtMs).toISOString()}'`);
+      expect(actualQuery.get("pageSize")).toBe("5");
+      const replay = await post(executeRoute, resumeToken, reviewedVerdict);
+      expect(replay.status).toBeGreaterThanOrEqual(400);
+      expect(JSON.stringify(replay.body)).not.toContain(privateTitle);
+      expect((await post(proposalRoute, ownerToken, selection)).status).toBe(409);
+
+      const calendar = await approvalFor("calendar");
+      const calendarReview = await post(`${calendar.route}/content`, resumeToken);
+      expect(calendarReview.status).toBe(200);
+      const nextScheduledAtMs = Date.now() - 1;
+      const nextOccurrence = seedOccurrence(nextScheduledAtMs);
+      expect(nextOccurrence).not.toBe(occurrence);
+      const stale = await post(`${calendar.route}/daily-brief-read`, resumeToken,
+        { ...calendar.verdict, content_review_digest: calendarReview.body.review_digest });
+      expect(stale.status).toBe(409);
+      expect(googleRequests).toHaveLength(1);
+
+      const approveCurrentSource = async (service: "calendar" | "gmail", title: string) => {
+        const request = await approvalFor(service, nextOccurrence);
+        const review = await post(`${request.route}/content`, resumeToken);
+        expect(review.status).toBe(200);
+        expect(review.body).toMatchObject({ kind: "daily_brief_read", service, occurrence_id_digest: nextOccurrence,
+          scheduled_at_ms: nextScheduledAtMs, max_results: 5, review_digest: expect.stringMatching(/^[a-f0-9]{64}$/) });
+        const verdict = { ...request.verdict, content_review_digest: review.body.review_digest };
+        const response = await post(`${request.route}/daily-brief-read`, resumeToken, verdict);
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(response.body).toMatchObject({ result: { daily_brief_read: { service,
+          items: [{ title }], incomplete: false, used_for_authority: false } } });
+        for (const undisplayed of [calendarId, gmailId, undisplayedGmailSnippet, googleToken]) {
+          expect(JSON.stringify(response.body)).not.toContain(undisplayed);
+        }
+        return { request, verdict };
+      };
+      await approveCurrentSource("calendar", calendarTitle);
+      expect(googleRequests).toHaveLength(2);
+      expect(googleRequests[1]).toMatchObject({ method: "GET", host: "www.googleapis.com", tokenMatched: true,
+        path: expect.stringMatching(/^\/calendar\/v3\/calendars\/primary\/events\?/) });
+      const timeWindow = new URL(googleRequests[1]!.path, "https://www.googleapis.com").searchParams;
+      expect(timeWindow.get("timeMin")).toBe(new Date(nextScheduledAtMs).toISOString());
+      expect(timeWindow.get("timeMax")).toBe(new Date(nextScheduledAtMs + 24 * 60 * 60 * 1000).toISOString());
+      const gmail = await approveCurrentSource("gmail", gmailTitle);
+      expect(googleRequests.slice(2)).toEqual([
+        { method: "GET", host: "gmail.googleapis.com", tokenMatched: true, path: expect.stringMatching(/^\/gmail\/v1\/users\/me\/messages\?/) },
+        { method: "GET", host: "gmail.googleapis.com", tokenMatched: true, path: expect.stringContaining(`/messages/${gmailId}?format=metadata`) },
+      ]);
+      expect(deliveries.every((content) => content === staticContent)).toBe(true);
+
+      const history = await requestJson(port, `/history?request_id=${encodeURIComponent(drive.requestId)}`, { token: inboundToken });
+      expect(history.status).toBe(200);
+      expect(history.body).toMatchObject({ history: { chain_valid: true, entries: expect.arrayContaining([
+        expect.objectContaining({ kind: "hds_decision" }),
+        expect.objectContaining({ kind: "execution_history", payload_digest: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+        expect.objectContaining({ kind: "final_output", payload_digest: expect.stringMatching(/^[a-f0-9]{64}$/) }),
+      ]) } });
+      await stopChild(gateway.child);
+      const privateHistory = new CompleteHistoryStore({ filepath: historyFile });
+      const brief = (approved.body.result as Record<string, unknown>).daily_brief_read;
+      expect(privateHistory.verify()).toBe(true);
+      expect(privateHistory.replay({ kind: "execution_history", request_id: drive.requestId })).toMatchObject([
+        { payload: { status: "success", result_digest: expect.stringMatching(/^[a-f0-9]{64}$/), execution_receipt: {
+          ticket_digest: expect.stringMatching(/^[a-f0-9]{64}$/), used_for_authority: false } } },
+      ]);
+      expect(privateHistory.replay({ kind: "final_output", request_id: drive.requestId })).toEqual(expect.arrayContaining([
+        expect.objectContaining({ payload: expect.objectContaining({ target_surface: "control_center", release_decision: "allow",
+          rendered_output_digest: operationPlanDigest(JSON.stringify(brief)), used_for_authority: false }) }),
+      ]));
+      const auditFile = join(root, "audit", "audit.jsonl");
+      const memoryFile = join(root, "memory.jsonl");
+      for (const observed of [JSON.stringify(history.body), readFileSync(historyFile, "utf8"), readFileSync(auditFile, "utf8"),
+        ...(existsSync(memoryFile) ? [readFileSync(memoryFile, "utf8")] : []), gateway.output.join(""), webSocketFrames.join("\n")]) {
+        for (const privateValue of [privateTitle, privateId, calendarTitle, calendarId, gmailTitle, gmailId, undisplayedGmailSnippet, googleToken]) {
+          expect(observed).not.toContain(privateValue);
+        }
+      }
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 20_000);
+      expect((await post(proposalRoute, ownerToken, { occurrence_id_digest: nextOccurrence, service: "gmail" })).status).toBe(409);
+      expect((await post(`${gmail.request.route}/daily-brief-read`, resumeToken, gmail.verdict)).status).toBe(409);
+      expect(googleRequests).toHaveLength(4);
+    } finally {
+      webSocket?.terminate();
+      if (gateway) await stopChild(gateway.child);
+      await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
+    }
+  }, 75_000);
 
   it("quiesces J/M and meaning-update consumers for selected restore, verifies reopened stores, and keeps existing plans held", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-jm-restore-l3-"));

@@ -182,7 +182,7 @@ GOOGLE_CALENDAR_ACCESS_TOKEN=<calendar-read-token>
 GOOGLE_DRIVE_ACCESS_TOKEN=<drive-read-token>
 ```
 
-固定文のDaily BriefはHDSの予定送信経路を通ります。Googleを取得元に設定すると、定刻の到達をローカルに記録し、Control Centerに取得待ちを表示します。定刻だけではGoogleへ接続せず、設定したチャネルにも送信しません。
+固定文のDaily BriefはHDSの予定送信経路を通ります。Googleを取得元に設定すると、定刻の到達をローカルに記録します。Control Centerの予定画面で到達済みの予定とサービスを選び、承認画面で取得範囲を確認できます。
 
 ## Generic scheduled messages
 
@@ -418,7 +418,7 @@ BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED=1
 BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES=gmail,calendar,drive
 ```
 
-Google付きの予定は到達時刻と対象サービスを設定します。定期取得は接続待ちです。個別の読み取りは上記のツールで依頼し、各操作のL3審査を通してください。
+予定からのGoogle取得にはループバックHTTPで開いたControl Centerの所有者トークンと承認トークン、サービスごとのL3承認、永続HDS監査が必要です。GmailとDriveは到達前の24時間、Calendarは到達後の24時間を対象に、最大5件の項目を表示します。結果の表示先は承認した画面です。定刻に自動で取得・チャネル送信する運転は保留です。
 
 Calendar attendee invites, Drive delete/share, autonomous cross-service actions, and unbounded file writes are not available here. Missing tokens fail closed before a request is sent. Doctor checks the Google Daily Brief source only when `BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED` is set.
 

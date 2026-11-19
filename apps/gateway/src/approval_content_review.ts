@@ -20,6 +20,10 @@ import type {
   WebChatBrowserLinkNavigationContentReview,
 } from "@blue-tanuki/channel-webchat";
 
+type GmailWriteContentReview = Extract<WebChatApprovalContentReview, {
+  operation: "gmail.write.draft.create" | "gmail.write.message.send" | "gmail.write.draft.send";
+}>;
+
 const GMAIL_WRITE_ARGUMENTS = new Set([
   "operation",
   "to",
@@ -518,7 +522,7 @@ export function projectGmailDraftSendContentReview(
     provider_raw_digest: string;
     request_payload_digest: string;
   },
-): (WebChatApprovalContentReview & { operation: "gmail.write.draft.send" }) | null {
+): (GmailWriteContentReview & { operation: "gmail.write.draft.send" }) | null {
   if (!isGmailDraftSendReviewCommand(command) || !/^[a-f0-9]{64}$/.test(commandDigest) ||
       !/^[a-f0-9]{64}$/.test(snapshot.provider_state_digest) ||
       !/^[a-f0-9]{64}$/.test(snapshot.provider_raw_digest) ||
@@ -602,7 +606,7 @@ export function projectGmailWriteContentReview(
     used_for_authority: false;
     may_execute: false;
   },
-): (WebChatApprovalContentReview & {
+): (GmailWriteContentReview & {
   operation: "gmail.write.draft.create" | "gmail.write.message.send";
 }) | null {
   if (command.type !== "tool_call" || !isGmailWriteContentReviewCommand(command) ||
