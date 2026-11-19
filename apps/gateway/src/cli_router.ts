@@ -407,11 +407,12 @@ async function runRecoveryApplyGoalPurposeCli(argv: string[]): Promise<void> {
       return {
         observe: async () => hasOfflineGoalPurposeRepairAuditReceipt(env, binding)
           ? observeOfflineGoalPurposeRepair(env, selector) : null,
-        apply: async () => {
-          if (!EmergencyStopStateStore.permitsOfflineRepair(env, issuedAtMs) ||
-              !hasOfflineGoalPurposeRepairAuditReceipt(env, binding)) throw new Error("offline_repair_stopped");
-          await applyOfflineGoalPurposeRepair(env, plan);
-        },
+        apply: async (assertFenceContinuity) => applyOfflineGoalPurposeRepair(env, plan, () => {
+          assertFenceContinuity();
+          if (!hasOfflineGoalPurposeRepairAuditReceipt(env, binding)) throw new Error("offline_repair_receipt_unverified");
+        }, () => {
+          if (!EmergencyStopStateStore.permitsOfflineRepair(env, issuedAtMs)) throw new Error("offline_repair_stopped");
+        }),
       };
     },
   });

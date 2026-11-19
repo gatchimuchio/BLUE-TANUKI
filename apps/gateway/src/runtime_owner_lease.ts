@@ -47,7 +47,7 @@ export interface OfflineGoalPurposeRepairBinding extends Omit<GoalPurposeRepairF
 export type OfflineGoalPurposeRepairSelector = Pick<OfflineGoalPurposeRepairBinding,
   "backup_id" | "manifest_sha256" | "repair_sha256" | "handoff_digest">;
 
-export type OfflineGoalPurposeRepairResult = "applied" | "authorization_required" | "authorization_expired" |
+export type OfflineGoalPurposeRepairResult = "applied" | "rolled_back" | "authorization_required" | "authorization_expired" |
   "preflight_changed" | "owner_lock_busy" | "owner_lock_sidecars_present" | "owner_state_unavailable" |
   "recovery_pending" | "outcome_unknown";
 
@@ -343,7 +343,7 @@ export async function applyUnderOfflineGoalPurposeRepairLock(
   callbacks: {
     /** Prepare and observe without changing repair targets. Apply runs only after the durable fence. */
     readonly prepare: (binding: OfflineGoalPurposeRepairBinding, issuedAtMs: number) => Promise<null | {
-      readonly apply: () => Promise<void>;
+      readonly apply: (assertFenceContinuity: () => void) => Promise<void | "rolled_back">;
       readonly observe: () => Promise<string | null>;
     }>;
   },
@@ -420,15 +420,17 @@ export async function applyUnderOfflineGoalPurposeRepairLock(
       clearPreparedGoalPurposeRepair(db);
     });
     assertApplyingFence();
-    await prepared.apply();
-    const after = await prepared.observe();
-    if (after !== evidence.verification.after_sha256 || await prepared.observe() !== after) return "outcome_unknown";
+    const rolledBack = await prepared.apply(assertApplyingFence) === "rolled_back";
+    const expectedState = rolledBack ? evidence.verification.before_sha256 : evidence.verification.after_sha256;
+    const observed = await prepared.observe();
+    if (observed !== expectedState || await prepared.observe() !== observed) return "outcome_unknown";
     ownerStateTransaction(db, () => {
       assertApplyingFence();
-      persistRecoverySettlement(db, owner.generation, evidence, after, "postconditions_matched");
+      persistRecoverySettlement(db, owner.generation, evidence, observed,
+        rolledBack ? "pre_action_state_matched" : "postconditions_matched");
       clearRecoveryFence(db);
     });
-    return "applied";
+    return rolledBack ? "rolled_back" : "applied";
   } catch (error) {
     if (fenceAttempted) return "outcome_unknown";
     if (!lockDb && isSqliteBusy(error)) return "owner_lock_busy";

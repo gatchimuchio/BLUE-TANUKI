@@ -702,7 +702,10 @@ describe("delegated goal purpose owner review", () => {
     }
   }, 90_000);
 
-  it("repairs the exact L3-reviewed goal-purpose pair through the compiled offline recovery CLI", async () => {
+  it.each([
+    { scenario: "apply succeeds", failSecondRename: false },
+    { scenario: "second rename fails", failSecondRename: true },
+  ])("repairs the exact L3-reviewed goal-purpose pair through the compiled offline recovery CLI ($scenario)", async ({ failSecondRename }) => {
     const gatewayPort = await reserveLoopbackPort();
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-goal-purpose-offline-repair-"));
     const auditDir = join(tempRoot, "audit");
@@ -782,24 +785,28 @@ describe("delegated goal purpose owner review", () => {
         canonical_state_snapshot: { entries: { store_key: string; archive_rel_path?: string }[] };
       };
       const storeKeys = ["goal_purpose_j_control", "goal_purpose_m_state"] as const;
-      const archivedPair = storeKeys.map((key) => {
+      const archivedPaths = storeKeys.map((key) => {
         const archived = snapshot.entries.find((entry) => entry.store_key === key)?.archive_rel_path;
         expect(archived, key).toBeTypeOf("string");
-        return readFileSync(join(archiveRoot, archived!));
+        return join(archiveRoot, archived!);
       });
+      const archivedPair = archivedPaths.map((archivePath) => readFileSync(archivePath));
 
       await stopChild(gateway.child);
-      const j = new DatabaseSync(targets[0]!);
-      try {
-        j.exec("PRAGMA application_id = 123456789");
-      } finally {
-        j.close();
+      for (const target of failSecondRename ? targets : targets.slice(0, 1)) {
+        const store = new DatabaseSync(target);
+        try {
+          store.exec("PRAGMA application_id = 123456789");
+        } finally {
+          store.close();
+        }
       }
       gateway = startGateway();
       await waitForHealth(gatewayPort, gateway);
       expect(await observeGoals()).toEqual(goals);
       const changedPair = targets.map((target) => readFileSync(target));
       expect(changedPair[0]!.equals(archivedPair[0]!)).toBe(false);
+      expect(changedPair[1]!.equals(archivedPair[1]!)).toBe(!failSecondRename);
 
       const plan = await request("/recovery/restore-plan", maintenanceToken, "POST", { backup_id });
       expect(plan.status).toBe(200);
@@ -808,7 +815,8 @@ describe("delegated goal purpose owner review", () => {
       expect(planBody).toMatchObject({ status: "planned", manifest_sha256, may_execute: false, used_for_authority: false,
         goal_purpose_replay: { status: "matched", verified_purpose_count: 1 },
         goal_purpose_repair: { repair_sha256: expect.stringMatching(/^[a-f0-9]{64}$/), stores: [
-          { store_key: storeKeys[0], target_state: "different" }, { store_key: storeKeys[1], target_state: "matched" },
+          { store_key: storeKeys[0], target_state: "different" },
+          { store_key: storeKeys[1], target_state: failSecondRename ? "different" : "matched" },
         ] },
       });
       const repair = planBody.goal_purpose_repair!;
@@ -848,8 +856,9 @@ describe("delegated goal purpose owner review", () => {
       expect(prepared.expires_at_ms).toBeGreaterThan(Date.now());
       expectPair(changedPair);
 
-      const apply = (handoffCode: string) => {
-        const run = spawnSync(process.execPath, [gatewayEntry, "--recovery-apply-goal-purpose", "--backup-id", backup_id,
+      const apply = (handoffCode: string, preload?: string) => {
+        const run = spawnSync(process.execPath, [...(preload ? ["--require", preload] : []), gatewayEntry,
+          "--recovery-apply-goal-purpose", "--backup-id", backup_id,
           "--manifest-sha256", manifest_sha256, "--repair-sha256", repair.repair_sha256, "--env-file", envFile, "--json"], {
           cwd: repositoryRoot, env, input: `${handoffCode}\n`, encoding: "utf8", timeout: 15_000, windowsHide: true,
         });
@@ -879,15 +888,44 @@ describe("delegated goal purpose owner review", () => {
       } finally {
         writeFileSync(auditFile, auditBefore);
       }
-      expect(apply(code)).toEqual({ exit: 0, result: { status: "applied" } });
-      expectPair(archivedPair);
+      if (failSecondRename) {
+        const injectionPreload = join(tempRoot, "fail-second-rename.cjs");
+        const observedFirstRename = join(tempRoot, "first-rename-observed");
+        const expectedJDigest = createHash("sha256").update(archivedPair[0]!).digest("hex");
+        writeFileSync(injectionPreload, [
+          'const { promises, readFileSync, writeFileSync } = require("node:fs");',
+          'const { createHash } = require("node:crypto");',
+          'const { basename } = require("node:path");',
+          'const originalRename = promises.rename;',
+          'let failed = false;',
+          'promises.rename = async (source, target) => {',
+          `  if (failed || basename(source) !== "new-m-state.sqlite" || target !== ${JSON.stringify(targets[1])}) {`,
+          '    return originalRename(source, target);',
+          '  }',
+          '  failed = true;',
+          `  const currentJ = readFileSync(${JSON.stringify(targets[0])});`,
+          `  if (createHash("sha256").update(currentJ).digest("hex") === ${JSON.stringify(expectedJDigest)}) {`,
+          `    writeFileSync(${JSON.stringify(observedFirstRename)}, "verified", { flag: "wx" });`,
+          '  }',
+          '  throw Object.assign(new Error("synthetic second rename failure"), { code: "EIO" });',
+          '};',
+        ].join("\n"));
+        expect(apply(code, injectionPreload)).toEqual({ exit: 2, result: { status: "rolled_back" } });
+        expect(readFileSync(observedFirstRename, "utf8")).toBe("verified");
+      } else {
+        expect(apply(code)).toEqual({ exit: 0, result: { status: "applied" } });
+      }
+      const expectedPair = failSecondRename ? changedPair : archivedPair;
+      expectPair(expectedPair);
       const preservedDirectories = readdirSync(pairRoot).filter((name) => name.startsWith(".offline-goal-repair-"));
       expect(preservedDirectories).toHaveLength(1);
       for (const [index, filename] of ["before-j-control.sqlite", "before-m-state.sqlite"].entries()) {
         expect(readFileSync(join(pairRoot, preservedDirectories[0]!, filename)).equals(changedPair[index]!)).toBe(true);
       }
       expect(apply(code)).toEqual({ exit: 2, result: { status: "authorization_required" } });
-      expectPair(archivedPair);
+      expectPair(expectedPair);
+      expect(readFileSync(join(archiveRoot, "manifest.json"))).toEqual(manifest);
+      archivedPaths.forEach((archivePath, index) => expect(readFileSync(archivePath)).toEqual(archivedPair[index]));
       expect(readFileSync(auditFile).equals(auditBefore)).toBe(true);
       expect(readFileSync(historyFile).equals(historyBefore)).toBe(true);
       expect(auditBefore.includes(code)).toBe(false);

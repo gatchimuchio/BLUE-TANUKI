@@ -31,6 +31,7 @@ import {
   GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type RuntimeRecoveryFenceEvidence,
 } from "../src/runtime_owner_lease.js";
 import {
+  applyOfflineGoalPurposeRepair,
   buildRecoverySnapshot,
   correlateTaskMemoryRestorePoints,
   createRecoveryBackup,
@@ -38,6 +39,7 @@ import {
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
+  planOfflineGoalPurposeRepair,
   planOfflineRecoveryRestore,
   resetRecoveryConnector,
   resetRecoveryProvider,
@@ -83,6 +85,66 @@ const CANONICAL_DATABASES = [
   ["goal_purpose_j_control", path.join("goal-purpose-memory", "j-control.sqlite")],
   ["goal_purpose_m_state", path.join("goal-purpose-memory", "m-state.sqlite")],
 ] as const;
+
+async function seedGoalPurposeRecoveryFixture(root: string) {
+  const envFile = path.join(root, "product.env");
+  const env = {
+    BLUE_TANUKI_ENV_FILE: envFile,
+    BLUE_TANUKI_AUDIT_DIR: path.join(root, "audit"),
+    BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
+    BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
+  };
+  await writeFile(envFile, Object.entries(env)
+    .map(([key, value]) => `${key}=${JSON.stringify(value.replaceAll("\\", "/"))}`).join("\n") + "\n");
+  await mkdir(env.BLUE_TANUKI_AUDIT_DIR);
+  const auditPath = path.join(env.BLUE_TANUKI_AUDIT_DIR, "audit.jsonl");
+  const sourceMemory = goalPurposeMemoryStorage(env);
+  const controller = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }), goal_purpose_memory: sourceMemory });
+  const purpose = "合成資料の出典を確認し、未確認事項を区別する。";
+  const args = { goal_ref: `goal_${"a".repeat(32)}`, purpose_digest: createHash("sha256").update(purpose).digest("hex") };
+  try {
+    const requestId = randomUUID();
+    const proposalActor = "webchat-owner-token-holder";
+    const reviewerActor = "webchat-resume-token-holder";
+    const { command } = controller.decide(createGatewayInternalInboundRequest({
+      id: requestId, user: proposalActor, channel: "webchat", timestamp: Date.now(),
+      content: "Owner submitted an initial delegated purpose for L3 review.",
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+        "blue_tanuki.goal_purpose_adoption.version": "v1",
+        "blue_tanuki.tool_call": { tool_name: "goal.governance.adopt", arguments: args },
+      },
+    }));
+    if (!command) throw new Error("HDS did not issue a purpose adoption command");
+    expect(command).toMatchObject({ type: "tool_call", payload: { tool_name: "goal.governance.adopt", arguments: args } });
+    const binding = {
+      ...args, request_id: requestId, command_id: command.id, proposal_actor: proposalActor,
+      command_digest: createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex"),
+    };
+    const reviewDigest = goalPurposeAdoptionReviewDigest(binding);
+    const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
+    controller.onApprovalEvaluation(evaluation, { request_id: requestId });
+    expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest: reviewDigest })).toBe(true);
+    controller.onCommandLifecycle(command.id, "approval_approved", {
+      actor: reviewerActor, request_id: requestId, reason: "human_approval:approve",
+    });
+    expect(controller.commitGoalPurposeAdoptionAfterL3({ ...binding, content_review_digest: reviewDigest,
+      purpose_text: purpose, actor: reviewerActor, evaluation })).toMatchObject({ ok: true, ...args, version: 1 });
+  } finally {
+    controller.close();
+  }
+  return { env, envFile, auditPath, purpose, args, sourceMemory };
+}
+
+function setFixtureSqliteApplicationId(filepath: string, applicationId: number): void {
+  const database = new DatabaseSync(filepath);
+  try {
+    database.exec(`PRAGMA application_id = ${applicationId}`);
+  } finally {
+    database.close();
+  }
+}
 
 describe("task-scoped M restore-point correlation", () => {
   it("keeps task lineages isolated and reports missing backup membership as unobserved", () => {
@@ -1509,54 +1571,9 @@ describe("buildRecoverySnapshot", () => {
 
   it("captures HDS-authored purpose records and reserves the archived J/M pair for offline reconciliation", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-goal-purpose-snapshot-"));
-    const envFile = path.join(root, "product.env");
-    const env = {
-      BLUE_TANUKI_ENV_FILE: envFile,
-      BLUE_TANUKI_AUDIT_DIR: path.join(root, "audit"),
-      BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
-      BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
-    };
-    let controller: HDSUpperController | undefined;
     let archiveReader: HDSUpperController | undefined;
     try {
-      await writeFile(envFile, Object.entries(env)
-        .map(([key, value]) => `${key}=${JSON.stringify(value.replaceAll("\\", "/"))}`).join("\n") + "\n");
-      await mkdir(env.BLUE_TANUKI_AUDIT_DIR);
-      const auditPath = path.join(env.BLUE_TANUKI_AUDIT_DIR, "audit.jsonl");
-      const sourceMemory = goalPurposeMemoryStorage(env);
-      controller = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }), goal_purpose_memory: sourceMemory });
-      const purpose = "合成資料の出典を確認し、未確認事項を区別する。";
-      const args = { goal_ref: `goal_${"a".repeat(32)}`, purpose_digest: createHash("sha256").update(purpose).digest("hex") };
-      const requestId = randomUUID();
-      const proposalActor = "webchat-owner-token-holder";
-      const reviewerActor = "webchat-resume-token-holder";
-      const { command } = controller.decide(createGatewayInternalInboundRequest({
-        id: requestId, user: proposalActor, channel: "webchat", timestamp: Date.now(),
-        content: "Owner submitted an initial delegated purpose for L3 review.",
-        metadata: {
-          "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
-          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
-          "blue_tanuki.goal_purpose_adoption.version": "v1",
-          "blue_tanuki.tool_call": { tool_name: "goal.governance.adopt", arguments: args },
-        },
-      }));
-      if (!command) throw new Error("HDS did not issue a purpose adoption command");
-      expect(command).toMatchObject({ type: "tool_call", payload: { tool_name: "goal.governance.adopt", arguments: args } });
-      const binding = {
-        ...args, request_id: requestId, command_id: command.id, proposal_actor: proposalActor,
-        command_digest: createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex"),
-      };
-      const reviewDigest = goalPurposeAdoptionReviewDigest(binding);
-      const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
-      controller.onApprovalEvaluation(evaluation, { request_id: requestId });
-      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest: reviewDigest })).toBe(true);
-      controller.onCommandLifecycle(command.id, "approval_approved", {
-        actor: reviewerActor, request_id: requestId, reason: "human_approval:approve",
-      });
-      expect(controller.commitGoalPurposeAdoptionAfterL3({ ...binding, content_review_digest: reviewDigest,
-        purpose_text: purpose, actor: reviewerActor, evaluation })).toMatchObject({ ok: true, ...args, version: 1 });
-      controller.close();
-      controller = undefined;
+      const { env, envFile, auditPath, purpose, args } = await seedGoalPurposeRecoveryFixture(root);
 
       const backup = await createRecoveryBackup(env);
       const pack = path.dirname(backup.backup_manifest_path!);
@@ -1636,10 +1653,102 @@ describe("buildRecoverySnapshot", () => {
         purpose_text: purpose, used_for_authority: false });
     } finally {
       archiveReader?.close();
-      controller?.close();
       await rm(root, { recursive: true, force: true });
     }
   }, 25_000);
+
+  it.each(["write failure", "target drift", "lost fence", "emergency stop", "lost rename response", "initially missing J"] as const)(
+    "preserves the reviewed offline goal-purpose pair after %s", async (interruption) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-goal-purpose-rollback-"));
+      try {
+        const { env, auditPath, sourceMemory } = await seedGoalPurposeRecoveryFixture(root);
+        const targets = [sourceMemory.database_path, sourceMemory.memory_database_path] as const;
+        const backup = await createRecoveryBackup(env);
+        const manifest = await readFile(backup.backup_manifest_path!);
+        const pack = path.dirname(backup.backup_manifest_path!);
+        const archivedJ = await readFile(path.join(pack, "canonical-state", "goal_purpose_j_control.sqlite"));
+        const archivedM = await readFile(path.join(pack, "canonical-state", "goal_purpose_m_state.sqlite"));
+        const auditBefore = await readFile(auditPath);
+        // Change physical bytes without introducing a distinct logical purpose or corrupting SQLite.
+        for (const [index, target] of targets.entries()) setFixtureSqliteApplicationId(target, 123456789 + index);
+        const missingJ = interruption === "initially missing J";
+        if (missingJ) await unlink(targets[0]);
+        const initialJ = missingJ ? null : await readFile(targets[0]);
+        const initialM = await readFile(targets[1]);
+        const selector = { backup_id: backup.backup_id!, manifest_sha256: createHash("sha256").update(manifest).digest("hex") };
+        const plan = await planOfflineGoalPurposeRepair(env, selector);
+        if (!plan) throw new Error("Expected a verified goal-purpose repair candidate");
+        expect(plan.stores.map(({ target_state }) => target_state)).toEqual([missingJ ? "missing" : "different", "different"]);
+        expect(initialJ).not.toEqual(archivedJ);
+
+        let firstMemberReplaced = false;
+        let secondMemberAttempted = false;
+        let secondMemberReplaced = false;
+        let fenceLost = false;
+        let driftedJ: Buffer | undefined;
+        const rename = fs.rename.bind(fs);
+        const replacement = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+          if (path.basename(String(source)) === "new-m-state.sqlite" && target === targets[1]) {
+            secondMemberAttempted = true;
+            expect(await readFile(targets[0])).toEqual(archivedJ);
+            if (interruption === "target drift") {
+              setFixtureSqliteApplicationId(targets[0], 9356832);
+              driftedJ = await readFile(targets[0]);
+            }
+            if (interruption === "lost fence") fenceLost = true;
+            if (interruption === "lost rename response") {
+              await rename(source, target);
+              expect(await readFile(targets[1])).toEqual(archivedM);
+              secondMemberReplaced = true;
+            }
+            throw Object.assign(new Error("synthetic rename failure"), { code: "EACCES" });
+          }
+          await rename(source, target);
+          if (path.basename(String(source)) === "new-j-control.sqlite" && target === targets[0]) firstMemberReplaced = true;
+        });
+
+        const assertFence = () => {
+          if (fenceLost) throw new Error("synthetic owner fence loss");
+        };
+        const permitsContinuation = () => {
+          if (interruption === "emergency stop" && firstMemberReplaced) throw new Error("synthetic emergency stop");
+        };
+        try {
+          const operation = applyOfflineGoalPurposeRepair(env, plan, assertFence, permitsContinuation);
+          if (interruption === "target drift" || interruption === "lost fence") {
+            await expect(operation).rejects.toThrow();
+          } else {
+            await expect(operation).resolves.toBe("rolled_back");
+          }
+        } finally {
+          replacement.mockRestore();
+        }
+
+        expect(firstMemberReplaced).toBe(true);
+        expect(secondMemberAttempted).toBe(interruption !== "emergency stop");
+        expect(secondMemberReplaced).toBe(interruption === "lost rename response");
+        if (interruption === "target drift") {
+          expect(driftedJ).toBeDefined();
+          expect(driftedJ).not.toEqual(initialJ);
+          expect(driftedJ).not.toEqual(archivedJ);
+        }
+        const expectedJ = interruption === "target drift" ? driftedJ : interruption === "lost fence" ? archivedJ : initialJ;
+        if (missingJ) {
+          await expect(stat(targets[0])).rejects.toMatchObject({ code: "ENOENT" });
+          const savedDirectories = (await readdir(path.dirname(targets[0]))).filter((name) => name.startsWith(".offline-goal-repair-"));
+          expect(savedDirectories).toHaveLength(1);
+          expect(await readFile(path.join(path.dirname(targets[0]), savedDirectories[0]!, "interrupted-j-control.sqlite"))).toEqual(archivedJ);
+        } else {
+          expect(await readFile(targets[0])).toEqual(expectedJ);
+        }
+        expect(await readFile(targets[1])).toEqual(initialM);
+        expect(await readFile(auditPath)).toEqual(auditBefore);
+        expect(await readFile(backup.backup_manifest_path!)).toEqual(manifest);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }, 25_000,
+  );
 
   it("captures and verifies per-store SQLite snapshots without mutating sources or applying them through generic restore", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-snapshot-"));

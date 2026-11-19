@@ -1919,7 +1919,13 @@ async function copyGoalPurposeRepairFile(source: string, destination: string, pr
 }
 
 /** Called only with the installation lease held and a durable prepared fence for this exact plan. */
-export async function applyOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, plan: OfflineGoalPurposeRepairPlan): Promise<void> {
+export async function applyOfflineGoalPurposeRepair(
+  env: NodeJS.ProcessEnv,
+  plan: OfflineGoalPurposeRepairPlan,
+  assertFenceContinuity: () => void,
+  permitsContinuation: () => void,
+): Promise<void | "rolled_back"> {
+  assertFenceContinuity();
   const state = await loadOfflineGoalPurposeRepairState(env, plan);
   if (!state || state.plan.repair_sha256 !== plan.repair_sha256 || state.plan.before_sha256 !== plan.before_sha256 ||
       state.plan.after_sha256 !== plan.after_sha256 || !await isGoalPurposeRepairCandidate(env, state)) {
@@ -1934,14 +1940,18 @@ export async function applyOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, plan
   const preserveDirectory = await fs.mkdtemp(path.join(state.directory, ".offline-goal-repair-"));
   if (process.platform !== "win32") await fs.chmod(preserveDirectory, 0o700);
   const staged = [path.join(preserveDirectory, "new-j-control.sqlite"), path.join(preserveDirectory, "new-m-state.sqlite")] as const;
+  const priorCopies = state.before.map(({ filepath }) => path.join(preserveDirectory, `before-${path.basename(filepath)}`));
+  // Record each attempted rename before calling it: an error can leave the exact replacement on disk.
+  const attempted = new Set<number>();
+  let keepStagedForInspection = false;
   try {
     const preserved = [];
     for (const [index, target] of state.before.entries()) {
       const file = state.archive.files[index]!;
       await copyGoalPurposeRepairFile(file.filepath, staged[index]!, file.proof);
-      const name = `before-${path.basename(target.filepath)}`;
-      if (target.proof) await copyGoalPurposeRepairFile(target.filepath, path.join(preserveDirectory, name), target.proof);
-      preserved.push({ store_key: GOAL_PURPOSE_STORES[index], file: target.proof ? name : null, proof: target.proof });
+      const prior = priorCopies[index]!;
+      if (target.proof) await copyGoalPurposeRepairFile(target.filepath, prior, target.proof);
+      preserved.push({ store_key: GOAL_PURPOSE_STORES[index], file: target.proof ? path.basename(prior) : null, proof: target.proof });
     }
     const evidence = await fs.open(path.join(preserveDirectory, "before-state.json"), "wx", 0o600);
     try {
@@ -1965,16 +1975,64 @@ export async function applyOfflineGoalPurposeRepair(env: NodeJS.ProcessEnv, plan
         await assertGoalPurposeFileProof(member.filepath, position < index ? state.after[position]!.proof : member.proof);
       }
       await assertGoalPurposeFileProof(staged[index]!, state.after[index]!.proof);
+      assertFenceContinuity();
+      permitsContinuation();
+      attempted.add(index);
       await fs.rename(staged[index]!, target.filepath);
       await syncGoalPurposePath(target.filepath);
       await syncGoalPurposePath(state.directory, true);
       await syncGoalPurposePath(preserveDirectory, true);
     }
+    assertFenceContinuity();
     if (await observeOfflineGoalPurposeRepair(env, plan) !== plan.after_sha256) {
       throw new Error("offline_goal_purpose_postcondition_unverified");
     }
+  } catch (error) {
+    if (!attempted.size) throw error;
+    keepStagedForInspection = true;
+    assertFenceContinuity();
+
+    const observed = await Promise.all(state.before.map(({ filepath }) => readGoalPurposeFileProof(filepath)));
+    for (const [index, { proof }] of state.before.entries()) {
+      if (sameGoalPurposeProof(observed[index]!, proof)) continue;
+      if (!attempted.has(index) || !sameGoalPurposeProof(observed[index]!, state.after[index]!.proof)) {
+        throw new Error("offline_goal_purpose_rollback_unverified");
+      }
+      await assertGoalPurposeFileProof(priorCopies[index]!, proof);
+    }
+
+    // Compensate only the exact locally installed files under the same durable fence.
+    for (const index of [...attempted].reverse()) {
+      const { filepath, proof } = state.before[index]!;
+      if (sameGoalPurposeProof(observed[index]!, proof)) continue;
+      const rollbackStage = path.join(preserveDirectory, `rollback-${path.basename(filepath)}`);
+      const isolatedReplacement = path.join(preserveDirectory, `interrupted-${path.basename(filepath)}`);
+      if (proof) await copyGoalPurposeRepairFile(priorCopies[index]!, rollbackStage, proof);
+      else await assertGoalPurposeFileProof(isolatedReplacement, null);
+      for (const [position, member] of state.before.entries()) {
+        await assertGoalPurposeFileProof(member.filepath, observed[position]!);
+      }
+      assertFenceContinuity();
+      if (proof) {
+        await fs.rename(rollbackStage, filepath);
+        await syncGoalPurposePath(filepath);
+      } else {
+        await fs.rename(filepath, isolatedReplacement);
+        await syncGoalPurposePath(isolatedReplacement);
+      }
+      observed[index] = proof;
+      await syncGoalPurposePath(state.directory, true);
+      await syncGoalPurposePath(preserveDirectory, true);
+    }
+
+    assertFenceContinuity();
+    if (await observeOfflineGoalPurposeRepair(env, plan) !== plan.before_sha256) {
+      throw new Error("offline_goal_purpose_rollback_unverified");
+    }
+    keepStagedForInspection = false;
+    return "rolled_back";
   } finally {
-    for (const file of staged) {
+    for (const file of keepStagedForInspection ? [] : staged) {
       await fs.unlink(file).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });

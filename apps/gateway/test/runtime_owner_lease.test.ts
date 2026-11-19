@@ -119,6 +119,59 @@ describe("Gateway runtime owner lease", () => {
     }
   });
 
+  it("settles a rollback only after two observations of the reviewed pre-action state", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try { lease.prepareOfflineGoalPurposeRepair(binding); } finally { lease.close(); }
+    let observed = verification.before_sha256;
+    const observe = vi.fn(async () => observed);
+    const apply = vi.fn(async (assertFenceContinuity: () => void) => {
+      assertFenceContinuity();
+      expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", command_digest: binding.command_digest });
+      observed = verification.after_sha256;
+      assertFenceContinuity();
+      observed = verification.before_sha256;
+      return "rolled_back" as const;
+    });
+    const callbacks = { prepare: async () => ({ apply, observe }) };
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("rolled_back");
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("authorization_required");
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(3);
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+
+    const ownerStatePath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const db = new DatabaseSync(ownerStatePath, { readOnly: true });
+    try {
+      expect(db.prepare("SELECT status, observed_sha256 FROM gateway_recovery_settlements").get()).toEqual({
+        status: "pre_action_state_matched", observed_sha256: verification.before_sha256,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("retains the fence when the claimed rollback drifts before settlement", async () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const binding = goalPurposeRepairBinding();
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try { lease.prepareOfflineGoalPurposeRepair(binding); } finally { lease.close(); }
+    const observations = [verification.before_sha256, verification.before_sha256, verification.after_sha256];
+    const observe = vi.fn(async () => observations.shift() ?? null);
+    const apply = vi.fn(async (assertFenceContinuity: () => void) => {
+      assertFenceContinuity();
+      return "rolled_back" as const;
+    });
+    const callbacks = { prepare: async () => ({ apply, observe }) };
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("outcome_unknown");
+    expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", command_digest: binding.command_digest });
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_recovery_pending");
+    expect(await applyUnderOfflineGoalPurposeRepairLock(env, goalPurposeRepair, callbacks)).toBe("recovery_pending");
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(3);
+  });
+
   it("preserves state on rejected preflight or expiry and invalidates the handoff on a fresh owner generation", async () => {
     const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
     const binding = goalPurposeRepairBinding();
