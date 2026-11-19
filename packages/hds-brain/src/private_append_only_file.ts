@@ -38,9 +38,9 @@ export class HDSPrivateAppendOnlyFile {
   private absentAtConstruction = false;
   private appendFailed = false;
 
-  constructor(filepath: string) {
+  constructor(filepath: string, private readonly readOnly = false) {
     this.filepath = resolve(filepath);
-    ensureDirectoryPath(dirname(this.filepath));
+    if (!this.readOnly) ensureDirectoryPath(dirname(this.filepath));
     this.directoryIdentity = captureDirectoryIdentity(dirname(this.filepath));
     const existing = tryLstat(this.filepath);
     if (existing) {
@@ -64,6 +64,7 @@ export class HDSPrivateAppendOnlyFile {
   }
 
   appendUtf8(value: string): void {
+    if (this.readOnly) throw new Error("hds_private_file_read_only");
     if (this.appendFailed) throw new Error("hds_private_file_append_disabled_after_failure");
     const opened = this.open("append");
     if (!opened) throw new Error("hds_private_file_unavailable");
@@ -122,7 +123,7 @@ export class HDSPrivateAppendOnlyFile {
           (this.identity && (descriptorStat.dev !== this.identity.dev || descriptorStat.ino !== this.identity.ino))) {
         throw new Error("hds_private_file_identity_changed");
       }
-      if (process.platform !== "win32") fchmodSync(fd, 0o600);
+      if (!this.readOnly && process.platform !== "win32") fchmodSync(fd, 0o600);
       return {
         fd,
         identity: { dev: descriptorStat.dev, ino: descriptorStat.ino },

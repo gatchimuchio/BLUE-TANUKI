@@ -3661,6 +3661,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res: ServerResponse,
     route: string,
   ): Promise<void> {
+    if (route === "/recovery/restore-plan") res.setHeader("cache-control", "no-store");
     if (!this.opts.recovery) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "recovery_not_configured" }));
@@ -3734,7 +3735,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     if (route === "/recovery/restore-plan") {
-      const headers = { "content-type": "application/json", "cache-control": "no-store" };
+      const headers = { "content-type": "application/json" };
       if (req.method !== "POST") {
         res.writeHead(405, headers);
         res.end(JSON.stringify({ error: "method_not_allowed" }));
@@ -3759,6 +3760,16 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             report.used_for_authority !== false || report.may_execute !== false) {
           throw new Error("invalid_recovery_restore_plan_boundary");
         }
+        const replay = report.goal_purpose_replay;
+        const verifiedPurposePair = ["goal_purpose_j_control", "goal_purpose_m_state"].every(key => {
+          const stores = report.canonical_stores.filter(store => store.store_key === key);
+          return stores.length === 1 && stores[0]?.archive_status === "verified";
+        });
+        const replayValid = report.status === "planned" && replay && typeof replay === "object" && !Array.isArray(replay) &&
+          ["matched", "no_current_purpose", "not_included", "unverified"].includes(replay.status) &&
+          Number.isSafeInteger(replay.verified_purpose_count) &&
+          (replay.status === "matched" ? replay.verified_purpose_count > 0 : replay.verified_purpose_count === 0) &&
+          ((replay.status !== "matched" && replay.status !== "no_current_purpose") || verifiedPurposePair);
         const response = JSON.stringify({
           surface: report.surface,
           schema_version: report.schema_version,
@@ -3769,6 +3780,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           canonical_stores: report.canonical_stores.map(({ store_key, archive_status, disposition }) => ({
             store_key, archive_status, disposition,
           })),
+          ...(replayValid ? { goal_purpose_replay: { status: replay.status, verified_purpose_count: replay.verified_purpose_count } } : {}),
           offline_lease_verified: false,
           cross_store_atomic: false,
           used_for_authority: false,

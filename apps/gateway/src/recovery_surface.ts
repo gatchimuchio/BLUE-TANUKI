@@ -3,7 +3,10 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { recoveryRootPath as recoveryRoot } from "@blue-tanuki/core";
+import { AuditLog, inspectGoalPurposeRecovery } from "@blue-tanuki/hds-brain";
+import { AUDIT_FILENAME } from "./audit_config.js";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
+import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
   CANONICAL_STATE_STORE_PATHS,
   RESTORABLE_CANONICAL_STATE_STORES,
@@ -327,6 +330,11 @@ export interface PreUpdateRecoveryBackupInspection {
 type RecoveryPlanTargetDisposition = "not_configured" | "preserve_current" | "overlapping_targets" |
   "not_captured" | "requires_domain_review" | "candidate_only" | "unverified_target";
 
+interface GoalPurposeReplayObservation {
+  status: "matched" | "no_current_purpose" | "not_included" | "unverified";
+  verified_purpose_count: number;
+}
+
 export interface OfflineRecoveryRestorePlan {
   surface: "offline_recovery_restore_plan";
   schema_version: 1;
@@ -336,6 +344,7 @@ export interface OfflineRecoveryRestorePlan {
   items: readonly { role: string; disposition: RecoveryPlanTargetDisposition }[];
   canonical_stores: readonly { store_key: CanonicalStateStoreKey; archive_status: CanonicalStateSnapshotEntryStatus | "not_included";
     disposition: "requires_store_reconciliation" | "preserve_current" }[];
+  goal_purpose_replay?: GoalPurposeReplayObservation;
   offline_lease_verified: false;
   cross_store_atomic: false;
   used_for_authority: false;
@@ -1578,6 +1587,46 @@ export async function inspectRecoveryBackupById(
   });
 }
 
+/** Compare the archived pair to the preserved, current installation's audit and configuration. */
+async function observeArchivedGoalPurpose(
+  env: NodeJS.ProcessEnv,
+  packDir: string,
+  snapshot: CanonicalStateSnapshotManifest | undefined,
+): Promise<{ observation: GoalPurposeReplayObservation; binding: string | null }> {
+  const j = snapshot?.entries.find(({ store_key }) => store_key === "goal_purpose_j_control");
+  const m = snapshot?.entries.find(({ store_key }) => store_key === "goal_purpose_m_state");
+  if (!j && !m) return { observation: { status: "not_included", verified_purpose_count: 0 }, binding: null };
+  const unverified = { observation: { status: "unverified", verified_purpose_count: 0 }, binding: null } as const;
+  if (j?.status !== "verified" || !j.archive_rel_path || m?.status !== "verified" || !m.archive_rel_path ||
+      !env.BLUE_TANUKI_AUDIT_DIR) return unverified;
+  try {
+    const filepath = path.resolve(env.BLUE_TANUKI_AUDIT_DIR, AUDIT_FILENAME);
+    const audit = new AuditLog({ filepath, read_only: true });
+    const config = goalGovernanceConfigFromEnvironment(env, { read_only: true });
+    const provenance = (source: AuditLog, currentConfig: typeof config) => JSON.stringify([
+      source.list().length, source.list().at(-1)?.entry_hash ?? null, currentConfig ?? null,
+    ]);
+    const before = provenance(audit, config);
+    const jPath = await assertArchivePath(packDir, path.join(packDir, j.archive_rel_path), "goal_purpose_replay_j");
+    const mPath = await assertArchivePath(packDir, path.join(packDir, m.archive_rel_path), "goal_purpose_replay_m");
+    const observation = inspectGoalPurposeRecovery({ audit, goal_governance: config,
+      j_database_path: jPath, m_database_path: mPath });
+    if (observation.status === "unverified") return unverified;
+    for (const [entry, archive] of [[j, jPath], [m, mPath]] as const) {
+      const proof = await readRecoveryPathProof(archive);
+      if (proof?.kind !== "file" || proof.bytes !== entry.bytes || proof.sha256 !== entry.sha256) return unverified;
+    }
+    if (before !== provenance(new AuditLog({ filepath, read_only: true }),
+      goalGovernanceConfigFromEnvironment(env, { read_only: true }))) return unverified;
+    const binding = createHash("sha256").update(JSON.stringify([
+      "offline-goal-purpose-replay.v1", before, j.sha256, m.sha256, observation,
+    ])).digest("hex");
+    return { observation, binding };
+  } catch {
+    return unverified;
+  }
+}
+
 /** Plan against one exact pack. The installed CLI also requires the caller's previously observed manifest digest. */
 export async function planOfflineRecoveryRestore(
   env: NodeJS.ProcessEnv,
@@ -1662,13 +1711,16 @@ export async function planOfflineRecoveryRestore(
       return { store_key: key, archive_status: entry?.status ?? "not_included",
         disposition: entry?.status === "verified" ? "requires_store_reconciliation" : "preserve_current" } as const;
     });
+    const goalPurpose = await observeArchivedGoalPurpose(env, packDir, manifest.canonical_state_snapshot);
     if ((await readManifest(env, backupId)).manifest_sha256 !== manifestSha256) {
       return { ...base, status: "manifest_changed" };
     }
     const planSha256 = createHash("sha256").update(JSON.stringify([
-      "offline-recovery-restore-plan.v1", manifestSha256, privateRoot, bindings, canonical_stores,
+      "offline-recovery-restore-plan.v2", manifestSha256, privateRoot, bindings, canonical_stores,
+      goalPurpose.observation, goalPurpose.binding,
     ])).digest("hex");
-    return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256, items, canonical_stores };
+    return { ...base, status: "planned", manifest_sha256: manifestSha256, plan_sha256: planSha256, items, canonical_stores,
+      goal_purpose_replay: goalPurpose.observation };
   } catch {
     return base;
   }

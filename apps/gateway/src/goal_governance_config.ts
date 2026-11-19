@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, realpathSync, type Stats } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseGoalGovernanceAtBoundary, type GoalGovernanceConfig } from "@blue-tanuki/protocol";
 
@@ -12,10 +12,17 @@ const MAX_GOAL_GOVERNANCE_BYTES = 1024 * 1024;
  */
 export function goalGovernanceConfigFromEnvironment(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  options: { readonly read_only?: boolean } = {},
 ): GoalGovernanceConfig | undefined {
   const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
   const candidatePath = join(stateRoot, "private-state", GOAL_GOVERNANCE_FILENAME);
-  if (!existsSync(candidatePath)) return undefined;
+  let candidate: Stats;
+  try {
+    candidate = lstatSync(candidatePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 
   const stateRootPath = realpathSync(stateRoot);
   const privateRootPath = join(stateRootPath, "private-state");
@@ -27,7 +34,6 @@ export function goalGovernanceConfigFromEnvironment(
     throw new Error("goal_governance_private_state_path_invalid");
   }
 
-  const candidate = lstatSync(candidatePath);
   if (candidate.isSymbolicLink() || !candidate.isFile()) {
     throw new Error("goal_governance_config_must_be_regular_file");
   }
@@ -38,7 +44,7 @@ export function goalGovernanceConfigFromEnvironment(
   if (!isWithin(privateRoot, configPath)) {
     throw new Error("goal_governance_config_path_invalid");
   }
-  if (process.platform !== "win32") chmodSync(configPath, 0o600);
+  if (!options.read_only && process.platform !== "win32") chmodSync(configPath, 0o600);
 
   let raw: unknown;
   try {

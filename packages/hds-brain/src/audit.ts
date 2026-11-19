@@ -27,20 +27,26 @@ export interface AuditOptions {
    * the chain is loaded and verified on construction.
    */
   filepath?: string;
+  /** Inspect an existing file without creating directories, changing permissions, or appending. */
+  read_only?: boolean;
 }
 
 export class AuditLog {
   private entries: AuditEntry[] = [];
   private readonly storage?: HDSPrivateAppendOnlyFile;
+  private readonly readOnly: boolean;
   private persistenceFailure = false;
 
   constructor(opts: AuditOptions = {}) {
-    this.storage = opts.filepath ? new HDSPrivateAppendOnlyFile(opts.filepath) : undefined;
+    this.readOnly = opts.read_only === true;
+    this.storage = opts.filepath ? new HDSPrivateAppendOnlyFile(opts.filepath, this.readOnly) : undefined;
     const existing = this.storage?.readUtf8IfPresent();
+    if (this.readOnly && existing === undefined) throw new Error("AuditLog: existing audit required for read-only inspection");
     if (existing !== undefined) this.loadFromRaw(existing);
   }
 
   append(log: AuditRecord): AuditEntry {
+    if (this.readOnly) throw new Error("AuditLog: read-only inspection cannot append");
     if (this.persistenceFailure) {
       throw new Error("AuditLog persistence has failed; refusing further appends");
     }
@@ -89,7 +95,7 @@ export class AuditLog {
     return this.entries.length;
   }
 
-  /** Whether appended records survive a process restart through this log. */
+  /** Whether this log is backed by an audit file. */
   isPersistent(): boolean {
     return this.storage !== undefined;
   }

@@ -165,6 +165,7 @@ export {
 } from "./ports.js";
 export {
   HDSUpperController,
+  inspectGoalPurposeRecovery,
   type ControllerOptions,
   type ControllerSelfHealthOptions,
   type LLMCommandRoute,

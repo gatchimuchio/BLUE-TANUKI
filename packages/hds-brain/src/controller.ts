@@ -167,7 +167,7 @@ import { goalPurposeAdoptionApprovalTarget, goalPurposeAdoptionReviewDigest, goa
 import { model } from "./model.js";
 import { commit } from "./commit.js";
 import { AuditLog, type AuditEntry } from "./audit.js";
-import { GoalPurposeMemoryConsumer, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
+import { GoalPurposeMemoryConsumer, inspectGoalPurposeMemoryPair, type GoalPurposeMemoryApprovalContext } from "./goal_purpose_memory.js";
 import { MeaningUpdateMemoryConsumer } from "./meaning_update_memory.js";
 import { buildMemoryCitationInterpretationDependencies, buildMemoryJudgmentReassessmentProposals,
   isMemoryCitationJudgmentReassessmentEligible,
@@ -956,7 +956,7 @@ function reconcilePendingMeaningUpdateCommitMarkers(audit: AuditLog, memory: Mea
 function replayGoalPurposeChanges(
   audit: AuditLog,
   initial: GoalGovernanceLedger,
-  purposeMemory?: GoalPurposeMemoryConsumer,
+  purposeMemory?: Pick<GoalPurposeMemoryConsumer, "read">,
   adoptedIndex?: number,
 ): GoalGovernanceLedger {
   let ledger = initial;
@@ -1023,7 +1023,7 @@ function initialGoalPurposeEvent(input: {
   });
 }
 
-function replayInitialGoalPurposeAdoption(audit: AuditLog, purposeMemory?: GoalPurposeMemoryConsumer):
+function replayInitialGoalPurposeAdoption(audit: AuditLog, purposeMemory?: Pick<GoalPurposeMemoryConsumer, "read">):
   { ledger: GoalGovernanceLedger; index: number } | null {
   const entries = audit.list();
   const markers = entries.filter(({ log }) => isGoalPurposeAdoptionCommitMarker(log));
@@ -1050,6 +1050,54 @@ function replayInitialGoalPurposeAdoption(audit: AuditLog, purposeMemory?: GoalP
   const initial = GoalGovernanceLedger.fromVerifiedAdoption(event);
   if (!initial.ok) throw new Error("persisted initial goal adoption does not establish a ledger");
   return { ledger: initial.ledger, index };
+}
+
+function replayGoalGovernance(
+  audit: AuditLog,
+  config: GoalGovernanceConfig | undefined,
+  purposeMemory?: Pick<GoalPurposeMemoryConsumer, "read">,
+): GoalGovernanceLedger | undefined {
+  const adopted = replayInitialGoalPurposeAdoption(audit, purposeMemory);
+  if (config !== undefined) {
+    if (adopted) throw new Error("configured goal governance conflicts with persisted initial adoption");
+    const built = GoalGovernanceLedger.create(config);
+    if (!built.ok) throw new Error("invalid goal governance configuration");
+    if (!audit.verify()) throw new Error("goal governance requires a valid audit chain");
+    for (const event of config.events) {
+      if (event.event_kind === "purpose_change" && event.purpose_memory_ref) {
+        if (!purposeMemory) throw new Error("configured goal purpose events require their private M store");
+        if (!purposeMemory.read(event)) throw new Error("configured goal purpose event has an invalid private M reference");
+      }
+    }
+    return replayGoalPurposeChanges(audit, built.ledger, purposeMemory);
+  }
+  if (adopted) return replayGoalPurposeChanges(audit, adopted.ledger, purposeMemory, adopted.index);
+  if (audit.list().some(({ log }) => isGoalPurposeChangeCommitMarker(log))) {
+    throw new Error("persisted goal purpose changes require a base goal governance ledger");
+  }
+  return undefined;
+}
+
+/** Read only the specified archived pair, using the caller's current persistent audit and configuration as evidence. */
+export function inspectGoalPurposeRecovery(options: {
+  readonly audit: AuditLog;
+  readonly goal_governance?: GoalGovernanceConfig;
+  readonly j_database_path: string;
+  readonly m_database_path: string;
+}): { readonly status: "matched" | "no_current_purpose" | "unverified"; readonly verified_purpose_count: number } {
+  const unverified = { status: "unverified", verified_purpose_count: 0 } as const;
+  try {
+    if (!options.audit.isPersistent() || !options.audit.verify()) return unverified;
+    const memory = inspectGoalPurposeMemoryPair(options.j_database_path, options.m_database_path);
+    if (!memory) return unverified;
+    replayGoalGovernance(options.audit, options.goal_governance, memory);
+    const count = memory.countCompleteReplay();
+    if (count === null) return unverified;
+    return count > 0 ? { status: "matched", verified_purpose_count: count }
+      : { status: "no_current_purpose", verified_purpose_count: 0 };
+  } catch {
+    return unverified;
+  }
 }
 
 function replayMeaningUpdateMemoryCommits(audit: AuditLog, memory: MeaningUpdateMemoryConsumer): void {
@@ -1275,24 +1323,7 @@ export class HDSUpperController {
     this.goal_relation_tree = opts.goal_relation_graph === undefined
       ? undefined
       : buildGoalRelationTreeView(opts.goal_relation_graph);
-    const adopted = replayInitialGoalPurposeAdoption(this.audit, this.goalPurposeMemory);
-    if (opts.goal_governance !== undefined) {
-      if (adopted) throw new Error("configured goal governance conflicts with persisted initial adoption");
-      const built = GoalGovernanceLedger.create(opts.goal_governance);
-      if (!built.ok) throw new Error("invalid goal governance configuration");
-      if (!this.audit.verify()) throw new Error("goal governance requires a valid audit chain");
-      for (const event of opts.goal_governance.events) {
-        if (event.event_kind === "purpose_change" && event.purpose_memory_ref) {
-          if (!this.goalPurposeMemory) throw new Error("configured goal purpose events require their private M store");
-          if (!this.goalPurposeMemory.read(event)) throw new Error("configured goal purpose event has an invalid private M reference");
-        }
-      }
-      this.goal_governance = replayGoalPurposeChanges(this.audit, built.ledger, this.goalPurposeMemory);
-    } else if (adopted) {
-      this.goal_governance = replayGoalPurposeChanges(this.audit, adopted.ledger, this.goalPurposeMemory, adopted.index);
-    } else if (this.audit.list().some(({ log }) => isGoalPurposeChangeCommitMarker(log))) {
-      throw new Error("persisted goal purpose changes require a base goal governance ledger");
-    }
+    this.goal_governance = replayGoalGovernance(this.audit, opts.goal_governance, this.goalPurposeMemory);
     this.self_health = {
       ...STANDALONE_SELF_HEALTH_DEFAULTS,
       ...(opts.self_health ?? {}),

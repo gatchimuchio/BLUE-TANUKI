@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,7 +8,7 @@ import { canonicalExecutorCommandBytes, createGatewayInternalInboundRequest,
   GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { evaluateApproval, goalPurposeAdoptionReviewDigest } from "../src/approval_policy.js";
 import { AuditLog } from "../src/audit.js";
-import { HDSUpperController } from "../src/controller.js";
+import { HDSUpperController, inspectGoalPurposeRecovery } from "../src/controller.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, purposeVersionForEventTime } from "../src/goal_governance.js";
 import { operationPlanDigest } from "../src/operation_plan.js";
 
@@ -467,6 +467,12 @@ describe("HDS goal governance consumer", () => {
     try {
       controller = new HDSUpperController({ audit: new AuditLog({ filepath }), goal_purpose_memory: memoryStorage });
       expect(controller.getGoalGovernanceProjection()).toBeUndefined();
+      const archivePaths = {
+        j_database_path: memoryStorage.database_path,
+        m_database_path: memoryStorage.memory_database_path,
+      };
+      expect(inspectGoalPurposeRecovery({ ...archivePaths, audit: controller.getAudit() }))
+        .toEqual({ status: "no_current_purpose", verified_purpose_count: 0 });
       const origin = createGatewayInternalInboundRequest({
         id: request_id,
         user: proposal_actor,
@@ -521,6 +527,14 @@ describe("HDS goal governance consumer", () => {
       controller.close();
       controller = undefined;
 
+      const archivedFiles = [filepath, archivePaths.j_database_path, archivePaths.m_database_path];
+      const beforeInspection = archivedFiles.map((filename) => readFileSync(filename));
+      const currentAudit = new AuditLog({ filepath });
+      expect(inspectGoalPurposeRecovery({ ...archivePaths, audit: currentAudit }))
+        .toEqual({ status: "matched", verified_purpose_count: 1 });
+      expect(inspectGoalPurposeRecovery({ ...archivePaths, audit: new AuditLog() }))
+        .toEqual({ status: "unverified", verified_purpose_count: 0 });
+      expect(archivedFiles.map((filename) => readFileSync(filename))).toEqual(beforeInspection);
       restarted = new HDSUpperController({ audit: new AuditLog({ filepath }), goal_purpose_memory: memoryStorage });
       expect(restarted.readGoalPurposeContent(args.goal_ref, 1)).toMatchObject({ ...args, version: 1, purpose_text, used_for_authority: false });
       expect(restarted.getGoalGovernanceProjection()?.goals).toMatchObject([{ goal_ref: args.goal_ref, current_version: 1 }]);
@@ -580,6 +594,11 @@ describe("HDS goal governance consumer", () => {
       });
       expect(controller.getAudit().verify()).toBe(true);
 
+      const archived = { audit: new AuditLog({ filepath }), j_database_path: memoryStorage.database_path,
+        m_database_path: memoryStorage.memory_database_path };
+      expect(inspectGoalPurposeRecovery(archived)).toEqual({ status: "unverified", verified_purpose_count: 0 });
+      expect(inspectGoalPurposeRecovery({ ...archived, goal_governance: createConfig() }))
+        .toEqual({ status: "matched", verified_purpose_count: 1 });
       restarted = new HDSUpperController({
         audit: new AuditLog({ filepath }),
         goal_governance: createConfig(),

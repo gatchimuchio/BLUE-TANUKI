@@ -3521,10 +3521,12 @@ describe("WebChatChannel — Control Center shell", () => {
       canonical_stores: [
         { store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
         { store_key: "goal_purpose_j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
-        { store_key: "goal_purpose_m_state", archive_status: "not_included", disposition: "preserve_current" },
+        { store_key: "goal_purpose_m_state", archive_status: "verified", disposition: "requires_store_reconciliation" },
       ],
+      goal_purpose_replay: { status: "matched", verified_purpose_count: 2, original: "raw-purpose-sentinel" },
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
     };
+    let nextReport: unknown = report;
     const context = {
       state: { recoveryRestorePlanGeneration: 0 },
       byId: (id: keyof typeof elements) => elements[id],
@@ -3535,7 +3537,7 @@ describe("WebChatChannel — Control Center shell", () => {
       },
       postJson(path: string, token: string, body: unknown) {
         expect([path, token, body]).toEqual(["/recovery/restore-plan", MAINTENANCE_TOKEN, { backup_id: "backup-review" }]);
-        return Promise.resolve(report);
+        return Promise.resolve(nextReport);
       },
     };
     const execute = (script: string) => new Script(source + "\n" + script).runInNewContext(context);
@@ -3547,8 +3549,37 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(details.text).toContain("環境設定　現行を保持");
     expect(details.text).toContain("J制御台帳　収録済み・整合確認済み／台帳の照合が必要");
     expect(details.text).toContain("委任目的J制御台帳　収録済み・整合確認済み／台帳の照合が必要");
-    expect(details.text).toContain("委任目的M状態台帳　未収録／現行を保持");
+    expect(details.text).toContain("委任目的M状態台帳　収録済み・整合確認済み／台帳の照合が必要");
+    const replayRow = "委任目的J/Mと現行監査の読み取り専用照合　";
+    expect(details.text).toContain(replayRow + "記録と原文が一致（2件）");
     expect(details.text).not.toMatch(/raw-.*-sentinel|__proto__|backup-review/);
+    for (const [status, label] of [
+      ["no_current_purpose", "照合対象の委任目的レコードなし"],
+      ["not_included", "バックアップに未収録"],
+      ["unverified", "確認できない"],
+    ]) {
+      nextReport = { ...report, goal_purpose_replay: { status, verified_purpose_count: 0 } };
+      await execute("inspectRecoveryRestorePlan()");
+      expect(details.text).toContain(replayRow + label);
+      expect(details.text).not.toContain("記録と原文が一致");
+    }
+    for (const replay of [undefined, { status: "__proto__", verified_purpose_count: 0 },
+      { status: "matched", verified_purpose_count: 0 }, { status: "unverified", verified_purpose_count: 2 }]) {
+      nextReport = { ...report, goal_purpose_replay: replay };
+      await execute("inspectRecoveryRestorePlan()");
+      expect(details.text).not.toContain(replayRow);
+      expect(details.text).not.toContain("__proto__");
+    }
+    for (const replay of [report.goal_purpose_replay, { status: "no_current_purpose", verified_purpose_count: 0 }]) {
+      nextReport = { ...report, goal_purpose_replay: replay, canonical_stores: [
+        ...report.canonical_stores.slice(0, -1),
+        { store_key: "goal_purpose_m_state", archive_status: "not_included", disposition: "preserve_current" },
+      ] };
+      await execute("inspectRecoveryRestorePlan()");
+      expect(details.text).toContain("委任目的M状態台帳　未収録／現行を保持");
+      expect(details.text).not.toContain(replayRow);
+    }
+    nextReport = report;
     await execute("const pending = inspectRecoveryRestorePlan(); clearRecoveryRestorePlan(); pending");
     expect(details.hidden).toBe(true);
     expect(details.text).toBe("");
@@ -3571,6 +3602,7 @@ describe("WebChatChannel — Control Center shell", () => {
         { store_key: "goal_purpose_j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
         { store_key: "goal_purpose_m_state", archive_status: "verified", disposition: "requires_store_reconciliation" },
       ],
+      goal_purpose_replay: { status: "matched", verified_purpose_count: 1, purpose_text: "private-purpose-sentinel" },
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
       secret: "private-sentinel",
     } as const;
@@ -3582,6 +3614,11 @@ describe("WebChatChannel — Control Center shell", () => {
         inspectRestorePlan: async backupId => {
           seen.push(backupId);
           if (backupId === "backup-throw") throw new Error("private-error-sentinel");
+          if (backupId === "backup-legacy") return { ...report, goal_purpose_replay: undefined };
+          if (backupId === "backup-malformed") return { ...report,
+            goal_purpose_replay: { ...report.goal_purpose_replay, verified_purpose_count: -1 } };
+          if (backupId === "backup-incomplete-pair") return { ...report, canonical_stores: report.canonical_stores.slice(0, -1) };
+          if (backupId === "backup-changed") return { ...report, status: "manifest_changed", plan_sha256: null };
           return report;
         },
       },
@@ -3596,7 +3633,10 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(app.text.includes('id="recovery-backup-store-goal_purpose_m_state"')).toBe(true);
       expect(app.text.includes('value="goal_purpose_j_control"')).toBe(false);
       expect(app.text.includes('value="goal_purpose_m_state"')).toBe(false);
-      expect((await postJson(ctx.port, route, { backup_id: "backup-review" })).status).toBe(401);
+      const unauthorized = await postJson(ctx.port, route, { backup_id: "backup-review" });
+      expect(unauthorized.status).toBe(401);
+      expect(unauthorized.headers.get("cache-control")).toBe("no-store");
+      expect(unauthorized.body).toEqual({ error: "unauthorized" });
       expect((await postJson(ctx.port, route, { backup_id: "backup-review" }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
       expect((await getRaw(ctx.port, route, auth)).status).toBe(405);
       for (const body of [{}, { backup_id: "" }, { backup_id: "latest" }, { backup_id: "../other" },
@@ -3614,11 +3654,18 @@ describe("WebChatChannel — Control Center shell", () => {
         canonical_stores: report.canonical_stores, offline_lease_verified: false, cross_store_atomic: false,
         used_for_authority: false, may_execute: false,
       });
+      expect(response.body.goal_purpose_replay).toEqual({ status: "matched", verified_purpose_count: 1 });
       expect(JSON.stringify(response.body)).not.toContain("private");
+      for (const backupId of ["backup-legacy", "backup-malformed", "backup-incomplete-pair", "backup-changed"]) {
+        const omitted = await postJson(ctx.port, route, { backup_id: backupId }, auth);
+        expect(omitted.status).toBe(200);
+        expect(omitted.headers.get("cache-control")).toBe("no-store");
+        expect(omitted.body).not.toHaveProperty("goal_purpose_replay");
+      }
       const error = await postJson(ctx.port, route, { backup_id: "backup-throw" }, auth);
       expect(error.status).toBe(500);
       expect(error.body).toEqual({ error: "recovery_restore_plan_failed" });
-      expect(seen).toEqual(["backup-review", "backup-throw"]);
+      expect(seen).toEqual(["backup-review", "backup-legacy", "backup-malformed", "backup-incomplete-pair", "backup-changed", "backup-throw"]);
     } finally {
       await ctx.teardown();
     }

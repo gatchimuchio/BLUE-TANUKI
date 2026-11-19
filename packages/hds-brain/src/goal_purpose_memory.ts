@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
+import { dirname, isAbsolute } from "node:path";
 import {
   MEMORY_COMMIT_V2_SCHEMA_VERSION,
   memoryCommitContentDigest,
@@ -8,8 +10,8 @@ import {
   type MemoryCommitV2,
 } from "@blue-tanuki/protocol";
 import type { OperationPlanMemoryStorage } from "./operation_plan.js";
-import { JMemoryCommitCoordinator } from "./制御状態.js";
-import type { JMemoryApprovalReference, JMemoryApprovalReader } from "./保存取引.js";
+import { inspectJControlRecoveryLedger, JMemoryCommitCoordinator } from "./制御状態.js";
+import { readVerifiedMemoryRecoveryLedger, type JMemoryApprovalReference, type JMemoryApprovalReader } from "./保存取引.js";
 import { goalGovernanceEventDigest } from "./goal_governance.js";
 import type { GoalPurposeAdoptionReviewBinding } from "./types.js";
 
@@ -73,8 +75,7 @@ export class GoalPurposeMemoryConsumer {
       authorization_ref: event.authorization_ref,
       used_for_authority: false,
     };
-    const updateId = `goal-purpose:${recordId}`;
-    const jEventId = `goal-purpose-memory:${recordId}`;
+    const { update_id: updateId, j_event_id: jEventId } = purposeMemoryCommitIds(recordId);
     const existing = this.coordinator.readMemoryRecord(recordId);
     if (!existing) return { ok: false, reason: "purpose_memory_store_unavailable" };
     if (existing.exists) {
@@ -92,16 +93,9 @@ export class GoalPurposeMemoryConsumer {
         : { ok: false, reason: "purpose_memory_reconciliation_failed" };
     }
 
-    const commitContent = {
-      schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION,
-      expected_version: existing.revision,
-      update_id: updateId,
-      j_event_id: jEventId,
-      changes: [{ operation: "upsert" as const, record_id: recordId, value: record as unknown as MemoryCommitJsonValue }],
-    };
     let commit: MemoryCommitV2;
     try {
-      commit = { ...commitContent, content_digest: memoryCommitContentDigest(commitContent) };
+      commit = purposeMemoryCommit(record, existing.revision);
     } catch {
       return { ok: false, reason: "purpose_memory_commit_invalid" };
     }
@@ -138,32 +132,7 @@ export class GoalPurposeMemoryConsumer {
 
   /** Resolve an audit event's opaque M reference and verify the exact content binding. */
   read(event: GoalPurposeContentEvent): GoalPurposeMemoryRecord | null {
-    const recordId = recordIdForReference(event.purpose_memory_ref);
-    if (!recordId) return null;
-    const stored = this.coordinator.readMemoryRecord(recordId);
-    if (!stored) throw new Error("persisted goal purpose memory is unavailable");
-    if (!stored.exists) throw new Error("persisted goal purpose memory record is missing");
-    const expected: GoalPurposeMemoryRecord = {
-      schema_version: "blue-tanuki.goal-purpose-memory.v1",
-      record_type: "goal_purpose_content",
-      record_id: recordId,
-      goal_ref: event.goal_ref,
-      purpose_version: event.new_version,
-      purpose_digest: event.new_purpose_digest,
-      purpose_text: typeof (stored.value as { purpose_text?: unknown } | null)?.purpose_text === "string"
-        ? (stored.value as { purpose_text: string }).purpose_text : "",
-      event_ref: event.event_ref,
-      event_digest: digestEvent(event),
-      authorization_ref: event.authorization_ref,
-      used_for_authority: false,
-    };
-    const mismatchFields = purposeRecordMismatchFields(stored.value, expected, event);
-    if (mismatchFields.length > 0) {
-      throw new Error(`persisted goal purpose memory binding is invalid: ${mismatchFields.join(",")}`);
-    }
-    const parsed = parsePurposeMemoryRecord(stored.value);
-    if (!parsed) throw new Error("persisted goal purpose memory record is malformed");
-    return parsed;
+    return readGoalPurposeMemoryRecord(event, (recordId) => this.coordinator.readMemoryRecord(recordId));
   }
 
   recoverPending(): boolean {
@@ -184,6 +153,95 @@ export class GoalPurposeMemoryConsumer {
   close(): void {
     this.coordinator.close();
   }
+}
+
+function purposeMemoryCommitIds(recordId: string): Pick<MemoryCommitV2, "update_id" | "j_event_id"> {
+  return { update_id: `goal-purpose:${recordId}`, j_event_id: `goal-purpose-memory:${recordId}` };
+}
+
+function purposeMemoryCommit(record: GoalPurposeMemoryRecord, expectedVersion: number): MemoryCommitV2 {
+  const content = {
+    schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION,
+    expected_version: expectedVersion,
+    ...purposeMemoryCommitIds(record.record_id),
+    changes: [{ operation: "upsert" as const, record_id: record.record_id, value: record as unknown as MemoryCommitJsonValue }],
+  };
+  return { ...content, content_digest: memoryCommitContentDigest(content) };
+}
+
+function readGoalPurposeMemoryRecord(
+  event: GoalPurposeContentEvent,
+  lookup: (recordId: string) => { readonly exists: boolean; readonly value: unknown } | null,
+): GoalPurposeMemoryRecord | null {
+  const recordId = recordIdForReference(event.purpose_memory_ref);
+  if (!recordId) return null;
+  const stored = lookup(recordId);
+  if (!stored) throw new Error("persisted goal purpose memory is unavailable");
+  if (!stored.exists) throw new Error("persisted goal purpose memory record is missing");
+  const expected: GoalPurposeMemoryRecord = {
+    schema_version: "blue-tanuki.goal-purpose-memory.v1",
+    record_type: "goal_purpose_content",
+    record_id: recordId,
+    goal_ref: event.goal_ref,
+    purpose_version: event.new_version,
+    purpose_digest: event.new_purpose_digest,
+    purpose_text: typeof (stored.value as { purpose_text?: unknown } | null)?.purpose_text === "string"
+      ? (stored.value as { purpose_text: string }).purpose_text : "",
+    event_ref: event.event_ref,
+    event_digest: digestEvent(event),
+    authorization_ref: event.authorization_ref,
+    used_for_authority: false,
+  };
+  const mismatchFields = purposeRecordMismatchFields(stored.value, expected, event);
+  if (mismatchFields.length > 0) {
+    throw new Error(`persisted goal purpose memory binding is invalid: ${mismatchFields.join(",")}`);
+  }
+  const parsed = parsePurposeMemoryRecord(stored.value);
+  if (!parsed) throw new Error("persisted goal purpose memory record is malformed");
+  return parsed;
+}
+
+/** Keep original purpose records inside HDS. The caller must prove coverage by replaying the current audit. */
+export function inspectGoalPurposeMemoryPair(jPath: string, mPath: string): (Pick<GoalPurposeMemoryConsumer, "read"> & {
+  countCompleteReplay(): number | null;
+}) | null {
+  if (!isAbsolute(jPath) || !isAbsolute(mPath)) return null;
+  const jFile = lstatSync(jPath, { bigint: true });
+  const mFile = lstatSync(mPath, { bigint: true });
+  if (!jFile.isFile() || !mFile.isFile() || (jFile.dev === mFile.dev && jFile.ino === mFile.ino)) return null;
+  const j = inspectJControlRecoveryLedger({ private_state_root: dirname(jPath), database_path: jPath });
+  const m = readVerifiedMemoryRecoveryLedger({ private_state_root: dirname(mPath), database_path: mPath });
+  if (j.status !== "verified" || !m) return null;
+
+  const jUpdates = new Map(j.updates.map((entry) => [entry.update_id_digest, entry]));
+  const mUpdates = new Map(m.inspection.updates.map((entry) => [entry.update_id_digest, entry]));
+  const matched = new Set<string>();
+  return {
+    read(event) {
+      const record = readGoalPurposeMemoryRecord(event, (recordId) => {
+        const raw = m.records.get(recordId);
+        return raw === undefined ? { exists: false, value: undefined } : { exists: true, value: JSON.parse(raw) };
+      });
+      if (!record) return null;
+      const ids = purposeMemoryCommitIds(record.record_id);
+      const updateDigest = digestText(ids.update_id);
+      const jEventDigest = digestText(ids.j_event_id);
+      const jUpdate = jUpdates.get(updateDigest);
+      const mUpdate = mUpdates.get(updateDigest);
+      if (!jUpdate || !mUpdate || jUpdate.phase !== "receipt_confirmed" || mUpdate.phase !== "committed" ||
+          jUpdate.j_event_id_digest !== jEventDigest || mUpdate.j_event_id_digest !== jEventDigest ||
+          jUpdate.expected_version === undefined || mUpdate.revision !== jUpdate.expected_version + 1 ||
+          jUpdate.receipt_revision !== mUpdate.revision || jUpdate.receipt_event_digest !== mUpdate.event_digest ||
+          jUpdate.content_digest !== mUpdate.content_digest ||
+          purposeMemoryCommit(record, jUpdate.expected_version).content_digest !== mUpdate.content_digest) return null;
+      matched.add(updateDigest);
+      return record;
+    },
+    countCompleteReplay() {
+      return matched.size === j.updates.length && matched.size === m.inspection.updates.length &&
+        matched.size === m.records.size ? matched.size : null;
+    },
+  };
 }
 
 function recordIdForReference(reference: string | undefined): string | null {

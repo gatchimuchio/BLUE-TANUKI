@@ -1342,7 +1342,9 @@ describe("buildRecoverySnapshot", () => {
 
   it("captures HDS-authored purpose records and reserves the archived J/M pair for offline reconciliation", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-goal-purpose-snapshot-"));
+    const envFile = path.join(root, "product.env");
     const env = {
+      BLUE_TANUKI_ENV_FILE: envFile,
       BLUE_TANUKI_AUDIT_DIR: path.join(root, "audit"),
       BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
       BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
@@ -1350,6 +1352,8 @@ describe("buildRecoverySnapshot", () => {
     let controller: HDSUpperController | undefined;
     let archiveReader: HDSUpperController | undefined;
     try {
+      await writeFile(envFile, Object.entries(env)
+        .map(([key, value]) => `${key}=${JSON.stringify(value.replaceAll("\\", "/"))}`).join("\n") + "\n");
       await mkdir(env.BLUE_TANUKI_AUDIT_DIR);
       const auditPath = path.join(env.BLUE_TANUKI_AUDIT_DIR, "audit.jsonl");
       const sourceMemory = goalPurposeMemoryStorage(env);
@@ -1398,8 +1402,46 @@ describe("buildRecoverySnapshot", () => {
       expect(inspection).toMatchObject({ status: "verified", canonical_state_expected_store_count: 9,
         canonical_state_verified_store_count: 2, canonical_state_cross_store_atomic: false, may_execute: false });
       expect(JSON.stringify(inspection)).not.toContain(purpose);
-      const plan = await planOfflineRecoveryRestore(env, backup.backup_id!, createHash("sha256").update(manifestBytes).digest("hex"));
-      expect(plan).toMatchObject({ status: "planned", may_execute: false, used_for_authority: false, cross_store_atomic: false });
+      const manifestSha = createHash("sha256").update(manifestBytes).digest("hex");
+      const inspectPlan = () => planOfflineRecoveryRestore(env, backup.backup_id!, manifestSha);
+      const plan = await inspectPlan();
+      expect(plan).toMatchObject({ status: "planned", may_execute: false, used_for_authority: false, cross_store_atomic: false,
+        goal_purpose_replay: { status: "matched", verified_purpose_count: 1 } });
+      expect(JSON.stringify(plan)).not.toContain(purpose);
+
+      const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+      lease.close();
+      const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
+      const cli = spawnSync(process.execPath, ["--", main, "--recovery-inspect", "--restore-plan", "--verify-offline",
+        "--backup-id", backup.backup_id!, "--manifest-sha256", manifestSha, "--env-file", envFile, "--json"], {
+        cwd: root, encoding: "utf8", env: { SystemRoot: process.env.SystemRoot }, timeout: 15_000, windowsHide: true,
+      });
+      expect(cli.status, cli.stderr).toBe(0);
+      expect(JSON.parse(cli.stdout)).toMatchObject({ offline_lease_verified: true, plan_sha256: plan.plan_sha256,
+        goal_purpose_replay: { status: "matched", verified_purpose_count: 1 }, may_execute: false });
+      expect(cli.stdout).not.toContain(purpose);
+
+      const configPath = path.join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "goal-governance.json");
+      await writeFile(configPath, "{");
+      expect((await inspectPlan()).goal_purpose_replay).toEqual({ status: "unverified", verified_purpose_count: 0 });
+      expect(await readFile(configPath, "utf8")).toBe("{");
+      await unlink(configPath);
+
+      const currentAuditBytes = await readFile(auditPath);
+      const observedAudit = new AuditLog({ filepath: auditPath, read_only: true });
+      expect(() => observedAudit.append(observedAudit.list()[0]!.log)).toThrow("read-only inspection cannot append");
+      expect(await readFile(auditPath)).toEqual(currentAuditBytes);
+      const currentAudit = new AuditLog({ filepath: auditPath });
+      currentAudit.append(currentAudit.list()[0]!.log);
+      const laterPlan = await inspectPlan();
+      expect(laterPlan.goal_purpose_replay).toEqual(plan.goal_purpose_replay);
+      expect(laterPlan.plan_sha256).not.toBe(plan.plan_sha256);
+      await writeFile(auditPath, "");
+      expect((await inspectPlan()).goal_purpose_replay).toEqual({ status: "unverified", verified_purpose_count: 0 });
+      await unlink(auditPath);
+      expect((await inspectPlan()).goal_purpose_replay).toEqual({ status: "unverified", verified_purpose_count: 0 });
+      await expect(stat(auditPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await writeFile(auditPath, currentAuditBytes);
 
       const stagedMemory = goalPurposeMemoryStorage({ BLUE_TANUKI_STATE_ROOT: path.join(root, "archive-reader") });
       for (const [key, stagedPath] of [
@@ -1428,7 +1470,7 @@ describe("buildRecoverySnapshot", () => {
       controller?.close();
       await rm(root, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 25_000);
 
   it("captures and verifies per-store SQLite snapshots without mutating sources or applying them through generic restore", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-snapshot-"));

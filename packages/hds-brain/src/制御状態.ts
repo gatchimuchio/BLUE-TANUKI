@@ -1009,7 +1009,7 @@ export function inspectJControlRecoveryLedger(options: {
       allowExtension: false,
     });
     database.enableLoadExtension(false);
-    database.exec("PRAGMA query_only = ON");
+    database.exec("PRAGMA query_only = ON; BEGIN");
     if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
       return unavailableLedgerInspection("J", "store_unavailable");
     }

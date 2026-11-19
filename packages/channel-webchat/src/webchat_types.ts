@@ -1855,6 +1855,10 @@ export interface WebChatRecoveryRestorePlan {
   plan_sha256: string | null;
   items: readonly { role: string; disposition: string }[];
   canonical_stores: readonly { store_key: string; archive_status: string; disposition: string }[];
+  goal_purpose_replay?: {
+    status: "matched" | "no_current_purpose" | "not_included" | "unverified";
+    verified_purpose_count: number;
+  };
   offline_lease_verified: false;
   cross_store_atomic: false;
   used_for_authority: false;

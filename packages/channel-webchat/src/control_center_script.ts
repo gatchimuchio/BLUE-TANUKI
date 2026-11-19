@@ -6016,6 +6016,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           rows.push(label(storeLabels, store?.store_key) + "　" + label(archiveLabels, store?.archive_status) +
             "／" + label(dispositionLabels, store?.disposition));
         }
+        const replay = report.goal_purpose_replay;
+        const replayLabels = {
+          matched: "記録と原文が一致",
+          no_current_purpose: "照合対象の委任目的レコードなし",
+          not_included: "バックアップに未収録",
+          unverified: "確認できない"
+        };
+        const verifiedPurposePair = ["goal_purpose_j_control", "goal_purpose_m_state"].every(key => {
+          const stores = report.canonical_stores.filter(store => store?.store_key === key);
+          return stores.length === 1 && stores[0]?.archive_status === "verified";
+        });
+        if (replay && typeof replay === "object" && !Array.isArray(replay) && typeof replay.status === "string" &&
+            Object.hasOwn(replayLabels, replay.status) && Number.isSafeInteger(replay.verified_purpose_count) &&
+            (replay.status === "matched" ? replay.verified_purpose_count > 0 : replay.verified_purpose_count === 0) &&
+            ((replay.status !== "matched" && replay.status !== "no_current_purpose") || verifiedPurposePair)) {
+          const verifiedCount = replay.status === "matched" ? "（" + replay.verified_purpose_count + "件）" : "";
+          rows.push("", "委任目的J/Mと現行監査の読み取り専用照合　" + replayLabels[replay.status] + verifiedCount);
+        }
         setText("recovery-restore-plan-status", "読み取り専用の計画です。Gateway停止状態と一括復元の整合性は未確認です。");
         setText("recovery-restore-plan-details", rows.join("\\n"));
         byId("recovery-restore-plan-details").hidden = false;

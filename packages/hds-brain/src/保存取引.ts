@@ -915,10 +915,29 @@ export function rebuildMemoryDerivedProjection(options: {
  * Inspect the M canonical ledger without opening a writer or repairing any projection.
  * The verified prefix is diagnostic evidence only and cannot authorize work.
  */
-export function inspectMemoryRecoveryLedger(options: {
+interface MemoryRecoveryLedgerPaths {
   readonly private_state_root: string;
   readonly database_path: string;
-}): PersistenceLedgerInspection {
+}
+
+export function inspectMemoryRecoveryLedger(options: MemoryRecoveryLedgerPaths): PersistenceLedgerInspection {
+  return inspectMemoryRecoveryLedgerInternal(options);
+}
+
+/** Package-internal view of canonical M records for HDS's content binding checks. */
+export function readVerifiedMemoryRecoveryLedger(options: MemoryRecoveryLedgerPaths): Readonly<{
+  inspection: PersistenceLedgerInspection;
+  records: ReadonlyMap<string, string>;
+}> | null {
+  let records: ReadonlyMap<string, string> | undefined;
+  const inspection = inspectMemoryRecoveryLedgerInternal(options, (verified) => { records = verified; });
+  return inspection.status === "verified" && records ? { inspection, records } : null;
+}
+
+function inspectMemoryRecoveryLedgerInternal(
+  options: MemoryRecoveryLedgerPaths,
+  readVerifiedRecords?: (records: ReadonlyMap<string, string>) => void,
+): PersistenceLedgerInspection {
   let database: DatabaseSyncType | undefined;
   try {
     let databasePath: string;
@@ -939,7 +958,7 @@ export function inspectMemoryRecoveryLedger(options: {
       allowExtension: false,
     });
     database.enableLoadExtension(false);
-    database.exec("PRAGMA query_only = ON");
+    database.exec("PRAGMA query_only = ON; BEGIN");
     if (stringValue(firstValue(database.prepare("PRAGMA journal_mode").get()))?.toLowerCase() !== "delete") {
       return unavailableLedgerInspection("M", "store_unavailable");
     }
@@ -979,6 +998,7 @@ export function inspectMemoryRecoveryLedger(options: {
       };
     }
     const projectionMatches = verifyMDerivedProjection(database, canonical);
+    if (projectionMatches) readVerifiedRecords?.(canonical.records);
     return {
       owner: "M",
       status: projectionMatches ? "verified" : "projection_mismatch",

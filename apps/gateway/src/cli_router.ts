@@ -174,6 +174,9 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
       if (plan.plan_sha256) writeStdout(`計画SHA-256 ${plan.plan_sha256}`);
       for (const item of plan.items) writeStdout(`${item.role} ${item.disposition}`);
       for (const store of plan.canonical_stores) writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}`);
+      if (plan.goal_purpose_replay) {
+        writeStdout(`委任目的と現行監査の照合 ${plan.goal_purpose_replay.status} ${plan.goal_purpose_replay.verified_purpose_count}件`);
+      }
       writeStdout(offlineVerified
         ? "計画の観測中にGatewayの起動を排他しました。排他は解除済みです。復元・承認は実行していません。"
         : "読み取り専用です。Gatewayの停止状態は別に確認してください。");
