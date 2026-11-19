@@ -1254,6 +1254,14 @@ describe("buildRecoverySnapshot", () => {
       expect(changed.plan_sha256).not.toBe(plan.plan_sha256);
       expect(await readFile(memoryFile, "utf8")).toBe("new-current-value");
 
+      const archivedFailure = path.join(path.dirname(manifestFile), "items", "failure_memory_dir.dir", "records.jsonl");
+      const archivedBytes = await readFile(archivedFailure);
+      const modifiedBytes = Buffer.from(archivedBytes);
+      modifiedBytes[0] = modifiedBytes[0]! ^ 1;
+      await writeFile(archivedFailure, modifiedBytes);
+      expect(JSON.parse(run(pin).stdout)).toMatchObject({ status: "invalid", plan_sha256: null });
+      await writeFile(archivedFailure, archivedBytes);
+
       const replacement = Buffer.concat([original, Buffer.from("\n")]);
       await writeFile(manifestFile, replacement);
       await writeFile(`${manifestFile}.sha256`, createHash("sha256").update(replacement).digest("hex") + "  manifest.json\n");

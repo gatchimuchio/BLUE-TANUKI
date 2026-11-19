@@ -130,23 +130,23 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const { inspectRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
-  const runtimeRecoveryFence = inspectRuntimeRecoveryFence(env);
   if (backupId !== undefined && manifestSha256 !== undefined) {
     const { planOfflineRecoveryRestore } = await import("./recovery_surface.js");
     const plan = await planOfflineRecoveryRestore(env, backupId, manifestSha256);
     if (json) {
-      writeStdout(JSON.stringify({ ...plan, runtime_recovery_fence_status: runtimeRecoveryFence.status }, null, 2));
+      writeStdout(JSON.stringify(plan, null, 2));
     } else {
       writeStdout(`復元計画 ${plan.status}`);
       if (plan.plan_sha256) writeStdout(`計画SHA-256 ${plan.plan_sha256}`);
       for (const item of plan.items) writeStdout(`${item.role} ${item.disposition}`);
       for (const store of plan.canonical_stores) writeStdout(`${store.store_key} ${store.archive_status} ${store.disposition}`);
-      writeStdout(`復旧処理の照合状態 ${runtimeRecoveryFence.status}。読み取り専用です。`);
+      writeStdout("読み取り専用です。Gatewayの停止状態は別に確認してください。");
     }
-    process.exitCode = runtimeRecoveryFence.status === "clear" && plan.status === "planned" ? 0 : 2;
+    process.exitCode = plan.status === "planned" ? 0 : 2;
     return;
   }
+  const { inspectRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
+  const runtimeRecoveryFence = inspectRuntimeRecoveryFence(env);
   if (!json) {
     writeStdout(`復旧処理の照合状態 ${runtimeRecoveryFence.status}`);
     if (runtimeRecoveryFence.status === "pending") {

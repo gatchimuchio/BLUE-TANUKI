@@ -913,35 +913,41 @@ async function sha256File(filePath: string): Promise<{ sha256: string; bytes: nu
 async function sha256Path(
   itemPath: string,
   kind: RecoveryPathKind,
-  format: "backup" | "state" = "backup",
-): Promise<{ sha256: string; bytes: number }> {
+  format: "backup" | "state" | "plan" = "backup",
+): Promise<{ sha256: string; bytes: number; structured_sha256?: string }> {
   if (kind === "file") return sha256File(itemPath);
   if (kind !== "directory") return { sha256: "", bytes: 0 };
 
   const hash = createHash("sha256");
+  // Bind the plan to the same directory traversal that checked the legacy manifest digest.
+  const structured = format === "plan" ? createHash("sha256") : undefined;
+  const archiveFormat = format !== "state";
   let bytes = 0;
   const walk = async (dir: string): Promise<void> => {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    const sorted = entries.sort((a, b) => format === "backup" ? a.name.localeCompare(b.name)
+    const sorted = entries.sort((a, b) => archiveFormat ? a.name.localeCompare(b.name)
       : a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     for (const entry of sorted) {
       const fullPath = path.join(dir, entry.name);
       const rel = path.relative(itemPath, fullPath);
       if (entry.isDirectory()) {
-        hash.update(format === "backup" ? `dir:${rel}\n` : JSON.stringify(["directory", rel]) + "\n");
+        const record = JSON.stringify(["directory", rel]) + "\n";
+        hash.update(archiveFormat ? `dir:${rel}\n` : record);
+        structured?.update(record);
         await walk(fullPath);
       } else if (entry.isFile()) {
         const file = await sha256File(fullPath);
-        hash.update(format === "backup" ? `file:${rel}:${file.sha256}:${file.bytes}\n`
-          : JSON.stringify(["file", rel, file.sha256, file.bytes]) + "\n");
+        const record = JSON.stringify(["file", rel, file.sha256, file.bytes]) + "\n";
+        hash.update(archiveFormat ? `file:${rel}:${file.sha256}:${file.bytes}\n` : record);
+        structured?.update(record);
         bytes += file.bytes;
-      } else if (format === "state") {
+      } else if (format !== "backup") {
         throw new Error("factory_reset_target_unverified");
       }
     }
   };
   await walk(itemPath);
-  return { sha256: hash.digest("hex"), bytes };
+  return { sha256: hash.digest("hex"), bytes, ...(structured ? { structured_sha256: structured.digest("hex") } : {}) };
 }
 
 async function copyPath(source: string, dest: string, kind: RecoveryPathKind): Promise<void> {
@@ -1166,7 +1172,9 @@ async function assertArchiveTreeHasNoSymlinks(archivePath: string, kind: "file" 
 }
 
 async function preflightRestoreManifest(
-  env: NodeJS.ProcessEnv, manifest: RecoveryBackupManifest, requireFixedArchivePaths = false,
+  env: NodeJS.ProcessEnv,
+  manifest: RecoveryBackupManifest,
+  planArchiveProofs?: Map<string, NonNullable<RecoveryPathProof>>,
 ): Promise<void> {
   const rawItems: unknown = manifest.items;
   const expectedSpecs = sourceSpecs(env);
@@ -1239,15 +1247,16 @@ async function preflightRestoreManifest(
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error("invalid_backup_manifest_archive_path");
     }
-    if (requireFixedArchivePaths && (archive !== archivePath(packDir, spec, item.kind) ||
+    if (planArchiveProofs && (archive !== archivePath(packDir, spec, item.kind) ||
         await recoveryPathKind(archive) !== item.kind)) {
       throw new Error("invalid_backup_manifest_archive_path");
     }
     await assertArchiveTreeHasNoSymlinks(archive, item.kind);
-    const digest = await sha256Path(archive, item.kind);
+    const digest = await sha256Path(archive, item.kind, planArchiveProofs ? "plan" : "backup");
     if (digest.sha256 !== item.sha256 || digest.bytes !== item.bytes) {
       throw new Error(`invalid_backup_manifest_archive_digest:${item.key}`);
     }
+    planArchiveProofs?.set(pair, { kind: item.kind, bytes: digest.bytes, sha256: digest.structured_sha256 ?? digest.sha256 });
   }
 
   if (seen.size !== expectedByPair.size) throw new Error("invalid_backup_manifest_items");
@@ -1598,7 +1607,8 @@ export async function planOfflineRecoveryRestore(
     const manifest = await readManifest(env, backupId);
     if (manifest.manifest_sha256 !== manifestSha256) return { ...base, status: "manifest_changed" };
     assertRecoveryManifestBoundary(manifest);
-    await preflightRestoreManifest(env, manifest, true);
+    const archiveProofs = new Map<string, NonNullable<RecoveryPathProof>>();
+    await preflightRestoreManifest(env, manifest, archiveProofs);
     const packDir = path.dirname(manifest.manifest_path);
     if (manifest.canonical_state_snapshot) {
       await inspectCanonicalStateSnapshots(packDir, manifest.canonical_state_snapshot);
@@ -1622,14 +1632,7 @@ export async function planOfflineRecoveryRestore(
     for (const spec of specs) {
       const identity = `${spec.key}:${spec.env_key}`;
       const target = currentTargets.get(identity);
-      const item = manifest.items.find(entry => entry.key === spec.key && entry.env_key === spec.env_key)!;
-      let archiveProof: RecoveryPathProof = null;
-      if (item.copied && (item.kind === "file" || item.kind === "directory")) {
-        const archive = archivePath(packDir, spec, item.kind);
-        archiveProof = await readRecoveryPathProof(archive);
-        if (!archiveProof || archiveProof.kind !== item.kind || archiveProof.bytes !== item.bytes ||
-            (archiveProof.kind === "file" && archiveProof.sha256 !== item.sha256)) return base;
-      }
+      const archiveProof = archiveProofs.get(identity) ?? null;
       let disposition: RecoveryPlanTargetDisposition;
       let observedTarget: RecoveryPathProof = null;
       if (!target) disposition = "not_configured";
