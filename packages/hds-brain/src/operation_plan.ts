@@ -86,6 +86,11 @@ import type { RuntimeKernelJPlanStepAdoptionProjection } from "./runtime_kernel_
 
 type PlanState = OperationPlanCheckpoint["plans"][number];
 type Binding = PlanState["bindings"][number];
+export type OwnerTaskWaitCancellationScope =
+  | { readonly status: "waiting"; readonly wait_id: string; readonly deadline_at_ms: number }
+  | { readonly status: "cancelled"; readonly cancelled_at_ms: number }
+  | { readonly status: "ambiguous" }
+  | null;
 export interface OperationPlanExecutionGoalIdentity {
   readonly operation_plan_binding_digest: string;
   readonly target_id: string;
@@ -3205,8 +3210,8 @@ export class OperationPlanLedger {
       task_identity_digest: taskIdentityDigest, revision_digest: current.digest, owner_digest: operationPlanDigest(plan.owner),
       channel_digest: operationPlanDigest(plan.channel), session_id_digest: sessionIdDigest,
       deadline_at_ms: control.deadline_at_ms });
-    if ((this.state.waits ?? []).some((wait) => wait.state === "waiting" &&
-        (wait.wait_id === waitId || wait.task_identity_digest === taskIdentityDigest))) {
+    if ((this.state.waits ?? []).some((wait) => wait.wait_id === waitId ||
+        (wait.state === "waiting" && wait.task_identity_digest === taskIdentityDigest))) {
       throw new Error("plan_wait_already_active");
     }
     return { wait_id: waitId, plan_id_digest: planIdDigest, task_identity_digest: taskIdentityDigest,
@@ -3238,17 +3243,20 @@ export class OperationPlanLedger {
   }
 
   /** One unambiguous inbound event can wake a wait in its owner/channel session. */
-  matchWaitForInbound(caller: InboundRequest, nowMs = this.nowMs()): OperationPlanWaitState | null {
+  matchWaitForInbound(caller: InboundRequest, nowMs = this.nowMs(), waitId?: string): OperationPlanWaitState | null {
     const sessionScope = caller.session_id ?? `${caller.channel}:${caller.user}`;
     const ownerDigest = operationPlanDigest(caller.user);
     const channelDigest = operationPlanDigest(caller.channel);
     const sessionIdDigest = operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: sessionScope });
-    const matches = (this.state.waits ?? []).filter((wait) => wait.state === "waiting" &&
-      nowMs < wait.deadline_at_ms &&
+    const scopedWaits = (this.state.waits ?? []).filter((wait) => wait.owner_digest === ownerDigest &&
+      wait.channel_digest === channelDigest && wait.session_id_digest === sessionIdDigest);
+    const matches = scopedWaits.filter((wait) => wait.state === "waiting" && nowMs < wait.deadline_at_ms &&
       !this.taskGoalIsAchieved(wait.task_identity_digest) &&
-      wait.owner_digest === ownerDigest && wait.channel_digest === channelDigest && wait.session_id_digest === sessionIdDigest &&
       wait.revision_digest === this.currentRevisionDigest(wait.plan_id_digest));
-    return matches.length === 1 ? structuredClone(matches[0]!) : null;
+    const [active] = matches;
+    if (matches.length !== 1 || !active) return null;
+    if (waitId !== undefined ? active.wait_id !== waitId : scopedWaits.some(wait => wait.state === "cancelled")) return null;
+    return structuredClone(active);
   }
 
   activeWait(waitId: string): OperationPlanWaitState | null {
@@ -3451,6 +3459,66 @@ export class OperationPlanLedger {
 
   listWaits(): readonly OperationPlanWaitState[] {
     return structuredClone(this.state.waits ?? []);
+  }
+
+  /** Resolve an authenticated Work receipt against J's durable task and wait lineage. */
+  ownerTaskWaitCancellationScope(requestId: string): OwnerTaskWaitCancellationScope {
+    const wait = this.ownerTaskReceiptWait(requestId);
+    if (wait === "ambiguous") return { status: "ambiguous" };
+    if (wait?.state === "waiting") {
+      return { status: "waiting", wait_id: wait.wait_id, deadline_at_ms: wait.deadline_at_ms };
+    }
+    return wait?.cancelled_at_ms !== undefined ? { status: "cancelled", cancelled_at_ms: wait.cancelled_at_ms } : null;
+  }
+
+  /** Recheck after the receipt lookup and fence both reply and deadline before either may wake C. */
+  cancelOwnerTaskWait(requestId: string, waitId: string): OperationPlanWaitState | null {
+    const current = this.ownerTaskReceiptWait(requestId);
+    if (!current || current === "ambiguous" || current.state !== "waiting" || current.wait_id !== waitId) return null;
+    const cancelled = OperationPlanWaitStateSchema.parse({ ...current, state: "cancelled",
+      cancelled_at_ms: Math.max(current.created_at_ms, this.nowMs()) });
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex(wait => wait.wait_id === waitId && wait.state === "waiting");
+      if (index < 0) throw new Error("plan_wait_state_changed");
+      waits[index] = cancelled;
+      state.waits = waits;
+    });
+    return cancelled;
+  }
+
+  private ownerTaskReceiptWait(requestId: string): OperationPlanWaitState | "ambiguous" | null {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(requestId) ||
+        this.recoveryRefreshPending || this.memoryQuiesced || !this.port ||
+        operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
+    const roots = this.state.plans.filter(plan => plan.revisions[0]!.plan.request_id === `operation-request:${requestId}` &&
+      plan.owner === "webchat-owner-token-holder" && plan.channel === "webchat");
+    if (roots.length > 1) return "ambiguous";
+    const root = roots[0];
+    if (!root?.goal_purpose_binding) return null;
+    const taskDigest = operationPlanTaskIdentityDigest(root);
+    const ownerDigest = operationPlanDigest(root.owner);
+    const channelDigest = operationPlanDigest(root.channel);
+    const purposeDigest = operationPlanDigest(root.goal_purpose_binding);
+    const waits = (this.state.waits ?? []).filter(wait => wait.task_identity_digest === taskDigest &&
+      wait.owner_digest === ownerDigest && wait.channel_digest === channelDigest);
+    const active = waits.filter(wait => wait.state === "waiting");
+    if (active.length > 1) return "ambiguous";
+    const latestCancelled = waits.filter(wait => wait.state === "cancelled" && wait.cancelled_at_ms !== undefined)
+      .sort((left, right) => right.cancelled_at_ms! - left.cancelled_at_ms!);
+    const wait = active[0] ?? latestCancelled[0];
+    if (!wait) return null;
+    if (!active.length && latestCancelled[1]?.cancelled_at_ms === wait.cancelled_at_ms) return "ambiguous";
+    const parentPlans = this.state.plans.filter(plan => operationPlanDigest(plan.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
+    if (parentPlans.length > 1) return "ambiguous";
+    const parent = parentPlans[0];
+    if (!parent?.goal_purpose_binding || parent.owner !== root.owner || parent.channel !== root.channel ||
+        operationPlanTaskIdentityDigest(parent) !== taskDigest || operationPlanDigest(parent.goal_purpose_binding) !== purposeDigest ||
+        this.recoveryHolds.has(wait.plan_id_digest) || this.recoveryHolds.has(operationPlanDigest(root.revisions[0]!.plan.plan_id))) return null;
+    const current = wait.state === "waiting";
+    if (current && (parent.revisions.at(-1)?.digest !== wait.revision_digest ||
+        !this.goalPurposeBindingIsCurrent(root.goal_purpose_binding) || this.taskGoalIsAchieved(taskDigest))) return null;
+    return parent.revisions.some(revision => revision.digest === wait.revision_digest) ? wait : null;
   }
 
   resumedWaitTaskIdentityDigest(waitId: string, eventId: string): string | null {
@@ -7598,9 +7666,10 @@ export class OperationPlanLedger {
         state: wait.state, deadline_at_ms: wait.deadline_at_ms,
         ...(this.recoveryHolds.has(wait.plan_id_digest)
           ? { recovery_hold_reason: this.recoveryHolds.get(wait.plan_id_digest)!.reason } : {}),
+        ...(wait.cancelled_at_ms !== undefined ? { cancelled_at_ms: wait.cancelled_at_ms } : {}),
         ...(wait.resumed_at_ms !== undefined ? { resumed_at_ms: wait.resumed_at_ms } : {}),
         ...(wait.wake_reason ? { wake_reason: wait.wake_reason } : {}),
-        compute_outcome: wait.compute_outcome ?? (wait.state === "waiting" ? "not_started" as const : "not_recorded" as const),
+        compute_outcome: wait.compute_outcome ?? (wait.state === "resumed" ? "not_recorded" as const : "not_started" as const),
         ...(wait.compute_result_digest ? { compute_result_digest: wait.compute_result_digest } : {}),
         ...(wait.candidate_plan_id_digest ? { candidate_plan_id: wait.candidate_plan_id_digest } : {}),
         ...(wait.compute_completed_at_ms !== undefined ? { compute_completed_at_ms: wait.compute_completed_at_ms } : {}),

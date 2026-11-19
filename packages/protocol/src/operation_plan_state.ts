@@ -738,7 +738,8 @@ export const OperationPlanWaitStateSchema = z.object({
   session_id_digest: Digest,
   deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   created_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  state: z.enum(["waiting", "resumed"]),
+  state: z.enum(["waiting", "resumed", "cancelled"]),
+  cancelled_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   resumed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   wake_reason: z.enum(["reply", "deadline", "recovery"]).optional(),
   wake_event_id_digest: Digest.optional(),
@@ -760,8 +761,10 @@ export const OperationPlanWaitStateSchema = z.object({
   if (wait.deadline_at_ms <= wait.created_at_ms) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_deadline_must_follow_creation" });
   }
-  if ((wait.state === "waiting" && (wait.resumed_at_ms !== undefined || wait.wake_reason !== undefined ||
-      wait.wake_event_id_digest !== undefined || computeOutcomeFieldsPresent)) || (wait.state === "resumed" && !resumedFieldsPresent)) {
+  if ((wait.state !== "resumed" && (wait.resumed_at_ms !== undefined || wait.wake_reason !== undefined ||
+      wait.wake_event_id_digest !== undefined || computeOutcomeFieldsPresent)) || (wait.state === "resumed" && !resumedFieldsPresent) ||
+      ((wait.state === "cancelled") !== (wait.cancelled_at_ms !== undefined)) ||
+      (wait.cancelled_at_ms !== undefined && wait.cancelled_at_ms < wait.created_at_ms)) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_state_fields_mismatch" });
   }
   if ((wait.compute_outcome !== undefined) !== (wait.resume_command_id_digest !== undefined) ||

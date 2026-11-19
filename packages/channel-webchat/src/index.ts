@@ -38,6 +38,8 @@ export {
   type WebChatD4RuntimeIntentCancellation,
   type WebChatOwnerTaskCancellationStatus,
   type WebChatOwnerTaskCancellation,
+  type WebChatOwnerTaskWaitPending,
+  type WebChatOwnerTaskWaitCancellation,
   type WebChatMeaningUpdateContentReview,
   type WebChatMemoryJudgmentReassessmentContentReview,
   type WebChatMemoryPersonalizationStopContentReview,

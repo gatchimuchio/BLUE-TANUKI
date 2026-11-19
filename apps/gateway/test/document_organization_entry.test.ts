@@ -1512,6 +1512,10 @@ describe("delegated goal purpose owner review", () => {
 
     const taskText = "Prepare one bounded read-only search plan after restart.";
     const submissionId = "01a119c0-5b35-4491-ae00-000000000803";
+    const cancelledTaskText = "Prepare the initial candidate for this cancellation fixture.";
+    const cancelledSubmissionId = "01a119c0-5b35-4491-ae00-000000000815";
+    const cancelledTaskRequests: string[] = [];
+    let cancelledConnectionClosed = false;
     let providerCalls = 0;
     let providerFailure: unknown;
     let blockNextProviderCall = false;
@@ -1550,6 +1554,15 @@ describe("delegated goal purpose owner review", () => {
           response.end(JSON.stringify({ id: "c0802-memory-citation-fixture", object: "chat.completion", created: 1,
             model: "c0802-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+          return;
+        }
+        if (isPlanPrompt && prompt.includes(cancelledTaskText)) {
+          const requestId = /固定request_id=([^\s。]+)/.exec(prompt)?.[1];
+          if (!requestId) throw new Error("J did not bind the initial candidate request id");
+          cancelledTaskRequests.push(requestId);
+          response.once("close", () => { cancelledConnectionClosed = !response.writableFinished; });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"choices":[');
           return;
         }
         if (!prompt.includes(taskText)) throw new Error("owner task intent was not passed to the local C fixture");
@@ -1597,6 +1610,34 @@ describe("delegated goal purpose owner review", () => {
     const gatewayPort = await reserveLoopbackPort();
     const runtimeEnv = isolatedRuntimeEnvironment(providerPort, gatewayPort, auditDir, historyFile, sessionDir);
     runtimeEnv.BLUE_TANUKI_STATE_ROOT = stateRoot;
+    const ownerPost = (path: string, body: Record<string, unknown>, bearer = ownerToken) =>
+      fetch(`http://127.0.0.1:${gatewayPort}${path}`, {
+        method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const submissionReceipt = (action: "status" | "cancel", id = submissionId, bearer = ownerToken) =>
+      ownerPost(`/owner/task-submission-${action}`, { submission_id: id }, bearer);
+    const submitOwnerTask = (task: string, id: string) => ownerPost("/owner/task-compute", {
+      user: "c0802-owner", task, goal_ref: goalRef, submission_id: id,
+      actor: "system", metadata: { "blue_tanuki.actor_kind": "system" },
+    });
+    const connectTaskWebSocket = async () => {
+      const response = await ownerPost("/ws-ticket", { user: "c0802-owner" }, token);
+      expect(response.status).toBe(200);
+      const { ticket } = await response.json() as { ticket: string };
+      const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      await once(socket, "open");
+      return socket;
+    };
+    const readPlanSnapshot = async () => {
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      return await response.json() as { operation_plan_status?: {
+        plans?: Array<Record<string, unknown>>; waits?: Array<Record<string, unknown>>;
+      } };
+    };
 
     let gateway: CapturedProcess | undefined;
     let taskWebSocket: WebSocket | undefined;
@@ -1635,23 +1676,10 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_change_committed", goal_ref: goalRef, version: 2,
       } });
 
-      const ticketResponse = await fetch(`http://127.0.0.1:${gatewayPort}/ws-ticket`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner" }),
-      });
-      expect(ticketResponse.status).toBe(200);
-      const { ticket } = await ticketResponse.json() as { ticket: string };
-      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
-      await once(taskWebSocket, "open");
+      taskWebSocket = await connectTaskWebSocket();
 
       const taskReply = waitForWebChatSend(taskWebSocket, "owner task restart fixture");
-      const submissionResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef, submission_id: submissionId,
-          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
-      });
+      const submissionResponse = await submitOwnerTask(taskText, submissionId);
       expect(submissionResponse.status).toBe(202);
       const accepted = await submissionResponse.json() as { accepted?: boolean; request_id?: string; status?: string };
       expect(accepted).toMatchObject({ accepted: true, status: "queued_for_hds_decision" });
@@ -1660,15 +1688,9 @@ describe("delegated goal purpose owner review", () => {
       expect(providerCalls).toBeGreaterThan(0);
       expect(providerFailure).toBeUndefined();
 
-      const statusUrl = `http://127.0.0.1:${gatewayPort}/owner/task-submission-status`;
-      const readStatus = () => fetch(statusUrl, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ submission_id: submissionId }),
-      });
       let statusBeforeRestart: { found?: boolean; request_id?: string; state?: string } | undefined;
       for (let attempt = 0; attempt < 50; attempt += 1) {
-        const response = await readStatus();
+        const response = await submissionReceipt("status");
         expect(response.status).toBe(200);
         statusBeforeRestart = await response.json() as { found?: boolean; request_id?: string; state?: string };
         if (statusBeforeRestart.state === "handler_returned") break;
@@ -1683,63 +1705,111 @@ describe("delegated goal purpose owner review", () => {
       expect(statusBeforeRestart).toMatchObject({ found: true, request_id: accepted.request_id, state: "handler_returned",
         execution_observation: computationObservation });
 
+      const unplanned = await submitOwnerTask(cancelledTaskText, cancelledSubmissionId);
+      expect(unplanned.status).toBe(202);
+      const unplannedAccepted = await unplanned.json() as { request_id: string };
+      await waitFor(() => cancelledTaskRequests.length ? true : null, gateway,
+        "the initial C planner did not start for the cancellable Work");
+      expect(cancelledTaskRequests).toEqual([`operation-request:${unplannedAccepted.request_id}`]);
+      const initialCancel = await submissionReceipt("cancel", cancelledSubmissionId);
+      expect(initialCancel.status).toBe(202);
+      expect(await initialCancel.json()).toMatchObject({ found: true, accepted: true, cancellation: {
+        status: "cancel_requested", execution_signal_aborted: true, external_processing_stop: "unknown",
+        used_for_authority: false, may_execute: false,
+      } });
+      await waitFor(() => cancelledConnectionClosed ? true : null, gateway,
+        "the initial C connection did not close after cancelling its original Work receipt");
+      const initialCancelObservation = await waitFor(async () => {
+        const body = await (await submissionReceipt("status", cancelledSubmissionId)).json() as {
+          request_id?: string; cancellation?: { status?: string };
+        };
+        return body.cancellation?.status === "execution_observed" ? body : null;
+      }, gateway, "the initial C cancellation did not settle");
+      expect(initialCancelObservation).toMatchObject({ request_id: unplannedAccepted.request_id, cancellation: {
+        executor_settled: true, external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+      } });
+
+      const requestIdDigest = createHash("sha256").update(`operation-request:${accepted.request_id}`).digest("hex");
+      const originalPlan = (await readPlanSnapshot()).operation_plan_status?.plans?.find((plan) =>
+        plan.request_id_digest === requestIdDigest);
+      const deadlineAt = Date.now() + 8_000;
+      const waitControl = { plan_id: originalPlan?.plan_id, revision_digest: originalPlan?.revision_digest,
+        deadline_at_ms: deadlineAt };
+      const registerWait = await ownerPost("/operators/developer/invoke", {
+        user: "c0802-owner", content: `plan:wait ${JSON.stringify(waitControl)}`,
+      });
+      expect(registerWait.status).toBe(202);
+      const readOriginalWait = async () => (await readPlanSnapshot()).operation_plan_status?.waits?.find((wait) =>
+        wait.plan_id === originalPlan?.plan_id && wait.revision_digest === originalPlan?.revision_digest);
+      const registeredWait = await waitFor(async () => await readOriginalWait() ?? null, gateway,
+        "the original Work wait was not persisted");
+      expect(registeredWait).toMatchObject({ state: "waiting", deadline_at_ms: deadlineAt });
+      expect(await (await submissionReceipt("status")).json()).toMatchObject({ request_id: accepted.request_id,
+        cancellation: { status: "wait_pending", deadline_at_ms: deadlineAt, used_for_authority: false,
+          may_execute: false } });
+      expect((await submissionReceipt("cancel", submissionId, token)).status).toBe(401);
+      expect((await submissionReceipt("cancel", cancelledSubmissionId)).status).toBe(409);
+      expect(await readOriginalWait()).toMatchObject({ state: "waiting" });
+      const cancelledWaitResponse = await submissionReceipt("cancel");
+      expect(cancelledWaitResponse.status).toBe(202);
+      expect(cancelledWaitResponse.headers.get("cache-control")).toBe("no-store");
+      const cancelledWait = await cancelledWaitResponse.json() as { cancellation: { cancel_requested_at_ms: number } };
+      expect(cancelledWait).toMatchObject({ found: true, accepted: true, cancellation: { status: "wait_cancelled",
+        cancel_requested_at_ms: expect.any(Number), used_for_authority: false, may_execute: false } });
+      expect(cancelledWait.cancellation.cancel_requested_at_ms).toBeLessThan(deadlineAt);
+      expect(await readOriginalWait()).toMatchObject({ state: "cancelled", cancelled_at_ms: cancelledWait.cancellation.cancel_requested_at_ms });
+
       const providerCallsBeforeRestart = providerCalls;
       taskWebSocket.close();
       taskWebSocket = undefined;
       await stopChild(gateway.child);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadlineAt + 250 - Date.now())));
+      expect(Date.now()).toBeGreaterThan(deadlineAt);
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
 
-      const statusAfterRestartResponse = await readStatus();
+      const statusAfterRestartResponse = await submissionReceipt("status");
       expect(statusAfterRestartResponse.status).toBe(200);
       expect(statusAfterRestartResponse.headers.get("cache-control")).toBe("no-store");
       const statusAfterRestart = await statusAfterRestartResponse.json();
       expect(statusAfterRestart).toMatchObject({ found: true, request_id: accepted.request_id,
-        state: "handler_returned", execution_observation: computationObservation,
+        state: "handler_returned", execution_observation: computationObservation, cancellation: cancelledWait.cancellation,
         task_outcome: { status: "held", used_for_authority: false, may_execute: false },
         result: { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false } });
       expect(statusAfterRestart.result).not.toHaveProperty("content");
-      const ordinaryStatusResponse = await fetch(statusUrl, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ submission_id: submissionId }),
-      });
+      const ordinaryStatusResponse = await submissionReceipt("status", submissionId, token);
       expect(ordinaryStatusResponse.status).toBe(401);
       expect(await ordinaryStatusResponse.json()).not.toHaveProperty("execution_observation");
 
-      const duplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: taskText, goal_ref: goalRef, submission_id: submissionId,
-          actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
-      });
+      const duplicateResponse = await submitOwnerTask(taskText, submissionId);
       expect(duplicateResponse.status).toBe(202);
       expect(await duplicateResponse.json()).toMatchObject({ accepted: true, status: "already_accepted",
         request_id: accepted.request_id });
+      expect(await (await submissionReceipt("status", cancelledSubmissionId)).json()).toMatchObject({
+        request_id: unplannedAccepted.request_id, cancellation: initialCancelObservation.cancellation });
+      expect(await readOriginalWait()).toMatchObject({ state: "cancelled", cancelled_at_ms: cancelledWait.cancellation.cancel_requested_at_ms });
+      taskWebSocket = await connectTaskWebSocket();
+      const staleReply = waitForWebChatSend(taskWebSocket, "reply to a cancelled Work wait");
+      const lateWaitText = `plan:compute ${JSON.stringify({ task: taskText,
+        goal_purpose_binding: originalPlan?.goal_purpose_binding })}`;
+      expect((await ownerPost("/owner/inbound", { user: "c0802-owner", plan_id: originalPlan?.plan_id,
+        revision_digest: originalPlan?.revision_digest, wait_id: registeredWait.wait_id, content: lateWaitText })).status).toBe(202);
+      expect(await staleReply).toContain("plan_control_denied:plan_wait_resume_stale");
+      expect(await readOriginalWait()).toMatchObject({ state: "cancelled" });
+      expect(cancelledTaskRequests).toEqual([`operation-request:${unplannedAccepted.request_id}`]);
       expect(providerCalls).toBe(providerCallsBeforeRestart);
 
-      const snapshotResponse = await fetch(`http://127.0.0.1:${gatewayPort}/runtime/snapshot`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(snapshotResponse.status).toBe(200);
-      const snapshot = await snapshotResponse.json() as {
-        operation_plan_status?: { status?: string; recovery_refresh_status?: string; used_for_authority?: boolean;
-          plans?: Array<Record<string, unknown>> };
-      };
+      const snapshot = await readPlanSnapshot();
       expect(snapshot.operation_plan_status).toMatchObject({ status: "available", recovery_refresh_status: "ready",
         used_for_authority: false });
-      const requestIdDigest = createHash("sha256").update(`operation-request:${accepted.request_id}`).digest("hex");
       expect(snapshot.operation_plan_status?.plans?.filter((plan) => plan.request_id_digest === requestIdDigest)).toHaveLength(1);
+      const cancelledRequestDigest = createHash("sha256").update(`operation-request:${unplannedAccepted.request_id}`).digest("hex");
+      expect(snapshot.operation_plan_status?.plans?.some((plan) => plan.request_id_digest === cancelledRequestDigest)).toBe(false);
 
       const interruptedTaskText = "Prepare one bounded read-only search plan during a Gateway crash fixture.";
       const interruptedSubmissionId = "01a119c0-5b35-4491-ae00-000000000804";
       blockNextProviderCall = true;
-      const interruptedSubmissionResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: interruptedTaskText, goal_ref: goalRef,
-          submission_id: interruptedSubmissionId, actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
-      });
+      const interruptedSubmissionResponse = await submitOwnerTask(interruptedTaskText, interruptedSubmissionId);
       expect(interruptedSubmissionResponse.status).toBe(202);
       const interruptedAccepted = await interruptedSubmissionResponse.json() as {
         accepted?: boolean; request_id?: string; status?: string;
@@ -1748,36 +1818,27 @@ describe("delegated goal purpose owner review", () => {
       expect(interruptedAccepted.request_id).toBeTruthy();
       await waitForSignal(blockedProviderCall, gateway, "synthetic provider call did not remain in flight");
 
-      const interruptedStatusUrl = `http://127.0.0.1:${gatewayPort}/owner/task-submission-status`;
-      const readInterruptedStatus = () => fetch(interruptedStatusUrl, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ submission_id: interruptedSubmissionId }),
-      });
-      const dispatchingStatus = await readInterruptedStatus();
+      const dispatchingStatus = await submissionReceipt("status", interruptedSubmissionId);
       expect(dispatchingStatus.status).toBe(200);
       expect(dispatchingStatus.headers.get("cache-control")).toBe("no-store");
       expect(await dispatchingStatus.json()).toMatchObject({ found: true, request_id: interruptedAccepted.request_id,
         state: "dispatching", execution_observation: { status: "active", used_for_authority: false, may_execute: false } });
 
       const providerCallsAtCrash = providerCalls;
+      taskWebSocket.close();
+      taskWebSocket = undefined;
       await forceStopChild(gateway.child);
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
 
-      const uncertainStatus = await readInterruptedStatus();
+      const uncertainStatus = await submissionReceipt("status", interruptedSubmissionId);
       expect(uncertainStatus.status).toBe(200);
       expect(uncertainStatus.headers.get("cache-control")).toBe("no-store");
       expect(await uncertainStatus.json()).toMatchObject({ found: true, request_id: interruptedAccepted.request_id,
         state: "outcome_unknown", execution_observation: { status: "outcome_unknown", used_for_authority: false,
           may_execute: false } });
 
-      const interruptedDuplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner", task: interruptedTaskText, goal_ref: goalRef,
-          submission_id: interruptedSubmissionId, actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
-      });
+      const interruptedDuplicateResponse = await submitOwnerTask(interruptedTaskText, interruptedSubmissionId);
       expect(interruptedDuplicateResponse.status).toBe(409);
       expect(await interruptedDuplicateResponse.json()).toMatchObject({ accepted: false,
         status: "owner_task_submission_outcome_unknown", request_id: interruptedAccepted.request_id });
@@ -1786,6 +1847,7 @@ describe("delegated goal purpose owner review", () => {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
       releaseBlockedProviderCall?.();
+      provider.closeAllConnections();
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
     }

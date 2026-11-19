@@ -1622,12 +1622,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           value.cancel_requested_at_ms > 0 && value.used_for_authority === false && value.may_execute === false;
       }
 
+      function ownerTaskWaitSummary(value) {
+        if (!isObject(value) || (value.status !== "wait_pending" && value.status !== "wait_cancelled")) return null;
+        const timeKey = value.status === "wait_pending" ? "deadline_at_ms" : "cancel_requested_at_ms";
+        const keys = ["status", timeKey, "used_for_authority", "may_execute"];
+        if (Object.keys(value).length !== keys.length || Object.keys(value).some(function (key) { return keys.indexOf(key) < 0; }) ||
+            value.used_for_authority !== false || value.may_execute !== false ||
+            !Number.isSafeInteger(value[timeKey]) || value[timeKey] < 0) return null;
+        if (value.status === "wait_cancelled") return "返信／期限待機を取り消しました。この待機は再開しません。";
+        const deadline = new Date(value.deadline_at_ms);
+        return "返信／期限待機中です。" + (Number.isNaN(deadline.getTime()) ? "期限時刻を表示できません。" : "期限は " + deadline.toISOString() + " です。");
+      }
+
       function ownerTaskCancellationSummary(value) {
         if (value === undefined) return null;
         if (!isObject(value) || value.used_for_authority !== false || value.may_execute !== false) {
           return "取消状態projectionが不正なため未確認です。";
         }
         if (ownerTaskApprovalWithdrawn(value)) return "承認待ちを取り消しました。この承認での実行は開始していません。";
+        const wait = ownerTaskWaitSummary(value);
+        if (wait) return wait;
         if (value.status === "unknown") {
           const allowed = ["status", "reason_code", "used_for_authority", "may_execute"];
           if (Object.keys(value).length !== allowed.length || Object.keys(value).some(function (key) {
@@ -1748,7 +1762,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               : " Runtimeの詳細照会にはRuntime tokenが必要です。") +
               (cancellationSummary ? " " + cancellationSummary : "");
           } else {
-            status.textContent = receiptSummary + " Runtime planを照合しています。";
+            status.textContent = receiptSummary + (cancellationSummary ? " " + cancellationSummary : "") + " Runtime planを照合しています。";
             const runtimeSnapshot = await loadRuntime("owner-task-status", runtimeRead);
             if (selectionChanged() || byId("runtime-token").value.trim() !== runtimeToken) return;
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
@@ -1813,11 +1827,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             throw new Error("Gateway受付記録がありません。未送信の証明ではないため、新しい依頼IDへ切り替えないでください。");
           }
           if (response.status === 409 && result && result.found === true && result.accepted === false) {
-            throw new Error("この依頼から中止できる承認または実行を一意に確認できません。状態を再照会してください。");
+            throw new Error("この依頼で中止できる対象を一意に確認できません。状態を再照会してください。");
           }
           const cancellation = result && result.cancellation;
           if (response.ok && result?.found === true && result.accepted === true && ownerTaskApprovalWithdrawn(cancellation)) {
             status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。承認待ちを取り消しました。この承認での実行は開始していません。";
+            status.className = "badge warn";
+            return;
+          }
+          const waitSummary = cancellation?.status === "wait_cancelled" ? ownerTaskWaitSummary(cancellation) : null;
+          if (response.ok && result?.found === true && result.accepted === true && waitSummary) {
+            status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。" + waitSummary;
             status.className = "badge warn";
             return;
           }
@@ -2507,14 +2527,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "同一planの返信待機を登録しました", result.request_id);
       }
 
-      async function replyToOperationPlanWait(planId, revisionDigest, content) {
+      async function replyToOperationPlanWait(planId, revisionDigest, waitId, content) {
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         if (!ownerToken) throw new Error("待機中の仕事へ返信するにはowner tokenを入力してください");
         if (typeof planId !== "string" || !/^[a-f0-9]{64}$/.test(planId) ||
-            typeof revisionDigest !== "string" || !/^[a-f0-9]{64}$/.test(revisionDigest)) {
-          throw new Error("返信先のplan revisionを確認できません");
+            typeof revisionDigest !== "string" || !/^[a-f0-9]{64}$/.test(revisionDigest) ||
+            typeof waitId !== "string" || !/^[a-f0-9]{64}$/.test(waitId)) {
+          throw new Error("返信先の待機とplan revisionを確認できません");
         }
         if (typeof content !== "string" || content.trim().length === 0 || content.length > 200000) {
           throw new Error("200000文字以内の返信を入力してください");
@@ -2522,7 +2543,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         let result;
         try {
           result = await postJson("/owner/inbound", ownerToken, { user: state.chatUser,
-            content: content.trim(), plan_id: planId, revision_digest: revisionDigest });
+            content: content.trim(), plan_id: planId, revision_digest: revisionDigest, wait_id: waitId });
         } finally {
           ownerTokenInput.value = "";
         }
@@ -3289,7 +3310,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !/^[a-f0-9]{64}$/.test(wait.plan_id || "") || !/^[a-f0-9]{64}$/.test(wait.task_identity_digest || "") ||
               !/^[a-f0-9]{64}$/.test(wait.revision_digest || "") ||
               wait.used_for_authority !== false || wait.may_execute !== false ||
-              !Number.isSafeInteger(wait.deadline_at_ms) || !["waiting", "resumed"].includes(wait.state)) return "";
+              !Number.isSafeInteger(wait.deadline_at_ms) || !["waiting", "resumed", "cancelled"].includes(wait.state)) return "";
+          const cancelled = wait.state === "cancelled";
+          if (cancelled ? !Number.isSafeInteger(wait.cancelled_at_ms) || wait.cancelled_at_ms < 0 ||
+              wait.compute_outcome !== "not_started" : wait.cancelled_at_ms !== undefined) return "";
           if (wait.recovery_hold_reason !== undefined &&
               !["held_residual", "held_unobserved", "held_unverified"].includes(wait.recovery_hold_reason)) return "";
           const outcomeLabels = {
@@ -3328,7 +3352,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const deadlineDate = new Date(wait.deadline_at_ms);
           const deadline = Number.isNaN(deadlineDate.getTime())
             ? String(wait.deadline_at_ms) + " ms" : deadlineDate.toISOString();
-          const recoveryInput = wait.compute_outcome === "interrupted" && !recoveryHold
+          const recoveryInput = wait.state === "resumed" && wait.compute_outcome === "interrupted" && !recoveryHold
             ? '<label>復旧後の新しい返信<textarea data-operation-plan-resume-input="true" maxlength="200000"></textarea></label>' +
               '<button type="button" class="secondary" data-operation-plan-resume-wait="true" data-wait-id="' +
               escapeHtml(wait.wait_id) + '" data-owner-authentication-required="' +
@@ -3338,18 +3362,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。' +
               (isObject(wait.owner_reauthentication_binding) ? '別入口のwaitはowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
             : '';
-          const replyInput = wait.state === "waiting" && wait.owner_authentication_required === true &&
+          const replyInput = wait.state === "waiting" && !recoveryHold && wait.owner_authentication_required === true &&
             !isObject(wait.owner_reauthentication_binding)
             ? '<label>同じ仕事への返信<textarea data-operation-plan-wait-reply-input="true" maxlength="200000"></textarea></label>' +
               '<button type="button" class="secondary" data-operation-plan-wait-reply="true" data-plan-id="' +
-              escapeHtml(wait.plan_id) + '" data-revision-digest="' + escapeHtml(wait.revision_digest) + '">この仕事へ返信して再計画</button>' +
+              escapeHtml(wait.plan_id) + '" data-revision-digest="' + escapeHtml(wait.revision_digest) +
+              '" data-wait-id="' + escapeHtml(wait.wait_id) + '">この仕事へ返信して再計画</button>' +
               '<p class="muted">owner tokenで送信します。plan／revision／owner／channelが一致するwaitだけが再開し、返信本文はJ状態へ保存しません。</p>'
             : '';
           return '<article class="trace-item"><div class="row"><h3>返信／期限wait ' +
-            escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(recoveryHold || outcomeLabels[wait.compute_outcome], "review") + '</div>' +
+            escapeHtml(shortDigest(wait.wait_id)) + '</h3>' + badge(cancelled ? "返信／期限待機の取消済み" :
+              recoveryHold || outcomeLabels[wait.compute_outcome], "review") + '</div>' +
             '<dl class="kv"><dt>task digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.task_identity_digest)) +
             '</dd><dt>元計画digest</dt><dd class="mono">' + escapeHtml(shortDigest(wait.plan_id)) +
             '</dd><dt>期限</dt><dd>' + escapeHtml(deadline) + '</dd>' +
+            (cancelled ? '<dt>取消時刻</dt><dd>' + escapeHtml(new Date(wait.cancelled_at_ms).toLocaleString()) + '</dd>' : '') +
             (wait.state === "resumed" ? '<dt>再開理由</dt><dd>' + escapeHtml(wakeReason) + '</dd>' : '') +
             (resourceUse ? '<dt>C資源消費</dt><dd>' + escapeHtml(String(resourceUse.charged_compute_ms) + ' ms / ' +
               String(resourceUse.charged_tokens) + ' tokens (' + resourceUse.tokens_usage_status + ') / ' +
@@ -10665,7 +10692,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const responseInput = container && container.querySelector("[data-operation-plan-wait-reply-input]");
           try {
             await replyToOperationPlanWait(target.dataset.planId || "", target.dataset.revisionDigest || "",
-              responseInput?.value || "");
+              target.dataset.waitId || "", responseInput?.value || "");
             if (responseInput) responseInput.value = "";
           } catch (error) {
             appendChat("error", error.message);

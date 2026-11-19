@@ -90,8 +90,10 @@ import type {
   WebChatAboutSurface,
   WebChatTaskOutcome,
   WebChatTaskApprovalWithdrawal,
+  WebChatD4RuntimeCancellationStatus,
   WebChatOwnerTaskCancellation,
-  WebChatOwnerTaskCancellationStatus,
+  WebChatOwnerTaskWaitCancellation,
+  WebChatOwnerTaskWaitPending,
   WebChatApprovalContentReview,
   WebChatApprovalGrantItem,
   WebChatApprovalHistoryItem,
@@ -713,10 +715,29 @@ function normalizeTaskApprovalWithdrawal(value: unknown): WebChatTaskApprovalWit
   };
 }
 
-function normalizeTaskCancellationStatus(value: unknown): WebChatOwnerTaskCancellationStatus {
+function normalizeOwnerTaskWaitState(value: unknown): WebChatOwnerTaskWaitPending | WebChatOwnerTaskWaitCancellation | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const wait = value as Record<string, unknown>;
+  if (wait.status !== "wait_pending" && wait.status !== "wait_cancelled") return null;
+  const timeKey = wait.status === "wait_pending" ? "deadline_at_ms" : "cancel_requested_at_ms";
+  const time = wait[timeKey];
+  const allowed = ["status", timeKey, "used_for_authority", "may_execute"];
+  if (Object.keys(wait).length !== allowed.length || Object.keys(wait).some(key => !allowed.includes(key)) ||
+      wait.used_for_authority !== false || wait.may_execute !== false ||
+      typeof time !== "number" || !Number.isSafeInteger(time) || time < 0) return null;
+  const noAuthority = { used_for_authority: false, may_execute: false } as const;
+  return wait.status === "wait_pending" ? { status: "wait_pending", deadline_at_ms: time, ...noAuthority }
+    : { status: "wait_cancelled", cancel_requested_at_ms: time, ...noAuthority };
+}
+
+function normalizeOwnerTaskCancellationStatus(value: unknown) {
+  return normalizeOwnerTaskWaitState(value) ?? normalizeTaskCancellationStatus(value);
+}
+
+function normalizeTaskCancellationStatus(value: unknown): WebChatD4RuntimeCancellationStatus {
   const withdrawal = normalizeTaskApprovalWithdrawal(value);
   if (withdrawal) return withdrawal;
-  const unknown: WebChatOwnerTaskCancellationStatus = {
+  const unknown: WebChatD4RuntimeCancellationStatus = {
     status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
   };
   if (typeof value !== "object" || value === null || Array.isArray(value)) return unknown;
@@ -727,7 +748,7 @@ function normalizeTaskCancellationStatus(value: unknown): WebChatOwnerTaskCancel
     if (Object.keys(status).some((key) => !allowed.includes(key)) ||
         !["projection_unavailable", "projection_ambiguous", "projection_invalid", "no_recorded_evidence"]
           .includes(String(status.reason_code))) return unknown;
-    return { status: "unknown", reason_code: status.reason_code as Extract<WebChatOwnerTaskCancellationStatus,
+    return { status: "unknown", reason_code: status.reason_code as Extract<WebChatD4RuntimeCancellationStatus,
       { status: "unknown" }>["reason_code"], used_for_authority: false, may_execute: false };
   }
   if (status.status === "request_recorded") {
@@ -758,7 +779,7 @@ function normalizeTaskCancellationStatus(value: unknown): WebChatOwnerTaskCancel
   return {
     status: "execution_observed", cancel_request_accepted: true, executor_settled: status.executor_settled,
     executor_status: status.executor_status as "success" | "failed" | "suspended" | "unknown",
-    local_worker_stop: status.local_worker_stop as Extract<WebChatOwnerTaskCancellationStatus,
+    local_worker_stop: status.local_worker_stop as Extract<WebChatD4RuntimeCancellationStatus,
       { status: "execution_observed" }>["local_worker_stop"],
     external_processing_stop: "unknown", cancel_requested_at_ms: status.cancel_requested_at_ms,
     observed_at_ms: status.observed_at_ms, used_for_authority: false, may_execute: false,
@@ -1633,7 +1654,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               .catch(() => undefined))
           : undefined;
         const cancellation = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionCancellationStatus
-          ? normalizeTaskCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
+          ? normalizeOwnerTaskCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
                 used_for_authority: false as const, may_execute: false as const })))
           : undefined;
@@ -1702,7 +1723,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           return;
         }
         const outcome = await this.opts.onOwnerTaskSubmissionCancellation({ request_id: status.request_id });
-        const cancellation = normalizeTaskApprovalWithdrawal(outcome) ?? normalizeTaskCancellationAcknowledgement(outcome);
+        const wait = normalizeOwnerTaskWaitState(outcome);
+        const cancellation = wait?.status === "wait_cancelled" ? wait
+          : normalizeTaskApprovalWithdrawal(outcome) ?? normalizeTaskCancellationAcknowledgement(outcome);
         if (!cancellation) {
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
@@ -2623,6 +2646,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const content = typeof body?.content === "string" ? body.content : null;
       const planId = typeof body?.plan_id === "string" ? body.plan_id : undefined;
       const revisionDigest = typeof body?.revision_digest === "string" ? body.revision_digest : undefined;
+      const waitId = typeof body?.wait_id === "string" ? body.wait_id : undefined;
       if (!replyTo || !content) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "user and content are required strings" }));
@@ -2630,7 +2654,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (rejectReservedWebChatAudience(res, replyTo)) return;
       if ((planId === undefined) !== (revisionDigest === undefined) ||
-          (planId !== undefined && (!/^[a-f0-9]{64}$/.test(planId) || !/^[a-f0-9]{64}$/.test(revisionDigest!)))) {
+          (planId !== undefined && (!/^[a-f0-9]{64}$/.test(planId) || !/^[a-f0-9]{64}$/.test(revisionDigest!))) ||
+          (body && Object.hasOwn(body, "wait_id") && (!planId || !revisionDigest || !waitId || !/^[a-f0-9]{64}$/.test(waitId)))) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ accepted: false, error: "invalid_owner_wait_binding" }));
         return;
@@ -2669,6 +2694,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               "blue_tanuki.operation_core.version": "operation-core.v1",
               "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,
               "blue_tanuki.operation_core.projection_id": "owner-plan-wait:operation-core",
+              ...(waitId ? { "blue_tanuki.operation_plan.owner_wait_reply_id": waitId } : {}),
               "blue_tanuki.operation_core.source_interface": "gui",
               "blue_tanuki.operation_core.used_for_authority": false,
               "blue_tanuki.operation_core.planner_output_used_for_authority": false,

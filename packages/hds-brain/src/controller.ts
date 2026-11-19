@@ -136,6 +136,7 @@ import { OperationPlanLedger, operationPlanDigest, type OperationPlanStatePort, 
   type OperationPlanCanonicalMemoryRestoreObservation, type OperationPlanGoalPurposeRelationReviewContent,
   type OperationPlanGatewayReceiptRechecker,
   type OperationPlanSavedResultReturnProjection,
+  type OwnerTaskWaitCancellationScope,
   operationPlanGoalPurposeRelationReviewAuditDigest,
   mergeOperationPlanMemoryInterpretationDependencies } from "./operation_plan.js";
 import { reviewResultReflection, type ResultObservationProjection } from "./operation_result_reflection.js";
@@ -1518,7 +1519,17 @@ export class HDSUpperController {
     let savedResultReturn: OperationPlanSavedResultReturnProjection | undefined;
     let goalCompletionStatusProjection: ReturnType<OperationPlanLedger["inspectGoalCompletionStatus"]> | undefined;
     const controlCaller = req;
-    const planPrefix = /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
+    const ownerWaitReplyId = isGatewayInternalInboundRequest(req)
+      ? req.metadata?.["blue_tanuki.operation_plan.owner_wait_reply_id"] : undefined;
+    const explicitOwnerWaitReply = ownerWaitReplyId !== undefined;
+    const ownerWaitReplyScope = isGatewayInternalInboundRequest(req) && req.user === GOAL_OWNER_ACTOR &&
+      req.channel === "webchat" && req.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+      req.metadata["blue_tanuki.trust_level"] === "owner" && req.metadata["blue_tanuki.process_kind"] === "chat" &&
+      req.metadata["blue_tanuki.operator_surface"] === "developer" &&
+      req.metadata["blue_tanuki.operation_core.projection_id"] === "owner-plan-wait:operation-core" &&
+      /^webchat-owner-plan:[a-f0-9]{64}:[a-f0-9]{64}$/u.test(req.session_id ?? "");
+    const planPrefix = explicitOwnerWaitReply ? null : /^plan:([^\s]+)(?:\s+([\s\S]*))?$/i.exec(req.content.trim());
+    const failureReviewControlRequested = !explicitOwnerWaitReply && /^failure:review(?:\s|$)/i.test(controlCaller.content.trim());
     const hasMcpCatalogDecisionOption = options.plan_compute_mcp_catalog_context !== undefined ||
       options.plan_compute_mcp_catalog_refresh_failure !== undefined;
     if ((options.plan_compute_source_refresh_failure || hasMcpCatalogDecisionOption) &&
@@ -1544,9 +1555,13 @@ export class HDSUpperController {
     let planComputeMcpCatalogContext: OperationPlanMcpCatalogContext | undefined;
     let planComputeMemoryInterpretationDependencies: OperationPlanMemoryInterpretationDependency[] | undefined;
     let planComputeCitationRequestId: string | undefined;
+    const scopedOwnerWaitReply = explicitOwnerWaitReply || (ownerWaitReplyScope && !planPrefix && !failureReviewControlRequested);
 
     const deadlineWaitId = req.metadata?.["blue_tanuki.operation_plan.wait_deadline_id"];
-    if (deadlineWaitId !== undefined) {
+    if (explicitOwnerWaitReply && (deadlineWaitId !== undefined || !ownerWaitReplyScope ||
+        typeof ownerWaitReplyId !== "string" || !/^[a-f0-9]{64}$/u.test(ownerWaitReplyId))) {
+      planControlFailure = "plan_wait_resume_invalid";
+    } else if (deadlineWaitId !== undefined) {
       try {
         if (!isGatewayInternalInboundRequest(req) || req.metadata?.["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
             req.metadata?.["blue_tanuki.actor_kind"] !== "system" || req.metadata?.["blue_tanuki.process_kind"] !== "cron" ||
@@ -1582,10 +1597,11 @@ export class HDSUpperController {
           "plan_compute_purpose_unavailable"]
           .includes(reason) ? reason : "plan_wait_resume_invalid";
       }
-    } else if (!planPrefix && !/^failure:review(?:\s|$)/i.test(req.content.trim())) {
+    } else if (!planPrefix && !failureReviewControlRequested) {
       const actor = resolveActor(req);
       if (["owner", "user"].includes(actor.actor_kind)) {
-        const wait = this.operationPlans.matchWaitForInbound(req);
+        const wait = this.operationPlans.matchWaitForInbound(req, undefined,
+          typeof ownerWaitReplyId === "string" ? ownerWaitReplyId : undefined);
         const context = wait ? this.operationPlans.waitContext(wait) : null;
         if (wait && context && context.owner === req.user && context.channel === req.channel) {
           const resumedPurpose = context.goal_purpose_binding
@@ -1612,7 +1628,7 @@ export class HDSUpperController {
                   "blue_tanuki.operation_core.used_for_authority": false } });
             }
           }
-        }
+        } else if (scopedOwnerWaitReply) planControlFailure = "plan_wait_resume_stale";
       }
     }
     if (planPrefix && planPrefix[1] !== "compute") {
@@ -1879,10 +1895,9 @@ ${planControl.question}`,
           }
         }
       }
-    } else if (/^plan:/i.test(req.content.trim()) && !planPrefix) {
+    } else if (!explicitOwnerWaitReply && /^plan:/i.test(req.content.trim()) && !planPrefix) {
       planControlFailure = "plan_control_invalid";
     }
-    const failureReviewControlRequested = /^failure:review(?:\s|$)/i.test(controlCaller.content.trim());
     const failureReviewPrefix = /^failure:review\s+(\S+)$/i.exec(controlCaller.content.trim());
     if (failureReviewControlRequested) {
       try {
@@ -1947,7 +1962,7 @@ ${planControl.question}`,
       : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
       : planPrefix?.[1]?.toLowerCase() === "status" ? "operation_plan_goal_completion_status" as const
       : planPrefix?.[1]?.toLowerCase() === "resume_wait" ? "operation_plan_wait_resume" as const
-      : planComputeWaitResume ? "operation_plan_wait_resume" as const
+      : planComputeWaitResume || scopedOwnerWaitReply ? "operation_plan_wait_resume" as const
       : failureReviewControlRequested ? "failure_review" as const : undefined;
     const input = normalizeForDetection(req.content);
     const authorityReq = requestWithNormalizedContent(req, input.normalized_content);
@@ -2223,7 +2238,8 @@ ${planControl.question}`,
           log,
           suspended_at: this.nowMs(),
           reason: c.reason,
-          ...(planControl ? { resume_allowed: false, resume_denied_reason: "plan_control_requires_fresh_review" } : {}),
+          ...(planControl || scopedOwnerWaitReply
+            ? { resume_allowed: false, resume_denied_reason: "plan_control_requires_fresh_review" } : {}),
         });
         const suspendedRequest = planControl?.action === "resume_wait"
           ? createGatewayInternalInboundRequest({ ...authorityReq, content: "plan:resume_wait",
@@ -5216,6 +5232,30 @@ ${planControl.question}`,
   }
   listOperationPlanWaits(): readonly OperationPlanWaitState[] {
     return this.operationPlans.listWaits();
+  }
+  ownerTaskWaitCancellationScope(requestId: string): OwnerTaskWaitCancellationScope {
+    if (!this.audit.isPersistent() || !this.audit.verify()) return null;
+    return this.operationPlans.ownerTaskWaitCancellationScope(requestId);
+  }
+  /** The authenticated Gateway receipt may close a waiting control, with no executor admission. */
+  cancelOwnerTaskWait(requestId: string, waitId: string): Extract<OwnerTaskWaitCancellationScope, { status: "cancelled" }> | null {
+    const scope = this.ownerTaskWaitCancellationScope(requestId);
+    if (scope?.status !== "waiting" || scope.wait_id !== waitId) return null;
+    const waiting = this.operationPlans.activeWait(waitId);
+    if (!waiting) return null;
+    const waitingDigest = operationPlanDigest(waiting);
+    const registered = this.audit.list().flatMap(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+      log.event === "wait_registered" && log.projection_digest === waitingDigest &&
+      log.candidate_digest === waiting.task_identity_digest && log.target_digest === waiting.plan_id_digest ? [log] : []);
+    const [registration] = registered;
+    if (registered.length !== 1 || !registration) return null;
+    const cancelled = this.operationPlans.cancelOwnerTaskWait(requestId, waitId);
+    if (!cancelled || cancelled.cancelled_at_ms === undefined) return null;
+    this.audit.append({ kind: "operation_plan", event: "wait_cancelled", request_id: requestId,
+      command_id: registration.command_id, projection_digest: operationPlanDigest(cancelled), proposal_digest: waitingDigest,
+      candidate_digest: cancelled.task_identity_digest, target_digest: cancelled.wait_id, reason: "owner_task_receipt",
+      used_for_authority: false, may_execute: false, timestamp: cancelled.cancelled_at_ms });
+    return { status: "cancelled", cancelled_at_ms: cancelled.cancelled_at_ms };
   }
   operationPlanWaitContext(waitId: string): { readonly wait: OperationPlanWaitState;
     readonly goal: string; readonly owner: string; readonly channel: string } | null {

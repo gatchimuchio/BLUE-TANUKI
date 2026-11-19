@@ -272,7 +272,8 @@ export interface OperationPlanStatusProjection {
     task_identity_digest: string;
     owner_authentication_required: boolean;
     owner_reauthentication_binding?: { owner_identity_digest: string; channel_identity_digest: string };
-    state: "waiting" | "resumed";
+    state: "waiting" | "resumed" | "cancelled";
+    cancelled_at_ms?: number;
     deadline_at_ms: number;
     recovery_hold_reason?: "held_residual" | "held_unobserved" | "held_unverified";
     resumed_at_ms?: number;
@@ -418,12 +419,14 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
   const waits: OperationPlanStatusProjection["waits"] = [];
   for (const wait of rawWaits as Record<string, unknown>[]) {
     const allowedKeys = new Set(["wait_id", "plan_id", "revision_digest", "task_identity_digest", "owner_authentication_required",
-      "owner_reauthentication_binding", "state", "deadline_at_ms",
+      "owner_reauthentication_binding", "state", "deadline_at_ms", "cancelled_at_ms",
       "recovery_hold_reason", "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
       "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
     const state = wait.state;
     const outcome = wait.compute_outcome;
     const resumed = state === "resumed";
+    const cancelled = state === "cancelled";
+    const cancelledAt = wait.cancelled_at_ms;
     const resumedAt = wait.resumed_at_ms;
     const completedAt = wait.compute_completed_at_ms;
     const interruptedAt = wait.compute_interrupted_at_ms;
@@ -432,7 +435,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
     const ownerReauthenticationBinding = wait.owner_reauthentication_binding;
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
-        (wait.revision_digest !== undefined && !isDigest(wait.revision_digest)) || !isDigest(wait.task_identity_digest) || (state !== "waiting" && !resumed) ||
+        (wait.revision_digest !== undefined && !isDigest(wait.revision_digest)) || !isDigest(wait.task_identity_digest) ||
+        (state !== "waiting" && !resumed && !cancelled) ||
         (wait.owner_authentication_required !== undefined && typeof wait.owner_authentication_required !== "boolean") ||
         (ownerReauthenticationBinding !== undefined && (!isRecord(ownerReauthenticationBinding) ||
           Object.keys(ownerReauthenticationBinding).some((key) => !["owner_identity_digest", "channel_identity_digest"].includes(key)) ||
@@ -441,13 +445,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (wait.recovery_hold_reason !== undefined &&
           !["held_residual", "held_unobserved", "held_unverified"].includes(String(wait.recovery_hold_reason))) ||
         wait.used_for_authority !== false || wait.may_execute !== false ||
+        (cancelled ? !Number.isSafeInteger(cancelledAt) || (cancelledAt as number) < 0 : cancelledAt !== undefined) ||
         (resumed && (!Number.isSafeInteger(resumedAt) || (resumedAt as number) < 0 ||
           !["reply", "deadline", "recovery"].includes(String(wait.wake_reason)))) ||
         (!resumed && (resumedAt !== undefined || wait.wake_reason !== undefined)) ||
         (outcome !== "not_started" && outcome !== "pending" && outcome !== "interrupted" && outcome !== "candidate_retained" &&
           outcome !== "candidate_rejected" && outcome !== "failed" && outcome !== "not_recorded") ||
-        (state === "waiting" && outcome !== "not_started") ||
-        (resumed && outcome === "not_started") ||
+        (resumed ? outcome === "not_started" : outcome !== "not_started") ||
         (wait.compute_result_digest !== undefined && !isDigest(wait.compute_result_digest)) ||
         (wait.candidate_plan_id !== undefined && !isDigest(wait.candidate_plan_id)) ||
         (completedAt !== undefined && (!Number.isSafeInteger(completedAt) || (completedAt as number) < (resumedAt as number))) ||
@@ -467,13 +471,14 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
       ...(typeof wait.revision_digest === "string" ? { revision_digest: wait.revision_digest } : {}),
-      task_identity_digest: wait.task_identity_digest as string, state: state as "waiting" | "resumed",
+      task_identity_digest: wait.task_identity_digest as string, state,
       owner_authentication_required: wait.owner_authentication_required === true,
       ...(isRecord(ownerReauthenticationBinding) ? { owner_reauthentication_binding: {
         owner_identity_digest: ownerReauthenticationBinding.owner_identity_digest as string,
         channel_identity_digest: ownerReauthenticationBinding.channel_identity_digest as string,
       } } : {}),
       deadline_at_ms: wait.deadline_at_ms as number,
+      ...(typeof cancelledAt === "number" ? { cancelled_at_ms: cancelledAt } : {}),
       ...(wait.recovery_hold_reason === "held_residual" || wait.recovery_hold_reason === "held_unobserved" ||
         wait.recovery_hold_reason === "held_unverified" ? { recovery_hold_reason: wait.recovery_hold_reason } : {}),
       ...(typeof resumedAt === "number" ? { resumed_at_ms: resumedAt } : {}),

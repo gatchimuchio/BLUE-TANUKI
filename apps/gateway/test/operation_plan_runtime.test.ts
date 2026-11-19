@@ -2813,6 +2813,58 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     expect(hds.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
   });
 
+  it("取消済みと同じowner・sessionの新しいwaitは明示された現行wait IDだけで再開する", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-id-replacement-"));
+    const store = new OperationPlanStateStore(join(root, "state.sqlite"));
+    const owner = "webchat-owner-token-holder";
+    const channel = "webchat";
+    const goal = "Wait for the current owner's synthetic reply.";
+    const seed = plan(`operation-request:${randomUUID()}`, "synthetic-root");
+    const revision = operationPlanDigest(seed);
+    const planId = operationPlanDigest(seed.plan_id);
+    const session = `webchat-owner-plan:${planId}:${revision}`;
+    const now = Date.now();
+    const identity = { owner_digest: operationPlanDigest(owner), channel_digest: operationPlanDigest(channel) };
+    const taskIdentity = operationPlanDigest({ schema_version: "blue-tanuki.operation-plan-task-identity.v1", ...identity,
+      task_digest: operationPlanDigest(goal), plan_id_digest: planId, request_id_digest: operationPlanDigest(seed.request_id) });
+    const scope = { ...identity, plan_id_digest: planId, revision_digest: revision, task_identity_digest: taskIdentity,
+      session_id_digest: operationPlanDigest({ schema_version: "operation-plan-wait-session.v1", session_scope: session }) };
+    const wait = (deadline_at_ms: number) => ({ ...scope, deadline_at_ms, created_at_ms: now,
+      wait_id: operationPlanDigest({ schema_version: "operation-plan-wait.v1", ...scope, deadline_at_ms }),
+      used_for_authority: false as const, may_execute: false as const });
+    const cancelled = wait(now + 30_000);
+    const active = wait(now + 60_000);
+    let hds: HDSUpperController | undefined;
+    try {
+      store.compareAndSet(null, OperationPlanCheckpointSchema.parse({ schema_version: "operation-plan-state.v1",
+        plans: [{ owner, channel, goal, revisions: [{ digest: revision, plan: seed }], bindings: [], results: [] }],
+        waits: [{ ...cancelled, state: "cancelled", cancelled_at_ms: now }, { ...active, state: "waiting" }],
+      }));
+      hds = new HDSUpperController({ operation_plan_state: store });
+      const reply = (content: string, waitId?: string) => createGatewayInternalInboundRequest({ id: randomUUID(),
+        user: owner, channel, session_id: session, content, timestamp: now,
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.projection_id": "owner-plan-wait:operation-core",
+          ...(waitId ? { "blue_tanuki.operation_plan.owner_wait_reply_id": waitId } : {}) } });
+      for (const stale of [reply("Delayed legacy reply"), reply("plan:compute ignored", cancelled.wait_id)]) {
+        const refused = hds.decide(stale);
+        expect(refused.command).toBeNull();
+        expect(refused.log.commit.reason).toBe("plan_control_denied:plan_wait_resume_stale");
+      }
+      expect(hds.listOperationPlanWaits()).toMatchObject([{ state: "cancelled" }, { state: "waiting" }]);
+      const literal = "failure:review is literal reply data";
+      const current = hds.decide(reply(literal, active.wait_id));
+      expect(current.command).toMatchObject({ type: "llm_call", payload: { compute_context: {
+        local_p_version: "blue-tanuki.plan-compute-agent-delegation.v1",
+      } } });
+      expect(current.command?.type === "llm_call" && current.command.payload.messages.at(-1)?.content).toContain(literal);
+      expect(hds.listOperationPlanWaits()).toMatchObject([
+        { state: "cancelled" }, { state: "resumed", wake_reason: "reply", compute_outcome: "pending" },
+      ]);
+    } finally { hds?.close(); store.close(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it("永続waitを再起動後に正規返信から一度だけCへつなぎ、期限eventも再利用しない", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-resume-"));
     const databasePath = join(root, "state.sqlite");

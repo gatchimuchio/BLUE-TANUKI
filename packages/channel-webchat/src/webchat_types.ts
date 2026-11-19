@@ -99,7 +99,7 @@ export interface WebChatTaskApprovalWithdrawal {
 
 export type WebChatD4RuntimeApprovalWithdrawal = WebChatTaskApprovalWithdrawal;
 
-export type WebChatOwnerTaskCancellationStatus =
+export type WebChatD4RuntimeCancellationStatus =
   | WebChatTaskApprovalWithdrawal
   | {
       readonly status: "request_recorded";
@@ -131,7 +131,22 @@ export type WebChatOwnerTaskCancellationStatus =
       readonly may_execute: false;
     };
 
-export type WebChatD4RuntimeCancellationStatus = WebChatOwnerTaskCancellationStatus;
+export interface WebChatOwnerTaskWaitPending {
+  readonly status: "wait_pending";
+  readonly deadline_at_ms: number;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export interface WebChatOwnerTaskWaitCancellation {
+  readonly status: "wait_cancelled";
+  readonly cancel_requested_at_ms: number;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
+export type WebChatOwnerTaskCancellationStatus = WebChatD4RuntimeCancellationStatus |
+  WebChatOwnerTaskWaitPending | WebChatOwnerTaskWaitCancellation;
 
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
@@ -2043,9 +2058,9 @@ export interface WebChatOptions {
   onOwnerTaskSubmissionSavedResult?: (input: { request_id: string; step_index: number; result_ref: string }) => Promise<string | null>;
   /** Read-only cancellation evidence for the exact authenticated owner task request. */
   onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
-  /** Request abort for the single active command bound to an authenticated owner task request. */
+  /** 本人の受付に属する承認待ち・実行・返信／期限待機を一意に確認して取り消す。 */
   onOwnerTaskSubmissionCancellation?: (input: { request_id: string }) =>
-    Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null>;
+    Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | WebChatOwnerTaskWaitCancellation | null>;
   /** Request L3 review of an owner-authored initial delegated purpose. */
   onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */

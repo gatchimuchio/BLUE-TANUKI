@@ -177,6 +177,7 @@ import type {
   WebChatD4RuntimeTaskOutcome,
   WebChatOwnerTaskCancellation,
   WebChatOwnerTaskCancellationStatus,
+  WebChatOwnerTaskWaitCancellation,
   WebChatTaskApprovalWithdrawal,
   WebChatAuthorityTraceItem,
   WebChatEvidenceControlContext,
@@ -5082,25 +5083,35 @@ async function serveWithOwnerLease(
             return { status: "unknown", reason_code: binding.status === "ambiguous" ? "projection_ambiguous" : "projection_invalid",
               used_for_authority: false, may_execute: false };
           }
+          const wait = entries.length ? hds.ownerTaskWaitCancellationScope(request_id) : null;
+          if (wait?.status === "ambiguous") {
+            return { status: "unknown", reason_code: "projection_ambiguous", used_for_authority: false, may_execute: false };
+          }
+          if (wait?.status === "waiting") {
+            return { status: "wait_pending", deadline_at_ms: wait.deadline_at_ms, used_for_authority: false, may_execute: false };
+          }
           const commandIds = new Set(binding.status === "matched" ? binding.command_ids : []);
           const plans = binding.status === "matched" ? binding.plans : [];
           const computeCommands = binding.status === "matched" ? binding.compute_command_ids : [];
           const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans, new Set(computeCommands), entries);
+          const recordedWait = wait?.status === "cancelled" ? taskWaitCancellation(wait.cancelled_at_ms) : null;
+          const prior = recordedWait && (!withdrawal || recordedWait.cancel_requested_at_ms > withdrawal.cancel_requested_at_ms)
+            ? recordedWait : withdrawal;
           const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
             [...commandIds], undefined, ["owner_task", "resume"],
           );
           const execution = projectOwnerTaskCancellationStatus(operationPlans, request_id, observations, computeCommands);
-          if (!withdrawal) return execution;
+          if (!prior) return execution;
           if (execution.status === "unknown") {
-            return execution.reason_code === "no_recorded_evidence" || binding.status === "not_found" ? withdrawal : execution;
+            return execution.reason_code === "no_recorded_evidence" || binding.status === "not_found" ? prior : execution;
           }
-          return execution.cancel_requested_at_ms >= withdrawal.cancel_requested_at_ms ? execution : withdrawal;
+          return execution.cancel_requested_at_ms >= prior.cancel_requested_at_ms ? execution : prior;
         } catch {
           return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
         }
       },
       onOwnerTaskSubmissionCancellation: async ({ request_id }: { request_id: string }):
-        Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null> => {
+        Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | WebChatOwnerTaskWaitCancellation | null> => {
         ownerLease.assertActive();
         let operationPlans: unknown;
         let entries: readonly AuditEntry[];
@@ -5120,16 +5131,31 @@ async function serveWithOwnerLease(
         const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
         const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds, computeCommands);
         if (binding.status === "ambiguous" || binding.status === "invalid" || pending.length > 1) return null;
+        const wait = entries.length ? hds.ownerTaskWaitCancellationScope(request_id) : null;
+        if (wait?.status === "ambiguous") return null;
         if (plans.length && activeCommandIds.size) {
           if (!entries.length || ownerTaskRelationReviewApprovalGates(entries, plans)
             .some(review => activeCommandIds.has(review.command_id) && review.command_id !== pending[0]?.command.id)) return null;
+        }
+        if (wait?.status === "waiting") {
+          if (binding.status !== "not_active" || pending.length > 0) return null;
+          const cancelled = hds.cancelOwnerTaskWait(request_id, wait.wait_id);
+          if (!cancelled) return null;
+          waitDeadlineScheduler.refresh();
+          return taskWaitCancellation(cancelled.cancelled_at_ms);
         }
         if (pending.length === 1) {
           const [approval] = pending;
           if (binding.status === "matched" && binding.command_id !== approval!.command.id) return null;
           return withdrawPendingTaskApproval(approval!, OWNER_TASK_APPROVAL_ACTOR, OWNER_TASK_WITHDRAWAL_REASON, { ownerTaskPlans: plans });
         }
-        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans, computeCommandIds, entries);
+        if (binding.status === "not_active") {
+          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds, plans, computeCommandIds, entries);
+          if (wait?.status === "cancelled" && (!withdrawal || wait.cancelled_at_ms > withdrawal.cancel_requested_at_ms)) {
+            return taskWaitCancellation(wait.cancelled_at_ms);
+          }
+          return withdrawal;
+        }
         if (binding.status !== "matched") return null;
         const cancellation = requestTaskExecutionCancellation(binding.command_id, {
           actor: OWNER_TASK_APPROVAL_ACTOR,
@@ -7972,6 +7998,10 @@ async function serveWithOwnerLease(
     };
   }
 
+  function taskWaitCancellation(timestamp: number): WebChatOwnerTaskWaitCancellation {
+    return { status: "wait_cancelled", cancel_requested_at_ms: timestamp, used_for_authority: false, may_execute: false };
+  }
+
   function pendingWithdrawalEvidence(requestId: string, commandId: string, actor: string, reason: string):
     WebChatTaskApprovalWithdrawal | null {
     const audit = hds.getAudit();
@@ -8561,6 +8591,8 @@ async function serveWithOwnerLease(
   ): Promise<void> => {
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
+    const ownerWaitReply = isGatewayInternalInboundRequest(authorityReq) &&
+      authorityReq.metadata?.["blue_tanuki.operation_plan.owner_wait_reply_id"] !== undefined;
     // Gateway history, reply, and execution paths use only authorityReq, which
     // is a canonical request or the safe invalid-inbound fallback. Raw invalid
     // input is passed to HDS-BRAIN only for its independent fail-closed
@@ -8592,7 +8624,7 @@ async function serveWithOwnerLease(
           : undefined,
       },
     });
-    const documentSource = boundary.boundary_ok
+    const documentSource = boundary.boundary_ok && !ownerWaitReply
       ? documentOrganizationSourceFromRequest(authorityReq)
       : null;
     const documentSession = documentSource === null
@@ -8611,7 +8643,7 @@ async function serveWithOwnerLease(
           ? `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`
           : documentCoordinator.buildComputePrompt(),
       }
-      : boundary.boundary_ok
+      : boundary.boundary_ok && !ownerWaitReply
         ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory, completeHistory)
         : hdsBoundaryInput;
     const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
@@ -8622,7 +8654,7 @@ async function serveWithOwnerLease(
       commandEphemeralContext.ephemeral_images.length === 0 && audioTranscriptionProjection
       ? createGatewayInternalTransientAudioRequest(authorityReq, commandEphemeralContext)
       : decisionInput;
-    const selectedFileStateRefresh = await refreshOwnerSelectedFileStateObservations({
+    const selectedFileStateRefresh = ownerWaitReply ? undefined : await refreshOwnerSelectedFileStateObservations({
       hds,
       caller: authorityReq,
       lookupExecutionReceipt: (commandKey) => executionStore.lookupCommand(commandKey),
@@ -8630,7 +8662,7 @@ async function serveWithOwnerLease(
     let planComputeMcpCatalogContext:
       Awaited<ReturnType<typeof inspectMcpToolPlanningCatalogFromEnvironment>> | undefined;
     let planComputeMcpCatalogRefreshFailed = false;
-    if (requestIncludesMcpPlanningCatalog(decisionInput)) {
+    if (!ownerWaitReply && requestIncludesMcpPlanningCatalog(decisionInput)) {
       try {
         planComputeMcpCatalogContext = await inspectMcpToolPlanningCatalogFromEnvironment(process.env);
       } catch {
@@ -8639,7 +8671,7 @@ async function serveWithOwnerLease(
     }
     const decisionOptions = {
       ...(documentCoordinator ? { transient_content: "document_organization" as const } : {}),
-      ...(selectedFileStateRefresh.status === "failed"
+      ...(selectedFileStateRefresh?.status === "failed"
         ? { plan_compute_source_refresh_failure: selectedFileStateRefresh.reason } : {}),
       ...(planComputeMcpCatalogContext
         ? { plan_compute_mcp_catalog_context: planComputeMcpCatalogContext } : {}),

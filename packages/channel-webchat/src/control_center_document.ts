@@ -212,7 +212,7 @@ ${CONTROL_CENTER_STYLE}    </style>
               <button id="owner-task-new-submission" type="button" hidden>先行依頼を確認後、新しい依頼IDへ切替</button>
               <span id="owner-task-status" class="badge warn" aria-live="polite">未送信</span>
             </div>
-            <p class="muted">選択した依頼の承認待ちの取り消し、または実行中の処理の中止を要求します。要求後は停止状態を再照会してください。</p>
+            <p class="muted">選択した依頼の承認待ち・返信／期限待機の取り消し、または実行中の処理の中止を要求します。要求後は状態を再照会してください。</p>
             <p id="owner-task-result-status" class="muted" aria-live="polite" hidden></p>
             <pre id="owner-task-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
             <p class="muted">会話の回答はGatewayの揮発メモリに最大15分だけ保持され、再起動・期限切れ・容量超過時は取得できません。回答本文はSQLite、M、CompleteHistoryへ保存しません。表示は実行権限・目標達成・外部処理停止の証拠ではありません。</p>

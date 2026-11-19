@@ -220,6 +220,8 @@ async function setup(
       onOwnerTaskSubmissionExecutionObservation?: WebChatOptions["onOwnerTaskSubmissionExecutionObservation"];
       onOwnerTaskSubmissionPlanSteps?: WebChatOptions["onOwnerTaskSubmissionPlanSteps"];
       onOwnerTaskSubmissionSavedResult?: WebChatOptions["onOwnerTaskSubmissionSavedResult"];
+      onOwnerTaskSubmissionCancellationStatus?: WebChatOptions["onOwnerTaskSubmissionCancellationStatus"];
+      onOwnerTaskSubmissionCancellation?: WebChatOptions["onOwnerTaskSubmissionCancellation"];
       maintenance_token?: string;
       resume_approval_tokens?: WebChatOptions["resume_approval_tokens"];
       resume_approval_token_ttl_ms?: number;
@@ -257,6 +259,8 @@ async function setup(
     onOwnerTaskSubmissionExecutionObservation: opts.onOwnerTaskSubmissionExecutionObservation,
     onOwnerTaskSubmissionPlanSteps: opts.onOwnerTaskSubmissionPlanSteps,
     onOwnerTaskSubmissionSavedResult: opts.onOwnerTaskSubmissionSavedResult,
+    onOwnerTaskSubmissionCancellationStatus: opts.onOwnerTaskSubmissionCancellationStatus,
+    onOwnerTaskSubmissionCancellation: opts.onOwnerTaskSubmissionCancellation,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -1031,7 +1035,7 @@ describe("WebChatChannel — Control Center shell", () => {
       headers: { Authorization: "Bearer owner-token" }, body: JSON.stringify({ submission_id: submissionId, step_index: 1, result_ref: resultRef }) } });
   });
 
-  it("reports a withdrawn owner approval without claiming process or external stop", () => {
+  it("reports withdrawn owner approvals and durable waits without claiming process or external stop", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskApprovalWithdrawn(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("async function checkOwnerTaskSubmissionStatus(", start);
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
@@ -1046,6 +1050,13 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(summary(withdrawal)).toBe("承認待ちを取り消しました。この承認での実行は開始していません。");
     expect(summary({ ...withdrawal, execution_token: "private-fixture" })).toContain("不正");
     expect(summary({ ...withdrawal, executor_started: true })).toContain("不正");
+    const noAuthority = { used_for_authority: false, may_execute: false };
+    const pending = { status: "wait_pending", deadline_at_ms: 1000, ...noAuthority };
+    const cancelled = { status: "wait_cancelled", cancel_requested_at_ms: 500, ...noAuthority };
+    expect(summary(pending)).toContain("返信／期限待機中です。期限は 1970-01-01T00:00:01.000Z");
+    expect(summary(cancelled)).toBe("返信／期限待機を取り消しました。この待機は再開しません。");
+    expect(summary({ ...cancelled, executor_settled: true })).toContain("不正");
+    expect(summary({ ...pending, deadline_at_ms: -1 })).toContain("不正");
   });
 
   it("lets owner cancellation preempt both status reads without rendering a retired response", async () => {
@@ -1911,6 +1922,11 @@ describe("WebChatChannel — Control Center shell", () => {
           state: "waiting", deadline_at_ms: nowMs + 120_000, compute_outcome: "not_started",
           resource_review_required: false,
           used_for_authority: false, may_execute: false },
+        { wait_id: "6".repeat(64), plan_id: "f".repeat(64), revision_digest: "e".repeat(64),
+          task_identity_digest: "2".repeat(64), owner_authentication_required: true,
+          state: "cancelled", deadline_at_ms: nowMs + 120_000, cancelled_at_ms: nowMs, compute_outcome: "not_started",
+          resource_review_required: false,
+          used_for_authority: false, may_execute: false },
         { wait_id: "1".repeat(64), plan_id: "0".repeat(64), revision_digest: "c".repeat(64),
           task_identity_digest: "f".repeat(64),
           state: "resumed", deadline_at_ms: nowMs - 30_000, resumed_at_ms: nowMs - 60_000, wake_reason: "reply",
@@ -2013,6 +2029,9 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain('data-owner-authentication-required="true"');
     expect(rendered).toContain("別入口のwaitはowner tokenを再入力し");
     expect(rendered).toContain("返信／期限待機中");
+    expect(rendered).toContain("返信／期限待機の取消済み");
+    expect(rendered).toContain("取消時刻");
+    expect(rendered).not.toContain('data-plan-id="' + "f".repeat(64) + '"');
     expect(rendered).toContain("C計算中断・新しい返信が必要");
     expect(rendered).toContain('data-operation-plan-resume-wait="true"');
     expect(rendered).toContain('data-operation-plan-resume-input="true"');
@@ -2024,6 +2043,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
     expect(rendered).toContain('data-operation-plan-wait-reply="true"');
+    expect(rendered).toContain('data-wait-id="' + "4".repeat(64) + '"');
     expect(rendered.match(/data-operation-plan-wait="true"/g) ?? []).toHaveLength(0);
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");
     expect(rendered).not.toContain("PRIVATE WAIT GOAL MUST NOT RENDER");
@@ -6294,9 +6314,19 @@ describe("WebChatChannel — HTTP inbound", () => {
       });
       expect(isGatewayInternalInboundRequest(ownerCtx.received[0])).toBe(true);
       expect(ownerCtx.received[0]?.metadata).not.toHaveProperty("authority");
+      const waitReplyKey = "blue_tanuki.operation_plan.owner_wait_reply_id";
+      expect(ownerCtx.received[0]?.metadata?.[waitReplyKey]).toBeUndefined();
       expect((await postJson(ownerCtx.port, "/owner/inbound", {
         user: "owner-ui", content: "not a wait reply", plan_id: "a".repeat(64),
       }, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(400);
+      const validReply = { user: "owner-ui", content: "reply fixture", plan_id: "a".repeat(64),
+        revision_digest: "b".repeat(64), wait_id: "c".repeat(64) };
+      for (const invalidReply of [{ ...validReply, plan_id: undefined }, { ...validReply, wait_id: null },
+        { ...validReply, wait_id: "wrong" }]) {
+        const denied = await postJson(ownerCtx.port, "/owner/inbound", invalidReply, { authorization: `Bearer ${OWNER_TOKEN}` });
+        expect(denied.status).toBe(400);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+      }
       expect(ownerCtx.received).toHaveLength(1);
 
       const ordinaryOwnerInput = await postJson(ownerCtx.port, "/owner/inbound", {
@@ -6307,6 +6337,11 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(ownerCtx.received).toHaveLength(2);
       expect(isGatewayInternalInboundRequest(ownerCtx.received[1])).toBe(false);
       expect(ownerCtx.received[1]).not.toHaveProperty("session_id");
+      const waitReply = await postJson(ownerCtx.port, "/owner/inbound", validReply, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(waitReply.status).toBe(202);
+      expect(ownerCtx.received).toHaveLength(3);
+      expect(isGatewayInternalInboundRequest(ownerCtx.received[2])).toBe(true);
+      expect(ownerCtx.received[2]?.metadata?.[waitReplyKey]).toBe(validReply.wait_id);
     } finally {
       await ownerCtx.teardown();
     }
@@ -6665,6 +6700,56 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(projectedRequests).toEqual([requestId, requestId]);
       expect(executionRequests).toEqual([requestId, requestId]);
       expect(planStepRequests).toEqual([requestId, requestId]);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("shows and cancels a durable wait only for the exact authenticated owner receipt", async () => {
+    const submissionId = "00000000-0000-4000-8000-000000000161";
+    const requestId = "00000000-0000-4000-8000-000000000162";
+    const store = createTestOwnerTaskSubmissionStore();
+    store.claim({ submission_id: submissionId, payload_digest: "a".repeat(64), request_id: requestId });
+    store.markHandlerReturned(requestId);
+    const noAuthority = { used_for_authority: false, may_execute: false } as const;
+    const pending = { status: "wait_pending", deadline_at_ms: 1000, ...noAuthority } as const;
+    const cancelled = { status: "wait_cancelled", cancel_requested_at_ms: 500, ...noAuthority } as const;
+    const projected: string[] = [];
+    const cancelledRequests: string[] = [];
+    const cancelledWithPrivateEvidence = { ...cancelled, wait_id: "private-wait-reference" };
+    let current: typeof pending | typeof cancelled = pending;
+    let cancellation: typeof cancelled = cancelledWithPrivateEvidence;
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      owner_task_submission_store: store,
+      onOwnerTaskSubmissionCancellationStatus: async ({ request_id }) => { projected.push(request_id); return current; },
+      onOwnerTaskSubmissionCancellation: async ({ request_id }) => { cancelledRequests.push(request_id); return cancellation; },
+    });
+    try {
+      await ownerCtx.ch.start(async () => {});
+      const statusRoute = "/owner/task-submission-status";
+      const cancelRoute = "/owner/task-submission-cancel";
+      const body = { submission_id: submissionId };
+      const auth = { authorization: `Bearer ${OWNER_TOKEN}` };
+      expect((await postJson(ownerCtx.port, statusRoute, body)).status).toBe(401);
+      expect((await postJson(ownerCtx.port, cancelRoute, body)).status).toBe(401);
+      expect((await postJson(ownerCtx.port, cancelRoute, { ...body, request_id: requestId }, auth)).status).toBe(400);
+      expect((await postJson(ownerCtx.port, cancelRoute,
+        { submission_id: "00000000-0000-4000-8000-000000000163" }, auth)).status).toBe(404);
+      expect(projected).toEqual([]);
+      expect(cancelledRequests).toEqual([]);
+      expect((await postJson(ownerCtx.port, statusRoute, body, auth)).body).toMatchObject({ found: true, cancellation: pending });
+      const malformed = await postJson(ownerCtx.port, cancelRoute, body, auth);
+      expect(malformed.status).toBe(409);
+      expect(JSON.stringify(malformed.body)).not.toContain("private-wait-reference");
+      cancellation = cancelled;
+      const cancel = await postJson(ownerCtx.port, cancelRoute, body, auth);
+      expect(cancel.status).toBe(202);
+      expect(cancel.body).toEqual({ found: true, accepted: true, cancellation: cancelled });
+      current = cancelled;
+      expect((await postJson(ownerCtx.port, statusRoute, body, auth)).body).toMatchObject({ found: true, cancellation: cancelled });
+      expect(projected).toEqual([requestId, requestId]);
+      expect(cancelledRequests).toEqual([requestId, requestId]);
     } finally {
       await ownerCtx.teardown();
     }
