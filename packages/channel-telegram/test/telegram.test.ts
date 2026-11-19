@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InboundEphemeralContext } from "@blue-tanuki/channel-base";
+import type { InboundEphemeralContext, SendResult } from "@blue-tanuki/channel-base";
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import {
   TelegramChannel,
@@ -542,18 +542,29 @@ describe("Telegram inbound stop and restart", () => {
     const handlerEntered = deferred<void>();
     const releaseOldHandler = deferred<void>();
     const afterDispatch = deferred<void>();
+    const oldReply = deferred<SendResult>();
+    const newReply = deferred<SendResult>();
+    const outbound: string[] = [];
+    const meta = { command_id: "fixture", upstream_commit_hash: "a".repeat(64) };
     const oldHandler = vi.fn(async () => {
       handlerEntered.resolve();
       await releaseOldHandler.promise;
+      oldReply.resolve(await channel.send({ channel: "telegram", target: "12345", content: "old reply" }, meta));
     });
-    const currentHandler = vi.fn(async () => {});
+    const currentHandler = vi.fn(async () => {
+      newReply.resolve(await channel.send({ channel: "telegram", target: "12345", content: "new reply" }, meta));
+    });
     const inbox = new MemoryTelegramInbox();
     const claim = vi.spyOn(inbox, "claim");
     const settle = vi.spyOn(inbox, "settle");
     const offsets: Array<number | null> = [];
     const fetch: TelegramFetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number; text?: string };
+      if (String(input).endsWith("/sendMessage")) {
+        outbound.push(body.text ?? "");
+        return telegramResult({ message_id: 100 + outbound.length });
+      }
       expect(String(input)).toMatch(/\/getUpdates$/u);
-      const body = JSON.parse(String(init?.body ?? "{}")) as { offset?: number };
       offsets.push(body.offset ?? null);
       if (offsets.length <= 2) return telegramResult([first, next]);
       afterDispatch.resolve();
@@ -568,14 +579,19 @@ describe("Telegram inbound stop and restart", () => {
       expect(inbox.state()).toBe("outcome_unknown");
       expect(inbox.latestUpdateId()).toBe(91);
       expect(claim.mock.calls).toEqual([[91, expect.any(String)]]);
+      const stopped = await channel.send({ channel: "telegram", target: "12345", content: "stopped reply" }, meta);
+      expect(stopped).toMatchObject({ delivered: false, delivery_status: "not_delivered", error_code: "cancelled_before_dispatch" });
 
       await channel.start(currentHandler);
       await afterDispatch.promise;
       expect(offsets).toEqual([null, 92, 93]);
       expect(currentHandler.mock.calls).toEqual([[expect.objectContaining({ id: "telegram-92" }), undefined]]);
+      expect(await newReply.promise).toMatchObject({ delivered: true, external_id: "telegram-101" });
 
       releaseOldHandler.resolve();
+      expect(await oldReply.promise).toMatchObject({ delivered: false, delivery_status: "not_delivered", error_code: "cancelled_before_dispatch" });
       await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(outbound).toEqual(["new reply"]);
       expect(oldHandler.mock.calls).toEqual([[expect.objectContaining({ id: "telegram-91" }), undefined]]);
       expect(claim.mock.calls.map(([id]) => id)).toEqual([91, 91, 92]);
       expect(settle.mock.calls).toEqual([
@@ -588,6 +604,124 @@ describe("Telegram inbound stop and restart", () => {
       await channel.stop();
       releaseOldHandler.resolve();
     }
+  });
+});
+
+describe("Telegram outbound stop and acknowledgement", () => {
+  const meta = { command_id: "fixture", upstream_commit_hash: "a".repeat(64) };
+
+  it("keeps an admitted update stopped across Gateway stop-signal rotation during attachment normalization", async () => {
+    let gatewayStop = new AbortController();
+    const attachmentRequested = deferred<void>();
+    const attachmentResponse = deferred<Response>();
+    const oldReply = deferred<SendResult>();
+    const currentReply = deferred<SendResult>();
+    const oldUpdate = fixtureMessage(101, "previous input");
+    oldUpdate.message!.document = { file_id: "fixture-file", file_name: "note.txt", mime_type: "text/plain", file_size: 8 };
+    let polls = 0;
+    const sent: string[] = [];
+    const fetch: TelegramFetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/getUpdates")) {
+        polls += 1;
+        return polls === 1
+          ? telegramResult([oldUpdate, fixtureMessage(102, "fresh input")])
+          : idlePoll(init?.signal);
+      }
+      if (url.endsWith("/getFile")) {
+        attachmentRequested.resolve();
+        return attachmentResponse.promise;
+      }
+      if (url.endsWith("/documents/note.txt")) return new Response("fixture!");
+      const body = JSON.parse(String(init?.body ?? "{}")) as { text: string };
+      sent.push(body.text);
+      return telegramResult({ message_id: 200 + sent.length });
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", outbound_stop_signal: () => gatewayStop.signal,
+      fetch, inbox: new MemoryTelegramInbox(), inbound_grants: [lifecycleGrant] });
+    try {
+      await channel.start(async (request) => {
+        if (request.id === "telegram-101") {
+          oldReply.resolve(await channel.send({ channel: "telegram", target: "12345", content: "old" }, meta));
+          return;
+        }
+        currentReply.resolve(await channel.send({ channel: "telegram", target: "12345", content: "current" }, meta));
+      });
+      await attachmentRequested.promise;
+      gatewayStop.abort();
+      expect(await channel.send({ channel: "telegram", target: "12345", content: "blocked" }, meta)).toMatchObject({
+        delivered: false, delivery_status: "not_delivered", error_code: "cancelled_before_dispatch",
+      });
+      gatewayStop = new AbortController();
+      attachmentResponse.resolve(telegramResult({ file_path: "documents/note.txt", file_size: 8 }));
+      expect(await oldReply.promise).toMatchObject({ delivered: false, delivery_status: "not_delivered", error_code: "cancelled_before_dispatch" });
+      expect(await currentReply.promise).toMatchObject({ delivered: true, external_id: "telegram-201" });
+      expect(sent).toEqual(["current"]);
+    } finally {
+      attachmentResponse.resolve(telegramResult({}));
+      await channel.stop();
+    }
+  });
+
+  it("settles a partial pre-start send as unknown when stopped and discards a late acknowledgement", async () => {
+    let sends = 0;
+    const reached = deferred<AbortSignal | null | undefined>();
+    const lateResponse = deferred<Response>();
+    const fetch: TelegramFetch = async (_input, init) => {
+      sends += 1;
+      if (sends === 1) return telegramResult({ message_id: 301 });
+      reached.resolve(init?.signal);
+      return lateResponse.promise;
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, request_timeout_ms: 2000 });
+    const result = channel.send({ channel: "telegram", target: "12345", content: "x".repeat(8193) }, meta);
+    try {
+      const signal = await reached.promise;
+      expect(signal?.aborted).toBe(false);
+      await channel.stop();
+      expect(signal?.aborted).toBe(true);
+      expect(await result).toMatchObject({ delivered: false, delivery_status: "unknown", error: "telegram_partial_delivery_unknown",
+        error_code: "delivery_outcome_unknown" });
+      lateResponse.resolve(telegramResult({ message_id: 302 }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sends).toBe(2);
+      expect(channel.getHistory().filter(entry => entry.ok).map(entry => entry.external_id)).toEqual(["telegram-301"]);
+    } finally {
+      lateResponse.resolve(telegramResult({}));
+      await channel.stop();
+    }
+  });
+
+  it("bounds the send confirmation body and never promotes an acknowledgement that arrives after the deadline", async () => {
+    let sentSignal: AbortSignal | null | undefined;
+    let responseBody!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start: controller => { responseBody = controller; } });
+    const fetch: TelegramFetch = async (_input, init) => {
+      sentSignal = init?.signal;
+      return new Response(stream);
+    };
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, request_timeout_ms: 25 });
+    try {
+      expect(await channel.send({ channel: "telegram", target: "12345", content: "fixture" }, meta)).toMatchObject({
+        delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown",
+      });
+      expect(sentSignal?.aborted).toBe(true);
+    } finally {
+      responseBody.enqueue(new TextEncoder().encode(JSON.stringify({ ok: true, result: { message_id: 303 } })));
+      responseBody.close();
+      await channel.stop();
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(channel.getHistory().some(entry => entry.ok)).toBe(false);
+  });
+
+  it("requires a native message identifier before any subsequent chunk", async () => {
+    const fetch = vi.fn<TelegramFetch>(async () => telegramResult({}));
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch });
+    const result = await channel.send({ channel: "telegram", target: "12345", content: "x".repeat(4097) }, meta);
+    expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+    expect(result.external_id).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 

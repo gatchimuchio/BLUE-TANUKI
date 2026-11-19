@@ -1606,12 +1606,15 @@ async function serveWithOwnerLease(
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
   const activeCommandFinalizations = new Set<Promise<void>>();
   const emergencyStopStateStore = EmergencyStopStateStore.fromEnvironment(process.env);
+  // Telegram can reply directly, outside the active task execution registry.
+  let telegramOutboundStop = new AbortController();
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
     hasUnsettledWork: () => activeCommandFinalizations.size > 0 || executionTasks.size > 0 ||
       activeTaskExecutions.snapshot().length > 0,
     abortRunningExecutions: ({ actor, requested_at_ms }) => {
+      telegramOutboundStop.abort();
       for (const execution of activeTaskExecutions.snapshot()) {
         try {
           requestTaskExecutionCancellation(execution.command_id, {
@@ -1629,6 +1632,7 @@ async function serveWithOwnerLease(
       }
     },
   });
+  if (emergencyStop.active) telegramOutboundStop.abort();
   const router = new InboundRouter({
     propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams", "line"],
     redactHandlerErrorsForChannels: ["telegram", "slack", "teams", "line"],
@@ -8451,6 +8455,11 @@ async function serveWithOwnerLease(
       ...(telegramUpdateStore ? { inbox: telegramUpdateStore } : {}),
       poll_interval_ms: parsePositiveInt(process.env.TELEGRAM_POLL_INTERVAL_MS),
       poll_timeout_sec: parsePositiveInt(process.env.TELEGRAM_POLL_TIMEOUT_SEC),
+      outbound_stop_signal: () => {
+        if (gatewayShuttingDown || emergencyStop.active) telegramOutboundStop.abort();
+        else if (telegramOutboundStop.signal.aborted) telegramOutboundStop = new AbortController();
+        return telegramOutboundStop.signal;
+      },
       log: (line: string) => telegramLog.info(line),
     }],
   });
@@ -9326,6 +9335,7 @@ async function serveWithOwnerLease(
     shutdown: async () => {
       gatewayLog.info("shutting down");
       gatewayShuttingDown = true;
+      telegramOutboundStop.abort();
       for (const digest of telegramInitialGrants.keys()) discardTelegramInitialGrant(digest);
       waitDeadlineScheduler.stop();
       clearInterval(failureMemoryVerificationTimer);

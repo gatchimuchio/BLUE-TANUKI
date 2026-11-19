@@ -809,16 +809,6 @@ require("node:module").syncBuiltinESMExports();
       caption: "合成添付を読んでください。", document: { file_id: fileId, mime_type: "text/plain", file_size: attachment.length },
       chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" }, from: { id: Number(TELEGRAM_USER_ID), is_bot: false } } };
     const updateDigest = createHash("sha256").update(JSON.stringify(update)).digest("hex");
-    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-    const readCursor = () => {
-      const database = new DatabaseSync(join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite"),
-        { readOnly: true });
-      try {
-        return database.prepare("SELECT update_id, payload_digest, delivery_state FROM telegram_update_cursor").all();
-      } finally {
-        database.close();
-      }
-    };
     let providerRequests = 0;
     const provider = createServer((_request, response) => {
       providerRequests += 1;
@@ -841,7 +831,9 @@ require("node:module").syncBuiltinESMExports();
       await waitForHealth(gatewayPort, gateway, 40_000);
       await waitFor(() => readCaptureEvents(captureFile).find((event) => event.method === "getFile") ?? null,
         gateway, "Telegramの添付照会が永続受付後に開始されなかった");
-      expect(readCursor()).toEqual([{ update_id: update.update_id, payload_digest: updateDigest, delivery_state: "dispatching" }]);
+      expect(readTelegramInboxCursor(stateRoot)).toEqual([
+        { update_id: update.update_id, payload_digest: updateDigest, delivery_state: "dispatching" },
+      ]);
 
       const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
       writeFileSync(shutdownFile, "stop\n", "utf8");
@@ -849,7 +841,9 @@ require("node:module").syncBuiltinESMExports();
       gateway = undefined;
       expect(readCaptureEvents(captureFile).map((event) => event.method))
         .toEqual(["getUpdates", "getFile", "getFileAborted"]);
-      expect(readCursor()).toEqual([{ update_id: update.update_id, payload_digest: updateDigest, delivery_state: "outcome_unknown" }]);
+      expect(readTelegramInboxCursor(stateRoot)).toEqual([
+        { update_id: update.update_id, payload_digest: updateDigest, delivery_state: "outcome_unknown" },
+      ]);
 
       delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
       env.BT_F1003_TELEGRAM_CAPTURE = restartedCaptureFile;
@@ -866,6 +860,180 @@ require("node:module").syncBuiltinESMExports();
       provider.closeAllConnections();
       await closeServer(provider);
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it.each(["shutdown", "andon"] as const)("closes Telegram reply admission and retains in-flight ambiguity during %s", async (stopMode) => {
+    const root = mkdtempSync(join(tmpdir(), "bt-telegram-reply-stop-"));
+    const stateRoot = join(root, "state");
+    const historyFile = join(root, "history.jsonl");
+    const capture = join(root, "telegram.jsonl");
+    const restartCapture = join(root, "restart.jsonl");
+    const networkPreload = join(root, "telegram-fetch-fixture.cjs");
+    const observerPreload = join(root, "observe-telegram-stop.mjs");
+    const shutdownFile = join(root, "request-shutdown");
+    const probeFile = join(root, "attempt-late-send");
+    const reopenedProbeFile = join(root, "attempt-send-after-clear");
+    const envFile = join(root, "fixture.env");
+    const resumeToken = "synthetic-telegram-stop-resume-token";
+    const requestText = "合成試験用の青い花について一行で説明してください。";
+    const replyText = "合成試験で青い花について回答します。";
+    const update = { update_id: 774, message: { message_id: 774, message_thread_id: TELEGRAM_THREAD_ID, text: requestText,
+      chat: { id: Number(TELEGRAM_CHAT_ID), type: "supergroup" }, from: { id: Number(TELEGRAM_USER_ID), is_bot: false } } };
+    const eventIdentity = { update_id: update.update_id, payload_digest: createHash("sha256").update(JSON.stringify(update)).digest("hex") };
+    const providerBodies: string[] = [];
+    const provider = createServer((request, response) => {
+      void readRequest(request).then(body => {
+        providerBodies.push(body);
+        if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+          response.writeHead(404).end();
+          return;
+        }
+        const content = body.includes("blue-tanuki.memory-citation-response.v1") ? JSON.stringify({
+          schema_version: "blue-tanuki.memory-citation-response.v1", answer: replyText, citations: [],
+        }) : replyText;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "telegram-stop-fixture", object: "chat.completion", created: 1,
+          model: "f1003-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+      }).catch(() => response.writeHead(500).end());
+    });
+    let gateway: CapturedProcess | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const env = isolatedEnvironment(providerPort, gatewayPort, join(root, "audit"), stateRoot,
+        join(root, "memory.jsonl"), historyFile, join(root, "sessions"), capture, JSON.stringify([update]));
+      env.WEBCHAT_RESUME_TOKEN = resumeToken;
+      env.BT_F1003_TELEGRAM_SHUTDOWN_FILE = shutdownFile;
+      env.BT_F1003_TELEGRAM_HOLD_SEND = "1";
+      writeFileSync(envFile, "# 隔離済みの合成試験\n", "utf8");
+      writeFileSync(networkPreload, telegramFetchPreload(), "utf8");
+      const adapter = pathToFileURL(join(ROOT, "packages/channel-telegram/dist/index.js")).href;
+      writeFileSync(observerPreload, `
+import { appendFileSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { TelegramChannel } from ${JSON.stringify(adapter)};
+createRequire(import.meta.url)(${JSON.stringify(networkPreload)});
+
+const stopMode = ${JSON.stringify(stopMode)};
+const probeFile = ${JSON.stringify(probeFile)};
+const reopenedProbeFile = ${JSON.stringify(reopenedProbeFile)};
+const lateCommandId = "synthetic-telegram-after-stop-probe";
+const reopenedCommandId = "synthetic-telegram-after-clear-probe";
+const send = TelegramChannel.prototype.send;
+let observedChannel;
+function record(event) {
+  appendFileSync(process.env.BT_F1003_TELEGRAM_CAPTURE, JSON.stringify(event) + "\\n");
+}
+TelegramChannel.prototype.send = async function (payload, meta, context) {
+  const late = meta.command_id === lateCommandId;
+  const reopened = meta.command_id === reopenedCommandId;
+  if (!late && !reopened) {
+    observedChannel = this;
+    record({ method: "telegramReplyEntered", caller_signal: Boolean(context?.signal) });
+  }
+  const result = await send.call(this, payload, meta, context);
+  record({ method: late ? "telegramLateSendResult" : reopened ? "telegramClearedSendResult" : "telegramReplyResult", delivered: result.delivered,
+    delivery_status: result.delivery_status, error_code: result.error_code });
+  return result;
+};
+async function attemptProbe(channel, commandId, content) {
+  await channel.send({ channel: "telegram", target: ${JSON.stringify(TELEGRAM_CHAT_ID)}, content },
+    { command_id: commandId, upstream_commit_hash: "a".repeat(64) });
+}
+if (stopMode === "shutdown") {
+  const stop = TelegramChannel.prototype.stop;
+  TelegramChannel.prototype.stop = async function () {
+    await stop.call(this);
+    if (this === observedChannel) await attemptProbe(this, lateCommandId, "合成停止後送信");
+  };
+} else {
+  let lateAttempted = false;
+  const timer = setInterval(() => {
+    if (!observedChannel) return;
+    if (!lateAttempted && existsSync(probeFile)) {
+      lateAttempted = true;
+      void attemptProbe(observedChannel, lateCommandId, "合成停止後送信").catch(() => record({ method: "telegramLateSendProbeFailed" }));
+    }
+    if (existsSync(reopenedProbeFile)) {
+      clearInterval(timer);
+      void attemptProbe(observedChannel, reopenedCommandId, "合成解除後送信").catch(() => record({ method: "telegramClearedSendProbeFailed" }));
+    }
+  }, 20);
+  timer.unref();
+}
+`, "utf8");
+
+      gateway = spawnGateway(env, observerPreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      await waitFor(() => readCaptureEvents(capture).find(event => event.method === "sendMessage") ?? null,
+        gateway, "許可されたTelegram依頼の返信が実送信境界に到達しなかった");
+      expect(providerBodies).toHaveLength(1);
+      expect(providerBodies[0]).toContain(requestText);
+      expect(readCaptureEvents(capture)).toContainEqual({ method: "telegramReplyEntered", caller_signal: false });
+      expect(readTelegramInboxCursor(stateRoot)).toEqual([{ ...eventIdentity, delivery_state: "dispatching" }]);
+
+      if (stopMode === "andon") {
+        const changeStop = (action: "activate" | "clear") => fetch(`http://127.0.0.1:${gatewayPort}/approval/emergency-stop`, {
+          method: "POST", headers: { authorization: `Bearer ${resumeToken}`, "content-type": "application/json" },
+          body: JSON.stringify({ action, reason: "合成Telegram停止試験" }), signal: AbortSignal.timeout(8_000),
+        });
+        const response = await changeStop("activate");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ ok: true, result: { active: true } });
+        writeFileSync(probeFile, "late send\n", "utf8");
+        await waitFor(() => {
+          const events = readCaptureEvents(capture);
+          return events.some(event => event.method === "telegramReplyResult") &&
+            events.some(event => event.method === "telegramLateSendResult") ? true : null;
+        }, gateway, "Andonが発行済み返信を中断し、追加送信を遮断する結果を観測できなかった");
+        expect(readCaptureEvents(capture).filter(event => event.method === "sendMessage")).toHaveLength(1);
+        const cleared = await changeStop("clear");
+        expect(cleared.status, await cleared.clone().text()).toBe(200);
+        expect(await cleared.json()).toMatchObject({ ok: true, result: { active: false } });
+        writeFileSync(reopenedProbeFile, "new send after clear\n", "utf8");
+        const fresh = await waitFor(() => readCaptureEvents(capture).find(event => event.method === "telegramClearedSendResult") ?? null,
+          gateway, "Andon解除後に新しい送信の結果を観測できなかった");
+        expect(fresh).toMatchObject({ delivered: true, delivery_status: "delivered" });
+      }
+      const stopped = once(gateway.child, "close", { signal: AbortSignal.timeout(10_000) });
+      writeFileSync(shutdownFile, "stop\n", "utf8");
+      expect(await stopped).toEqual([0, null]);
+      gateway = undefined;
+
+      const events = readCaptureEvents(capture);
+      expect(events.filter(event => event.method === "sendMessage")).toEqual([
+        { method: "sendMessage", chat_id: TELEGRAM_CHAT_ID, message_thread_id: TELEGRAM_THREAD_ID, text: expect.stringContaining(replyText) },
+        ...(stopMode === "andon" ? [{ method: "sendMessage", chat_id: TELEGRAM_CHAT_ID, text: "合成解除後送信" }] : []),
+      ]);
+      expect(events.filter(event => event.method === "sendMessageResponseAfterAbort")).toHaveLength(1);
+      expect(events).toContainEqual({ method: "telegramReplyResult", delivered: false,
+        delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+      expect(events).toContainEqual(expect.objectContaining({ method: "telegramLateSendResult", delivered: false,
+        delivery_status: "not_delivered" }));
+      expect(readCaptureText(capture) ?? "").not.toContain(TELEGRAM_TOKEN);
+
+      if (stopMode === "shutdown") {
+        const interrupted = [{ ...eventIdentity, delivery_state: "outcome_unknown" }];
+        expect(readTelegramInboxCursor(stateRoot)).toEqual(interrupted);
+        delete env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
+        delete env.BT_F1003_TELEGRAM_HOLD_SEND;
+        env.BT_F1003_TELEGRAM_CAPTURE = restartCapture;
+        gateway = spawnGateway(env, networkPreload, envFile);
+        await waitForHealth(gatewayPort, gateway, 40_000);
+        const firstPoll = await waitFor(() => readCaptureEvents(restartCapture)
+          .find(event => event.method === "getUpdates") ?? null, gateway, "再起動後のTelegram照会を観測できなかった");
+        expect(firstPoll).toMatchObject({ offset: update.update_id + 1, update_ids: [] });
+        expect(readTelegramInboxCursor(stateRoot)).toEqual(interrupted);
+        expect(readCaptureEvents(restartCapture).every(event => event.method === "getUpdates")).toBe(true);
+        expect(providerBodies).toHaveLength(1);
+      }
+    } finally {
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
   }, 120_000);
 });
@@ -2242,11 +2410,23 @@ function operationPlanCandidate(requestId: string, fileRoot: string): OperationP
   };
 }
 
+function readTelegramInboxCursor(stateRoot: string) {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  const database = new DatabaseSync(join(stateRoot, "private-state", "telegram-inbox", "telegram-inbox.sqlite"),
+    { readOnly: true });
+  try {
+    return database.prepare("SELECT update_id, payload_digest, delivery_state FROM telegram_update_cursor").all();
+  } finally {
+    database.close();
+  }
+}
+
 function telegramFetchPreload(): string {
   return `
 const fs = require("node:fs");
 const { createHash } = require("node:crypto");
 const originalFetch = globalThis.fetch.bind(globalThis);
+let heldReply = false;
 function append(event) { fs.appendFileSync(process.env.BT_F1003_TELEGRAM_CAPTURE, JSON.stringify(event) + "\\n", "utf8"); }
 const shutdownFile = process.env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
 if (shutdownFile) {
@@ -2295,6 +2475,17 @@ globalThis.fetch = async (input, init) => {
     }
     if (method === "sendMessage") {
       append({ method, chat_id: body.chat_id, message_thread_id: body.message_thread_id, text: body.text });
+      if (process.env.BT_F1003_TELEGRAM_HOLD_SEND === "1" && !heldReply) {
+        heldReply = true;
+        await new Promise(resolve => {
+          const lateSuccess = () => {
+            append({ method: "sendMessageResponseAfterAbort" });
+            resolve();
+          };
+          if (init?.signal?.aborted) lateSuccess();
+          else init?.signal?.addEventListener("abort", lateSuccess, { once: true });
+        });
+      }
       return new Response(JSON.stringify({ ok: true, result: { message_id: 9002 } }),
         { status: 200, headers: { "content-type": "application/json" } });
     }

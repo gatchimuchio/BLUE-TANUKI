@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -35,6 +36,8 @@ export interface TelegramOptions {
   inbox?: TelegramUpdateInbox;
   /** Exact owner-configured inbound grants. Empty or absent rejects all inbound messages. */
   inbound_grants?: readonly TelegramInboundGrant[];
+  /** Current Gateway outbound stop generation, when the channel is run by the Gateway. */
+  outbound_stop_signal?: () => AbortSignal;
 }
 
 export interface TelegramUpdateInbox {
@@ -125,6 +128,8 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   readonly name = "telegram";
   private started = false;
   private silent = false;
+  private lifecycle = new AbortController();
+  private readonly inboundOutboundSignal = new AsyncLocalStorage<AbortSignal>();
   private polling?: TelegramPollingSession;
   private readonly history: SentRecord[] = [];
   private counter = 0;
@@ -133,34 +138,33 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
 
   async start(handler: InboundHandler): Promise<void> {
     if (this.started) return;
+    if (this.opts.bot_token && !this.opts.inbox) throw new Error("telegram_durable_inbox_required_for_live_polling");
+    const latestUpdateId = this.opts.bot_token ? this.opts.inbox?.latestUpdateId() ?? null : null;
+    if (this.lifecycle.signal.aborted) this.lifecycle = new AbortController();
+    this.started = true;
     if (!this.opts.bot_token) {
-      this.started = true;
       this.silent = true;
       this.log("[telegram] WARN TELEGRAM_BOT_TOKEN unset — running in silent mode");
       return;
     }
-    if (!this.opts.inbox) throw new Error("telegram_durable_inbox_required_for_live_polling");
     if (!this.opts.inbound_grants?.length) {
       this.log("[telegram] WARN TELEGRAM_INBOUND_GRANTS_JSON unset/empty — inbound messages are rejected");
     }
-    const latestUpdateId = this.opts.inbox.latestUpdateId();
     const polling: TelegramPollingSession = {
-      controller: new AbortController(),
+      controller: this.lifecycle,
       offset: latestUpdateId === null ? 0 : latestUpdateId + 1,
     };
-    this.started = true;
     this.polling = polling;
     polling.loop = this.pollLoop(polling, handler);
     this.log("[telegram] polling started");
   }
 
   async stop(): Promise<void> {
-    if (!this.started) return;
     this.started = false;
     const polling = this.polling;
     this.polling = undefined;
+    this.lifecycle.abort();
     if (!polling) return;
-    polling.controller.abort();
     const claim = polling.claim;
     // Gateway closes the inbox after stop. Record incomplete claims while it is still open.
     if (claim) {
@@ -174,8 +178,9 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
   }
 
   async send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult> {
-    if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
-      error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    const signal = AbortSignal.any([this.lifecycle.signal, this.opts.outbound_stop_signal?.(),
+      this.inboundOutboundSignal.getStore(), context?.signal].filter((candidate): candidate is AbortSignal => candidate !== undefined));
+    if (signal.aborted) return cancelledBeforeDispatch();
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.opts.bot_token) {
@@ -192,13 +197,8 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     const chunks = splitTelegramText(payload.content);
     const sentIds: string[] = [];
     for (let index = 0; index < chunks.length; index += 1) {
-      if (context?.signal?.aborted) {
-        return sentIds.length === 0
-          ? { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
-              error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" }
-          : { delivered: false, delivery_status: "unknown", error: "telegram_partial_delivery_unknown",
-              error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
-              next_action: "Check the destination's delivered messages before deciding whether to resend." };
+      if (signal.aborted) {
+        return sentIds.length === 0 ? cancelledBeforeDispatch() : unknownDelivery(true);
       }
       try {
         const r = await this.call("sendMessage", {
@@ -206,23 +206,19 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
           ...(target.message_thread_id !== undefined ? { message_thread_id: target.message_thread_id } : {}),
           text: chunks[index],
           disable_web_page_preview: true,
-        }, context?.signal);
+        }, signal);
+        if (signal.aborted) throw new Error("telegram_sendMessage_cancelled_in_flight");
         if (!r.ok) {
           const err = r.description ?? "telegram_send_failed";
           const external_id = `telegram-failed-${meta.command_id}-${this.counter}-${index + 1}`;
           this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at, external_id, ok: false, error: err });
-          if (context?.signal?.aborted || /^telegram_sendMessage_timeout_/u.test(err)) {
-            return { delivered: false, delivery_status: "unknown", error: "telegram_delivery_outcome_unknown",
-              error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
-              next_action: "Check the destination's delivered messages before deciding whether to resend." };
-          }
+          if (/^telegram_sendMessage_timeout_/u.test(err)) return unknownDelivery(sentIds.length > 0);
           return sentIds.length === 0
             ? { delivered: false, delivery_status: "not_delivered", error: err }
-            : { delivered: false, delivery_status: "unknown", error: "telegram_partial_delivery_unknown",
-                error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
-                next_action: "Check the destination's delivered messages before deciding whether to resend." };
+            : unknownDelivery(true);
         }
-        const messageId = readTelegramMessageId(r.result) ?? `${this.counter}-${index + 1}`;
+        const messageId = readTelegramMessageId(r.result);
+        if (messageId === null) throw new Error("telegram_sendMessage_receipt_unconfirmed");
         const external_id = `telegram-${messageId}`;
         sentIds.push(external_id);
         this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at, external_id, ok: true });
@@ -230,10 +226,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         const err = e instanceof Error ? e.message : String(e);
         this.history.push({ payload: { ...payload, content: chunks[index]! }, meta, at,
           external_id: `telegram-error-${meta.command_id}-${this.counter}-${index + 1}`, ok: false, error: err });
-        return { delivered: false, delivery_status: "unknown",
-          error: sentIds.length === 0 ? "telegram_delivery_outcome_unknown" : "telegram_partial_delivery_unknown",
-          error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
-          next_action: "Check the destination's delivered messages before deciding whether to resend." };
+        return unknownDelivery(sentIds.length > 0);
       }
     }
     return { delivered: true, delivery_status: "delivered", external_id: sentIds.at(-1) };
@@ -271,13 +264,15 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
             }
             if (!claim && update.update_id < polling.offset) continue;
             if (claim?.status === "accepted") polling.claim = { updateId: update.update_id, payloadDigest };
+            const stopSignal = this.opts.outbound_stop_signal?.();
+            const outboundSignal = stopSignal ? AbortSignal.any([signal, stopSignal]) : signal;
             const inbound = await this.normalize(update, signal);
             try {
               if (signal.aborted) return;
               let outcome: "handler_returned" | "outcome_unknown" = "handler_returned";
               if (inbound) {
                 try {
-                  await handler(inbound.request, inbound.context);
+                  await this.inboundOutboundSignal.run(outboundSignal, () => handler(inbound.request, inbound.context));
                 } catch {
                   outcome = "outcome_unknown";
                 }
@@ -651,7 +646,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     const controller = new AbortController();
     const signal = callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
+    const request = async (): Promise<{ ok: boolean; result?: unknown; description?: string }> => {
       signal.throwIfAborted();
       const res = await fetchImpl(url, {
         method: "POST",
@@ -660,8 +655,6 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         redirect: "error",
         signal,
       });
-      // Keep the send deadline on the dispatch request and bound inbound body reads as well.
-      if (method === "sendMessage") clearTimeout(timer);
       if (signal.aborted) {
         void res.body?.cancel().catch(() => undefined);
         signal.throwIfAborted();
@@ -674,6 +667,11 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         return { ok: false, description: res.ok ? "telegram_api_rejected" : `http_${res.status}` };
       }
       throw new Error("telegram_response_unconfirmed");
+    };
+    try {
+      const response = request();
+      // Keep the same deadline through confirmation, even if the transport ignores cancellation.
+      return method === "sendMessage" ? await awaitSendOrAbort(response, signal) : await response;
     } catch (error) {
       if (isAbortError(error)) {
         return { ok: false, description: `telegram_${method}_timeout_${timeoutMs}ms` };
@@ -694,10 +692,38 @@ function stripUndefined(value: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
+async function awaitSendOrAbort<T>(response: Promise<T>, signal: AbortSignal): Promise<T> {
+  let cancel!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    cancel = () => reject(signal.reason);
+    if (signal.aborted) cancel();
+    else signal.addEventListener("abort", cancel, { once: true });
+  });
+  try {
+    return await Promise.race([response, aborted]);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+}
+
+function cancelledBeforeDispatch(): SendResult {
+  return { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+    error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+}
+
+function unknownDelivery(partial: boolean): SendResult {
+  return { delivered: false, delivery_status: "unknown",
+    error: partial ? "telegram_partial_delivery_unknown" : "telegram_delivery_outcome_unknown",
+    error_kind: "non_recoverable", error_code: "delivery_outcome_unknown",
+    next_action: "Check the destination's delivered messages before deciding whether to resend." };
+}
+
 function readTelegramMessageId(value: unknown): string | null {
   if (!isRecord(value)) return null;
   const id = value.message_id;
-  return typeof id === "number" || typeof id === "string" ? String(id) : null;
+  if (typeof id === "number") return Number.isSafeInteger(id) && id > 0 ? String(id) : null;
+  return typeof id === "string" && id === id.trim() && /^[1-9][0-9]{0,15}$/u.test(id) &&
+    Number.isSafeInteger(Number(id)) ? id : null;
 }
 
 function digestUpdate(update: TelegramUpdate): string {
