@@ -186,7 +186,7 @@ import type {
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
   projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
-  projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
+  projectOwnerTaskRequestCommandIds, resolveOwnerTaskSavedResult } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -4991,6 +4991,21 @@ async function serveWithOwnerLease(
     };
   }
 
+  function ownerTaskPlanStepsEvidence(requestId: string): Parameters<typeof projectOwnerTaskPlanSteps>[0] | null {
+    const audit = hds.getAudit();
+    if (!audit.isPersistent() || !audit.verify()) return null;
+    return {
+      requestId,
+      operationPlans: hds.getRuntimeSnapshot().operation_plans,
+      verifiedAudit: audit.list(),
+      pendingCommandIds: [...pendingApprovals.keys()],
+      activeCommandIds: activeTaskExecutions.snapshot().map(item => item.command_id),
+      lookupCommand: key => executionStore.lookupCommand(key),
+      lookupApprovalState: (commandId, requestId) => approvalRecoveryStore.lookupState(commandId, requestId),
+      confirmResultMemory: commandId => hds.operationPlanResultReadyForReturn(commandId),
+    };
+  }
+
   const ownerTaskSubmissionStore = GatewayWebChatOwnerTaskStore.fromEnvironment(process.env);
   webchat = plugins.createChannel<WebChatChannel>({
     package_name: "@blue-tanuki/channel-webchat",
@@ -5023,20 +5038,38 @@ async function serveWithOwnerLease(
         });
       },
       onOwnerTaskSubmissionPlanSteps: async ({ request_id }: { request_id: string }) => {
-        const audit = hds.getAudit();
-        if (!audit.isPersistent() || !audit.verify()) {
-          return { status: "unknown" as const, used_for_authority: false as const, may_execute: false as const };
-        }
-        return projectOwnerTaskPlanSteps({
-          requestId: request_id,
-          operationPlans: hds.getRuntimeSnapshot().operation_plans,
-          verifiedAudit: audit.list(),
-          pendingCommandIds: [...pendingApprovals.keys()],
-          activeCommandIds: activeTaskExecutions.snapshot().map(item => item.command_id),
-          lookupCommand: key => executionStore.lookupCommand(key),
-          lookupApprovalState: (commandId, requestId) => approvalRecoveryStore.lookupState(commandId, requestId),
-          confirmResultMemory: commandId => hds.operationPlanResultReadyForReturn(commandId),
+        const evidence = ownerTaskPlanStepsEvidence(request_id);
+        return evidence ? projectOwnerTaskPlanSteps(evidence)
+          : { status: "unknown" as const, used_for_authority: false as const, may_execute: false as const };
+      },
+      onOwnerTaskSubmissionSavedResult: async ({ request_id, step_index, result_ref }: {
+        request_id: string; step_index: number; result_ref: string;
+      }): Promise<string | null> => {
+        if (!completeHistoryFile) return null;
+        const evidence = ownerTaskPlanStepsEvidence(request_id);
+        const selection = evidence && resolveOwnerTaskSavedResult(evidence, step_index, result_ref);
+        if (!selection) return null;
+        const inbound = createGatewayInternalInboundRequest({
+          id: randomUUID(), channel: "webchat", user: OWNER_TASK_APPROVAL_ACTOR,
+          content: `plan:result ${JSON.stringify(selection)}`, timestamp: Date.now(),
+          metadata: {
+            "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.actor_kind": "owner",
+            "blue_tanuki.trust_level": "owner",
+            "blue_tanuki.process_kind": "tool",
+            "blue_tanuki.operator_surface": "developer",
+            "blue_tanuki.operation_core.source_interface": "gui",
+          },
         });
+        let rendered: string | null = null;
+        await handleInbound(inbound, undefined, {
+          selectionStillCurrent: () => {
+            const current = ownerTaskPlanStepsEvidence(request_id);
+            return current !== null && resolveOwnerTaskSavedResult(current, step_index, result_ref) !== undefined;
+          },
+          emit: (content) => { rendered = content; },
+        });
+        return rendered;
       },
       onOwnerTaskSubmissionCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellationStatus> => {
         let operationPlans: unknown;
@@ -8427,6 +8460,7 @@ async function serveWithOwnerLease(
   const handleInbound = async (
     req: InboundRequest,
     ephemeralContext?: InboundEphemeralContext,
+    returnOwnerSavedResult?: { selectionStillCurrent: () => boolean; emit: (content: string) => void },
   ): Promise<void> => {
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
@@ -8551,6 +8585,35 @@ async function serveWithOwnerLease(
       return;
     }
 
+    if (command?.type === "noop" && command.payload.control_event === "operation_plan_result_return") {
+      if (returnOwnerSavedResult && (!isGatewayInternalInboundRequest(authorityReq) ||
+          authorityReq.channel !== "webchat" || authorityReq.user !== OWNER_TASK_APPROVAL_ACTOR ||
+          authorityReq.id !== log.request_id || log.commit.decision !== "ASSERT" ||
+          command.upstream_decision.commit_hash !== log.commit.hash)) return;
+      const projection = hds.takeOperationPlanSavedResultReturn(command);
+      const withheld = returnOwnerSavedResult !== undefined && (!projection || !returnOwnerSavedResult.selectionStillCurrent());
+      const feedback: ExecuteFeedback = { command_id: command.id, metrics: { duration_ms: 0 },
+        ...(withheld ? { status: "failed", error: "saved_result_unavailable" }
+          : { status: "success", result: { content: savedResultReturnMessage(projection) } }) };
+      const renderedOutput = withheld ? null : renderCommandOutput(command, hds.reviewMemoryCitations(command, feedback));
+      const outputAudit = hds.onOutputAudit({ command, feedback, rendered_output: renderedOutput,
+        target_surface: returnOwnerSavedResult ? "control_center" : "channel", request_id: log.request_id });
+      const recorded = recordFinalOutputHistory(log, authorityReq, authorityReq.user, outputAudit, command);
+      if (returnOwnerSavedResult) {
+        if (projection && renderedOutput && recorded && outputAudit.release_decision === "allow" &&
+            outputAudit.rendered_output_digest === digestValue(renderedOutput) && hds.getAudit().verify()) {
+          returnOwnerSavedResult.emit(renderedOutput);
+        }
+      } else if (renderedOutput) {
+        await dispatcher.dispatch(replyPayload(authorityReq, renderedOutput),
+          { command_id: command.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id });
+      }
+      return;
+    }
+
+    // The owner HTTP result action accepts only the exact J-issued display command.
+    if (returnOwnerSavedResult) return;
+
     if (documentSession?.restored_terminal_state && log.commit.decision === "ASSERT") {
       if (command) {
         hds.onCommandLifecycle(command.id, "approval_cancelled", {
@@ -8665,20 +8728,6 @@ async function serveWithOwnerLease(
           request_id: authorityReq.id,
         });
       }
-      return;
-    }
-
-    if (command?.type === "noop" && command.payload.control_event === "operation_plan_result_return") {
-      const projection = hds.takeOperationPlanSavedResultReturn(command);
-      const feedback: ExecuteFeedback = { command_id: command.id, status: "success",
-        result: { content: savedResultReturnMessage(projection) }, metrics: { duration_ms: 0 } };
-      const reviewed = hds.reviewMemoryCitations(command, feedback);
-      const rendered_output = renderCommandOutput(command, reviewed);
-      const output_audit = hds.onOutputAudit({ command, feedback, rendered_output, target_surface: "channel",
-        request_id: log.request_id });
-      recordFinalOutputHistory(log, authorityReq, authorityReq.user, output_audit, command);
-      if (rendered_output) await dispatcher.dispatch(replyPayload(authorityReq, rendered_output),
-      { command_id: command.id, upstream_commit_hash: log.commit.hash, request_id: log.request_id });
       return;
     }
 

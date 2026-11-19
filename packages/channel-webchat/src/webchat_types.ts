@@ -70,7 +70,7 @@ export const MAX_OWNER_TASK_PLAN_STEPS = 100;
 export type WebChatOwnerTaskPlanStep = { readonly index: number } & (
   { readonly status: "pending" | "awaiting_approval" | "active" | "interrupted" | "outcome_unknown" | "not_attempted" | "held" | "unknown" } |
   { readonly status: "adapter_returned"; readonly feedback_status: "success";
-    readonly verification?: "result_and_memory_confirmed" } |
+    readonly verification?: "result_and_memory_confirmed"; readonly result_ref?: string } |
   { readonly status: "adapter_returned"; readonly feedback_status: "failed" | "suspended" }
 );
 
@@ -2039,6 +2039,8 @@ export interface WebChatOptions {
   onOwnerTaskSubmissionExecutionObservation?: (input: { request_id: string }) => Promise<WebChatTaskExecutionObservation>;
   /** 同じ仕事に結び付いた現行計画ステップの読取専用観測。 */
   onOwnerTaskSubmissionPlanSteps?: (input: { request_id: string }) => Promise<WebChatOwnerTaskPlanSteps>;
+  /** 本人が選択した受付の現行工程の保存済み結果を、画面への一回の応答として返す。 */
+  onOwnerTaskSubmissionSavedResult?: (input: { request_id: string; step_index: number; result_ref: string }) => Promise<string | null>;
   /** Read-only cancellation evidence for the exact authenticated owner task request. */
   onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
   /** Request abort for the single active command bound to an authenticated owner task request. */

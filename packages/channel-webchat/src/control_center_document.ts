@@ -215,7 +215,10 @@ ${CONTROL_CENTER_STYLE}    </style>
             <p class="muted">中止要求は選択した依頼に結び付く現在実行中の処理へAbortSignalを送ります。受付はexecutorや外部処理の停止完了を示しません。状態を再照会してください。</p>
             <p id="owner-task-result-status" class="muted" aria-live="polite" hidden></p>
             <pre id="owner-task-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
-            <p class="muted">再取得本文はGatewayの揮発メモリに最大15分だけ保持され、再起動・期限切れ・容量超過時は取得できません。本文はSQLite、M、CompleteHistoryへ保存しません。表示は実行権限・目標達成・外部処理停止の証拠ではありません。</p>
+            <p class="muted">会話の回答はGatewayの揮発メモリに最大15分だけ保持され、再起動・期限切れ・容量超過時は取得できません。回答本文はSQLite、M、CompleteHistoryへ保存しません。表示は実行権限・目標達成・外部処理停止の証拠ではありません。</p>
+            <div id="owner-task-saved-result-actions" class="row" hidden></div>
+            <p id="owner-task-saved-result-status" class="muted" aria-live="polite" hidden></p>
+            <pre id="owner-task-saved-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
           </div>
         </section>
 

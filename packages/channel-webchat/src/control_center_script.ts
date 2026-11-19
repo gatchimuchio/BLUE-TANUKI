@@ -466,6 +466,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function setActiveScreen(screen) {
         const selected = screen || "conversation";
+        if (state.activeScreen === "tasks" && selected !== "tasks") clearOwnerTaskSavedResult(true);
         if (state.activeScreen === "approvals" && selected !== "approvals") clearGoalPurposeRepairHandoff();
         if (state.activeScreen === "approvals" && selected !== "approvals") {
           clearDailyBriefResult();
@@ -1160,6 +1161,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       let ownerTaskSubmissionIdMemory = null;
       let ownerTaskStatusSubmissionIdsMemory = [];
+      let ownerTaskSavedResultGeneration = 0;
       const OWNER_TASK_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       const OWNER_TASK_STATUS_SUBMISSION_IDS_KEY = "blue-tanuki.owner-task-status-submission-ids.v1";
 
@@ -1441,8 +1443,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       function ownerTaskPlanStepsSummary(value) {
-        const unknown = { text: "計画工程の状態は未確認です。", unsettled: true };
-        if (value === undefined) return { text: "", unsettled: false };
+        const unknown = { text: "計画工程の状態は未確認です。", unsettled: true, savedResults: [] };
+        if (value === undefined) return { text: "", unsettled: false, savedResults: [] };
         if (!isObject(value) || value.status !== "available" || value.used_for_authority !== false || value.may_execute !== false ||
             Object.keys(value).length !== 4 || !Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 100) {
           return unknown;
@@ -1453,6 +1455,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         };
         const feedbackLabels = { success: "成功応答", failed: "失敗応答", suspended: "停止応答" };
         const steps = [];
+        const savedResults = [];
         let unsettled = false;
         for (const [offset, step] of value.steps.entries()) {
           if (!isObject(step) || step.index !== offset + 1 || typeof step.status !== "string") return unknown;
@@ -1460,7 +1463,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (step.status === "adapter_returned") {
             if (typeof step.feedback_status !== "string" || !Object.hasOwn(feedbackLabels, step.feedback_status)) return unknown;
             const verified = step.verification === "result_and_memory_confirmed" && step.feedback_status === "success";
-            if ((step.verification !== undefined && !verified) || Object.keys(step).length !== (verified ? 4 : 3)) return unknown;
+            const hasResultRef = Object.hasOwn(step, "result_ref");
+            if ((step.verification !== undefined && !verified) ||
+                (hasResultRef && (!verified || typeof step.result_ref !== "string" || !/^[a-f0-9]{64}$/.test(step.result_ref))) ||
+                Object.keys(step).length !== (verified ? 4 : 3) + (hasResultRef ? 1 : 0)) return unknown;
+            if (hasResultRef) savedResults.push({ index: step.index, resultRef: step.result_ref });
             label = feedbackLabels[step.feedback_status] + (verified ? "・結果とM受領票を確認済み" : "");
           } else {
             if (!Object.hasOwn(phaseLabels, step.status) || Object.keys(step).length !== 2) return unknown;
@@ -1469,7 +1476,92 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           steps.push(String(step.index) + "「" + label + "」");
         }
-        return { text: "計画工程 " + steps.join("、") + "。", unsettled: unsettled };
+        return { text: "計画工程 " + steps.join("、") + "。", unsettled: unsettled, savedResults: savedResults };
+      }
+
+      function clearOwnerTaskSavedResult(clearActions) {
+        ownerTaskSavedResultGeneration += 1;
+        const pane = byId("owner-task-saved-result");
+        pane.textContent = "";
+        pane.hidden = true;
+        const status = byId("owner-task-saved-result-status");
+        status.textContent = "";
+        status.hidden = true;
+        if (clearActions) {
+          const actions = byId("owner-task-saved-result-actions");
+          actions.replaceChildren();
+          actions.hidden = true;
+        }
+      }
+
+      function renderOwnerTaskSavedResultActions(submissionId, savedResults) {
+        if (!savedResults.length) return;
+        const actions = byId("owner-task-saved-result-actions");
+        for (const step of savedResults) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.textContent = "工程 " + String(step.index) + " の保存済み結果を読む";
+          button.addEventListener("click", function () {
+            return readOwnerTaskSavedResult(submissionId, step, button);
+          });
+          actions.appendChild(button);
+        }
+        actions.hidden = false;
+      }
+
+      async function readOwnerTaskSavedResult(submissionId, step, button) {
+        if (!button.isConnected || button.disabled || ownerTaskStatusSubmissionId() !== submissionId) return;
+        clearOwnerTaskSavedResult(false);
+        const generation = ownerTaskSavedResultGeneration;
+        const ownerTokenInput = byId("owner-task-token");
+        const ownerToken = ownerTokenInput.value.trim();
+        const status = byId("owner-task-saved-result-status");
+        status.hidden = false;
+        if (!ownerToken) {
+          status.textContent = "保存済み結果の読取にはowner tokenを入力してください。";
+          return;
+        }
+        const isCurrent = function () {
+          return generation === ownerTaskSavedResultGeneration && button.isConnected &&
+            ownerTaskStatusSubmissionId() === submissionId && ownerTokenInput.value.trim() === ownerToken;
+        };
+        button.disabled = true;
+        status.textContent = "工程 " + String(step.index) + " の保存済み結果を照会しています。";
+        try {
+          const response = await fetch("/owner/task-submission-result", {
+            method: "POST", cache: "no-store", redirect: "error",
+            headers: Object.assign({ "content-type": "application/json" }, authHeaders(ownerToken)),
+            body: JSON.stringify({ submission_id: submissionId, step_index: step.index, result_ref: step.resultRef })
+          });
+          if (!isCurrent()) return;
+          if (!response.ok || !hasNoStore(response)) throw new Error("saved result unavailable");
+          const result = await response.json();
+          if (!isCurrent()) return;
+          if (!isObject(result) || Object.keys(result).length !== 6 || result.status !== "available" ||
+              result.result_ref !== step.resultRef || result.used_for_authority !== false || result.may_execute !== false ||
+              typeof result.content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(result.content_sha256) ||
+              typeof result.content !== "string" || result.content.length < 1 || result.content.length > 64 * 1024) {
+            throw new Error("saved result invalid");
+          }
+          const bytes = new TextEncoder().encode(result.content);
+          if (bytes.byteLength > 64 * 1024) throw new Error("saved result too large");
+          const digest = await crypto.subtle.digest("SHA-256", bytes);
+          if (!isCurrent()) return;
+          const actualDigest = Array.from(new Uint8Array(digest), function (byte) {
+            return byte.toString(16).padStart(2, "0");
+          }).join("");
+          if (actualDigest !== result.content_sha256) throw new Error("saved result digest mismatch");
+          const pane = byId("owner-task-saved-result");
+          pane.textContent = result.content;
+          pane.hidden = false;
+          status.textContent = "工程 " + String(step.index) + " · 保存時点の確認結果";
+        } catch {
+          if (isCurrent()) status.textContent = "保存済み結果を表示できませんでした。依頼状態を再確認してください。";
+        } finally {
+          if (isCurrent()) ownerTokenInput.value = "";
+          button.disabled = false;
+        }
       }
 
       async function ownerTaskSubmissionResultSummary(value) {
@@ -1573,6 +1665,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function checkOwnerTaskSubmissionStatus() {
+        clearOwnerTaskSavedResult(true);
+        const savedResultGeneration = ownerTaskSavedResultGeneration;
         const ownerTokenInput = byId("owner-task-token");
         const button = byId("check-owner-task-status");
         const status = byId("owner-task-status");
@@ -1631,6 +1725,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
           const resultSummary = await ownerTaskSubmissionResultSummary(result.result);
           if (selectionChanged()) return;
+          if (savedResultGeneration === ownerTaskSavedResultGeneration) {
+            renderOwnerTaskSavedResultActions(submissionId, planSteps.savedResults);
+          }
           resultStatus.textContent = resultSummary.text;
           resultStatus.hidden = false;
           if (resultSummary.content !== null) {
@@ -2047,6 +2144,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function submitOwnerTask() {
+        clearOwnerTaskSavedResult(true);
         const ownerTokenInput = byId("owner-task-token");
         const ownerToken = ownerTokenInput.value.trim();
         byId("owner-task-result").textContent = "";
@@ -2523,6 +2621,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             else sessionStorage.removeItem(key);
           }
           syncInputs();
+          clearOwnerTaskSavedResult(true);
           const ownerToken = typeof tokens.owner === "string" ? tokens.owner : "";
           for (const inputId of ["owner-task-token", "purpose-relation-owner-token", "goal-purpose-owner-token", "settings-owner-token",
             "daily-brief-owner-token"]) {
@@ -10823,6 +10922,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           "Tasks／Runtimeで先行依頼の状態を確認し、同じ仕事の重複実行にならないと判断した場合だけ、新しい依頼IDへ切り替えてください。続行しますか？");
         if (!confirmed) return;
         clearOwnerTaskSubmissionId();
+        clearOwnerTaskSavedResult(true);
         byId("owner-task-result").textContent = "";
         byId("owner-task-result").hidden = true;
         byId("owner-task-result-status").textContent = "";
@@ -10839,6 +10939,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("owner-task-status-submission-id").addEventListener("change", function () {
+        clearOwnerTaskSavedResult(true);
         byId("owner-task-result").textContent = "";
         byId("owner-task-result").hidden = true;
         byId("owner-task-result-status").textContent = "";
@@ -10860,8 +10961,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge warn";
       });
       byId("owner-task-token").addEventListener("input", function () {
+        clearOwnerTaskSavedResult(false);
         byId("owner-task-new-submission").hidden = true;
       });
+      window.addEventListener("pagehide", function () { clearOwnerTaskSavedResult(true); });
       byId("runtime-token").addEventListener("input", function () {
         byId("owner-task-new-submission").hidden = true;
       });

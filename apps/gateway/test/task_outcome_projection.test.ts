@@ -12,6 +12,7 @@ import {
   projectOwnerTaskExecutionObservation,
   projectOwnerTaskOutcome,
   projectOwnerTaskPlanSteps,
+  resolveOwnerTaskSavedResult,
 } from "../src/task_outcome_projection.js";
 
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
@@ -100,6 +101,7 @@ describe("owner task plan step observation", () => {
   };
   const binding = { step_id: stepId, step_digest: definition, revision_digest: revision, operation: "file.search", command_id: command,
     request_id: followUp, commit_hash: commit, status: "verified", result_digest: "6".repeat(64), delivery_digest: delivery,
+    command_digest: receipt.command_digest,
     execution_ticket_digest: createHash("sha256").update(ticket).digest("hex"), memory_status: "receipt_confirmed",
     memory_receipt_digest: "7".repeat(64) };
   const step = { step_id: stepId, definition_digest: definition, operation: "file.search", status: "verified",
@@ -132,6 +134,29 @@ describe("owner task plan step observation", () => {
       .toEqual({ status: "available", ...flags, steps: [response] });
     expect(projectOwnerTaskPlanSteps({ ...input, lookupCommand: () => ({ ...receipt, result_delivery_disposition: "stale_generation_evidence" }) }))
       .toMatchObject({ steps: [{ status: "outcome_unknown" }] });
+  });
+
+  it("resolves a saved result only for the same receipt, current plan revision, and step", () => {
+    const supportedStep = { ...step, saved_result_return_supported: true };
+    const supportedPlan = { ...plan, plan_id: "8".repeat(64), goal_purpose_binding_status: "current", steps: [supportedStep] };
+    const supported = { ...input, operationPlans: projection(supportedPlan) };
+    const result = projectOwnerTaskPlanSteps(supported);
+    const observed = result.status === "available" ? result.steps[0] : undefined;
+    const resultRef = observed?.status === "adapter_returned" && observed.feedback_status === "success"
+      ? observed.result_ref : undefined;
+    expect(resultRef).toMatch(/^[a-f0-9]{64}$/);
+    expect(resolveOwnerTaskSavedResult(supported, 1, resultRef!)).toEqual({
+      plan_id: supportedPlan.plan_id, revision_digest: revision, step_id: stepId,
+    });
+    expect(resolveOwnerTaskSavedResult(supported, 2, resultRef!)).toBeUndefined();
+    expect(resolveOwnerTaskSavedResult({ ...supported, requestId: followUp }, 1, resultRef!)).toBeUndefined();
+    expect(resolveOwnerTaskSavedResult({ ...supported, operationPlans: projection({ ...supportedPlan,
+      revision_digest: "9".repeat(64) }) }, 1, resultRef!)).toBeUndefined();
+    expect(resolveOwnerTaskSavedResult({ ...supported, operationPlans: projection({ ...supportedPlan,
+      goal_purpose_binding_status: "stale" }) }, 1, resultRef!)).toBeUndefined();
+    expect(resolveOwnerTaskSavedResult({ ...supported, operationPlans: projection({ ...supportedPlan,
+      steps: [step] }) }, 1, resultRef!)).toBeUndefined();
+    expect(resolveOwnerTaskSavedResult({ ...supported, confirmResultMemory: () => false }, 1, resultRef!)).toBeUndefined();
   });
 
   it("confines matching to exactly one owner plan, step, follow-up request, and ticket", () => {

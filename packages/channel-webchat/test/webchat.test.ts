@@ -219,6 +219,7 @@ async function setup(
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       onOwnerTaskSubmissionExecutionObservation?: WebChatOptions["onOwnerTaskSubmissionExecutionObservation"];
       onOwnerTaskSubmissionPlanSteps?: WebChatOptions["onOwnerTaskSubmissionPlanSteps"];
+      onOwnerTaskSubmissionSavedResult?: WebChatOptions["onOwnerTaskSubmissionSavedResult"];
       maintenance_token?: string;
       resume_approval_tokens?: WebChatOptions["resume_approval_tokens"];
       resume_approval_token_ttl_ms?: number;
@@ -255,6 +256,7 @@ async function setup(
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
     onOwnerTaskSubmissionExecutionObservation: opts.onOwnerTaskSubmissionExecutionObservation,
     onOwnerTaskSubmissionPlanSteps: opts.onOwnerTaskSubmissionPlanSteps,
+    onOwnerTaskSubmissionSavedResult: opts.onOwnerTaskSubmissionSavedResult,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -650,6 +652,7 @@ describe("WebChatChannel — Control Center shell", () => {
       "canvas-preview-dialog": { value: "", close() { this.open = false; } },
       "owner-task-token": { value: "owner-token" }, "owner-task-image": { value: "", files: [] },
       "owner-task-audio": { value: "", files: [] },
+      "owner-task-result": { value: "" }, "owner-task-result-status": { value: "" },
       "owner-task-include-mcp-catalog": { value: "", checked: false },
       "owner-task-completion-rules": { value: JSON.stringify(completionRules) }, "owner-task-goal-ref": {
         value: "goal_0123456789abcdef", selectedOptions: [{ dataset: { purposeVersion: "2" } }],
@@ -688,6 +691,7 @@ describe("WebChatChannel — Control Center shell", () => {
       WebSocket: { OPEN: 1 },
       pendingOwnerTaskSubmissionId: () => "submission-1",
       clearOwnerTaskSubmissionId() {},
+      clearOwnerTaskSavedResult() {},
       renderOwnerTaskStatusSubmissionIds() {},
       postOwnerTaskCompute: async (token: string, body: Record<string, unknown>) => {
         calls.push({ token, body });
@@ -746,6 +750,7 @@ describe("WebChatChannel — Control Center shell", () => {
       btoa: (value: string) => Buffer.from(value, "binary").toString("base64"),
       pendingOwnerTaskSubmissionId: () => "submission-1",
       clearOwnerTaskSubmissionId: () => { throw new Error("successful task submission must keep its id until status review"); },
+      clearOwnerTaskSavedResult() {},
       renderOwnerTaskStatusSubmissionIds: (id: string) => renderedSubmissionIds.push(id),
       postOwnerTaskCompute: async (token: string, body: unknown) => { calls.push({ token, body });
         return { status: "queued_for_hds_decision", request_id: "request-1" }; },
@@ -795,6 +800,7 @@ describe("WebChatChannel — Control Center shell", () => {
     const nodes: Record<string, { value: string; checked?: boolean; textContent?: string; className?: string; hidden?: boolean; disabled?: boolean;
       files?: readonly never[]; selectedOptions?: Array<{ dataset: { purposeVersion: string } }>;
       replaceChildren?: (...options: Array<{ text: string; value: string }>) => void;
+      appendChild?: (node: unknown) => void;
       add?: (option: { text: string; value: string }) => void;
       options?: Array<{ text: string; value: string }> }> = {
       "owner-task-token": { value: "owner-token" }, "owner-task-intent": { value: "Do one bounded task." },
@@ -806,6 +812,8 @@ describe("WebChatChannel — Control Center shell", () => {
       "cancel-owner-task-submission": { value: "", hidden: true, disabled: false },
       "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "" },
       "owner-task-result": { value: "", hidden: true }, "owner-task-result-status": { value: "", hidden: true },
+      "owner-task-saved-result": { value: "", hidden: true }, "owner-task-saved-result-status": { value: "", hidden: true },
+      "owner-task-saved-result-actions": { value: "", hidden: true, replaceChildren() {}, appendChild() {} },
     };
     const submitted: string[] = [];
     const harness = new Script(`
@@ -830,6 +838,7 @@ describe("WebChatChannel — Control Center shell", () => {
           await checkOwnerTaskSubmissionStatus();
           return { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
             newSubmissionHidden: byId("owner-task-new-submission").hidden,
+            savedResultActionsHidden: byId("owner-task-saved-result-actions").hidden,
             statusText: byId("owner-task-status").textContent, statusClass: byId("owner-task-status").className };
         }
         const afterStatusReview = await review("");
@@ -864,7 +873,7 @@ describe("WebChatChannel — Control Center shell", () => {
       { index: 1, status: "interrupted" }, { index: 2, status: "outcome_unknown" },
     ], ...flags };
     const verifiedPlan = { status: "available", steps: [{ index: 1, status: "adapter_returned", feedback_status: "success",
-      verification: "result_and_memory_confirmed" }], ...flags };
+      verification: "result_and_memory_confirmed", result_ref: "c".repeat(64) }], ...flags };
     const responses = [
       { ...accepted, execution_observation: { status: "adapter_returned", feedback_status: "success", ...flags },
         plan_steps: verifiedPlan, task_outcome: achieved },
@@ -884,6 +893,7 @@ describe("WebChatChannel — Control Center shell", () => {
       CANVAS_OPERATION_TASK_PREFIX: "Canvas表示物に対するownerの操作意図。添付参照は同定専用で権限根拠ではありません。\n",
       Option: function Option(this: { text: string; value: string }, text: string, value: string) { this.text = text; this.value = value; },
       byId: (id: string) => nodes[id],
+      document: { createElement: () => ({ addEventListener() {} }) },
       state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
       postJson: async () => responses.shift(),
       loadRuntime: async () => {
@@ -907,12 +917,12 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(submitted).toEqual([submittedId]);
     expect(result.afterSubmit).toEqual({ currentId: submittedId, statusId: submittedId, newSubmissionHidden: true });
     expect(result.afterStatusReview).toMatchObject({ currentId: submittedId, statusId: submittedId,
-      newSubmissionHidden: false, statusClass: "badge good" });
+      newSubmissionHidden: false, savedResultActionsHidden: false, statusClass: "badge good" });
     expect(result.afterStatusReview.statusText).toContain("委任仕事: 達成（owner明示規則 1/1");
     expect(result.afterStatusReview.statusText).toContain("初回計算の経路から成功応答を確認しました。");
     expect(result.afterStatusReview.statusText).toContain("計画工程 1「成功応答・結果とM受領票を確認済み」");
     expect(result.afterStatusReview.statusText).toContain("証拠digest bbbbbbbbbbbb");
-    expect(result.afterUnresolvedReview).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
+    expect(result.afterUnresolvedReview).toMatchObject({ currentId: submittedId, newSubmissionHidden: true, savedResultActionsHidden: true });
     expect(result.afterUnresolvedReview.statusText).toContain("計画工程 1「中断・要照合」、2「結果不明・再送しないでください」");
     expect(result.afterUnresolvedWithdrawal).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
     expect(result.afterUnresolvedWithdrawal.statusText).toContain("承認待ちを取り消しました。");
@@ -927,6 +937,97 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(result.restoredCurrentId).toBe(nextId);
     expect(result.restoredStatusId).toBe(submittedId);
     expect(result.restoredStatusIds).toEqual([submittedId]);
+  });
+
+  it("explicitly reads a verified saved result for the same owner receipt and clears stale private output", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskPlanStepsSummary(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("async function ownerTaskSubmissionResultSummary(", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(renderControlCenterHtml()).toContain('id="owner-task-saved-result-actions"');
+
+    const submissionId = "00000000-0000-4000-8000-000000000001";
+    const resultRef = "a".repeat(64);
+    const content = "保存結果 <確認済み>";
+    const contentHash = createHash("sha256").update(content, "utf8").digest("hex");
+    const calls: Array<{ path: string; options: RequestInit }> = [];
+    const makeResponse = (hash: string) => Response.json({ status: "available", result_ref: resultRef, content_sha256: hash, content,
+      used_for_authority: false, may_execute: false }, { headers: { "cache-control": "no-store" } });
+    let response = async () => makeResponse(contentHash);
+    const nodes: Record<string, unknown> = {
+      "owner-task-token": { value: "owner-token" },
+      "owner-task-saved-result": { textContent: "", hidden: true },
+      "owner-task-saved-result-status": { textContent: "", hidden: true },
+      "owner-task-saved-result-actions": { hidden: true, children: [] as Array<{ isConnected: boolean }>,
+        appendChild(node: { isConnected: boolean }) { node.isConnected = true; this.children.push(node); },
+        replaceChildren() { this.children.forEach((node) => { node.isConnected = false; }); this.children = []; } },
+    };
+    const result = await new Script(`
+      let ownerTaskSavedResultGeneration = 0;
+      let selection = submissionId;
+      function ownerTaskStatusSubmissionId() { return selection; }
+      function isObject(value) { return !!value && typeof value === "object" && !Array.isArray(value); }
+      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      (async function () {
+        const flags = { used_for_authority: false, may_execute: false };
+        const verified = { index: 1, status: "adapter_returned", feedback_status: "success",
+          verification: "result_and_memory_confirmed", result_ref: resultRef };
+        const failed = { index: 1, status: "adapter_returned", feedback_status: "failed", result_ref: resultRef };
+        const projection = function (step) { return { status: "available", ...flags, steps: [step] }; };
+        const actions = byId("owner-task-saved-result-actions");
+        const pane = byId("owner-task-saved-result");
+        const token = byId("owner-task-token");
+        const omitted = ownerTaskPlanStepsSummary(projection(failed)).savedResults.length;
+        renderOwnerTaskSavedResultActions(submissionId, ownerTaskPlanStepsSummary(projection(verified)).savedResults);
+        const beforeClick = { actionCount: actions.children.length, callCount: calls.length };
+        const button = actions.children[0];
+        await button.click();
+        const saved = { content: pane.textContent, hidden: pane.hidden, token: token.value };
+
+        token.value = "owner-token";
+        useInvalidResponse();
+        await button.click();
+        const invalid = { text: pane.textContent, hidden: pane.hidden };
+
+        token.value = "owner-token";
+        useCacheableResponse();
+        await button.click();
+        const cacheable = { text: pane.textContent, hidden: pane.hidden };
+
+        token.value = "owner-token";
+        const resolveResponse = deferResponse();
+        const pending = button.click();
+        selection = "different-submission";
+        clearOwnerTaskSavedResult(true);
+        token.value = "other-owner-token";
+        resolveResponse();
+        await pending;
+        return { omitted, beforeClick, saved, invalid, cacheable, stale: { text: pane.textContent, hidden: pane.hidden,
+          token: token.value, actionCount: actions.children.length } };
+      })()
+    `).runInNewContext({
+      submissionId, resultRef, calls, TextEncoder, crypto: webcrypto,
+      authHeaders: (token: string) => ({ Authorization: `Bearer ${token}` }),
+      hasNoStore: (result: Response) => result.headers.get("cache-control") === "no-store",
+      fetch: (path: string, options: RequestInit) => { calls.push({ path, options }); return response(); },
+      useInvalidResponse: () => { response = async () => makeResponse("0".repeat(64)); },
+      useCacheableResponse: () => { response = async () => new Response(await makeResponse(contentHash).text()); },
+      deferResponse: () => {
+        let resolve!: (result: Response) => void;
+        response = () => new Promise<Response>((complete) => { resolve = complete; });
+        return () => resolve(makeResponse(contentHash));
+      },
+      byId: (id: string) => nodes[id],
+      document: { createElement: () => ({ isConnected: false, disabled: false, click: () => Promise.resolve(),
+        addEventListener(_event: string, action: () => Promise<void>) { this.click = action; } }) },
+    });
+
+    expect(result).toEqual({ omitted: 0, beforeClick: { actionCount: 1, callCount: 0 },
+      saved: { content, hidden: false, token: "" }, invalid: { text: "", hidden: true }, cacheable: { text: "", hidden: true },
+      stale: { text: "", hidden: true, token: "other-owner-token", actionCount: 0 } });
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toMatchObject({ path: "/owner/task-submission-result", options: { method: "POST", cache: "no-store", redirect: "error",
+      headers: { Authorization: "Bearer owner-token" }, body: JSON.stringify({ submission_id: submissionId, step_index: 1, result_ref: resultRef }) } });
   });
 
   it("reports a withdrawn owner approval without claiming process or external stop", () => {
@@ -6453,6 +6554,96 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(projectedRequests).toEqual([requestId, requestId]);
       expect(executionRequests).toEqual([requestId, requestId]);
       expect(planStepRequests).toEqual([requestId, requestId]);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("opens only the exact saved step result for a local owner receipt and keeps refusals indistinguishable", async () => {
+    const submissionId = "00000000-0000-4000-8000-000000000054";
+    const requestId = "00000000-0000-4000-8000-000000000055";
+    const rejectedSubmissionId = "00000000-0000-4000-8000-000000000056";
+    const rejectedRequestId = "00000000-0000-4000-8000-000000000057";
+    const resultRef = "b".repeat(64);
+    const staleRef = "c".repeat(64);
+    const input = { submission_id: submissionId, step_index: 2, result_ref: resultRef };
+    const content = "保存時点の確認済み結果\n合成データ";
+    const store = createTestOwnerTaskSubmissionStore();
+    store.claim({ submission_id: submissionId, payload_digest: "a".repeat(64), request_id: requestId });
+    store.markHandlerReturned(requestId);
+    store.claim({ submission_id: rejectedSubmissionId, payload_digest: "a".repeat(64), request_id: rejectedRequestId });
+    store.markRejected(rejectedRequestId);
+    const requests: Array<{ request_id: string; step_index: number; result_ref: string }> = [];
+    let output: string | null = content;
+    let readFailed = false;
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      owner_task_submission_store: store,
+      onOwnerTaskSubmissionSavedResult: async (request) => {
+        requests.push(request);
+        if (readFailed) throw new Error("private result-store detail");
+        return request.result_ref === resultRef && request.step_index === input.step_index ? output : null;
+      },
+    });
+    try {
+      await ownerCtx.ch.start(async () => {});
+      const origin = `http://127.0.0.1:${ownerCtx.port}`;
+      const owner = { authorization: `Bearer ${OWNER_TOKEN}`, origin, "sec-fetch-site": "same-origin" };
+      const open = (body: unknown, headers: Record<string, string> = owner) =>
+        postJson(ownerCtx.port, "/owner/task-submission-result", body, headers);
+
+      expect((await open(input, { origin })).status).toBe(401);
+      expect((await open(input, { ...owner, authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await open(input, { authorization: owner.authorization })).status).toBe(403);
+      expect((await open(input, { ...owner, origin: "https://cross-origin.invalid" })).status).toBe(403);
+      expect((await open(input, { ...owner, "x-forwarded-host": "127.0.0.1" })).status).toBe(403);
+      for (const invalid of [{ ...input, request_id: requestId }, { ...input, step_index: 0 }, { ...input, result_ref: "not-a-digest" }]) {
+        expect((await open(invalid)).status).toBe(400);
+      }
+      const malformed = await fetch(`${origin}/owner/task-submission-result`, {
+        method: "POST", headers: { ...owner, "content-type": "application/json" }, body: "{",
+      });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({ error: "invalid_owner_task_saved_result" });
+      expect(requests).toEqual([]);
+
+      const unavailable = { error: "owner_task_saved_result_unavailable" };
+      for (const noResultSubmission of ["00000000-0000-4000-8000-000000000058", rejectedSubmissionId]) {
+        const denied = await open({ ...input, submission_id: noResultSubmission });
+        expect(denied.status).toBe(404);
+        expect(denied.body).toEqual(unavailable);
+      }
+      expect(requests).toEqual([]);
+
+      const stale = await open({ ...input, result_ref: staleRef });
+      expect(stale.status).toBe(404);
+      expect(stale.body).toEqual(unavailable);
+      expect(stale.headers.get("cache-control")).toBe("no-store");
+      const invalidOutputs = ["", { content, private_field: "must-not-leak" } as unknown as string,
+        "あ".repeat(Math.ceil((64 * 1024 + 1) / 3))];
+      for (const invalidOutput of invalidOutputs) {
+        output = invalidOutput;
+        const denied = await open(input);
+        expect(denied.status).toBe(404);
+        expect(denied.body).toEqual(unavailable);
+      }
+      readFailed = true;
+      const failed = await open(input);
+      expect(failed.status).toBe(404);
+      expect(failed.body).toEqual(unavailable);
+
+      readFailed = false;
+      output = content;
+      const result = await open(input);
+      expect(result.status).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(result.body).toEqual({ status: "available", result_ref: resultRef, content,
+        content_sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+        used_for_authority: false, may_execute: false });
+      const scoped = { request_id: requestId, step_index: input.step_index, result_ref: resultRef };
+      expect(requests).toEqual([{ ...scoped, result_ref: staleRef }, ...invalidOutputs.map(() => scoped), scoped, scoped]);
+      expect(ownerCtx.received).toEqual([]);
     } finally {
       await ownerCtx.teardown();
     }

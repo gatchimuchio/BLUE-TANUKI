@@ -330,22 +330,30 @@ function projectOwnerTaskPlanStep(
       binding.memory_status === "receipt_confirmed" && binding.memory_receipt_digest &&
       receipt.result_delivery_digest === binding.delivery_digest && receipt.result_delivery_acknowledged === true &&
       receipt.result_delivery_disposition === "reconciled" && input.confirmResultMemory(binding.command_id)) {
-    return { index, status: "adapter_returned", feedback_status: "success", verification: "result_and_memory_confirmed" };
+    const resultRef = step.saved_result_return_supported === true && plan.goal_purpose_binding_status === "current" &&
+        !plan.recovery_hold_reason && DIGEST.test(plan.plan_id) && DIGEST.test(plan.revision_digest) &&
+        DIGEST.test(step.step_id) && DIGEST.test(binding.command_digest) &&
+        DIGEST.test(binding.result_digest) && DIGEST.test(binding.memory_receipt_digest)
+      ? operationPlanDigest(["owner-task-saved-result.v1", input.requestId, index, plan.plan_id, plan.revision_digest,
+          step.step_id, binding.revision_digest, binding.command_digest, binding.result_digest, binding.memory_receipt_digest])
+      : undefined;
+    return { index, status: "adapter_returned", feedback_status: "success", verification: "result_and_memory_confirmed",
+      ...(resultRef ? { result_ref: resultRef } : {}) };
   }
   return { index, status: "adapter_returned", feedback_status: receipt.feedback_status };
 }
 
-/** Jの現行計画に限り、同じ受付の後続ステップをBroker・承認台帳・Mの観測に対応させる。 */
-export function projectOwnerTaskPlanSteps(input: OwnerTaskPlanStepsInput): WebChatOwnerTaskPlanSteps {
-  const noAuthority = { used_for_authority: false, may_execute: false } as const;
-  const unknown = { status: "unknown", ...noAuthority } as const;
+function currentOwnerTaskPlan(input: OwnerTaskPlanStepsInput): ProjectedPlan | undefined {
   const { requestId, operationPlans } = input;
-  if (!REQUEST_ID.test(requestId) || operationPlans?.recovery_refresh_status !== "ready") return unknown;
+  if (!REQUEST_ID.test(requestId) || operationPlans?.recovery_refresh_status !== "ready") return undefined;
   const matches = operationPlans.plans.filter(plan => matchesWebChatTaskPlan(plan, requestId, WEBCHAT_OWNER_TASK_DIGEST));
   const plan = matches[0];
   if (matches.length !== 1 || !plan || plan.steps.length < 1 || plan.steps.length > MAX_OWNER_TASK_PLAN_STEPS ||
-      new Set(plan.steps.map(step => step.step_id)).size !== plan.steps.length) return unknown;
+      new Set(plan.steps.map(step => step.step_id)).size !== plan.steps.length) return undefined;
+  return plan;
+}
 
+function ownerTaskPlanStepEvidence(input: OwnerTaskPlanStepsInput, plan: ProjectedPlan) {
   const requests = new Set(plan.bindings.map(binding => binding.request_id));
   const auditByRequest = new Map<string, AuditEntry["log"][]>();
   for (const { log } of input.verifiedAudit) {
@@ -354,10 +362,33 @@ export function projectOwnerTaskPlanSteps(input: OwnerTaskPlanStepsInput): WebCh
     entries.push(log);
     auditByRequest.set(log.request_id, entries);
   }
-  const pending = new Set(input.pendingCommandIds);
-  const active = new Set(input.activeCommandIds);
+  return { auditByRequest, pending: new Set(input.pendingCommandIds), active: new Set(input.activeCommandIds) };
+}
+
+/** Jの現行計画に限り、同じ受付の後続ステップをBroker・承認台帳・Mの観測に対応させる。 */
+export function projectOwnerTaskPlanSteps(input: OwnerTaskPlanStepsInput): WebChatOwnerTaskPlanSteps {
+  const noAuthority = { used_for_authority: false, may_execute: false } as const;
+  const plan = currentOwnerTaskPlan(input);
+  if (!plan) return { status: "unknown", ...noAuthority };
+  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, plan);
   return { status: "available", ...noAuthority,
     steps: plan.steps.map((step, index) => projectOwnerTaskPlanStep(input, plan, step, index + 1, auditByRequest, pending, active)) };
+}
+
+/** 受付が保持する現行計画から、同じ結果を選んだ場合だけJ向け制御値を組み立てる。 */
+export function resolveOwnerTaskSavedResult(input: OwnerTaskPlanStepsInput, stepIndex: number, resultRef: string):
+  { plan_id: string; revision_digest: string; step_id: string } | undefined {
+  if (!Number.isSafeInteger(stepIndex) || stepIndex < 1 || stepIndex > MAX_OWNER_TASK_PLAN_STEPS || !DIGEST.test(resultRef)) {
+    return undefined;
+  }
+  const plan = currentOwnerTaskPlan(input);
+  const step = plan?.steps[stepIndex - 1];
+  if (!plan || !step) return undefined;
+  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, plan);
+  const observation = projectOwnerTaskPlanStep(input, plan, step, stepIndex, auditByRequest, pending, active);
+  if (observation.status !== "adapter_returned" || observation.feedback_status !== "success" ||
+      observation.result_ref !== resultRef) return undefined;
+  return { plan_id: plan.plan_id, revision_digest: plan.revision_digest, step_id: step.step_id };
 }
 
 function projectRequestCommandIds(

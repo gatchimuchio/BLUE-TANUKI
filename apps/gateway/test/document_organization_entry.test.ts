@@ -356,6 +356,7 @@ describe("delegated goal purpose owner review", () => {
     const relativePath = "first-task.txt";
     const fileContent = "初回依頼の合成マーカー\n";
     const user = "first-task-owner";
+    const submissionId = "01a119c0-5b35-4491-ae00-000000000808";
     const task = `sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ${relativePath}\n検索語: 合成マーカー`;
     const env = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
     env.BLUE_TANUKI_STATE_ROOT = stateRoot;
@@ -492,7 +493,7 @@ describe("delegated goal purpose owner review", () => {
       await once(taskWebSocket, "open");
       const submitted = await request("/owner/task-compute", ownerToken, "POST", {
         user, task, goal_ref: goalRef, purpose_version: 1,
-        submission_id: "01a119c0-5b35-4491-ae00-000000000808",
+        submission_id: submissionId,
       });
       const submission = await submitted.json() as { request_id?: string };
       expect(submitted.status, JSON.stringify(submission)).toBe(202);
@@ -551,6 +552,59 @@ describe("delegated goal purpose owner review", () => {
       expect(resultReply).toContain(fileContent.trim());
       expect(resultReply).not.toContain(fileRoot);
       expect(readFileSync(join(fileRoot, relativePath), "utf8")).toBe(fileContent);
+
+      const readWorkStatus = () => request("/owner/task-submission-status", ownerToken, "POST", { submission_id: submissionId });
+      const workStatus = await readWorkStatus();
+      expect(workStatus.status).toBe(200);
+      const workState = await workStatus.json() as { plan_steps?: { steps: { result_ref?: string }[] }; request_id?: string };
+      expect(workState.request_id).toBe(submission.request_id);
+      expect(workState.plan_steps?.steps).toMatchObject([{ index: 1, verification: "result_and_memory_confirmed",
+        result_ref: expect.stringMatching(/^[a-f0-9]{64}$/u) }]);
+      const resultRef = workState.plan_steps!.steps[0]!.result_ref!;
+      expect(JSON.stringify(workState.plan_steps)).not.toContain(fileContent.trim());
+      const readSavedResult = (reference: string) => fetch(`${baseUrl}/owner/task-submission-result`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json", origin: baseUrl },
+        body: JSON.stringify({ submission_id: submissionId, step_index: 1, result_ref: reference }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const wrongRef = (resultRef[0] === "0" ? "1" : "0") + resultRef.slice(1);
+      const staleResult = await readSavedResult(wrongRef);
+      expect(staleResult.status).toBe(404);
+      expect(await staleResult.json()).toEqual({ error: "owner_task_saved_result_unavailable" });
+      const outgoingCount = webchatContents.length;
+      const privateResult = await readSavedResult(resultRef);
+      expect(privateResult.status).toBe(200);
+      expect(privateResult.headers.get("cache-control")).toBe("no-store");
+      const contentDigest = createHash("sha256").update(resultReply, "utf8").digest("hex");
+      const expectedPrivateResult = { status: "available", result_ref: resultRef, content: resultReply, content_sha256: contentDigest,
+        used_for_authority: false, may_execute: false };
+      expect(await privateResult.json()).toEqual(expectedPrivateResult);
+      expect(webchatContents).toHaveLength(outgoingCount);
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      const changedFile = "保存後に入れ替えた合成データ\n";
+      writeFileSync(join(fileRoot, relativePath), changedFile, "utf8");
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway);
+      const restoredWorkStatus = await readWorkStatus();
+      expect(restoredWorkStatus.status).toBe(200);
+      expect(await restoredWorkStatus.json()).toMatchObject({ request_id: submission.request_id,
+        plan_steps: { steps: [{ index: 1, result_ref: resultRef }] } });
+      const restoredPrivateResult = await readSavedResult(resultRef);
+      expect(restoredPrivateResult.status).toBe(200);
+      expect(restoredPrivateResult.headers.get("cache-control")).toBe("no-store");
+      expect(await restoredPrivateResult.json()).toEqual(expectedPrivateResult);
+      expect(readFileSync(join(fileRoot, relativePath), "utf8")).toBe(changedFile);
+      const auditDigest = createHash("sha256").update(JSON.stringify(resultReply), "utf8").digest("hex");
+      const outputLogs = readFileSync(join(auditDir, "audit.jsonl"), "utf8").split("\n").filter(Boolean)
+        .map((line) => (JSON.parse(line) as { log?: Record<string, unknown> }).log)
+        .filter((log) => log?.kind === "output_audit" && log.target_surface === "control_center" &&
+          log.rendered_output_digest === auditDigest);
+      expect(outputLogs).toHaveLength(2);
+      expect(JSON.stringify(outputLogs)).not.toContain(fileContent.trim());
       const ordinaryLogs = [...firstProcessOutput, gateway.stdout.join(""), gateway.stderr.join(""),
         readFileSync(join(auditDir, "audit.jsonl"), "utf8"), readFileSync(historyFile, "utf8"),
         existsSync(sessionDir) ? readRegularFilesRecursively(sessionDir).join("\n") : ""].join("\n");

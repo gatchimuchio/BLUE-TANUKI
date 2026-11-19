@@ -12,6 +12,7 @@ import {
   type Server as HttpsServer,
 } from "node:https";
 import * as path from "node:path";
+import { TLSSocket } from "node:tls";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
@@ -174,16 +175,17 @@ function isLoopbackClientAddress(address: string | undefined): boolean {
 function loopbackRequestOrigin(req: IncomingMessage, requireOrigin: boolean): boolean {
   const host = req.headers.host;
   if (typeof host !== "string" || !host || host.length > 255) return false;
+  const protocol = req.socket instanceof TLSSocket ? "https" : "http";
   let hostUrl: URL;
   try {
-    hostUrl = new URL(`http://${host}`);
+    hostUrl = new URL(`${protocol}://${host}`);
   } catch {
     return false;
   }
   const hostname = hostUrl.hostname.toLowerCase();
   if (hostUrl.username || hostUrl.password || hostUrl.pathname !== "/" || hostUrl.search || hostUrl.hash ||
       !["127.0.0.1", "localhost", "[::1]"].includes(hostname)) return false;
-  const effectivePort = hostUrl.port ? Number(hostUrl.port) : 80;
+  const effectivePort = hostUrl.port ? Number(hostUrl.port) : protocol === "https" ? 443 : 80;
   if (effectivePort !== (req.socket.localPort ?? effectivePort)) return false;
 
   const origin = req.headers.origin;
@@ -669,12 +671,17 @@ function normalizeOwnerTaskPlanSteps(value: unknown): WebChatOwnerTaskPlanSteps 
   for (const value of observation.steps as unknown[]) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return unknown;
     const step = value as Record<string, unknown>;
-    const { index, status, feedback_status, verification } = step;
+    const { index, status, feedback_status, verification, result_ref } = step;
     if (index !== steps.length + 1) return unknown;
     if (status === "adapter_returned") {
-      if (feedback_status === "success" && verification === "result_and_memory_confirmed" &&
-          hasExactKeys(step, ["index", "status", "feedback_status", "verification"])) {
-        steps.push({ index, status, feedback_status, verification });
+      if (feedback_status === "success" && verification === "result_and_memory_confirmed") {
+        const keys = ["index", "status", "feedback_status", "verification"];
+        if (result_ref !== undefined) {
+          if (typeof result_ref !== "string" || !/^[a-f0-9]{64}$/u.test(result_ref)) return unknown;
+          keys.push("result_ref");
+        }
+        if (!hasExactKeys(step, keys)) return unknown;
+        steps.push({ index, status, feedback_status, verification, ...(result_ref !== undefined ? { result_ref } : {}) });
       } else if ((feedback_status === "success" || feedback_status === "failed" || feedback_status === "suspended") &&
           hasExactKeys(step, ["index", "status", "feedback_status"])) {
         steps.push({ index, status, feedback_status });
@@ -817,6 +824,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
+ *   POST /owner/task-submission-result body:{submission_id,step_index,result_ref} auth:local same-origin owner bearer, no-store
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
@@ -1388,6 +1396,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     if (url.pathname === "/owner/daily-brief-read") {
       await this.handleOwnerDailyBriefRead(req, res, url);
+      return;
+    }
+    if (url.pathname === "/owner/task-submission-result") {
+      await this.handleOwnerTaskSubmissionSavedResult(req, res, url);
       return;
     }
 
@@ -4374,6 +4386,63 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: error instanceof Error ? error.message : "recovery_action_failed" }));
     }
+  }
+
+  private async handleOwnerTaskSubmissionSavedResult(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    const send = (status: number, body: Record<string, unknown>) => {
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    };
+    if (req.method !== "POST") {
+      res.setHeader("allow", "POST");
+      return send(405, { error: "method_not_allowed" });
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      return send(403, { error: "same_origin_local_control_center_required" });
+    }
+    const store = this.opts.owner_task_submission_store;
+    const readResult = this.opts.onOwnerTaskSubmissionSavedResult;
+    const unavailable = { error: "owner_task_saved_result_unavailable" };
+    if (!this.opts.owner_token || !store?.getStatus || !readResult) return send(404, unavailable);
+    if (!this.checkAuth(req, "owner")) return send(401, { error: "unauthorized" });
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      return send(415, { error: "application_json_required" });
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, OWNER_TOKEN_ACTOR, res)) return;
+
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 512, true);
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === "body_too_large";
+      return send(tooLarge ? 413 : 400, { error: tooLarge ? "request_body_too_large" : "invalid_owner_task_saved_result" });
+    }
+    if (!body || !hasExactKeys(body, ["submission_id", "step_index", "result_ref"])) {
+      return send(400, { error: "invalid_owner_task_saved_result" });
+    }
+    const { submission_id, step_index, result_ref } = body;
+    if (typeof submission_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submission_id) ||
+        typeof step_index !== "number" || !Number.isSafeInteger(step_index) || step_index < 1 || step_index > MAX_OWNER_TASK_PLAN_STEPS ||
+        typeof result_ref !== "string" || !/^[a-f0-9]{64}$/u.test(result_ref)) {
+      return send(400, { error: "invalid_owner_task_saved_result" });
+    }
+    let content: string | null;
+    try {
+      const status = store.getStatus({ submission_id });
+      if (!status || status.state === "rejected") return send(404, unavailable);
+      content = await readResult({ request_id: status.request_id, step_index, result_ref });
+    } catch {
+      return send(404, unavailable);
+    }
+    if (typeof content !== "string" || !content.trim() || Buffer.byteLength(content, "utf8") > 64 * 1024) {
+      return send(404, unavailable);
+    }
+    send(200, { status: "available", result_ref,
+      content_sha256: createHash("sha256").update(content, "utf8").digest("hex"), content,
+      used_for_authority: false, may_execute: false });
   }
 
   private async handleOwnerDailyBriefRead(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {

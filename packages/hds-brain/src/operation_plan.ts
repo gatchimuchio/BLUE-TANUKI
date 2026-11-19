@@ -2615,6 +2615,15 @@ export function partitionOperationPlanCheckpointForRuntime(
   };
 }
 
+function supportsSavedResultReturn(step: OperationStep): boolean {
+  if (step.operation === "gmail.write") {
+    const operation = step.parameters?.operation;
+    return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
+      operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
+  }
+  return ["github.write", "mcp.call", "file.search", "file.edit", "file.write", "file.delete"].includes(step.operation);
+}
+
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
@@ -5794,8 +5803,7 @@ export class OperationPlanLedger {
       ? ["verified", "provider_rejected", "outcome_unknown", "verification_failed"].includes(binding?.status ?? "")
       : binding?.status === "verified";
     if (bindingResolution.ambiguous || !binding || !allowedBindingStatus || binding.operation !== step.operation ||
-        (!githubWrite && !mcpCall && !gmailMessageSend && !gmailDraftSend && !gmailReplyDraft && !gmailTrash && !gmailModify && step.operation !== "file.search" && step.operation !== "file.edit" &&
-          step.operation !== "file.write" && step.operation !== "file.delete") ||
+        !supportsSavedResultReturn(step) ||
         binding.step_digest !== stepDigest(step) || !resultMemoryEligible(binding) || !binding.memory_commit || !binding.memory_receipt ||
         !this.resultMemoryReceiptConfirmed(binding.command_id)) throw new Error("plan_saved_result_not_verified");
     const sourceRevision = plan.revisions.find((entry) => entry.digest === binding.revision_digest);
@@ -7697,6 +7705,7 @@ export class OperationPlanLedger {
           }] : undefined;
           return { step_id: operationPlanDigest(step.step_id), operation: step.operation,
             definition_digest: stepDigest(step), status: binding?.status ?? "not_selected",
+            ...(sourceBinding && supportsSavedResultReturn(step) ? { saved_result_return_supported: true as const } : {}),
             ...(binding ? { binding_source_revision_digest: binding.revision_digest } : {}),
             ...(gmailMessageIdentityOptions?.length ? { gmail_message_identity_options: gmailMessageIdentityOptions } : {}),
             ...(gmailAttachmentIdentityOptions?.length ? { gmail_attachment_identity_options: gmailAttachmentIdentityOptions } : {}),
