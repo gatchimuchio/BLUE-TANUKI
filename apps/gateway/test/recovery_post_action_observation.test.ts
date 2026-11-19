@@ -405,6 +405,31 @@ describe("buildRecoveryPostActionObservation", () => {
     }
   });
 
+  it.each(["recovery.reset_connector", "recovery.factory_reset"] as const)(
+    "withholds the observed connector reset when a protected reference remains after %s", async (operation) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-observation-ref-"));
+      try {
+        const envFile = path.join(root, "product.env");
+        const cleanConfig = "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=true\nCOMPOSIO_LIVE_EXECUTION=false\n";
+        const ref = "os-keyring:v1:linux:COMPOSIO_API_KEY";
+        const env = { BLUE_TANUKI_ENV_FILE: envFile, LLM_BACKEND: "stub", COMPOSIO_DRY_RUN: "true", COMPOSIO_LIVE_EXECUTION: "false" };
+        const evidence = { entries: historyFor(operation), chain_valid: true, skipped_count: 0 };
+        const unverified = { status: "unverified", configuration_state: "not_observed" };
+
+        await writeFile(envFile, `${cleanConfig}COMPOSIO_API_KEY_REF=${ref}\n`);
+        expect(await buildRecoveryPostActionObservation(evidence, env)).toMatchObject(unverified);
+        await writeFile(envFile, cleanConfig);
+        expect(await buildRecoveryPostActionObservation(evidence, { ...env, COMPOSIO_API_KEY_REF: ref }))
+          .toMatchObject(unverified);
+        expect(await buildRecoveryPostActionObservation(evidence, env)).toMatchObject(operation === "recovery.reset_connector"
+          ? { status: "changed", configuration_state: "connector_dry_run" }
+          : { status: "unverified", configuration_state: "provider_connector_dry_run" });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps the selected canonical store digest-only when a restore attempt fails", async () => {
     const attempt = recoveryStoreRestoreAttemptHistoryEvidence({
       type: "tool_call",

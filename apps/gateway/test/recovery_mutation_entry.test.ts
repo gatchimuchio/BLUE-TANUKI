@@ -18,7 +18,7 @@ import { parseEnvFile } from "../src/env_file.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 import { inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
-import { storeLlmApiKeySecret } from "../src/secret_store.js";
+import { storeBlueTanukiSecret, storeLlmApiKeySecret } from "../src/secret_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -478,6 +478,124 @@ globalThis.fetch = async (url, init) => {
     expect(overridden.status).toBe(409);
     expect(readFileSync(envFile, "utf8")).toBe(saved);
   }, 150_000);
+});
+
+describe("Composioの保護済み資格", () => {
+  it.runIf(process.platform === "win32")("DPAPI参照をL3承認後のComposio探索にだけ渡す", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-composio-dpapi-entry-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const fixtureSecret = "synthetic-composio-dpapi-credential";
+    const webhookToken = "synthetic-composio-dpapi-webhook-token";
+    const stored = storeBlueTanukiSecret("COMPOSIO_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
+    const missingRef = `win32-dpapi-current-user:file:${Buffer.from(join(root, "absent.dpapi"), "utf8").toString("base64url")}`;
+    expect(stored.storage).toBe("win32_dpapi_current_user");
+    expect(stored.ref).toMatch(/^win32-dpapi-current-user:file:/u);
+
+    const providerCalls: Array<{ method?: string; path: string; query: string | null; keyMatched: boolean }> = [];
+    const provider = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const query = url.searchParams.get("query");
+      providerCalls.push({ method: request.method, path: url.pathname, query,
+        keyMatched: request.headers["x-api-key"] === fixtureSecret });
+      if (query === "credential-echo") {
+        const initialCode = fixtureSecret.charCodeAt(0).toString(16).padStart(4, "0");
+        response.writeHead(200, { "content-type": "application/json" })
+          .end(`{"items":[],"message":"\\u${initialCode}${fixtureSecret.slice(1)}"}`);
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ items: [] }));
+    });
+    try {
+      provider.listen(0, "127.0.0.1");
+      await once(provider, "listening");
+      const address = provider.address();
+      if (!address || typeof address === "string") throw new Error("合成Composio先を割り当てられなかった");
+      const port = await reserveLoopbackPort();
+      const preload = join(root, "composio-transport.cjs");
+      writeFileSync(preload, `const https = require("node:https");
+const { request } = require("node:http");
+const { syncBuiltinESMExports } = require("node:module");
+https.request = (options, callback) => {
+  if (options.protocol !== "https:" || options.hostname !== "backend.composio.dev" ||
+      options.method !== "GET" || !options.path.startsWith("/api/v3.1/tools?")) {
+    throw new Error("unexpected Composio request in isolated fixture");
+  }
+  return request({ ...options, protocol: "http:", hostname: "127.0.0.1", port: ${address.port} }, callback);
+};
+syncBuiltinESMExports();
+globalThis.fetch = async () => { throw new Error("unexpected fetch in isolated Composio fixture"); };`);
+      const env = { ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+        WEBHOOK_TOKEN: webhookToken, COMPOSIO_API_KEY: "", COMPOSIO_API_BASE_URL: "https://backend.composio.dev",
+        COMPOSIO_ALLOWED_TOOLKITS: "github", COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE", COMPOSIO_REVOKED_ACTIONS: "",
+        COMPOSIO_USER_ID: "synthetic-composio-owner", COMPOSIO_DRY_RUN: "true", COMPOSIO_LIVE_EXECUTION: "false",
+      };
+      const saveReference = (reference: string) => writeFileSync(envFile, `COMPOSIO_API_KEY_REF=${JSON.stringify(reference)}\n`, "utf8");
+      const assertRedacted = (value: string) => {
+        for (const secret of [fixtureSecret, stored.ref, missingRef]) expect(value.includes(secret)).toBe(false);
+      };
+      const reviewAndApprove = async (content: string, expectedProviderCalls: number) => {
+        const accepted = await requestJson(port, "/webhook", { method: "POST", token: webhookToken,
+          body: { content, reply_to: "synthetic-composio-recipient" }, signal: AbortSignal.timeout(10_000) });
+        expect(accepted.status).toBe(202);
+        expect(accepted.body.request_id).toEqual(expect.any(String));
+        let pending: Record<string, unknown> | undefined;
+        await expect.poll(async () => {
+          const queue = await requestJson(port, "/approval", { token: resumeToken, signal: AbortSignal.timeout(5_000) });
+          expect(queue.status).toBe(200);
+          assertRedacted(JSON.stringify(queue.body));
+          const approvals = queue.body.pending_approvals as Array<Record<string, unknown>>;
+          pending = approvals.find(item => item.request_id === accepted.body.request_id);
+          return pending;
+        }, { timeout: 8_000 }).toMatchObject({ approval_level: "L3_final_review", final_review_required: true,
+          command_id: expect.any(String), approval_token: expect.any(String) });
+        expect(providerCalls).toHaveLength(expectedProviderCalls);
+        const commandId = String(pending!.command_id);
+        const approved = await requestJson(port, `/approval/${encodeURIComponent(commandId)}`, {
+          method: "POST", token: resumeToken, body: { verdict: "approve", approval_token: pending!.approval_token },
+          signal: AbortSignal.timeout(20_000),
+        });
+        expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+        assertRedacted(JSON.stringify(approved.body));
+        return approved.body.result;
+      };
+
+      saveReference(stored.ref);
+      let gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 40_000);
+      expect(providerCalls).toEqual([]);
+      expect(await reviewAndApprove("tool:composio.search toolkit=github query=issues", 0)).toMatchObject({ status: "success" });
+      const expectedCall = { method: "GET", path: "/api/v3.1/tools", query: "issues", keyMatched: true };
+      expect(providerCalls).toEqual([expectedCall]);
+      const dryRun = 'tool:composio.execute {"toolkit":"github","tool":"GITHUB_CREATE_AN_ISSUE","payload":{"title":"合成試験"}}';
+      expect(await reviewAndApprove(dryRun, 1)).toMatchObject({ status: "success" });
+      expect(providerCalls).toEqual([expectedCall]);
+      const echoed = await reviewAndApprove("tool:composio.search toolkit=github query=credential-echo", 1);
+      expect(echoed).toMatchObject({ status: "failed" });
+      const receivedCalls = [expectedCall, { ...expectedCall, query: "credential-echo" }];
+      expect(providerCalls).toEqual(receivedCalls);
+      await stopChild(gateway.child);
+      assertRedacted(gateway.output.join(""));
+
+      saveReference(missingRef);
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 40_000);
+      expect(await reviewAndApprove("tool:composio.search toolkit=github query=missing-ref", 2)).toMatchObject({ status: "failed" });
+      expect(providerCalls).toEqual(receivedCalls);
+      await stopChild(gateway.child);
+      assertRedacted(gateway.output.join(""));
+      assertRedacted(readFileSync(historyFile, "utf8"));
+      expect(readFileSync(envFile, "utf8").includes(fixtureSecret)).toBe(false);
+    } finally {
+      if (provider.listening) {
+        provider.closeAllConnections();
+        const closed = once(provider, "close");
+        provider.close();
+        await closed;
+      }
+    }
+  }, 120_000);
 });
 
 describe("Recovery mutation HDS L3 entry", () => {

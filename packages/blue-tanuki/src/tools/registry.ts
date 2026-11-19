@@ -1009,6 +1009,8 @@ export interface ToolContext {
   /** 実行権限を与えず、HDS発行commandへ結ぶBroker観測。 */
   target_version_observation?: BrokerTargetVersionObservation;
   signal?: AbortSignal;
+  /** 組込みComposio toolだけが受け取る一時的な接続資格。 */
+  composio_api_key?: string;
   /** Gateway-controlled one-shot gate immediately before a guarded browser form GET. */
   before_browser_form_submit?: () => void;
   /** Rechecks the consumed ticket and current authority after protected local input. */

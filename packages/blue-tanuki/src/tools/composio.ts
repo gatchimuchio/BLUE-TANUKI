@@ -8,6 +8,20 @@ import { assertToolExecutionNotCancelled, type Tool, type ToolContext } from "./
 
 type Env = Record<string, string | undefined>;
 
+/** 既存のComposio設定とその接続資格だけをadapterへ渡す。 */
+export function composioToolEnvironment(env: Readonly<Env>, apiKey = env.COMPOSIO_API_KEY): Env {
+  return {
+    COMPOSIO_API_KEY: apiKey,
+    COMPOSIO_ALLOWED_TOOLKITS: env.COMPOSIO_ALLOWED_TOOLKITS,
+    COMPOSIO_ALLOWED_ACTIONS: env.COMPOSIO_ALLOWED_ACTIONS,
+    COMPOSIO_REVOKED_ACTIONS: env.COMPOSIO_REVOKED_ACTIONS,
+    COMPOSIO_USER_ID: env.COMPOSIO_USER_ID,
+    COMPOSIO_API_BASE_URL: env.COMPOSIO_API_BASE_URL,
+    COMPOSIO_DRY_RUN: env.COMPOSIO_DRY_RUN,
+    COMPOSIO_LIVE_EXECUTION: env.COMPOSIO_LIVE_EXECUTION,
+  };
+}
+
 export type ComposioActionIntent =
   | "read"
   | "write"
@@ -477,15 +491,23 @@ async function defaultComposioApiRequest(
   return await new Promise((resolve, reject) => {
     const requestBody = target.body ? Buffer.from(JSON.stringify(target.body), "utf8") : undefined;
     let finished = false;
-    const finish = (result: ComposioExecuteResponse): void => {
-      if (finished) return;
-      finished = true;
-      resolve(result);
-    };
     const fail = (error: Error): void => {
       if (finished) return;
       finished = true;
       reject(error);
+    };
+    const finish = (result: ComposioExecuteResponse): void => {
+      if (finished) return;
+      const { body, content_type, request_id } = result;
+      const key = target.api_key;
+      if (body.includes(key) || content_type?.includes(key) || request_id?.includes(key) ||
+          (body.includes("\\") && body.replace(/\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])/g,
+            escape => JSON.parse(`"${escape}"`) as string).includes(key))) {
+        fail(new Error("composio_credential_echo"));
+        return;
+      }
+      finished = true;
+      resolve(result);
     };
     const req = https.request(
       {
@@ -1632,8 +1654,10 @@ export const composioSearchTool: Tool = {
   description:
     "Searches Composio toolkit/action metadata under an explicit allowlist and returns canonical schema digests plus the reviewed action-effect registry status. Unreviewed actions are discovery-only; metadata never grants authority.",
   required_capabilities: requireToolOperationDescriptor("composio.search").required_capabilities,
-  async invoke(args: Record<string, unknown>): Promise<unknown> {
-    return await invokeComposioSearch(args);
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    return await invokeComposioSearch(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+    });
   },
 };
 
@@ -1644,7 +1668,9 @@ export const composioAccountsTool: Tool = {
     "Lists bounded Composio account projections for the configured owner and an explicitly allowed toolkit. Account metadata is never authority.",
   required_capabilities: requireToolOperationDescriptor("composio.accounts").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    return await invokeComposioAccounts(args, { signal: context.signal });
+    return await invokeComposioAccounts(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+    });
   },
 };
 
@@ -1655,7 +1681,9 @@ export const composioScopesTool: Tool = {
     "Returns a bounded, experimental least-privilege scope recommendation for explicitly allowed Composio actions. It does not observe granted scopes or grant authority.",
   required_capabilities: requireToolOperationDescriptor("composio.scopes").required_capabilities,
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
-    return await invokeComposioScopes(args, { signal: context.signal });
+    return await invokeComposioScopes(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+    });
   },
 };
 
@@ -1670,7 +1698,7 @@ export const composioExecuteTool: Tool = {
       throw new Error("Composio live action inspection requires an HDS command and Operation Plan binding");
     }
     return await inspectComposioActionTargetVersion(args, {
-      env: inspectOptions.env ?? process.env,
+      env: composioToolEnvironment(inspectOptions.env ?? process.env),
       ...(inspectOptions.signal ? { signal: inspectOptions.signal } : {}),
       commandDigest: inspectOptions.command_digest,
       operationPlanBindingDigest: inspectOptions.operation_plan_binding_digest,
@@ -1681,7 +1709,7 @@ export const composioExecuteTool: Tool = {
       throw new Error("Composio owner review requires an HDS command and Operation Plan binding");
     }
     return await inspectComposioActionContentReview(args, {
-      env: reviewOptions.env ?? process.env,
+      env: composioToolEnvironment(reviewOptions.env ?? process.env),
       ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
       commandDigest: reviewOptions.command_digest,
       operationPlanBindingDigest: reviewOptions.operation_plan_binding_digest,
@@ -1691,6 +1719,7 @@ export const composioExecuteTool: Tool = {
     const observation = context.target_version_observation === undefined
       ? undefined : ComposioActionTargetVersionObservationSchema.parse(context.target_version_observation);
     return await invokeComposioExecute(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key),
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { targetVersionObservation: observation } : {}),

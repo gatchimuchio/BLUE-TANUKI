@@ -14,6 +14,8 @@ import {
 import * as path from "node:path";
 import { AsyncEntry, Entry } from "@napi-rs/keyring";
 import { windowsSystemChildEnvironment, windowsSystemPowerShellCommand } from "./child_process_environment.js";
+import { DPAPI_SECRET_REF_PREFIX as SECRET_REF_PREFIX, dpapiSecretPathFromReference as pathFromRef,
+  secretDirForEnvFile } from "./runtime_path_config.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -95,7 +97,6 @@ interface ResolveOptions {
   keyringFactory?: SecretKeyringFactory;
 }
 
-const SECRET_REF_PREFIX = "win32-dpapi-current-user:file:";
 const OS_KEYRING_REF_PREFIX = "os-keyring:v1:";
 const OS_KEYRING_REF_V2_PREFIX = "os-keyring:v2:";
 const OS_KEYRING_SERVICE = "blue-tanuki";
@@ -154,37 +155,12 @@ function encodePath(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
 
-function decodePath(value: string): string {
-  return Buffer.from(value, "base64url").toString("utf8");
-}
-
-function secretDirForEnvFile(envFilePath: string, env: Env): string {
-  const configured = env.BLUE_TANUKI_SECRET_DIR;
-  if (configured && configured.trim().length > 0) return path.resolve(configured);
-  return path.join(path.dirname(path.resolve(envFilePath)), "secrets");
-}
-
 function secretPathForKey(envFilePath: string, key: BlueTanukiSecretKey, env: Env, entryId: string): string {
   return path.join(secretDirForEnvFile(envFilePath, env), `${key.toLowerCase()}.${entryId}.dpapi`);
 }
 
 function refForPath(secretPath: string): string {
   return `${SECRET_REF_PREFIX}${encodePath(path.resolve(secretPath))}`;
-}
-
-function pathFromRef(ref: string): string {
-  if (!ref.startsWith(SECRET_REF_PREFIX)) {
-    throw new Error("unsupported secret ref format");
-  }
-  const encoded = ref.slice(SECRET_REF_PREFIX.length);
-  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
-    throw new Error("unsupported secret ref format");
-  }
-  const decoded = decodePath(encoded);
-  if (!path.isAbsolute(decoded)) {
-    throw new Error("unsupported secret ref path");
-  }
-  return path.resolve(decoded);
 }
 
 function isWellFormedDpapiSecretRef(ref: string): boolean {

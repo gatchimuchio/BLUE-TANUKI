@@ -71,6 +71,18 @@ The Windows installer stores these settings in:
 
 Do not store Composio keys in the install directory.
 
+### OS保護された接続資格
+
+Setupで登録したキーは `COMPOSIO_API_KEY_REF` として設定に残る。GatewayとCLIは
+対象スキーマの照合、内容審査、組み込みComposioツールの呼び出しで必要な都度、
+OSの資格ストアからキーを取得する。復号した値をプロセスの環境変数へ書き戻さない。
+従来の `COMPOSIO_API_KEY` に値があればその値を使う。参照から取得できない場合は
+`composio_credential_unavailable` で当該処理を止める。接続資格を取得できても、
+許可リスト、現在の委任、最終審査は従来どおり必要となる。
+
+コネクターのリセットおよび初期化で環境設定からキーと参照を解除する。
+OSの資格ストアと保護ファイルは保持する。
+
 ### Control Center settings changes
 
 The WebChat Control Center prepares a `settings.write` Operation Plan for

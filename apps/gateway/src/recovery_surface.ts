@@ -44,7 +44,8 @@ import {
 } from "./recovery_inspection.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
-import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
+import { DPAPI_SECRET_REF_PREFIX, dpapiSecretPathFromReference, resolveRuntimeSchedulesDirectory,
+  secretDirForEnvFile } from "./runtime_path_config.js";
 import type { GoalPurposeRepairFenceEvidence, RuntimeRecoveryFenceEvidence } from "./runtime_owner_lease.js";
 
 export type RecoveryPathKind = "file" | "directory" | "missing" | "unset" | "unknown";
@@ -604,6 +605,7 @@ const PROVIDER_RESET_KEYS = [
 
 const CONNECTOR_RESET_KEYS = [
   "COMPOSIO_API_KEY",
+  "COMPOSIO_API_KEY_REF",
   "COMPOSIO_ALLOWED_TOOLKITS",
   "COMPOSIO_ALLOWED_ACTIONS",
   "COMPOSIO_REVOKED_ACTIONS",
@@ -3835,7 +3837,25 @@ async function recoveryPathKind(filepath: string): Promise<FactoryResetTarget["k
   }
 }
 
-async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryResetTarget[]> {
+async function factoryResetProtectedSecretPaths(envFile: string, env: NodeJS.ProcessEnv): Promise<{
+  directories: string[];
+  references: string[];
+}> {
+  const persisted = await readEnvValues(env);
+  const directories = new Set([secretDirForEnvFile(envFile, {}), secretDirForEnvFile(envFile, env),
+    secretDirForEnvFile(envFile, persisted)]);
+  const references = new Set<string>();
+  for (const values of [env, persisted]) {
+    for (const [key, ref] of Object.entries(values)) {
+      if (!key.endsWith("_REF") || !ref?.startsWith(DPAPI_SECRET_REF_PREFIX)) continue;
+      try { references.add(dpapiSecretPathFromReference(ref)); }
+      catch { continue; } // このホストで解釈できない参照からは対象パスを確定できない。
+    }
+  }
+  return { directories: [...directories], references: [...references] };
+}
+
+async function preflightFactoryReset(env: NodeJS.ProcessEnv, opts: { protectSecretStorage?: true } = {}): Promise<FactoryResetTarget[]> {
   if (!env.BLUE_TANUKI_ENV_FILE) throw new Error("env_file_required");
   const stateRoot = trimTrailingSeparators(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
   const privateRoot = path.join(stateRoot, "private-state");
@@ -3844,6 +3864,8 @@ async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryRes
     path.join(privateRoot, "failure-memory"),
   ];
   const installDataRoot = env.BLUE_TANUKI_DATA_ROOT?.trim();
+  const secretStorage = opts.protectSecretStorage
+    ? await factoryResetProtectedSecretPaths(env.BLUE_TANUKI_ENV_FILE, env) : undefined;
   const protectedPaths = [
     env.BLUE_TANUKI_ENV_FILE,
     env.BLUE_TANUKI_AUDIT_DIR,
@@ -3852,6 +3874,7 @@ async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryRes
     env.BLUE_TANUKI_FILE_ROOT,
     env.BLUE_TANUKI_INSTALL_ROOT?.trim(),
     recoveryRoot(env),
+    ...(secretStorage?.directories ?? []),
     ...(installDataRoot ? [
       path.join(installDataRoot, "blue-tanuki.env"),
       path.join(installDataRoot, "blue-tanuki-product-data.json"),
@@ -3860,6 +3883,8 @@ async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryRes
       path.join(installDataRoot, "blue-tanuki.stop"),
     ] : []),
   ].filter((value): value is string => Boolean(value)).map(trimTrailingSeparators);
+  // 参照先を開かず、設定に残った保存先も削除対象と重ねない。
+  const protectedTargets = [...protectedPaths, ...(secretStorage?.references ?? [])];
   const configuredTargets: ReadonlyArray<readonly [string | undefined, "file" | "directory"]> = [
     [env.BLUE_TANUKI_SESSION_DIR, "directory"],
     [env.BLUE_TANUKI_MEMORY_FILE, "file"],
@@ -3874,7 +3899,7 @@ async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryRes
 
   for (const { path: target } of resetTargets) {
     await runtimeSafeTarget(env, target, "factory_reset_remove", { allow_exact: [target] });
-    if (protectedPaths.some(protectedPath => isSameOrInside(target, protectedPath) || isSameOrInside(protectedPath, target)) ||
+    if (protectedTargets.some(protectedPath => isSameOrInside(target, protectedPath) || isSameOrInside(protectedPath, target)) ||
         isSameOrInside(stateRoot, target) || (installDataRoot && isSameOrInside(path.resolve(installDataRoot), target)) ||
         (isSameOrInside(target, privateRoot) && !resettablePrivateRoots.some(root => isSameOrInside(target, root)))) {
       throw new Error("factory_reset_target_protected");
@@ -4016,7 +4041,7 @@ export async function factoryResetRecovery(
 ): Promise<RecoveryActionResult> {
   assertConfirmation(options.confirm, "FACTORY_RESET");
   const config = { ...env };
-  const targets = await preflightFactoryReset(config);
+  const targets = await preflightFactoryReset(config, { protectSecretStorage: true });
   const envFile = path.resolve(config.BLUE_TANUKI_ENV_FILE!);
   const preFactory = await createBackupManifest(config, "pre_factory_reset");
   const manifestDigest = createHash("sha256").update(`${JSON.stringify(preFactory, null, 2)}\n`).digest("hex");

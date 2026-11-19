@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
+import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { createExecutorApprovalAuthority, Executor } from "../src/executor.js";
+import { StubBackend } from "../src/llm/stub.js";
 import {
   composioStatus,
   composioSchemaDigest,
@@ -15,9 +19,24 @@ import {
   type ComposioScopesTarget,
   type ComposioSearchTarget,
 } from "../src/tools/index.js";
+import { composioAccountsTool, composioExecuteTool, composioScopesTool, composioSearchTool } from "../src/tools/composio.js";
 
 const issueInputSchema = { type: "object", properties: { title: { type: "string" } } };
 const issueInputSchemaSha256 = composioSchemaDigest(issueInputSchema);
+const credentialRef = "synthetic-composio-reference";
+const issueArgs = {
+  toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
+  input_schema_sha256: issueInputSchemaSha256, payload: { title: "fixture" },
+};
+
+function composioCommand(tool: typeof composioExecuteTool, args = issueArgs): Extract<ExecuteCommand, { type: "tool_call" }> {
+  return {
+    id: `fixture-${tool.name}`, type: "tool_call", payload: { tool_name: tool.name, arguments: args },
+    constraints: { allowed_tools: [tool.name], allowed_capabilities: [...(tool.required_capabilities ?? [])] },
+    upstream_decision: { commit_hash: "synthetic-hds-commit", frame_goal: "fixture", model_abstraction: "fixture",
+      commit_decision: "ASSERT" },
+  };
+}
 
 function actionSchemaResponse(toolkit: string, slug: string, inputParameters: Record<string, unknown> = issueInputSchema) {
   return {
@@ -80,6 +99,105 @@ function accountResponse(account: Record<string, unknown> = activeAccount) {
 }
 
 describe("Composio connector", () => {
+  it("resolves a fresh protected credential for exact target and no-store review calls", async () => {
+    const env = { COMPOSIO_API_KEY_REF: credentialRef, COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE", COMPOSIO_USER_ID: "owner-local",
+      COMPOSIO_DRY_RUN: "false", COMPOSIO_LIVE_EXECUTION: "true", UNRELATED_SECRET: "not-for-the-adapter" };
+    let generation = 0;
+    const resolve = vi.fn((_ref: string) => `resolved-fixture-key-${++generation}`);
+    const accountKeys: string[] = [];
+    const accountsRequest = async (target: ComposioAccountsTarget) => { accountKeys.push(target.api_key); return accountResponse(); };
+    const searchRequest = async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE");
+    const target = vi.spyOn(composioExecuteTool, "inspect_target_version").mockImplementation((args, options) =>
+      inspectComposioActionTargetVersion(args, { env: options?.env, commandDigest: options?.command_digest,
+        operationPlanBindingDigest: options?.operation_plan_binding_digest, accountsRequest, searchRequest }));
+    const review = vi.spyOn(composioExecuteTool, "inspect_content_review").mockImplementation((args, options) =>
+      inspectComposioActionContentReview(args, { env: options?.env, commandDigest: options?.command_digest,
+        operationPlanBindingDigest: options?.operation_plan_binding_digest, accountsRequest, searchRequest }));
+    const tools = new ToolRegistry();
+    tools.register(composioExecuteTool);
+    const executor = new Executor({ approval_authority: createExecutorApprovalAuthority(), tools,
+      llm: new StubBackend(), resolve_composio_api_key: resolve });
+    const command = composioCommand(composioExecuteTool);
+    const planDigest = "b".repeat(64);
+    try {
+      const observation = await executor.inspectCommandTargetVersion(command, env, planDigest);
+      const content = await executor.inspectCommandContentReview(command, env, planDigest);
+      await executor.inspectCommandTargetVersion(command, { ...env, COMPOSIO_API_KEY: "raw-fixture-key" }, planDigest);
+      expect(content).toMatchObject({ kind: "composio_execute", no_store: true, target_version_observation: observation });
+      expect(accountKeys).toEqual(["resolved-fixture-key-1", "resolved-fixture-key-2", "raw-fixture-key"]);
+      expect(resolve.mock.calls).toEqual([[credentialRef], [credentialRef]]);
+      expect(target.mock.calls[0]?.[1]?.env).not.toHaveProperty("UNRELATED_SECRET");
+      expect(review.mock.calls[0]?.[1]?.env).not.toHaveProperty("COMPOSIO_API_KEY_REF");
+      expect(JSON.stringify(content)).not.toMatch(/(fixture-key|not-for-the-adapter)/u);
+
+      resolve.mockImplementationOnce(() => { throw new Error("private OS error detail"); });
+      await expect(executor.inspectCommandTargetVersion(command, env, planDigest)).rejects.toThrow(/^composio_credential_unavailable$/u);
+      expect(target).toHaveBeenCalledTimes(2);
+      expect(accountKeys).toHaveLength(3);
+    } finally {
+      target.mockRestore();
+      review.mockRestore();
+    }
+  });
+
+  it("binds protected credentials at the exact built-in dispatch and keeps dry-run offline", async () => {
+    vi.stubEnv("COMPOSIO_API_KEY", undefined);
+    vi.stubEnv("COMPOSIO_API_KEY_REF", credentialRef);
+    vi.stubEnv("COMPOSIO_ALLOWED_TOOLKITS", "github");
+    vi.stubEnv("COMPOSIO_ALLOWED_ACTIONS", "github:GITHUB_CREATE_AN_ISSUE");
+    vi.stubEnv("COMPOSIO_REVOKED_ACTIONS", undefined);
+    vi.stubEnv("COMPOSIO_DRY_RUN", "true");
+    vi.stubEnv("COMPOSIO_LIVE_EXECUTION", "false");
+    const secret = "resolved-dispatch-fixture";
+    const resolve = vi.fn((_ref: string) => secret);
+    const authority = createExecutorApprovalAuthority();
+    const dispatch = (executor: Executor, tool: typeof composioExecuteTool) => {
+      const command = composioCommand(tool);
+      const context = approvalContextFromCommand(command);
+      const final = finalReviewRequired(context);
+      const approved = authority.approve(command, { source: final ? "human_final_review" : "approval_gate",
+        decision: final ? "approve" : "allow", risk: context.risk, operation: context.operation, final_review_required: final,
+        approved_by: "fixture", approved_at_ms: Date.now(), upstream_commit_hash: command.upstream_decision.commit_hash, reason: "fixture" });
+      return executor.execute(approved);
+    };
+    const tools = new ToolRegistry();
+    const executor = new Executor({ approval_authority: authority, tools, llm: new StubBackend(), resolve_composio_api_key: resolve });
+    try {
+      for (const tool of [composioSearchTool, composioAccountsTool, composioScopesTool]) {
+        tools.register(tool);
+        vi.spyOn(tool, "invoke").mockImplementation(async (_args, context) => {
+          expect(context.composio_api_key).toBe(secret);
+          return { checked: true };
+        });
+        expect(await dispatch(executor, tool)).toMatchObject({ status: "success", result: { checked: true } });
+      }
+      tools.register(composioExecuteTool);
+      expect(await dispatch(executor, composioExecuteTool)).toMatchObject({ status: "success",
+        result: { dry_run: true, executed: false, external_call_performed: false } });
+      expect(resolve.mock.calls).toEqual(Array.from({ length: 4 }, () => [credentialRef]));
+      expect(process.env.COMPOSIO_API_KEY).toBeUndefined();
+      resolve.mockImplementationOnce(() => { throw new Error("private resolution detail"); });
+      const rejected = await dispatch(executor, composioSearchTool);
+      expect(rejected).toMatchObject({ status: "failed", error: "composio_credential_unavailable" });
+      expect(composioSearchTool.invoke).toHaveBeenCalledTimes(1);
+
+      const otherTools = new ToolRegistry();
+      const imitation = { ...composioSearchTool, invoke: vi.fn(async (_args, context) => {
+        expect(context).not.toHaveProperty("composio_api_key");
+        return { scoped: true };
+      }) } satisfies typeof composioSearchTool;
+      otherTools.register(imitation);
+      const otherExecutor = new Executor({ approval_authority: authority, tools: otherTools,
+        llm: new StubBackend(), resolve_composio_api_key: resolve });
+      expect(await dispatch(otherExecutor, imitation)).toMatchObject({ status: "success", result: { scoped: true } });
+      expect(resolve).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("hashes schema objects independently of JSON key order", () => {
     expect(composioSchemaDigest({ type: "object", properties: { title: { type: "string" } } }))
       .toBe(composioSchemaDigest({ properties: { title: { type: "string" } }, type: "object" }));

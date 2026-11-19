@@ -644,6 +644,9 @@ describe("buildRecoverySnapshot", () => {
       const logsDir = path.join(root, "logs");
       const fileRoot = path.join(root, "files");
       const recoveryDir = path.join(root, "recovery");
+      const secretDir = path.join(root, "secrets");
+      const protectedKey = path.join(secretDir, "composio_api_key.synthetic.dpapi");
+      const protectedRef = `win32-dpapi-current-user:file:${Buffer.from(protectedKey, "utf8").toString("base64url")}`;
       await mkdir(auditDir);
       await mkdir(sessionDir);
       await mkdir(memoryDir, { recursive: true });
@@ -651,6 +654,8 @@ describe("buildRecoverySnapshot", () => {
       await mkdir(schedulesDir);
       await mkdir(logsDir);
       await mkdir(fileRoot);
+      await mkdir(secretDir);
+      await writeFile(protectedKey, "synthetic protected key bytes\n", "utf8");
       await writeFile(path.join(auditDir, "audit.jsonl"), "{}\n", "utf8");
       await writeFile(sessionFile, "session-before\n", "utf8");
       await writeFile(memoryFile, "memory-before\n", "utf8");
@@ -665,6 +670,7 @@ describe("buildRecoverySnapshot", () => {
           "OPENROUTER_API_KEY=provider-secret-value",
           "OPENROUTER_MODEL=openrouter/model",
           "COMPOSIO_API_KEY=connector-secret-value",
+          `COMPOSIO_API_KEY_REF=${protectedRef}`,
           "COMPOSIO_ALLOWED_TOOLKITS=github",
           "COMPOSIO_ALLOWED_ACTIONS=github:GITHUB_CREATE_AN_ISSUE",
           "COMPOSIO_DRY_RUN=false",
@@ -689,6 +695,7 @@ describe("buildRecoverySnapshot", () => {
         LLM_BACKEND: "openrouter",
         OPENROUTER_API_KEY: "provider-secret-value",
         COMPOSIO_API_KEY: "connector-secret-value",
+        COMPOSIO_API_KEY_REF: protectedRef,
         COMPOSIO_DRY_RUN: "false",
         COMPOSIO_LIVE_EXECUTION: "true",
       };
@@ -769,8 +776,22 @@ describe("buildRecoverySnapshot", () => {
       expect(connectorEnv).toContain("COMPOSIO_DRY_RUN=true");
       expect(connectorEnv).toContain("COMPOSIO_LIVE_EXECUTION=false");
       expect(connectorEnv).not.toContain("COMPOSIO_API_KEY=");
+      expect(connectorEnv).not.toContain("COMPOSIO_API_KEY_REF=");
       expect(connectorEnv).not.toContain("connector-secret-value");
-      expect(connectorReset.reset_keys).toContain("COMPOSIO_API_KEY");
+      expect(env.COMPOSIO_API_KEY).toBeUndefined();
+      expect(env.COMPOSIO_API_KEY_REF).toBeUndefined();
+      expect(connectorReset.reset_keys).toEqual(expect.arrayContaining(["COMPOSIO_API_KEY", "COMPOSIO_API_KEY_REF"]));
+      expect(JSON.stringify(connectorReset)).not.toContain(protectedRef);
+      const readArchivedEnv = async (manifestPath: string): Promise<string> => {
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+          items: { key: string; archive_rel_path: string }[];
+        };
+        const entry = manifest.items.find(item => item.key === "env_file");
+        if (!entry?.archive_rel_path) throw new Error("fixture needs pre-action environment backup");
+        return readFile(path.join(path.dirname(manifestPath), entry.archive_rel_path), "utf8");
+      };
+      expect(await readArchivedEnv(connectorReset.backup_manifest_path!)).toContain(protectedRef);
+      expect(await readFile(protectedKey, "utf8")).toBe("synthetic protected key bytes\n");
 
       await mkdir(sessionDir, { recursive: true });
       await mkdir(memoryDir, { recursive: true });
@@ -781,6 +802,8 @@ describe("buildRecoverySnapshot", () => {
       await writeFile(memoryFile, "memory-reset\n", "utf8");
       await writeFile(path.join(schedulesDir, "jobs.json"), "[]\n", "utf8");
       await writeFile(path.join(logsDir, "gateway.log"), "log-reset\n", "utf8");
+      await writeFile(envFile, `${connectorEnv}COMPOSIO_API_KEY_REF=${protectedRef}\n`, "utf8");
+      env.COMPOSIO_API_KEY_REF = protectedRef;
 
       const factory = await factoryResetRecovery(env, { confirm: "FACTORY_RESET" });
       expect(factory.action).toBe("factory_reset");
@@ -791,6 +814,12 @@ describe("buildRecoverySnapshot", () => {
       expect(await exists(logsDir)).toBe(false);
       expect(await exists(auditDir)).toBe(true);
       expect(await exists(recoveryDir)).toBe(true);
+      expect(await readFile(envFile, "utf8")).not.toContain("COMPOSIO_API_KEY_REF=");
+      expect(env.COMPOSIO_API_KEY_REF).toBeUndefined();
+      expect(factory.reset_keys).toContain("COMPOSIO_API_KEY_REF");
+      expect(await readArchivedEnv(factory.backup_manifest_path!)).toContain(protectedRef);
+      expect(await readFile(protectedKey, "utf8")).toBe("synthetic protected key bytes\n");
+      expect(JSON.stringify(factory)).not.toContain(protectedRef);
       expect(JSON.stringify(factory)).not.toContain("provider-secret-value");
       expect(JSON.stringify(factory)).not.toContain("connector-secret-value");
     } finally {
@@ -2165,6 +2194,13 @@ describe("buildRecoverySnapshot", () => {
       const historyFile = path.join(historyDir, "complete-history.jsonl");
       const installDataRoot = path.join(root, "install-data");
       const installMarker = path.join(installDataRoot, "blue-tanuki-product-data.json");
+      const defaultSecretDir = path.join(root, "secrets");
+      const customSecretParent = path.join(root, "custom-secret-parent");
+      const customSecretDir = path.join(customSecretParent, "secrets");
+      const customSecretFile = path.join(customSecretDir, "synthetic.dpapi");
+      const previousSecretDir = path.join(root, "previous-secret-root");
+      const previousSecretFile = path.join(previousSecretDir, "previous-composio.dpapi");
+      const previousRef = `win32-dpapi-current-user:file:${Buffer.from(previousSecretFile, "utf8").toString("base64url")}`;
       const recoveryDir = path.join(root, "recovery");
       const envFile = path.join(root, "product.env");
       const configuredEnv = "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n";
@@ -2173,6 +2209,11 @@ describe("buildRecoverySnapshot", () => {
       await mkdir(ownerDir, { recursive: true });
       await mkdir(historyDir);
       await mkdir(installDataRoot);
+      await mkdir(defaultSecretDir);
+      await mkdir(customSecretDir, { recursive: true });
+      await writeFile(customSecretFile, "synthetic protected key fixture\n");
+      await mkdir(previousSecretDir);
+      await writeFile(previousSecretFile, "previous synthetic key fixture\n");
       await writeFile(envFile, configuredEnv);
       await writeFile(protectedFile, "owner state fixture\n");
       await writeFile(path.join(auditDir, "audit.jsonl"), "audit fixture\n");
@@ -2186,7 +2227,7 @@ describe("buildRecoverySnapshot", () => {
         BLUE_TANUKI_COMPLETE_HISTORY_FILE: ` ${historyFile} `,
         BLUE_TANUKI_DATA_ROOT: installDataRoot,
       };
-      for (const resetPath of [sessions, auditDir, historyDir, installDataRoot, recoveryDir, stateRoot, ownerDir]) {
+      for (const resetPath of [sessions, auditDir, historyDir, installDataRoot, recoveryDir, stateRoot, ownerDir, defaultSecretDir]) {
         await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_LOG_DIR: resetPath }, {
           confirm: "FACTORY_RESET",
         })).rejects.toThrow("factory_reset_target_protected");
@@ -2194,13 +2235,34 @@ describe("buildRecoverySnapshot", () => {
       await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_MEMORY_FILE: installMarker }, {
         confirm: "FACTORY_RESET",
       })).rejects.toThrow("factory_reset_target_protected");
+      await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_SECRET_DIR: customSecretDir,
+        BLUE_TANUKI_LOG_DIR: customSecretParent }, { confirm: "FACTORY_RESET" }))
+        .rejects.toThrow("factory_reset_target_protected");
+      await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_SECRET_DIR: customSecretDir, COMPOSIO_API_KEY_REF: previousRef,
+        BLUE_TANUKI_LOG_DIR: previousSecretDir }, { confirm: "FACTORY_RESET" }))
+        .rejects.toThrow("factory_reset_target_protected");
+      const withSecretDir = `${configuredEnv}BLUE_TANUKI_SECRET_DIR=${JSON.stringify(customSecretDir)}\n`;
+      await writeFile(envFile, withSecretDir);
+      await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_LOG_DIR: customSecretParent }, { confirm: "FACTORY_RESET" }))
+        .rejects.toThrow("factory_reset_target_protected");
+      expect(await readFile(envFile, "utf8")).toBe(withSecretDir);
+      expect(await readFile(customSecretFile, "utf8")).toBe("synthetic protected key fixture\n");
+      const withPreviousRef = `${withSecretDir}COMPOSIO_API_KEY_REF=${previousRef}\n`;
+      await writeFile(envFile, withPreviousRef);
+      await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_LOG_DIR: previousSecretDir }, { confirm: "FACTORY_RESET" }))
+        .rejects.toThrow("factory_reset_target_protected");
+      expect(await readFile(envFile, "utf8")).toBe(withPreviousRef);
+      expect(await readFile(previousSecretFile, "utf8")).toBe("previous synthetic key fixture\n");
+      await writeFile(envFile, configuredEnv);
       expect(await readFile(envFile, "utf8")).toBe(configuredEnv);
       expect(await readFile(path.join(auditDir, "audit.jsonl"), "utf8")).toBe("audit fixture\n");
       expect(await readFile(historyFile, "utf8")).toBe("history fixture\n");
       expect(await readFile(installMarker, "utf8")).toBe("install data fixture\n");
       expect(await readFile(protectedFile, "utf8")).toBe("owner state fixture\n");
       expect(await exists(recoveryDir)).toBe(false);
-      expect((await readdir(root)).sort()).toEqual(["history", "install-data", "product.env", "sessions", "state"]);
+      expect((await readdir(root)).sort()).toEqual([
+        "custom-secret-parent", "history", "install-data", "previous-secret-root", "product.env", "secrets", "sessions", "state",
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

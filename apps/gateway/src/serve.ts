@@ -8375,6 +8375,7 @@ async function serveWithOwnerLease(
     llm,
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
+    resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
       const entry = recordCompleteHistory({
         kind: "audit_history",

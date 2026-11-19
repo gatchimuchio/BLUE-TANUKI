@@ -113,7 +113,8 @@ import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.
 import { isSettingsWriteTool, settingsWriteActivationReview } from "./tools/settings_write.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
-  resolveComposioActionEffectRegistryBinding, composioExecuteTool } from "./tools/composio.js";
+  resolveComposioActionEffectRegistryBinding, composioToolEnvironment, composioAccountsTool, composioExecuteTool,
+  composioScopesTool, composioSearchTool } from "./tools/composio.js";
 import type { SessionStore } from "./sessions/types.js";
 import {
   buildOperationCoreExecutorTrace,
@@ -150,6 +151,8 @@ export interface ExecutorDeps {
   /** Gateway configures this for the governed HDS-to-provider path. */
   compute?: ComputeBackend<LLMRequest, LLMResponse>;
   tools: ToolRegistry;
+  /** Gatewayが保護参照を解決する。資格値を受け取るのはComposio組込みの経路だけ。 */
+  resolve_composio_api_key?: (secretRef: string) => string | undefined;
   /** Gatewayの組込みfile.searchだけを固定workerへ送る。省略はcore開発用。 */
   file_search_worker?: FileSearchWorker;
   /**
@@ -1148,6 +1151,19 @@ function assertComposioTargetVersionBinding(
 export class Executor {
   constructor(private readonly deps: ExecutorDeps) {}
 
+  private resolveComposioApiKey(env: Readonly<Record<string, string | undefined>>): string | undefined {
+    const apiKey = env.COMPOSIO_API_KEY;
+    const secretRef = env.COMPOSIO_API_KEY_REF;
+    if (apiKey || !secretRef) return apiKey;
+    try {
+      const resolved = this.deps.resolve_composio_api_key?.(secretRef);
+      if (resolved?.trim()) return resolved;
+    } catch {
+      // 参照やOS資格ストアの例外を実行結果に含めない。
+    }
+    throw new Error("composio_credential_unavailable");
+  }
+
   /** Read-only preflight for exact registered built-in target resolvers. */
   async inspectCommandTargetVersion(command: ExecuteCommand,
     env?: Readonly<Record<string, string | undefined>>,
@@ -1206,8 +1222,10 @@ export class Executor {
       if (tool !== composioExecuteTool || !tool.inspect_target_version) {
         throw new Error("composio.execute target inspection requires the registered built-in adapter");
       }
+      if (signal?.aborted) throw new Error("broker_target_version_inspection_cancelled");
       const observation = await inspectTargetVersion(tool, command.payload.arguments, {
-        ...(env ? { env } : {}), operation_plan_binding_digest: operationPlanBindingDigest,
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
+        operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
       return Object.freeze(assertComposioTargetVersionBinding(command.payload.arguments, observation,
@@ -1625,7 +1643,7 @@ export class Executor {
         throw new Error("composio.execute content review requires the registered built-in adapter");
       }
       const review = ComposioActionContentReviewSchema.parse(await tool.inspect_content_review(command.payload.arguments, {
-        ...(env ? { env } : {}),
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
         ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
@@ -3036,6 +3054,9 @@ export class Executor {
       const invocation = Promise.resolve().then(() => {
         if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
         before_action_dispatch?.();
+        const composioApiKey = tool === composioSearchTool || tool === composioAccountsTool ||
+          tool === composioScopesTool || tool === composioExecuteTool ? this.resolveComposioApiKey(process.env) : undefined;
+        if (composioApiKey !== undefined) remainingTimeoutMs();
         markInvoked("tool_adapter");
         return tool.invoke(payload.arguments, {
           command_id: id,
@@ -3045,6 +3066,7 @@ export class Executor {
           operation_plan_command_digest: operationPlanDigest(command),
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
+          ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
           ...(guardedBrowserFormSubmit ? { before_browser_form_submit: guardedBrowserFormSubmit } : {}),
           ...(assertCurrentSettingsWrite ? { assert_current_settings_write: assertCurrentSettingsWrite } : {}),
           on_execution_lifecycle: observeLifecycle,

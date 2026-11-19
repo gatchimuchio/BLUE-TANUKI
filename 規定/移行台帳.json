@@ -17,7 +17,7 @@
     { "path": "docs/CAPABILITY_ENVELOPE.md", "sha256": "38fd5137502e8d6d3ae0711bc291842c953052f5bc4ae4e621a04655120773fb" },
     { "path": "docs/CHANNEL_PROMOTION_GATE.md", "sha256": "9f8a3422eb02d2923f48ab5441e003ea518e4e38bf6acaff58ef114fcefb0cac" },
     { "path": "docs/CHANNEL_READINESS_MATRIX.md", "sha256": "cbd6c598a6f4df9731bba91e01e0b5476d81623135a83496465a4e71449ea787" },
-    { "path": "docs/COMPOSIO_CONNECTOR.md", "sha256": "81928d667093049f8b577cc7aff37a7abb81a91980305ef083b9474b12a1f68a" },
+    { "path": "docs/COMPOSIO_CONNECTOR.md", "sha256": "3b2ec85b8c8cc144c969051727c2a7b36195569b80b49b35b7ed4793bbe449a2" },
     { "path": "docs/CONFORMANCE_TARGETS.md", "sha256": "a61ae0feec14a5cb85168f37bf66d4c8be6b7b721e29320c85d323bbdedd9f7a" },
     { "path": "docs/CONFORMANCE.md", "sha256": "3eab601d44f92c7d1c992cdbb6b8493d1e4cb729239c17d2d8b98b3882aeb4b7" },
     { "path": "docs/CREDENTIAL_READINESS_MATRIX.md", "sha256": "57d03eeae67f51bfe759073a189e4219272539c2b72a2a1f98e477d300616f06" },
