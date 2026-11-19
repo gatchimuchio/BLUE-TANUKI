@@ -118,7 +118,7 @@ describe("downloadable product installer packages", () => {
     expect(launcher).toMatch(/recovery-inspect\)[\s\S]*?--recovery-inspect --env-file "\$ENV_FILE" "\$@"/);
   });
 
-  it("binds macOS reset reconciliation to confirmed pending evidence and the offline CLI", () => {
+  it("binds macOS factory reset and goal-purpose repair to confirmed evidence and the offline CLI", () => {
     const app = read("install/macos/app/BlueTanukiApp.swift");
     const owner = read("apps/gateway/src/runtime_owner_lease.ts");
     const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
@@ -133,13 +133,18 @@ describe("downloadable product installer packages", () => {
     );
     const action = app.slice(reconciliation, next);
     expect(action).toMatch(
-      /guard alert\.runModal\(\) == \.alertSecondButtonReturn else \{ return \}[\s\S]+?validateInstalledProduct\(\)[\s\S]+?"recovery-reconcile", "--backup-id", evidence\.backupID,\s+"--manifest-sha256", evidence\.manifestSHA256, "--json"/,
+      /guard alert\.runModal\(\) == \.alertSecondButtonReturn else \{ return \}[\s\S]+?validateInstalledProduct\(\)[\s\S]+?"recovery-reconcile", "--backup-id", evidence\.backupID,\s+"--manifest-sha256", evidence\.manifestSHA256,\s+"--command-sha256", evidence\.commandSHA256, "--json"/,
     );
+    expect(action).toContain("let operation = evidence.operation.label");
     expect(action).toContain("!report.used_for_authority, exitCode == report.status.expectedExitCode");
     expect(action).toContain("case .success(.unresolved):");
-    expect(action).not.toMatch(/resident-start|resident-open|factory-reset/);
-    expect(app).toContain('guard status == .pending, operation == "recovery.factory_reset"');
-    for (const name of ["FACTORY_BACKUP_ID", "DIGEST"]) {
+    expect(action).not.toMatch(/resident-start|resident-open|factory-reset|recovery-apply-goal-purpose/);
+    expect(app).toContain('case factoryReset = "recovery.factory_reset"');
+    expect(app).toContain('case goalPurposeRepair = "recovery.goal_purpose_repair"');
+    expect(app).toMatch(/guard status == \.pending,\s+let operation, let kind = PendingEvidence\.Operation\(rawValue: operation\)/);
+    expect(app).toMatch(/let commandSHA256 = command_digest,\s+commandSHA256\.range\(of: digestPattern, options: \.regularExpression\) != nil else \{ return nil \}/);
+    expect(app).toMatch(/case \.goalPurposeRepair:\s+guard backupID\.range\([^\r\n]+!= nil,\s+let repairSHA256 = repair_sha256,\s+repairSHA256\.range\(of: digestPattern, options: \.regularExpression\) != nil else \{ return nil \}/);
+    for (const name of ["FACTORY_BACKUP_ID", "EXPLICIT_BACKUP_ID", "DIGEST"]) {
       const pattern = new RegExp(`^const ${name} = /\\^(.+)\\$/;`, "m").exec(owner)?.[1];
       expect(pattern).toBeTruthy();
       expect(app).toContain(String.raw`#"\A${pattern}\z"#`);

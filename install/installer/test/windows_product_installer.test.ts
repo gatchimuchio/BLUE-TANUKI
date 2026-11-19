@@ -596,7 +596,7 @@ describe("Windows product installer package", () => {
     }
   });
 
-  it("sends the launch ticket request only on the exact established socket owned by the expected resident", async () => {
+  it("sends a launch ticket or mode request only on the exact socket owned by the expected resident", async () => {
     const command = findPowerShell();
     const launcher = read("install/windows/product/BlueTanukiLauncher.ps1");
     if (process.platform !== "win32" || !command) {
@@ -615,14 +615,14 @@ describe("Windows product installer package", () => {
     const psQuote = (value: string) => value.replace(/'/gu, "''");
     const token = "synthetic-peer-test-webchat-token";
     const ticket = "a".repeat(43);
-    const received: { path?: string; credential?: string; secondaryCredentialsPresent: boolean }[] = [];
+    const received: { method?: string; path?: string; credential?: string; secondaryCredentialsPresent: boolean }[] = [];
     let accepts = 0;
     const server = createServer((req, res) => {
-      received.push({ path: req.url, credential: req.headers.authorization,
+      received.push({ method: req.method, path: req.url, credential: req.headers.authorization,
         secondaryCredentialsPresent: ["resume", "owner", "settings", "maintenance"]
           .some((name) => req.headers["x-blue-tanuki-launch-" + name] !== undefined) });
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ ticket }));
+      res.end(JSON.stringify(req.url === "/runtime/snapshot" ? { safe_mode: true } : { ticket }));
     });
     server.on("connection", () => { accepts += 1; });
     try {
@@ -632,6 +632,7 @@ describe("Windows product installer package", () => {
       if (!address || typeof address === "string") throw new Error("synthetic listener has no port");
       writeFileSync(envFile, [
         "WEBCHAT_HOST=127.0.0.1", "WEBCHAT_PORT=" + address.port, "WEBCHAT_TOKEN=" + token,
+        "BLUE_TANUKI_SETTINGS_TOKEN=synthetic-peer-test-settings-token",
       ].join("\n"), "utf8");
       writeFileSync(harness, "\ufeff" + [
         "Set-StrictMode -Version Latest",
@@ -648,6 +649,7 @@ describe("Windows product installer package", () => {
         "if (-not $listener) { throw 'the fixture listener was not verified' }",
         "Invoke-InstalledWebChatHelper 'ticket' $listener.address $config.digest $listener.processId '1'",
         "Invoke-InstalledWebChatHelper 'ticket' $listener.address $config.digest $listener.processId $listener.startTime",
+        "Invoke-InstalledWebChatHelper 'resident-mode' $listener.address $config.digest $listener.processId $listener.startTime",
       ].join("\r\n"), "utf8");
       const child = spawn(command, powerShellFileArgs(command, harness, []), {
         cwd: temp, env: windowsFixtureEnvironment(), windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
@@ -658,13 +660,15 @@ describe("Windows product installer package", () => {
       try {
         child.stdout.on("data", (chunk) => { out += String(chunk); });
         child.stderr.on("data", (chunk) => { errors += String(chunk); });
-        await expect(waitForProcessExit(child, 20_000)).resolves.toBe(true);
+        await expect(waitForProcessExit(child, 30_000)).resolves.toBe(true);
         await completion;
         expect(child.exitCode, errors).toBe(0);
-        expect(accepts).toBe(2);
-        expect(received).toEqual([{ path: "/control-center/launch-handoff", credential: `Bearer ${token}`,
-          secondaryCredentialsPresent: false }]);
-        expect(out.trim()).toBe(ticket);
+        expect(accepts).toBe(3);
+        expect(received).toEqual([
+          { method: "POST", path: "/control-center/launch-handoff", credential: `Bearer ${token}`, secondaryCredentialsPresent: true },
+          { method: "GET", path: "/runtime/snapshot", credential: `Bearer ${token}`, secondaryCredentialsPresent: false },
+        ]);
+        expect(out.trim().split(/\r?\n/u)).toEqual([ticket, "safe"]);
       } finally {
         if (child.exitCode === null && child.signalCode === null) child.kill();
       }
@@ -672,7 +676,96 @@ describe("Windows product installer package", () => {
       if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
       rmSync(temp, { recursive: true, force: true });
     }
-  }, 25_000);
+  }, 35_000);
+
+  it("reports restart readiness and preserves the verified mode of an existing resident", () => {
+    const command = findPowerShell();
+    const launcherPath = "install/windows/product/BlueTanukiLauncher.ps1";
+    if (!command) {
+      expect(read(launcherPath)).toMatch(/"restart"\s*\{\s*Stop-Resident;\s*Start-ResidentCommand \$false\s*\}/u);
+      return;
+    }
+
+    const script = [
+      "Set-StrictMode -Version Latest",
+      "$ErrorActionPreference = 'Stop'",
+      "$ProgressPreference = 'SilentlyContinue'",
+      "$tokens = $null",
+      "$parseErrors = $null",
+      "$launcher = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_LAUNCHER_PATH, [ref]$tokens, [ref]$parseErrors)",
+      "if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }",
+      "foreach ($definition in $launcher.EndBlock.Statements) {",
+      "  if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $definition.Name -in @('Fail', 'Get-RunningResidentSafeMode', 'Start-Resident', 'Start-ResidentCommand')) {",
+      "    . ([scriptblock]::Create($definition.Extent.Text))",
+      "  }",
+      "}",
+      "$Command = $env:TEST_LAUNCHER_COMMAND",
+      "$logDir = 'fixture-logs'",
+      "function Stop-Resident { Write-Host 'fixture_step=stop' }",
+      "function Ensure-EnvFile { }",
+      "function Test-ResidentRunning { return $Command -ceq 'start' }",
+      "function Read-ResidentPid { return 123 }",
+      "function Start-ResidentProcess($SafeMode, $Reason) { Write-Host \"fixture_step=start mode=$SafeMode reason=$Reason\"; return @{ Id = 123 } }",
+      "function Start-Watchdog($SafeMode) { Write-Host \"fixture_watchdog=$SafeMode\" }",
+      "function Test-WatchdogRunning { return $false }",
+      "function Get-InstalledWebChatConfiguration { return @{ digest = 'fixture-config' } }",
+      "function Get-VerifiedControlCenterListener($Config) {",
+      "  $script:listenerChecks += 1",
+      "  $started = if ($script:fixtureMode -ceq 'changed' -and $script:listenerChecks -gt 1) { '2' } else { '1' }",
+      "  return @{ address = '127.0.0.1'; processId = '123'; startTime = $started }",
+      "}",
+      "function Invoke-InstalledWebChatHelper($Action, $Address, $Digest, $Resident, $Started) {",
+      "  if ($Action -cne 'resident-mode' -or $Address -cne '127.0.0.1' -or $Digest -cne 'fixture-config' -or $Resident -cne '123' -or $Started -cne '1') { throw 'wrong resident binding' }",
+      "  if ($script:fixtureMode -ceq 'changed') { return 'normal' }; return $script:fixtureMode",
+      "}",
+      "function Wait-Health($TimeoutMs) { return $env:TEST_GATEWAY_READY -ceq '1' }",
+      "function Get-ControlCenterUrl { return 'http://127.0.0.1:8787/app' }",
+      "$dispatch = $launcher.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.SwitchStatementAst] }",
+      "if ($Command -ceq 'start') {",
+      "  foreach ($mode in @('safe', 'normal', 'unknown', 'changed')) {",
+      "    $script:fixtureMode = $mode",
+      "    $script:listenerChecks = 0",
+      "    Write-Host \"fixture_resident_mode=$mode\"",
+      "    . ([scriptblock]::Create($dispatch.Extent.Text))",
+      "  }",
+      "} else { . ([scriptblock]::Create($dispatch.Extent.Text)) }",
+    ].join("\n");
+    const runLauncher = (operation: "start" | "restart", ready: boolean) => spawnSync(command, [
+      "-NoProfile", "-OutputFormat", "Text", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64"),
+    ], {
+      env: {
+        ...windowsFixtureEnvironment(),
+        TEST_LAUNCHER_PATH: join(root, launcherPath),
+        TEST_LAUNCHER_COMMAND: operation,
+        TEST_GATEWAY_READY: ready ? "1" : "0",
+      },
+      encoding: "utf8",
+    });
+
+    const failed = runLauncher("restart", false);
+    expect(failed.status, failed.stderr).toBe(2);
+    expect(failed.stdout).toMatch(/fixture_step=stop\r?\nfixture_step=start mode=False reason=manual/u);
+    expect(failed.stdout + failed.stderr).toContain("resident_health=not_ready");
+    expect(failed.stdout).toContain("next_action=Run BlueTanukiDoctor.cmd");
+    expect(failed.stdout).not.toContain("control_center=");
+
+    const ready = runLauncher("restart", true);
+    expect(ready.status, ready.stderr).toBe(0);
+    expect(ready.stdout).toMatch(/fixture_step=stop\r?\nfixture_step=start mode=False reason=manual/u);
+    expect(ready.stdout).toContain("resident_status=started pid=123");
+    expect(ready.stdout).toContain("control_center=http://127.0.0.1:8787/app");
+
+    const existing = runLauncher("start", true);
+    expect(existing.status, existing.stderr).toBe(0);
+    const modes = existing.stdout.split(/fixture_resident_mode=(?:safe|normal|unknown|changed)\r?\n/u);
+    expect(modes).toHaveLength(5);
+    expect(modes[1]).toContain("fixture_watchdog=True");
+    expect(modes[2]).toContain("fixture_watchdog=False");
+    expect(modes[3]).not.toContain("fixture_watchdog=");
+    expect(modes[4]).not.toContain("fixture_watchdog=");
+    expect(existing.stdout + existing.stderr).toContain("Automatic recovery was not restored");
+    expect(existing.stdout).not.toContain("fixture_step=");
+  }, 30_000);
 
   it("runs recovery inspection, reconciliation, and offline goal repair from the product launcher without resident startup", () => {
     const command = findPowerShell();

@@ -217,6 +217,7 @@ async function setup(
       onD4RuntimeIntentCancellation?: (input: WebChatD4RuntimeCancellationScope) =>
         Promise<WebChatD4RuntimeIntentCancellation | null>;
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
+      onOwnerTaskSubmissionExecutionObservation?: WebChatOptions["onOwnerTaskSubmissionExecutionObservation"];
       maintenance_token?: string;
       resume_approval_tokens?: WebChatOptions["resume_approval_tokens"];
       resume_approval_token_ttl_ms?: number;
@@ -251,6 +252,7 @@ async function setup(
     onD4RuntimeIntentCancellationStatus: opts.onD4RuntimeIntentCancellationStatus,
     onD4RuntimeIntentCancellation: opts.onD4RuntimeIntentCancellation,
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
+    onOwnerTaskSubmissionExecutionObservation: opts.onOwnerTaskSubmissionExecutionObservation,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -801,6 +803,7 @@ describe("WebChatChannel — Control Center shell", () => {
       "owner-task-new-submission": { value: "", hidden: true }, "check-owner-task-status": { value: "", hidden: true, disabled: false },
       "cancel-owner-task-submission": { value: "", hidden: true, disabled: false },
       "owner-task-status-submission-id": makeSelect(), "runtime-token": { value: "" },
+      "owner-task-result": { value: "", hidden: true }, "owner-task-result-status": { value: "", hidden: true },
     };
     const submitted: string[] = [];
     const harness = new Script(`
@@ -845,7 +848,9 @@ describe("WebChatChannel — Control Center shell", () => {
       Option: function Option(this: { text: string; value: string }, text: string, value: string) { this.text = text; this.value = value; },
       byId: (id: string) => nodes[id],
       state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
-      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned", task_outcome: {
+      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned",
+        execution_observation: { status: "adapter_returned", feedback_status: "success", used_for_authority: false, may_execute: false },
+        task_outcome: {
         status: "achieved", reason_code: "goal_completion_rules_satisfied", completion_evidence: {
           rules_digest: "a".repeat(64), evidence_digest: "b".repeat(64), rule_count: 1,
           satisfied_rule_count: 1, used_for_authority: false, may_execute: false,
@@ -865,6 +870,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(result.afterStatusReview).toMatchObject({ currentId: submittedId, statusId: submittedId,
       newSubmissionHidden: false, statusClass: "badge good" });
     expect(result.afterStatusReview.statusText).toContain("委任仕事: 達成（owner明示規則 1/1");
+    expect(result.afterStatusReview.statusText).toContain("初回計算の経路から成功応答を確認しました。");
     expect(result.afterStatusReview.statusText).toContain("証拠digest bbbbbbbbbbbb");
     expect(result.afterExplicitNewId).toEqual({ currentId: nextId, statusIds: [submittedId], newSubmissionHidden: true });
     expect(result.restoredCurrentId).toBe(nextId);
@@ -6275,7 +6281,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
-  it("returns the same request-bound J outcome from owner submission status without exposing raw result data", async () => {
+  it("returns initial computation and J outcome from the same owner submission without exposing raw result data", async () => {
     const submissionId = "00000000-0000-4000-8000-000000000051";
     const requestId = "00000000-0000-4000-8000-000000000052";
     const store = createTestOwnerTaskSubmissionStore();
@@ -6297,12 +6303,21 @@ describe("WebChatChannel — HTTP inbound", () => {
       may_execute: false,
     };
     const projectedRequests: string[] = [];
+    const executionRequests: string[] = [];
+    type ExecutionObservation = Awaited<ReturnType<NonNullable<WebChatOptions["onOwnerTaskSubmissionExecutionObservation"]>>>;
+    let executionObservation: ExecutionObservation = {
+      status: "adapter_returned", feedback_status: "success", used_for_authority: false, may_execute: false,
+    };
     const ownerCtx = await setup({
       owner_token: OWNER_TOKEN,
       owner_task_submission_store: store,
       onOwnerTaskSubmissionOutcome: async ({ request_id }) => {
         projectedRequests.push(request_id);
         return outcome;
+      },
+      onOwnerTaskSubmissionExecutionObservation: async ({ request_id }) => {
+        executionRequests.push(request_id);
+        return executionObservation;
       },
     });
     try {
@@ -6312,28 +6327,34 @@ describe("WebChatChannel — HTTP inbound", () => {
       });
       expect(unauthorized.status).toBe(401);
       expect(projectedRequests).toEqual([]);
+      expect(executionRequests).toEqual([]);
 
       const status = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: submissionId,
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(status.status).toBe(200);
-      expect(status.body).toEqual({ found: true, request_id: requestId, state: "handler_returned", task_outcome: outcome });
+      expect(status.body).toMatchObject({ found: true, request_id: requestId, state: "handler_returned", task_outcome: outcome,
+        execution_observation: executionObservation });
 
       outcome = { ...outcome, raw_result: "must-not-leak" } as unknown as WebChatTaskOutcome;
+      executionObservation = { ...executionObservation, raw_result: "private-calculation" } as unknown as ExecutionObservation;
       const invalid = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: submissionId,
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(invalid.body).toMatchObject({
         found: true,
         task_outcome: { status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false },
+        execution_observation: { status: "unknown", used_for_authority: false, may_execute: false },
       });
       expect(JSON.stringify(invalid.body)).not.toContain("must-not-leak");
+      expect(JSON.stringify(invalid.body)).not.toContain("private-calculation");
 
       const missing = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: "00000000-0000-4000-8000-000000000053",
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(missing.body).toEqual({ found: false });
       expect(projectedRequests).toEqual([requestId, requestId]);
+      expect(executionRequests).toEqual([requestId, requestId]);
     } finally {
       await ownerCtx.teardown();
     }

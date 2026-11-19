@@ -185,7 +185,7 @@ import type {
 } from "@blue-tanuki/channel-webchat";
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
-  projectOwnerTaskOutcome, projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
+  projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -5007,6 +5007,19 @@ async function serveWithOwnerLease(
         } catch {
           return projectOwnerTaskOutcome(undefined, request_id);
         }
+      },
+      onOwnerTaskSubmissionExecutionObservation: async ({ request_id }: { request_id: string }) => {
+        const audit = hds.getAudit();
+        if (!audit.isPersistent() || !audit.verify()) {
+          return { status: "unknown" as const, used_for_authority: false as const, may_execute: false as const };
+        }
+        return projectOwnerTaskExecutionObservation({
+          requestId: request_id,
+          verifiedAudit: audit.list(),
+          pendingCommandIds: ownerTaskPendingApprovals(request_id, new Set()).map(item => item.command.id),
+          activeCommandIds: activeTaskExecutions.snapshot().map(item => item.command_id),
+          lookupCommand: key => executionStore.lookupCommand(key),
+        });
       },
       onOwnerTaskSubmissionCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellationStatus> => {
         let operationPlans: unknown;

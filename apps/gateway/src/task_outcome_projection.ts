@@ -1,5 +1,5 @@
-import type { WebChatD4RuntimeCancellationStatus, WebChatD4RuntimeExecutionObservation, WebChatOwnerTaskCancellationStatus,
-  WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
+import type { WebChatD4RuntimeCancellationStatus, WebChatOwnerTaskCancellationStatus,
+  WebChatTaskExecutionObservation, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
 import { createHash } from "node:crypto";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { operationPlanDigest, type AuditEntry, type DecisionLog } from "@blue-tanuki/hds-brain";
@@ -155,23 +155,31 @@ export function projectD4RuntimeTaskOutcome(operationPlans: unknown, requestId: 
   return projectTaskOutcome(operationPlans, requestId, D4_RUNTIME_OWNER_DIGEST);
 }
 
-/** 受付と同じ要求のJ判断・承認記録・Broker受領票を照合し、実行の事実だけを返す。 */
-export function projectD4RuntimeExecutionObservation(input: {
+interface TaskExecutionObservationInput {
   readonly requestId: string;
   readonly verifiedAudit: readonly AuditEntry[];
   readonly pendingCommandIds: readonly string[];
   readonly activeCommandIds: readonly string[];
   readonly lookupCommand: (key: string) => ExecutionIntentReceipt | null;
-}): WebChatD4RuntimeExecutionObservation {
+}
+
+/** 受付と同じ要求のJ判断・承認記録・Broker受領票を照合し、実行の事実だけを返す。 */
+function projectTaskExecutionObservation(
+  input: TaskExecutionObservationInput,
+  source: "d4_runtime" | "owner_plan_compute",
+): WebChatTaskExecutionObservation {
   const noAuthority = { used_for_authority: false, may_execute: false } as const;
   const unknown = { status: "unknown", ...noAuthority } as const;
   if (!REQUEST_ID.test(input.requestId)) return unknown;
   const logs = input.verifiedAudit.flatMap(({ log }) => "request_id" in log && log.request_id === input.requestId ? [log] : []);
   const decisions = logs.filter((log): log is DecisionLog => !("kind" in log));
   const decision = decisions[0];
+  const ownerCompute = source === "owner_plan_compute";
   if (decisions.length !== 1 || !decision || decision.frame.actor.channel !== "webchat" ||
-      decision.frame.actor.actor_kind !== "user" || decision.frame.actor.trust_level !== "limited" ||
-      operationPlanDigest(decision.frame.actor.actor_id) !== D4_RUNTIME_OWNER_DIGEST) return unknown;
+      decision.frame.actor.actor_kind !== (ownerCompute ? "owner" : "user") ||
+      decision.frame.actor.trust_level !== (ownerCompute ? "owner" : "limited") ||
+      operationPlanDigest(decision.frame.actor.actor_id) !== (ownerCompute ? WEBCHAT_OWNER_TASK_DIGEST : D4_RUNTIME_OWNER_DIGEST) ||
+      (ownerCompute && decision.memory_capture_suppressed_for !== "operation_plan_compute")) return unknown;
   if (decision.commit.decision === "SUSPEND") return { status: "held", ...noAuthority };
   if (decision.commit.decision !== "ASSERT") return unknown;
 
@@ -179,8 +187,9 @@ export function projectD4RuntimeExecutionObservation(input: {
     log.upstream_commit_hash === decision.commit.hash && log.evaluation.context.command_id === log.command_id ? [log.command_id] : []));
   const [commandId] = commandIds;
   if (commandIds.size !== 1 || !commandId || !COMMAND_ID.test(commandId)) return unknown;
-  const liveCommandIds = new Set([...input.pendingCommandIds, ...input.activeCommandIds]);
-  if ([...liveCommandIds].some(id => id !== commandId)) return unknown;
+  // D4's registry input is pre-scoped. Owner Work matches the audit's exact command against the shared registry.
+  if (input.pendingCommandIds.some(id => id !== commandId) ||
+      (!ownerCompute && input.activeCommandIds.some(id => id !== commandId))) return unknown;
   if (input.pendingCommandIds.includes(commandId) && logs.some(log => "kind" in log && log.kind === "command_lifecycle" &&
     log.command_id === commandId && log.phase === "approval_pending" && log.upstream_commit_hash === decision.commit.hash)) {
     return { status: "awaiting_approval", ...noAuthority };
@@ -191,16 +200,33 @@ export function projectD4RuntimeExecutionObservation(input: {
   const receipt = input.lookupCommand(commandKey);
   if (!receipt || receipt.command_key !== commandKey || receipt.used_for_authority !== false ||
       !receipt.task_identity_digest || !receipt.hds_source_context_digest || !receipt.goal_version_binding) return unknown;
+  if (ownerCompute) {
+    const purpose = decision.goal_purpose_binding;
+    if (!purpose || receipt.operation_plan_binding_digest !== undefined ||
+        receipt.goal_version_binding.goal_id_digest !== purpose.goal_id_digest ||
+        receipt.goal_version_binding.purpose_version !== purpose.purpose_version ||
+        receipt.goal_version_binding.purpose_digest !== purpose.purpose_digest) return unknown;
+  }
   if (receipt.state === "not_attempted" || receipt.state === "outcome_unknown") {
     return { status: receipt.state, ...noAuthority };
   }
   if (receipt.state !== "adapter_returned" || !receipt.feedback_status ||
-      (receipt.invocation_boundary !== "llm_adapter" && receipt.invocation_boundary !== "tool_adapter")) return unknown;
+      (receipt.invocation_boundary !== "llm_adapter" &&
+        (ownerCompute || receipt.invocation_boundary !== "tool_adapter"))) return unknown;
   const feedback = logs.flatMap(log => "kind" in log && log.kind === "executor_feedback" && log.known_command &&
     log.command_id === commandId && log.upstream_decision === "ASSERT" && log.upstream_commit_hash === decision.commit.hash
     ? [log.feedback.status] : []);
   if (feedback.length !== 1 || feedback[0] !== receipt.feedback_status) return unknown;
   return { status: "adapter_returned", feedback_status: receipt.feedback_status, ...noAuthority };
+}
+
+export function projectD4RuntimeExecutionObservation(input: TaskExecutionObservationInput): WebChatTaskExecutionObservation {
+  return projectTaskExecutionObservation(input, "d4_runtime");
+}
+
+/** Workの初回計算が対象。後続の審査・計画step・目的達成は別の観測が必要。 */
+export function projectOwnerTaskExecutionObservation(input: TaskExecutionObservationInput): WebChatTaskExecutionObservation {
+  return projectTaskExecutionObservation(input, "owner_plan_compute");
 }
 
 function projectRequestCommandIds(

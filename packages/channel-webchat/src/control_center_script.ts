@@ -1412,6 +1412,34 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           evidence.evidence_digest.slice(0, 12) + "）。これは実行権限や公開／出荷判断を作りません。", achieved: true };
       }
 
+      function ownerTaskExecutionObservationSummary(value) {
+        if (value === undefined) return "";
+        const unknown = "初回計算の実行状態は未確認です。";
+        if (!isObject(value) || value.used_for_authority !== false || value.may_execute !== false) return unknown;
+        const keys = ["status", "used_for_authority", "may_execute"];
+        if (value.status === "adapter_returned") {
+          const allowed = keys.concat("feedback_status");
+          if (Object.keys(value).length !== allowed.length || Object.keys(value).some(function (key) {
+            return allowed.indexOf(key) < 0;
+          })) return unknown;
+          if (value.feedback_status === "success") return "初回計算の経路から成功応答を確認しました。";
+          if (value.feedback_status === "failed") return "初回計算の経路から失敗応答を確認しました。";
+          if (value.feedback_status === "suspended") return "初回計算の経路から停止応答を確認しました。";
+          return unknown;
+        }
+        if (Object.keys(value).length !== keys.length || Object.keys(value).some(function (key) {
+          return keys.indexOf(key) < 0;
+        })) return unknown;
+        switch (value.status) {
+          case "awaiting_approval": return "初回計算の承認を待っています。";
+          case "active": return "初回計算を処理しています。";
+          case "held": return "初回計算をJの判断で保留しています。";
+          case "not_attempted": return "初回計算を未試行として記録しています。";
+          case "outcome_unknown": return "初回計算の結果は不明です。同じ仕事を再送せず状態を確認してください。";
+          default: return unknown;
+        }
+      }
+
       async function ownerTaskSubmissionResultSummary(value) {
         const flags = value && value.used_for_authority === false && value.may_execute === false;
         if (!isObject(value) || !flags) return { text: "回答本文projectionが不正なため表示しません。", content: null };
@@ -1563,6 +1591,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             rejected: "依頼受付は拒否済みです。現在の委任目的とTasks／Runtimeを確認してください。"
           }[result.state];
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
+          const executionSummary = ownerTaskExecutionObservationSummary(result.execution_observation);
+          const receiptSummary = stateSummary + (executionSummary ? " " + executionSummary : "");
           const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
           const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
           const resultSummary = await ownerTaskSubmissionResultSummary(result.result);
@@ -1574,7 +1604,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
           if (!byId("runtime-token").value.trim()) {
-            status.textContent = stateSummary + (taskOutcomeSummary
+            status.textContent = receiptSummary + (taskOutcomeSummary
               ? " " + taskOutcomeSummary.text
               : " Runtime token未入力のためJ/M plan照合は未実施です。") +
               (cancellationSummary ? " " + cancellationSummary : "");
@@ -1584,12 +1614,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               byId("owner-task-new-submission").hidden = false;
             }
           } else {
-            status.textContent = stateSummary + " Runtime planを照合しています。";
+            status.textContent = receiptSummary + " Runtime planを照合しています。";
             const runtimeSnapshot = await loadRuntime("owner-task-status");
             if (selectionChanged()) return;
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
             if (selectionChanged()) return;
-            status.textContent = stateSummary + " " + correlation +
+            status.textContent = receiptSummary + " " + correlation +
               (cancellationSummary ? " " + cancellationSummary : "");
             if (isCurrentSubmission && result.state !== "dispatching") {
               byId("owner-task-new-submission").hidden = false;

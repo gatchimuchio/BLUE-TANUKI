@@ -1573,7 +1573,14 @@ describe("delegated goal purpose owner review", () => {
         if (statusBeforeRestart.state === "handler_returned") break;
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      expect(statusBeforeRestart).toMatchObject({ found: true, request_id: accepted.request_id, state: "handler_returned" });
+      const computationObservation = {
+        status: "adapter_returned",
+        feedback_status: "success",
+        used_for_authority: false,
+        may_execute: false,
+      };
+      expect(statusBeforeRestart).toMatchObject({ found: true, request_id: accepted.request_id, state: "handler_returned",
+        execution_observation: computationObservation });
 
       const providerCallsBeforeRestart = providerCalls;
       taskWebSocket.close();
@@ -1585,8 +1592,19 @@ describe("delegated goal purpose owner review", () => {
       const statusAfterRestartResponse = await readStatus();
       expect(statusAfterRestartResponse.status).toBe(200);
       expect(statusAfterRestartResponse.headers.get("cache-control")).toBe("no-store");
-      expect(await statusAfterRestartResponse.json()).toEqual({ found: true, request_id: accepted.request_id,
-        state: "handler_returned" });
+      const statusAfterRestart = await statusAfterRestartResponse.json();
+      expect(statusAfterRestart).toMatchObject({ found: true, request_id: accepted.request_id,
+        state: "handler_returned", execution_observation: computationObservation,
+        task_outcome: { status: "held", used_for_authority: false, may_execute: false },
+        result: { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false } });
+      expect(statusAfterRestart.result).not.toHaveProperty("content");
+      const ordinaryStatusResponse = await fetch(statusUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ submission_id: submissionId }),
+      });
+      expect(ordinaryStatusResponse.status).toBe(401);
+      expect(await ordinaryStatusResponse.json()).not.toHaveProperty("execution_observation");
 
       const duplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
         method: "POST",
@@ -1638,8 +1656,8 @@ describe("delegated goal purpose owner review", () => {
       const dispatchingStatus = await readInterruptedStatus();
       expect(dispatchingStatus.status).toBe(200);
       expect(dispatchingStatus.headers.get("cache-control")).toBe("no-store");
-      expect(await dispatchingStatus.json()).toEqual({ found: true, request_id: interruptedAccepted.request_id,
-        state: "dispatching" });
+      expect(await dispatchingStatus.json()).toMatchObject({ found: true, request_id: interruptedAccepted.request_id,
+        state: "dispatching", execution_observation: { status: "active", used_for_authority: false, may_execute: false } });
 
       const providerCallsAtCrash = providerCalls;
       await forceStopChild(gateway.child);
@@ -1649,8 +1667,9 @@ describe("delegated goal purpose owner review", () => {
       const uncertainStatus = await readInterruptedStatus();
       expect(uncertainStatus.status).toBe(200);
       expect(uncertainStatus.headers.get("cache-control")).toBe("no-store");
-      expect(await uncertainStatus.json()).toEqual({ found: true, request_id: interruptedAccepted.request_id,
-        state: "outcome_unknown" });
+      expect(await uncertainStatus.json()).toMatchObject({ found: true, request_id: interruptedAccepted.request_id,
+        state: "outcome_unknown", execution_observation: { status: "outcome_unknown", used_for_authority: false,
+          may_execute: false } });
 
       const interruptedDuplicateResponse = await fetch(`http://127.0.0.1:${gatewayPort}/owner/task-compute`, {
         method: "POST",

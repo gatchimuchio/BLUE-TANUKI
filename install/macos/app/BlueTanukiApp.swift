@@ -211,10 +211,10 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                 switch report.runtime_recovery_fence.status {
                 case .pending:
                     guard let evidence = report.runtime_recovery_fence.pendingEvidence else {
-                        self.setStatus("初期化結果の照合が保留中です。", detail: "事前バックアップの識別情報を確認できません。現在のデータを保持してください。")
+                        self.setStatus("復旧処理の照合が保留中です。", detail: "処理の種類または照合情報を確認できません。現在のデータを保持してください。")
                         return
                     }
-                    self.setStatus("初期化結果の照合が保留中です。", detail: "事前バックアップの識別情報を確認しました。")
+                    self.setStatus("\(evidence.operation.label)の照合が保留中です。", detail: "事前バックアップの識別情報を確認しました。")
                     self.confirmRecoveryReconciliation(evidence)
                 case .unavailable:
                     self.setStatus("復旧保護の状態を確認できません。", detail: "データを保持し、ログと復旧手順を確認してください。")
@@ -230,21 +230,23 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
     }
 
     private func confirmRecoveryReconciliation(_ evidence: RecoveryDiagnostic.PendingEvidence) {
+        let operation = evidence.operation.label
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "中断した初期化の結果を照合しますか？"
-        alert.informativeText = "Gatewayが停止している場合に、診断で確認した事前バックアップと現在の状態を照合します。初期化前か予定どおりの初期化後に一致した場合のみ起動保留を解除します。運転再開は別の操作です。"
+        alert.messageText = "中断した\(operation)の結果を照合しますか？"
+        alert.informativeText = "Gatewayが停止している場合に、診断で確認した事前バックアップと現在の状態を照合します。処理前または予定どおりの処理後の状態に一致した場合のみ起動保留を解除します。運転再開は別の操作です。"
         alert.addButton(withTitle: "閉じる")
         alert.addButton(withTitle: "照合する")
         guard alert.runModal() == .alertSecondButtonReturn else { return }
 
-        beginOperation("初期化結果を照合しています。", detail: "診断で確認した事前バックアップを使用します。") {
+        beginOperation("\(operation)の結果を照合しています。", detail: "診断で確認した事前バックアップを使用します。") {
             try self.validateInstalledProduct()
             let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
             let (data, exitCode) = try self.runShell(
                 launcher, arguments: [
                     "recovery-reconcile", "--backup-id", evidence.backupID,
-                    "--manifest-sha256", evidence.manifestSHA256, "--json",
+                    "--manifest-sha256", evidence.manifestSHA256,
+                    "--command-sha256", evidence.commandSHA256, "--json",
                 ], captureOutput: true, accepting: [0, 2]
             )
             guard let report = try? JSONDecoder().decode(RecoveryReconciliation.self, from: data),
@@ -255,17 +257,17 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         } completion: { result in
             switch result {
             case .success(.pre_action_state_matched):
-                self.setStatus("初期化前の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
+                self.setStatus("\(operation)前の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
             case .success(.postconditions_matched):
-                self.setStatus("予定どおりの初期化後の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
+                self.setStatus("予定どおりの\(operation)後の状態と一致しました。", detail: "照合結果を記録し、起動保留を解除しました。")
             case .success(.no_pending):
                 self.setStatus("現在、照合保留はありません。", detail: "復旧診断から最新の台帳と復旧保護の状態を確認できます。")
             case .success(.unresolved):
-                self.setStatus("初期化結果を照合できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
+                self.setStatus("\(operation)の結果を照合できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
             case .success(.invalid_arguments), .success(.configuration_unavailable):
-                self.setStatus("初期化結果の照合を開始できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
+                self.setStatus("\(operation)の結果の照合を開始できませんでした。", detail: "現在のデータを保持し、復旧診断で状態を確認してください。")
             case .failure(let error):
-                self.showFailure("初期化結果の照合", error: error)
+                self.showFailure("\(operation)の結果の照合", error: error)
             }
         }
     }
@@ -574,7 +576,7 @@ private enum AppError: Error, CustomStringConvertible {
         case .invalidInstaller: return "同梱インストーラーの完全性を確認できません"
         case .invalidResidentStatus: return "常駐プロセスの状態応答を確認できません"
         case .invalidRecoveryDiagnostic: return "復旧診断の応答を確認できません"
-        case .invalidRecoveryReconciliation: return "初期化結果の照合応答を確認できません"
+        case .invalidRecoveryReconciliation: return "復旧処理の照合応答を確認できません"
         case .commandOutputTooLarge: return "診断出力が画面で確認できる上限を超えました"
         case .missingComponent: return "必要な製品ファイルが見つかりません"
         case .notInstalled: return "製品が未インストールか、管理ファイルがありません"
@@ -585,25 +587,54 @@ private enum AppError: Error, CustomStringConvertible {
 
 private struct RecoveryDiagnostic: Decodable {
     enum Status: String, Decodable { case verified, residuals_present }
+
     struct PendingEvidence {
+        enum Operation: String {
+            case factoryReset = "recovery.factory_reset"
+            case goalPurposeRepair = "recovery.goal_purpose_repair"
+
+            var label: String {
+                switch self {
+                case .factoryReset: return "初期化"
+                case .goalPurposeRepair: return "委任目的の復旧"
+                }
+            }
+        }
+
+        let operation: Operation
         let backupID: String
         let manifestSHA256: String
+        let commandSHA256: String
     }
 
     struct Fence: Decodable {
         enum Status: String, Decodable { case clear, pending, unavailable }
         let status: Status
         let operation: String?
+        let command_digest: String?
         let backup_id: String?
         let manifest_sha256: String?
+        let repair_sha256: String?
 
         var pendingEvidence: PendingEvidence? {
-            guard status == .pending, operation == "recovery.factory_reset",
+            let digestPattern = #"\A[a-f0-9]{64}\z"#
+            guard status == .pending,
+                  let operation, let kind = PendingEvidence.Operation(rawValue: operation),
                   let backupID = backup_id,
-                  backupID.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z\.pre_factory_reset\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"#, options: .regularExpression) != nil,
                   let manifestSHA256 = manifest_sha256,
-                  manifestSHA256.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil else { return nil }
-            return PendingEvidence(backupID: backupID, manifestSHA256: manifestSHA256)
+                  manifestSHA256.range(of: digestPattern, options: .regularExpression) != nil,
+                  let commandSHA256 = command_digest,
+                  commandSHA256.range(of: digestPattern, options: .regularExpression) != nil else { return nil }
+            switch kind {
+            case .factoryReset:
+                guard backupID.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z\.pre_factory_reset\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z"#, options: .regularExpression) != nil else { return nil }
+            case .goalPurposeRepair:
+                guard backupID.range(of: #"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z"#, options: .regularExpression) != nil,
+                      let repairSHA256 = repair_sha256,
+                      repairSHA256.range(of: digestPattern, options: .regularExpression) != nil else { return nil }
+            }
+            return PendingEvidence(operation: kind, backupID: backupID,
+                                   manifestSHA256: manifestSHA256, commandSHA256: commandSHA256)
         }
     }
 

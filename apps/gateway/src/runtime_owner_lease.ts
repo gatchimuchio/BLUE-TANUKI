@@ -414,7 +414,8 @@ export async function applyUnderOfflineGoalPurposeRepairLock(
 /** Settle existing evidence under the regular Gateway lock, without obtaining a runtime lease or replaying work. */
 export async function reconcileRuntimeRecoveryFence(
   env: NodeJS.ProcessEnv,
-  expected: Pick<RuntimeRecoveryFenceEvidence, "backup_id" | "manifest_sha256">,
+  expected: Pick<RuntimeRecoveryFenceEvidence, "backup_id" | "manifest_sha256"> &
+    Partial<Pick<RuntimeRecoveryFenceEvidence, "command_digest">>,
   observe: (evidence: RuntimeRecoveryFenceEvidence) => Promise<string | null>,
 ): Promise<RuntimeRecoveryFenceReconciliation> {
   let lockDb: DatabaseType | undefined;
@@ -445,7 +446,10 @@ export async function reconcileRuntimeRecoveryFence(
     if (version !== RECOVERY_FENCE_SCHEMA_VERSION) return { status: "unresolved" };
     const evidence = readRecoveryFence(stateDb, owner.generation, owner.execution_epoch, owner.host_audience_digest);
     if (!evidence.verification || evidence.backup_id !== expected.backup_id ||
-        evidence.manifest_sha256 !== expected.manifest_sha256) return { status: "unresolved" };
+        evidence.manifest_sha256 !== expected.manifest_sha256 ||
+        (expected.command_digest !== undefined && evidence.command_digest !== expected.command_digest)) {
+      return { status: "unresolved" };
+    }
 
     const observed = await observe(evidence);
     if (observed === null) return { status: "unresolved" };

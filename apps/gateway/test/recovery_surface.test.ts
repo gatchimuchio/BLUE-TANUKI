@@ -1910,8 +1910,9 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.parse(diagnostic.stdout)).toMatchObject({ runtime_recovery_fence: pending });
       expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
 
-      const reconcile = () => run("--recovery-reconcile", "--backup-id", pending.backup_id,
-        "--manifest-sha256", pending.manifest_sha256, "--json");
+      const reconcile = (commandSha256?: string) => run("--recovery-reconcile", "--backup-id", pending.backup_id,
+        "--manifest-sha256", pending.manifest_sha256, "--json",
+        ...(commandSha256 === undefined ? [] : ["--command-sha256", commandSha256]));
       if (fixture.partial) {
         const mixed = reconcile();
         expect(mixed.status, mixed.stderr).toBe(2);
@@ -1931,7 +1932,15 @@ describe("buildRecoverySnapshot", () => {
       await writeFile(`${manifestPath}.sha256`, checksum);
 
       const currentEnvBytes = await readFile(envFile);
-      const matched = reconcile();
+      const malformed = reconcile("invalid");
+      expect(malformed.status, malformed.stderr).toBe(2);
+      expect(JSON.parse(malformed.stdout)).toMatchObject({ status: "invalid_arguments", used_for_authority: false });
+      const differentCommandDigest = (pending.command_digest[0] === "0" ? "1" : "0") + pending.command_digest.slice(1);
+      const changedCommand = reconcile(differentCommandDigest);
+      expect(changedCommand.status, changedCommand.stderr).toBe(2);
+      expect(JSON.parse(changedCommand.stdout)).toMatchObject({ status: "unresolved", used_for_authority: false });
+      expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
+      const matched = reconcile(pending.command_digest);
       expect(matched.status, matched.stderr).toBe(0);
       expect(JSON.parse(matched.stdout)).toMatchObject({ status: fixture.matches, used_for_authority: false });
       expect(inspectRuntimeRecoveryFence(env).status).toBe("clear");

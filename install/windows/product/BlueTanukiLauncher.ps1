@@ -380,14 +380,20 @@ try {
   ])).digest("hex");
   if (action === "describe") {
     process.stdout.write(JSON.stringify({ host, listenAddress, port, scheme, openHost, loopbackAddresses, digest }));
-  } else if (action === "ticket" && digest === expectedDigest &&
+  } else if ((action === "ticket" || action === "resident-mode") && digest === expectedDigest &&
              loopbackAddresses.includes(targetAddress) && credentials[0]) {
+    const issueTicket = action === "ticket";
     const [chat, resume, owner, settings, maintenance] = credentials;
-    const headers = { authorization: "Bearer " + chat, "content-type": "application/json" };
-    if (resume) headers["x-blue-tanuki-launch-resume"] = resume;
-    if (owner) headers["x-blue-tanuki-launch-owner"] = owner;
-    if (settings) headers["x-blue-tanuki-launch-settings"] = settings;
-    if (maintenance) headers["x-blue-tanuki-launch-maintenance"] = maintenance;
+    const headers = { authorization: "Bearer " + chat };
+    if (issueTicket) {
+      headers["content-type"] = "application/json";
+      headers["content-length"] = 2;
+      if (resume) headers["x-blue-tanuki-launch-resume"] = resume;
+      if (owner) headers["x-blue-tanuki-launch-owner"] = owner;
+      if (settings) headers["x-blue-tanuki-launch-settings"] = settings;
+      if (maintenance) headers["x-blue-tanuki-launch-maintenance"] = maintenance;
+    }
+    const maxResponseBytes = issueTicket ? 4096 : 256 * 1024;
     const secure = scheme === "https";
     const socket = secure
       ? connectTls({ host: targetAddress, port, rejectUnauthorized: true })
@@ -404,8 +410,9 @@ try {
       const request = secure ? httpsRequest : httpRequest;
       const body = await new Promise((resolve, reject) => {
         const client = request({
-          hostname: targetAddress, port, path: "/control-center/launch-handoff", method: "POST",
-          headers: { ...headers, "content-length": 2 }, agent, signal: AbortSignal.timeout(5000),
+          hostname: targetAddress, port,
+          path: issueTicket ? "/control-center/launch-handoff" : "/runtime/snapshot",
+          method: issueTicket ? "POST" : "GET", headers, agent, signal: AbortSignal.timeout(5000),
         }, (response) => {
           if (response.statusCode !== 200) {
             response.resume();
@@ -417,18 +424,20 @@ try {
           response.on("error", reject);
           response.on("data", (chunk) => {
             size += chunk.length;
-            if (size > 4096) response.destroy(new Error("launch_handoff_response_too_large"));
+            if (size > maxResponseBytes) response.destroy(new Error("launch_resident_response_too_large"));
             else chunks.push(chunk);
           });
           response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
         });
         client.on("error", reject);
-        client.end("{}");
+        client.end(issueTicket ? "{}" : undefined);
       });
       if (body) {
         const response = JSON.parse(body);
-        if (typeof response.ticket === "string" && /^[A-Za-z0-9_-]{43}$/.test(response.ticket)) {
+        if (issueTicket && typeof response.ticket === "string" && /^[A-Za-z0-9_-]{43}$/.test(response.ticket)) {
           process.stdout.write(response.ticket);
+        } else if (!issueTicket && typeof response.safe_mode === "boolean") {
+          process.stdout.write(response.safe_mode ? "safe" : "normal");
         }
       }
     } finally {
@@ -727,13 +736,24 @@ function Start-Watchdog($SafeMode = $false) {
   Write-Host "watchdog_status=started pid=$($process.Id)"
 }
 
+function Get-RunningResidentSafeMode {
+  $config = Get-InstalledWebChatConfiguration
+  $listener = Get-VerifiedControlCenterListener $config
+  if (-not $listener) { return $null }
+  $mode = Invoke-InstalledWebChatHelper "resident-mode" $listener.address $config.digest $listener.processId $listener.startTime
+  if ($mode -cnotin @("safe", "normal")) { return $null }
+  $current = Get-VerifiedControlCenterListener $config
+  if (-not $current -or $current.processId -cne $listener.processId -or
+      $current.startTime -cne $listener.startTime -or $current.address -cne $listener.address) { return $null }
+  return $mode -ceq "safe"
+}
+
 function Start-Resident($SafeMode = $false) {
   Ensure-EnvFile
   $alreadyRunning = Test-ResidentRunning
   $process = $null
   if ($alreadyRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
-    Start-Watchdog $SafeMode
   } else {
     $process = Start-ResidentProcess $SafeMode "manual"
     Start-Watchdog $SafeMode
@@ -742,6 +762,16 @@ function Start-Resident($SafeMode = $false) {
   if (Wait-Health 15000) {
     if ($alreadyRunning) {
       Write-Host "resident_health=ready pid=$(Read-ResidentPid)"
+      if (Test-WatchdogRunning) {
+        Write-Host "watchdog_status=running pid=$(Read-WatchdogPid)"
+      } else {
+        $runningMode = Get-RunningResidentSafeMode
+        if ($null -eq $runningMode) {
+          Write-Warning "Automatic recovery was not restored because the current Gateway mode could not be verified. Use BLUE-TANUKI Restart or BLUE-TANUKI Safe Mode."
+        } else {
+          Start-Watchdog $runningMode
+        }
+      }
     } else {
       Write-Host "resident_status=started pid=$($process.Id)"
     }
@@ -838,7 +868,8 @@ function Stop-Resident {
 }
 
 function Show-Status {
-  if (Test-ResidentRunning) {
+  $residentRunning = Test-ResidentRunning
+  if ($residentRunning) {
     Write-Host "resident_status=running pid=$(Read-ResidentPid)"
     $config = Get-InstalledWebChatConfiguration
     if ($config.loopbackAddresses.Count -eq 0) {
@@ -857,6 +888,7 @@ function Show-Status {
     Write-Host "watchdog_status=running pid=$(Read-WatchdogPid)"
   } else {
     Write-Host "watchdog_status=stopped"
+    if ($residentRunning) { Write-Host "watchdog_next_action=Use BLUE-TANUKI Restart or BLUE-TANUKI Safe Mode to restore automatic recovery." }
   }
   if (Test-Path -LiteralPath $envFile -PathType Leaf) {
     Write-Host "control_center=$(Get-ControlCenterUrl)"
@@ -1059,7 +1091,7 @@ switch ($Command.ToLowerInvariant()) {
   "watchdog-safe-mode" { Run-Watchdog $true }
   "stop" { Stop-Resident }
   "resident-stop" { Stop-Resident }
-  "restart" { Stop-Resident; Start-Resident $false }
+  "restart" { Stop-Resident; Start-ResidentCommand $false }
   "status" { Show-Status }
   "resident-status" { Show-Status }
   "doctor" { Run-Doctor $false }

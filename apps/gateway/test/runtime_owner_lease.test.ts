@@ -195,7 +195,12 @@ describe("Gateway runtime owner lease", () => {
     expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe)).toEqual({ status: "unresolved" });
     expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", repair_sha256: binding.repair_sha256 });
     observed = verification.after_sha256;
-    expect(await reconcileRuntimeRecoveryFence(env, goalPurposeRepair, observe)).toEqual({ status: "postconditions_matched" });
+    expect(await reconcileRuntimeRecoveryFence(env, { ...goalPurposeRepair, command_digest: "0".repeat(64) }, observe))
+      .toEqual({ status: "unresolved" });
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(inspectRuntimeRecoveryFence(env)).toMatchObject({ status: "pending", command_digest: binding.command_digest });
+    expect(await reconcileRuntimeRecoveryFence(env, { ...goalPurposeRepair, command_digest: binding.command_digest }, observe))
+      .toEqual({ status: "postconditions_matched" });
     expect(observe).toHaveBeenCalledTimes(3);
     GatewayRuntimeOwnerLease.fromEnvironment(env).close();
   });

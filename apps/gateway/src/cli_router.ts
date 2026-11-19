@@ -284,7 +284,8 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
     const flag = args[index]!;
     if (flag === "--recovery-reconcile" || flag === "--json") continue;
     const value = args[index + 1];
-    if ((flag !== "--backup-id" && flag !== "--manifest-sha256") || !value || inputs.has(flag)) {
+    if ((flag !== "--backup-id" && flag !== "--manifest-sha256" && flag !== "--command-sha256") ||
+        !value || inputs.has(flag)) {
       writeResult("invalid_arguments");
       return;
     }
@@ -293,8 +294,10 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
   }
   const backupId = inputs.get("--backup-id");
   const manifestSha256 = inputs.get("--manifest-sha256")?.toLowerCase();
+  const commandSha256 = inputs.get("--command-sha256")?.toLowerCase();
   if (!backupId || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(backupId) ||
-      !manifestSha256 || !/^[a-f0-9]{64}$/.test(manifestSha256)) {
+      !manifestSha256 || !/^[a-f0-9]{64}$/.test(manifestSha256) ||
+      (commandSha256 !== undefined && !/^[a-f0-9]{64}$/.test(commandSha256))) {
     writeResult("invalid_arguments");
     return;
   }
@@ -318,6 +321,7 @@ async function runRecoveryReconcileCli(argv: string[]): Promise<void> {
       await import("./recovery_surface.js");
     const result = await reconcileRuntimeRecoveryFence(env, {
       backup_id: backupId, manifest_sha256: manifestSha256,
+      ...(commandSha256 === undefined ? {} : { command_digest: commandSha256 }),
     }, async (evidence) => {
       if (evidence.operation === "recovery.factory_reset") return observeFactoryResetRecoveryState(env, evidence);
       return hasOfflineGoalPurposeRepairAuditReceipt(env, evidence) ? observeOfflineGoalPurposeRepair(env, evidence) : null;

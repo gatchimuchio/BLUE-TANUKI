@@ -1,17 +1,76 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
+import { operationPlanDigest, type AuditEntry } from "@blue-tanuki/hds-brain";
 import type { TaskExecutionCancellationEvidence } from "../src/execution_intent_store.js";
 import {
   projectD4RuntimeActiveCommand,
   projectD4RuntimeCancellationStatus,
   projectD4RuntimeTaskOutcome,
   projectOwnerTaskCancellationStatus,
+  projectOwnerTaskExecutionObservation,
   projectOwnerTaskOutcome,
 } from "../src/task_outcome_projection.js";
 
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
 const rulesDigest = "a".repeat(64);
 const evidenceDigest = "b".repeat(64);
+
+describe("owner task initial computation observation", () => {
+  const commandId = "owner-task-compute-command";
+  const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex");
+  const purpose = { goal_id_digest: "1".repeat(64), purpose_version: 2, purpose_digest: "2".repeat(64) };
+  const commitHash = "3".repeat(64);
+  const decision = {
+    request_id: requestId,
+    frame: { actor: { actor_id: "webchat-owner-token-holder", channel: "webchat", actor_kind: "owner", trust_level: "owner" } },
+    commit: { hash: commitHash, decision: "ASSERT" },
+    goal_purpose_binding: purpose,
+    memory_capture_suppressed_for: "operation_plan_compute",
+  };
+  const gate = { kind: "approval_gate", request_id: requestId, command_id: commandId,
+    upstream_commit_hash: commitHash, evaluation: { context: { command_id: commandId } } };
+  const feedback = { kind: "executor_feedback", request_id: requestId, command_id: commandId, known_command: true,
+    upstream_decision: "ASSERT", upstream_commit_hash: commitHash, feedback: { status: "success" } };
+  const verifiedEntries = (...logs: unknown[]) => logs.map(log => ({ log })) as AuditEntry[];
+  const receipt: ExecutionIntentReceipt = {
+    ticket_id: "initial-computation-ticket", command_key: commandKey,
+    command_digest: "4".repeat(64), proof_digest: "5".repeat(64),
+    hds_source_context_digest: "6".repeat(64), task_identity_digest: "7".repeat(64),
+    goal_version_binding: purpose, execution_epoch: "initial-computation-epoch", issued_at_ms: 1, expires_at_ms: 2,
+    state: "adapter_returned", invocation_boundary: "llm_adapter", feedback_status: "success", used_for_authority: false,
+  };
+  const input = {
+    requestId,
+    verifiedAudit: verifiedEntries(decision, gate, feedback),
+    pendingCommandIds: [],
+    activeCommandIds: [],
+    lookupCommand: (key: string) => key === commandKey ? receipt : null,
+  };
+
+  it("recovers broker feedback only for the first computation of the authenticated submission", () => {
+    const observation = projectOwnerTaskExecutionObservation({ ...input, activeCommandIds: ["unrelated-worker"] });
+    expect(observation).toEqual({ status: "adapter_returned", feedback_status: "success", used_for_authority: false, may_execute: false });
+    expect(projectOwnerTaskExecutionObservation({ ...input, verifiedAudit: verifiedEntries(decision, gate),
+      activeCommandIds: ["unrelated-worker", commandId] })).toMatchObject({ status: "active" });
+    expect(projectOwnerTaskExecutionObservation({ ...input, verifiedAudit: verifiedEntries(decision, gate),
+      lookupCommand: () => ({ ...receipt, state: "outcome_unknown" }) })).toMatchObject({ status: "outcome_unknown" });
+  });
+
+  it("holds unknown for cross-request feedback, other actors, ambiguous bindings and mismatched purpose", () => {
+    const otherRequest = "b4d61cc0-46c3-49dc-9826-0b8a9fe302da";
+    expect(projectOwnerTaskExecutionObservation({ ...input, verifiedAudit: verifiedEntries(decision, gate,
+      { ...feedback, request_id: otherRequest }) })).toMatchObject({ status: "unknown" });
+    expect(projectOwnerTaskExecutionObservation({ ...input, verifiedAudit: verifiedEntries({ ...decision,
+      frame: { actor: { ...decision.frame.actor, trust_level: "limited" } } }, gate, feedback) })).toMatchObject({ status: "unknown" });
+    expect(projectOwnerTaskExecutionObservation({ ...input, verifiedAudit: verifiedEntries(decision, gate, feedback, { ...gate,
+      command_id: "unrelated-worker", evaluation: { context: { command_id: "unrelated-worker" } } }) })).toMatchObject({ status: "unknown" });
+    expect(projectOwnerTaskExecutionObservation({ ...input, lookupCommand: () => ({ ...receipt,
+      goal_version_binding: { ...purpose, purpose_version: 3 } }) })).toMatchObject({ status: "unknown" });
+    expect(projectOwnerTaskExecutionObservation({ ...input, lookupCommand: () => ({ ...receipt,
+      invocation_boundary: "tool_adapter", operation_plan_binding_digest: "8".repeat(64) }) })).toMatchObject({ status: "unknown" });
+  });
+});
 
 function outcome(status: string, reason_code: string, assessment: Record<string, unknown>) {
   return {

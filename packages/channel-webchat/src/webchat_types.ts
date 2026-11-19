@@ -56,12 +56,14 @@ export interface WebChatTaskOutcome {
 /** Backwards-compatible name for the D4 Runtime status projection. */
 export type WebChatD4RuntimeTaskOutcome = WebChatTaskOutcome;
 
-/** Observation of the scoped Gateway request. J's task achievement remains a separate projection. */
-export type WebChatD4RuntimeExecutionObservation = {
+/** Observation of the scoped Gateway command. J's task achievement remains a separate projection. */
+export type WebChatTaskExecutionObservation = {
   readonly used_for_authority: false;
   readonly may_execute: false;
 } & ({ readonly status: "awaiting_approval" | "active" | "held" | "not_attempted" | "outcome_unknown" | "unknown" } |
   { readonly status: "adapter_returned"; readonly feedback_status: "success" | "failed" | "suspended" });
+
+export type WebChatD4RuntimeExecutionObservation = WebChatTaskExecutionObservation;
 
 export interface WebChatD4RuntimeCancellationScope {
   readonly request_id: string;
@@ -2018,6 +2020,8 @@ export interface WebChatOptions {
   ) => Promise<WebChatD4RuntimeIntentCancellation | null>;
   /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
+  /** Read-only execution evidence for the initial computation of this authenticated owner task. */
+  onOwnerTaskSubmissionExecutionObservation?: (input: { request_id: string }) => Promise<WebChatTaskExecutionObservation>;
   /** Read-only cancellation evidence for the exact authenticated owner task request. */
   onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
   /** Request abort for the single active command bound to an authenticated owner task request. */
