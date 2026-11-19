@@ -1811,6 +1811,7 @@ export type WebChatNotificationKind =
   | "approval_required"
   | "approval_interrupted"
   | "operation_outcome_unknown"
+  | "owner_saved_result_ready"
   | "schedule_fired"
   | "schedule_delivery_unknown"
   | "cron_recovery_state_unavailable"
@@ -1886,6 +1887,8 @@ export interface WebChatNotificationItem {
 export interface WebChatNotificationSurface {
   /** Return display-only resident notifications for the local console. */
   list: () => Promise<readonly WebChatNotificationItem[]>;
+  /** 所有者の認証後に返す、本文を含まない保存結果の通知。 */
+  listOwnerSavedResults?(): Promise<readonly WebChatNotificationItem[]>;
 }
 
 export interface WebChatHistoryReplayFilter {

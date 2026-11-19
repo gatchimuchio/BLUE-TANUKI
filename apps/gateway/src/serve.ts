@@ -186,7 +186,7 @@ import type {
   WebChatHistorySnapshot,
   WebChatResumeContext,
 } from "@blue-tanuki/channel-webchat";
-import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
+import { countOwnerTasksWithSavedResults, projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
   projectOwnerTaskCancellationScope, projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
   resolveOwnerTaskSavedResult, type OwnerTaskCancellationPlanReference } from "./task_outcome_projection.js";
@@ -5027,11 +5027,10 @@ async function serveWithOwnerLease(
     };
   }
 
-  function ownerTaskPlanStepsEvidence(requestId: string): Parameters<typeof projectOwnerTaskPlanSteps>[0] | null {
+  function ownerTaskPlanStepsEvidenceSnapshot(): Omit<Parameters<typeof projectOwnerTaskPlanSteps>[0], "requestId"> | null {
     const audit = hds.getAudit();
     if (!audit.isPersistent() || !audit.verify()) return null;
     return {
-      requestId,
       operationPlans: hds.getRuntimeSnapshot().operation_plans,
       verifiedAudit: audit.list(),
       pendingCommandIds: [...pendingApprovals.keys()],
@@ -5040,6 +5039,11 @@ async function serveWithOwnerLease(
       lookupApprovalState: (commandId, requestId) => approvalRecoveryStore.lookupState(commandId, requestId),
       confirmResultMemory: commandId => hds.operationPlanResultReadyForReturn(commandId),
     };
+  }
+
+  function ownerTaskPlanStepsEvidence(requestId: string): Parameters<typeof projectOwnerTaskPlanSteps>[0] | null {
+    const evidence = ownerTaskPlanStepsEvidenceSnapshot();
+    return evidence && { ...evidence, requestId };
   }
 
   const ownerTaskSubmissionStore = GatewayWebChatOwnerTaskStore.fromEnvironment(process.env);
@@ -5475,6 +5479,7 @@ async function serveWithOwnerLease(
       },
       notifications: {
         list: async () => residentNotificationSnapshot(),
+        listOwnerSavedResults: async () => ownerSavedResultNotificationSnapshot(),
       },
       history: {
         replay: async (filter: WebChatHistoryReplayFilter) => completeHistorySnapshot(filter),
@@ -7890,6 +7895,26 @@ async function serveWithOwnerLease(
       cron_state_read_failures: cronState.read_failures,
       operation_plan_projection: operationPlanProjection,
     });
+  }
+
+  function ownerSavedResultNotificationSnapshot(): import("@blue-tanuki/channel-webchat").WebChatNotificationItem[] {
+    if (!completeHistoryFile) return [];
+    const evidence = ownerTaskPlanStepsEvidenceSnapshot();
+    if (!evidence) return [];
+    const count = countOwnerTasksWithSavedResults(evidence, ownerTaskSubmissionStore.recentOwnerTaskRequestIdsForNotification());
+    if (count === 0) return [];
+    return [{
+      id: "owner-saved-results",
+      kind: "owner_saved_result_ready",
+      severity: "info",
+      title: "確認済みの保存結果があります",
+      message: `最近の仕事の受付のうち、${count}件に確認済みの保存結果があります。`,
+      timestamp: Date.now(),
+      source: "owner_task_saved_result",
+      read_only: true,
+      authority: "display_only",
+      next_action: "仕事画面で該当する受付の状態を照会し、保存結果を選んでください。",
+    }];
   }
 
   function interruptedApprovalSnapshot() {

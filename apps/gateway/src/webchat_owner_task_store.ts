@@ -26,6 +26,7 @@ const OWNER_TASK_RESULT_TTL_MS = 15 * 60 * 1000;
 const OWNER_TASK_RESULT_MAX_ENTRIES = 512;
 const OWNER_TASK_RESULT_MAX_BYTES = 64 * 1024;
 const OWNER_TASK_RESULT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const OWNER_NOTIFICATION_REQUEST_LIMIT = 20;
 const RESULT_CACHE_CLEANUP_INTERVAL_MS = 10_000;
 const D4_RUNTIME_RESULT_TTL_MS = 15 * 60 * 1000;
 const D4_RUNTIME_RESULT_MAX_ENTRIES = 512;
@@ -99,6 +100,8 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       // 過去に別セッションで受理された同一IDも照合できるようにする。旧環境の重複行は保持する。
       this.db.exec(`CREATE INDEX IF NOT EXISTS webchat_owner_task_inbox_by_event
         ON webchat_owner_task_inbox(event_digest);`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS webchat_owner_task_inbox_recent
+        ON webchat_owner_task_inbox(scope_digest,created_at_ms DESC,request_id DESC) WHERE delivery_state<>'rejected';`);
       this.db.exec(`CREATE TABLE IF NOT EXISTS webchat_d4_cancellation_commands (
         request_id TEXT NOT NULL REFERENCES webchat_owner_task_inbox(request_id),
         command_id TEXT NOT NULL CHECK(length(command_id) BETWEEN 1 AND 256),
@@ -411,6 +414,20 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     if (!SUBMISSION_ID.test(input.submission_id)) throw new Error("webchat_owner_task_submission_id_invalid");
     const eventDigest = sha256(`webchat-owner-task-event.v1\0${input.submission_id.toLowerCase()}`);
     return this.getStatusInScope(OWNER_TASK_SCOPE, eventDigest);
+  }
+
+  /** 結果通知の照合候補。所有者の受付だけを返し、結果本文や申請IDは読み込まない。 */
+  recentOwnerTaskRequestIdsForNotification(): string[] {
+    this.assertOpen();
+    const rows = this.db.prepare(`SELECT request_id FROM webchat_owner_task_inbox
+      WHERE scope_digest=? AND delivery_state<>'rejected'
+      ORDER BY created_at_ms DESC, request_id DESC LIMIT ?`).all(OWNER_TASK_SCOPE, OWNER_NOTIFICATION_REQUEST_LIMIT);
+    return rows.map(row => {
+      if (typeof row.request_id !== "string" || !REQUEST_ID.test(row.request_id)) {
+        throw new Error("webchat_owner_task_notification_request_id_invalid");
+      }
+      return row.request_id;
+    });
   }
 
   getOwnerTaskSubmissionResult(input: { readonly request_id: string }): WebChatOwnerTaskSubmissionResult {

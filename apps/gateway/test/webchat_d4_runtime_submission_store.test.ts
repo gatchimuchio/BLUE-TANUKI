@@ -77,8 +77,10 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
       expect(store.claim(owner)).toMatchObject({ status: "accepted" });
       expect(store.cancelD4RuntimeIntentBeforeDecision({ ...owner, scope_digest: sha256("webchat-owner-task-scope.v1") })).toBeNull();
       expect(() => store.beginD4RuntimeIntentDecision(owner.request_id)).toThrow("webchat_d4_runtime_intent_decision_unavailable");
+      expect(store.recentOwnerTaskRequestIdsForNotification()).toEqual([owner.request_id]);
       store.markHandlerReturned(owner.request_id);
       expect(store.getStatus(owner)).toMatchObject({ state: "handler_returned" });
+      expect(store.recentOwnerTaskRequestIdsForNotification()).toEqual([owner.request_id]);
     } finally {
       store.close();
     }

@@ -362,6 +362,7 @@ describe("delegated goal purpose owner review", () => {
     const fileContent = "初回依頼の合成マーカー\n";
     const user = "first-task-owner";
     const submissionId = "01a119c0-5b35-4491-ae00-000000000808";
+    const d4RuntimeToken = "synthetic-owner-result-notification-d4-token";
     const task = `sandbox内の指定した相対パスのテキストファイルで次の語句を検索してください。\n相対パス: ${relativePath}\n検索語: 合成マーカー`;
     const env = isolatedRuntimeEnvironment(0, gatewayPort, auditDir, historyFile, sessionDir);
     env.BLUE_TANUKI_ENV_FILE = envFile;
@@ -369,6 +370,8 @@ describe("delegated goal purpose owner review", () => {
     env.BLUE_TANUKI_FAILURE_MEMORY_FILE = join(tempRoot, "failure-memory.json");
     env.BLUE_TANUKI_STATE_ROOT = stateRoot;
     env.BLUE_TANUKI_FILE_ROOT = fileRoot;
+    env.BLUE_TANUKI_D4_RUNTIME_ID = "blue_tanuki";
+    env.BLUE_TANUKI_D4_RUNTIME_TOKEN = d4RuntimeToken;
     env.BLUE_TANUKI_ENABLE_SYNTHETIC_PLAN_BACKEND = "true";
     env.LLM_BACKEND = "synthetic-file-write-plan";
     env.BLUE_TANUKI_LLM_BACKEND_HINT = "synthetic-file-write-plan";
@@ -383,6 +386,17 @@ describe("delegated goal purpose owner review", () => {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(10_000),
       });
+    const savedResultNotice = { kind: "owner_saved_result_ready", severity: "info", read_only: true,
+      authority: "display_only", title: expect.any(String), message: expect.any(String) };
+    const loadNotifications = async (bearer = ownerToken) => {
+      const response = await request("/notifications", bearer);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const body = await response.text();
+      const { notifications, scope } = JSON.parse(body) as { notifications: Array<Record<string, unknown>>; scope?: string };
+      if (bearer === ownerToken) expect(scope).toBe("owner");
+      return { body, readyNotices: notifications.filter(notice => notice.kind === savedResultNotice.kind) };
+    };
     const loadGoals = async () => {
       const response = await request("/owner/task-goals", ownerToken);
       expect(response.status).toBe(200);
@@ -538,6 +552,9 @@ describe("delegated goal purpose owner review", () => {
       expect(await relationApproval.json()).toMatchObject({ ok: true, result: { executed: false,
         status: "goal_purpose_relation_review_committed", outcome: "supports" } });
 
+      const unauthenticatedNotifications = await fetch(`${baseUrl}/notifications`, { signal: AbortSignal.timeout(10_000) });
+      expect(unauthenticatedNotifications.status).toBe(401);
+      expect((await loadNotifications()).readyNotices).toEqual([]);
       const reviewStep = await request("/owner/inbound", ownerToken, "POST", { user, plan_id, revision_digest,
         content: `plan:review ${JSON.stringify({ plan_id, revision_digest, step_id, goal_purpose_binding })}` });
       expect(reviewStep.status).toBe(202);
@@ -551,6 +568,10 @@ describe("delegated goal purpose owner review", () => {
         task_outcome: { status: "held", reason_code: "goal_completion_rules_missing", may_execute: false } });
       expect(verified.step).toMatchObject({ operation: "file.search", binding: { result_digest: expect.any(String),
         memory_status: "receipt_confirmed" } });
+      const verifiedNotifications = await loadNotifications();
+      expect(verifiedNotifications.readyNotices).toMatchObject([savedResultNotice]);
+      expect((await loadNotifications(token)).readyNotices).toEqual([]);
+      expect((await loadNotifications(d4RuntimeToken)).readyNotices).toEqual([]);
 
       const savedResult = await request("/owner/inbound", ownerToken, "POST", { user, plan_id, revision_digest,
         content: `plan:result ${JSON.stringify({ plan_id, revision_digest, step_id })}` });
@@ -571,6 +592,11 @@ describe("delegated goal purpose owner review", () => {
         result_ref: expect.stringMatching(/^[a-f0-9]{64}$/u) }]);
       const resultRef = workState.plan_steps!.steps[0]!.result_ref!;
       expect(JSON.stringify(workState.plan_steps)).not.toContain(fileContent.trim());
+      const privateNoticeValues = [purpose, task, relativePath, fileContent.trim(), fileRoot, submissionId,
+        workState.request_id!, resultRef, ownerToken, token, d4RuntimeToken]
+        .map(value => JSON.stringify(value).slice(1, -1));
+      for (const value of privateNoticeValues) expect(verifiedNotifications.body).not.toContain(value);
+      expect(verifiedNotifications.readyNotices[0]).not.toHaveProperty("content");
       const readSavedResult = (reference: string) => fetch(`${baseUrl}/owner/task-submission-result`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json", origin: baseUrl },
@@ -650,6 +676,9 @@ describe("delegated goal purpose owner review", () => {
       expect(restoredWorkStatus.status).toBe(200);
       expect(await restoredWorkStatus.json()).toMatchObject({ request_id: submission.request_id,
         plan_steps: { steps: [{ index: 1, result_ref: resultRef }] } });
+      const restoredNotifications = await loadNotifications();
+      expect(restoredNotifications.readyNotices).toMatchObject([savedResultNotice]);
+      for (const value of privateNoticeValues) expect(restoredNotifications.body).not.toContain(value);
       const restoredPrivateResult = await readSavedResult(resultRef);
       expect(restoredPrivateResult.status).toBe(200);
       expect(restoredPrivateResult.headers.get("cache-control")).toBe("no-store");

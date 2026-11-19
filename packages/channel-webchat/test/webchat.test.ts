@@ -9584,6 +9584,133 @@ describe("WebChatChannel - resident notifications API", () => {
     }
   });
 
+  it("keeps Owner saved-result notifications separate from other notification readers", async () => {
+    const savedResult = {
+      id: "owner-saved-result-fixture",
+      kind: "owner_saved_result_ready",
+      severity: "info",
+      title: "保存結果を確認できます",
+      message: "確認済みの保存結果があります。",
+      timestamp: 12346,
+      source: "owner_task_result",
+      read_only: true,
+      authority: "display_only",
+    } as const;
+    const general = { ...savedResult, id: "audit-fixture", kind: "audit_warning" } as const;
+    let ownerReads = 0;
+    let generalReads = 0;
+    const ctx = await setup({
+      owner_token: OWNER_TOKEN,
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      rate_limits: { inbound: { capacity: 2, refill_per_sec: 0.001 } },
+      notifications: {
+        list: async () => { generalReads += 1; return [general, savedResult]; },
+        listOwnerSavedResults: async () => { ownerReads += 1; return ownerReads === 1 ? [general, savedResult] : []; },
+      },
+    });
+    await ctx.ch.start(async () => {});
+    const read = (token: string) => getRaw(ctx.port, "/notifications", { authorization: `Bearer ${token}` });
+    try {
+      expect((await read(RESUME_TOKEN)).status).toBe(401);
+      expect((await read("unrecognized-token-fixture")).status).toBe(401);
+      expect((await postJson(ctx.port, "/notifications", {}, { authorization: `Bearer ${OWNER_TOKEN}` })).status).toBe(405);
+      const inbound = await read(TOKEN);
+      expect(inbound.status).toBe(200);
+      expect(JSON.parse(inbound.text)).toEqual({ notifications: [general] });
+      const d4 = await read(D4_RUNTIME_TOKEN);
+      expect(d4.status).toBe(200);
+      expect(JSON.parse(d4.text).notifications).toEqual([
+        { category: "audit_integrity_issue", severity: "info", occurred_at_ms: 12346 },
+      ]);
+      expect(ownerReads).toBe(0);
+
+      const owner = await read(OWNER_TOKEN);
+      expect(owner.status).toBe(200);
+      expect(owner.headers.get("cache-control")).toBe("no-store");
+      expect(JSON.parse(owner.text)).toEqual({ notifications: [savedResult], scope: "owner" });
+      expect(JSON.parse((await read(OWNER_TOKEN)).text)).toEqual({ notifications: [], scope: "owner" });
+      expect((await read(OWNER_TOKEN)).status).toBe(429);
+      expect(generalReads).toBe(2);
+      expect(JSON.parse((await read(TOKEN)).text)).toEqual({ notifications: [general] });
+      expect(ownerReads).toBe(2);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("clears the Owner notification credential before use and ignores a superseded response", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("let notificationLoadGeneration");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("function clearGoalPurposeRepairHandoff", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(renderControlCenterHtml()).toContain('id="owner-notifications-token" type="password"');
+    const owner = { value: OWNER_TOKEN };
+    const inbound = { value: TOKEN };
+    const state = { notificationsToken: "prior-inbound-token" };
+    const storageKey = "bt.notificationsToken";
+    const stored = new Map([[storageKey, state.notificationsToken]]);
+    const writes: string[][] = [];
+    const rendered: unknown[] = [];
+    const credentialAtFetch: string[] = [];
+    const requests: Array<{ path: string; token: string; cache: string }> = [];
+    const notice = { notifications: [{ kind: "owner_saved_result_ready" }], scope: "owner" };
+    let finishOwnerRead!: (result: unknown) => void;
+    const ownerResponse = new Promise(resolve => { finishOwnerRead = resolve; });
+    let ownerReads = 0;
+    const load = new Script(`${CONTROL_CENTER_SCRIPT.slice(start, end)}\nloadNotifications`).runInNewContext({
+      state,
+      byId: (id: string) => id === "owner-notifications-token" ? owner : inbound,
+      sessionStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => { writes.push([key, value]); stored.set(key, value); },
+        removeItem: (key: string) => { stored.delete(key); },
+      },
+      renderNotifications: (body: unknown) => { rendered.push(body); },
+      setHtml: () => {}, setText: () => {}, escapeHtml: (value: string) => value,
+      fetchJson: (path: string, token: string, options: RequestInit) => {
+        credentialAtFetch.push(owner.value);
+        requests.push({ path, token, cache: options.cache ?? "" });
+        if (token === OWNER_TOKEN) return ++ownerReads === 1 ? ownerResponse : Promise.resolve(notice);
+        if (token === TOKEN) return Promise.resolve({ notifications: [] });
+        return Promise.reject(new Error("unauthorized"));
+      },
+    }) as () => Promise<void>;
+
+    const pending = load();
+    expect(state.notificationsToken).toBe("prior-inbound-token");
+    expect(writes).toEqual([]);
+    await load();
+    finishOwnerRead(notice);
+    await pending;
+    expect(credentialAtFetch).toEqual(["", ""]);
+    expect(requests).toEqual([
+      { path: "/notifications", token: OWNER_TOKEN, cache: "no-store" },
+      { path: "/notifications", token: TOKEN, cache: "no-store" },
+    ]);
+    expect(writes).toEqual([[storageKey, TOKEN]]);
+    expect(rendered).toEqual([{ notifications: [] }]);
+
+    inbound.value = OWNER_TOKEN;
+    await load();
+    expect(inbound.value).toBe("");
+    expect(state.notificationsToken).toBe(TOKEN);
+    expect(stored.get(storageKey)).toBe(TOKEN);
+    expect(rendered.at(-1)).toEqual(notice);
+
+    inbound.value = OWNER_TOKEN;
+    state.notificationsToken = OWNER_TOKEN;
+    stored.set(storageKey, OWNER_TOKEN);
+    await load();
+    expect(inbound.value).toBe("");
+    expect(state.notificationsToken).toBe("");
+    expect(stored.has(storageKey)).toBe(false);
+
+    inbound.value = "unsupported-token-fixture";
+    await load();
+    expect(stored.has(storageKey)).toBe(false);
+    expect(writes).toEqual([[storageKey, TOKEN]]);
+  });
+
   it("does not accept POST /notifications", async () => {
     const ctx = await setup({
       notifications: {

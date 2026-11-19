@@ -371,8 +371,8 @@ function currentOwnerTaskPlan(input: OwnerTaskPlanStepsInput): ProjectedPlan | u
   return plan;
 }
 
-function ownerTaskPlanStepEvidence(input: OwnerTaskPlanStepsInput, plan: ProjectedPlan) {
-  const requests = new Set(plan.bindings.map(binding => binding.request_id));
+function ownerTaskPlanStepEvidence(input: Omit<OwnerTaskPlanStepsInput, "requestId">, plans: readonly ProjectedPlan[]) {
+  const requests = new Set(plans.flatMap(plan => plan.bindings.map(binding => binding.request_id)));
   const auditByRequest = new Map<string, AuditEntry["log"][]>();
   for (const { log } of input.verifiedAudit) {
     if (!("request_id" in log) || typeof log.request_id !== "string" || !requests.has(log.request_id)) continue;
@@ -388,9 +388,26 @@ export function projectOwnerTaskPlanSteps(input: OwnerTaskPlanStepsInput): WebCh
   const noAuthority = { used_for_authority: false, may_execute: false } as const;
   const plan = currentOwnerTaskPlan(input);
   if (!plan) return { status: "unknown", ...noAuthority };
-  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, plan);
+  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, [plan]);
   return { status: "available", ...noAuthority,
     steps: plan.steps.map((step, index) => projectOwnerTaskPlanStep(input, plan, step, index + 1, auditByRequest, pending, active)) };
+}
+
+/** 受付ごとの保存結果判定を共用し、通知の照合に必要な監査索引を一度だけ作る。 */
+export function countOwnerTasksWithSavedResults(evidence: Omit<OwnerTaskPlanStepsInput, "requestId">,
+  requestIds: readonly string[]): number {
+  const candidates = requestIds.flatMap(requestId => {
+    const input = { ...evidence, requestId };
+    const plan = currentOwnerTaskPlan(input);
+    return plan?.steps.some(step => step.saved_result_return_supported && step.status === "verified")
+      ? [{ input, plan }] : [];
+  });
+  if (candidates.length === 0) return 0;
+  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(evidence, candidates.map(candidate => candidate.plan));
+  return candidates.filter(({ input, plan }) => plan.steps.some((step, index) => {
+    const result = projectOwnerTaskPlanStep(input, plan, step, index + 1, auditByRequest, pending, active);
+    return result.status === "adapter_returned" && result.feedback_status === "success" && result.result_ref !== undefined;
+  })).length;
 }
 
 /** 受付が保持する現行計画から、同じ結果を選んだ場合だけJ向け制御値を組み立てる。 */
@@ -402,7 +419,7 @@ export function resolveOwnerTaskSavedResult(input: OwnerTaskPlanStepsInput, step
   const plan = currentOwnerTaskPlan(input);
   const step = plan?.steps[stepIndex - 1];
   if (!plan || !step) return undefined;
-  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, plan);
+  const { auditByRequest, pending, active } = ownerTaskPlanStepEvidence(input, [plan]);
   const observation = projectOwnerTaskPlanStep(input, plan, step, stepIndex, auditByRequest, pending, active);
   if (observation.status !== "adapter_returned" || observation.feedback_status !== "success" ||
       observation.result_ref !== resultRef) return undefined;

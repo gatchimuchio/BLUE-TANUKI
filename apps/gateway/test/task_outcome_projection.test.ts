@@ -5,6 +5,7 @@ import { operationPlanDigest, type AuditEntry } from "@blue-tanuki/hds-brain";
 import { getOperationDescriptor } from "@blue-tanuki/protocol";
 import type { TaskExecutionCancellationEvidence } from "../src/execution_intent_store.js";
 import {
+  countOwnerTasksWithSavedResults,
   projectD4RuntimeActiveCommand,
   projectD4RuntimeCancellationStatus,
   projectD4RuntimeTaskOutcome,
@@ -183,6 +184,10 @@ describe("owner task plan step observation", () => {
     expect(resolveOwnerTaskSavedResult({ ...supported, operationPlans: projection({ ...supportedPlan,
       steps: [step] }) }, 1, resultRef!)).toBeUndefined();
     expect(resolveOwnerTaskSavedResult({ ...supported, confirmResultMemory: () => false }, 1, resultRef!)).toBeUndefined();
+    expect(countOwnerTasksWithSavedResults(supported, [requestId, followUp])).toBe(1);
+    expect(countOwnerTasksWithSavedResults({ ...supported, confirmResultMemory: () => false }, [requestId])).toBe(0);
+    expect(countOwnerTasksWithSavedResults({ ...supported, operationPlans: projection(supportedPlan, supportedPlan) },
+      [requestId])).toBe(0);
   });
 
   it("confines matching to exactly one owner plan, step, follow-up request, and ticket", () => {

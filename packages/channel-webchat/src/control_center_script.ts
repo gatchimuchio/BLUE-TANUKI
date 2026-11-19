@@ -7020,14 +7020,29 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      let notificationLoadGeneration = 0;
       async function loadNotifications() {
-        const token = byId("notifications-token").value.trim();
-        state.notificationsToken = token;
-        sessionStorage.setItem("bt.notificationsToken", token);
+        const generation = ++notificationLoadGeneration;
+        const ownerTokenInput = byId("owner-notifications-token");
+        const generalTokenInput = byId("notifications-token");
+        const ownerToken = ownerTokenInput.value.trim();
+        ownerTokenInput.value = "";
+        const token = ownerToken || generalTokenInput.value.trim();
         try {
-          const body = await fetchJson("/notifications", token);
+          const body = await fetchJson("/notifications", token, { cache: "no-store" });
+          if (body.scope === "owner") {
+            if (generalTokenInput.value.trim() === token) generalTokenInput.value = "";
+            if (state.notificationsToken === token) state.notificationsToken = "";
+            if (sessionStorage.getItem("bt.notificationsToken") === token) sessionStorage.removeItem("bt.notificationsToken");
+          }
+          if (generation !== notificationLoadGeneration) return;
+          if (!ownerToken && body.scope !== "owner") {
+            state.notificationsToken = token;
+            sessionStorage.setItem("bt.notificationsToken", token);
+          }
           renderNotifications(body);
         } catch (error) {
+          if (generation !== notificationLoadGeneration) return;
           setHtml("notification-list", '<div class="notification-item">' + escapeHtml(error.message) + '</div>');
           setText("notification-summary", "error");
           byId("notification-summary").className = "badge bad";

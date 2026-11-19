@@ -140,7 +140,7 @@ const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 
 const D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND: Record<
-  WebChatNotificationKind,
+  Exclude<WebChatNotificationKind, "owner_saved_result_ready">,
   D4RuntimeNotificationCategory
 > = {
   approval_required: "owner_attention",
@@ -3084,8 +3084,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const notifications = value.map((entry) => {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
       const item = entry as Record<string, unknown>;
-      const category = typeof item.kind === "string"
-        ? D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND[item.kind as WebChatNotificationKind]
+      const kind = item.kind as WebChatNotificationKind;
+      const category = typeof kind === "string" && kind !== "owner_saved_result_ready"
+        ? D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND[kind]
         : undefined;
       return {
         category,
@@ -3848,21 +3849,31 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     const d4RuntimeProjection = this.checkAuth(req, "d4_runtime");
-    if (!d4RuntimeProjection && !this.checkAuth(req, "inbound")) {
+    const ownerSavedResults = Boolean(this.opts.notifications.listOwnerSavedResults) && this.checkAuth(req, "owner");
+    if (!d4RuntimeProjection && !ownerSavedResults && !this.checkAuth(req, "inbound")) {
       res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
+    if (ownerSavedResults && !this.rateLimitOr429(this.buckets.inbound, "owner-saved-result-notifications", res)) return;
     let notifications: readonly WebChatNotificationItem[];
     try {
-      notifications = await this.opts.notifications.list();
+      if (ownerSavedResults) {
+        const savedResults = await this.opts.notifications.listOwnerSavedResults?.();
+        notifications = (savedResults ?? []).filter(item => item.kind === "owner_saved_result_ready");
+      } else {
+        notifications = await this.opts.notifications.list();
+        if (Array.isArray(notifications)) {
+          notifications = notifications.filter(item => item?.kind !== "owner_saved_result_ready");
+        }
+      }
     } catch {
       res.writeHead(503, {
         "content-type": "application/json",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       });
-      res.end(JSON.stringify({ error: "notifications_unavailable" }));
+      res.end(JSON.stringify({ error: ownerSavedResults ? "owner_saved_result_notifications_unavailable" : "notifications_unavailable" }));
       return;
     }
     if (d4RuntimeProjection) {
@@ -3889,7 +3900,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(JSON.stringify({ notifications }));
+    res.end(JSON.stringify(ownerSavedResults ? { notifications, scope: "owner" } : { notifications }));
   }
 
   private async handleHistory(
