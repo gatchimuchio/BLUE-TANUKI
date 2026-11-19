@@ -23,6 +23,7 @@ import {
 } from "../src/canonical_state_backup.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
+import { GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
 import {
   buildRecoverySnapshot,
   correlateTaskMemoryRestorePoints,
@@ -1536,7 +1537,7 @@ describe("buildRecoverySnapshot", () => {
     }
   });
 
-  it("keeps the verified pre-reset backup and reports an unknown outcome on deletion failure", async () => {
+  it("keeps the verified pre-reset backup and blocks runtime restart on deletion failure", async () => {
     const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-factory-reset-partial-"));
     const sessionDir = path.join(root, "sessions");
     const sessionFile = path.join(sessionDir, "session.jsonl");
@@ -1556,19 +1557,56 @@ describe("buildRecoverySnapshot", () => {
         BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
         BLUE_TANUKI_SESSION_DIR: sessionDir,
       };
-      await expect(factoryResetRecovery(env, { confirm: "FACTORY_RESET" }))
-        .rejects.toThrow("factory_reset_outcome_unknown");
+      const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+      const evidence = (backupId: string, manifestSha256: string) => ({
+        operation: "recovery.factory_reset" as const,
+        command_digest: "a".repeat(64), backup_id: backupId, manifest_sha256: manifestSha256,
+      });
+      try {
+        await expect(factoryResetRecovery(env, {
+          confirm: "FACTORY_RESET",
+          fence: {
+            begin: (id, digest) => lease.beginRecoveryMutation(evidence(id, digest)),
+            finish: (id, digest) => lease.finishRecoveryMutation(evidence(id, digest)),
+          },
+        })).rejects.toThrow("factory_reset_outcome_unknown");
+      } finally {
+        lease.close();
+      }
       expect(await readFile(envFile, "utf8")).toContain("COMPOSIO_DRY_RUN=true");
       expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
-      expect(await inspectLatestRecoveryBackup(env)).toMatchObject({
+      const backup = await inspectLatestRecoveryBackup(env);
+      expect(backup).toMatchObject({
         status: "verified",
         backup_action: "pre_factory_reset",
       });
+      const pending = inspectRuntimeRecoveryFence(env);
+      expect(pending).toMatchObject({ status: "pending", manifest_sha256: backup.manifest_sha256 });
+      if (pending.status !== "pending") throw new Error("fixture fence was not held");
+      expect(createHash("sha256").update(pending.backup_id).digest("hex")).toBe(backup.backup_id_digest);
+
+      const main = fileURLToPath(new URL("../dist/main.js", import.meta.url));
+      const systemKeys = ["PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE",
+        "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "ComSpec"];
+      const inherited = Object.fromEntries(systemKeys.map(key => [key, process.env[key]]));
+      const run = (...args: string[]) => spawnSync(process.execPath, ["--", main, ...args], {
+        cwd: root, env: { ...inherited, ...env, LLM_BACKEND: "stub", WEBCHAT_HOST: "127.0.0.1" },
+        encoding: "utf8", timeout: 15_000, windowsHide: true,
+      });
+      for (const args of [["--serve"], ["fixture one-shot work"]]) {
+        const startup = run(...args);
+        expect(startup.status, startup.stderr).toBe(1);
+        expect(startup.stdout + startup.stderr).toContain("gateway_runtime_recovery_pending");
+      }
+      const diagnostic = run("--recovery-inspect", "--json");
+      expect(diagnostic.status, diagnostic.stderr).toBe(2);
+      expect(JSON.parse(diagnostic.stdout)).toMatchObject({ runtime_recovery_fence: pending });
+      expect(inspectRuntimeRecoveryFence(env)).toEqual(pending);
     } finally {
       denyRemoval.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it("rejects restore manifests that rewrite source_path outside configured runtime targets", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-manifest-"));

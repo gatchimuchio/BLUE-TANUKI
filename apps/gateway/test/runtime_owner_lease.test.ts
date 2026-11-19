@@ -1,15 +1,21 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { GatewayRuntimeOwnerLease } from "../src/runtime_owner_lease.js";
+import { GatewayRuntimeOwnerLease, inspectRuntimeRecoveryFence, type RuntimeRecoveryFenceEvidence } from "../src/runtime_owner_lease.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const roots: string[] = [];
+const recoveryEvidence: RuntimeRecoveryFenceEvidence = {
+  operation: "recovery.factory_reset",
+  command_digest: "1".repeat(64),
+  backup_id: "2026-11-19T14-18-15-560Z.pre_factory_reset.12345678-1234-4123-8123-123456789abc",
+  manifest_sha256: "2".repeat(64),
+};
 function temporaryStateRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-"));
   roots.push(root);
@@ -28,6 +34,91 @@ afterEach(() => {
 });
 
 describe("Gateway runtime owner lease", () => {
+  it("surfaces a pending fence read-only and leaves a stopped mutation's generation unchanged", () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: join(temporaryStateRoot(), "state") };
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    expect(existsSync(env.BLUE_TANUKI_STATE_ROOT)).toBe(false);
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      lease.beginRecoveryMutation(recoveryEvidence);
+      expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_already_active");
+    } finally {
+      lease.close();
+    }
+    const directory = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime");
+    const filepath = join(directory, "owner-state.sqlite");
+    const original = readFileSync(filepath);
+    const created = readdirSync(directory).sort();
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", ...recoveryEvidence });
+    expect(readdirSync(directory).sort()).toEqual(created);
+    expect(readFileSync(filepath)).toEqual(original);
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_recovery_pending");
+    expect(() => lease.finishRecoveryMutation(recoveryEvidence)).toThrow("gateway_runtime_owner_lease_lost");
+    const db = new DatabaseSync(filepath, { readOnly: true });
+    try {
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+      expect(db.prepare("SELECT generation,execution_epoch FROM gateway_owner_state").get()).toEqual({
+        generation: lease.generation, execution_epoch: lease.executionEpoch,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("settles only the exact successful mutation on the lease that started it", () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(() => lease.beginRecoveryMutation({ ...recoveryEvidence, backup_id: "latest" }))
+        .toThrow("gateway_runtime_recovery_fence_invalid");
+      expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+      lease.beginRecoveryMutation(recoveryEvidence);
+      expect(() => lease.beginRecoveryMutation(recoveryEvidence)).toThrow("gateway_runtime_recovery_fence_unavailable");
+      expect(() => lease.finishRecoveryMutation({ ...recoveryEvidence, manifest_sha256: "3".repeat(64) }))
+        .toThrow("gateway_runtime_recovery_fence_mismatch");
+      expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "pending", ...recoveryEvidence });
+      lease.finishRecoveryMutation(recoveryEvidence);
+      expect(() => lease.finishRecoveryMutation(recoveryEvidence)).toThrow("gateway_runtime_recovery_fence_mismatch");
+      expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "clear" });
+    } finally {
+      lease.close();
+    }
+    const restarted = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      expect(restarted.generation).toBe(lease.generation + 1);
+      expect(restarted.executionEpoch).not.toBe(lease.executionEpoch);
+    } finally {
+      restarted.close();
+    }
+    const state = new DatabaseSync(join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite"),
+      { readOnly: true });
+    try {
+      expect(state.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+      expect(state.prepare("SELECT name FROM sqlite_schema WHERE name='gateway_recovery_fence'").get()).toBeUndefined();
+    } finally {
+      state.close();
+    }
+  });
+
+  it("fails closed when recovery-fence evidence is corrupted", () => {
+    const env = { BLUE_TANUKI_STATE_ROOT: temporaryStateRoot() };
+    const lease = GatewayRuntimeOwnerLease.fromEnvironment(env);
+    try {
+      lease.beginRecoveryMutation(recoveryEvidence);
+    } finally {
+      lease.close();
+    }
+    const filepath = join(env.BLUE_TANUKI_STATE_ROOT, "private-state", "gateway-runtime", "owner-state.sqlite");
+    const db = new DatabaseSync(filepath);
+    try {
+      db.prepare("UPDATE gateway_recovery_fence SET digest=? WHERE singleton=1").run("0".repeat(64));
+    } finally {
+      db.close();
+    }
+    expect(inspectRuntimeRecoveryFence(env)).toEqual({ status: "unavailable" });
+    expect(() => GatewayRuntimeOwnerLease.fromEnvironment(env)).toThrow("gateway_runtime_owner_state_unavailable");
+  });
+
   it("persists a fresh execution epoch per acquired generation and rejects a second process", () => {
     const root = temporaryStateRoot();
     const env = { BLUE_TANUKI_STATE_ROOT: root };

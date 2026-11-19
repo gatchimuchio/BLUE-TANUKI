@@ -1274,6 +1274,19 @@ async function serveWithOwnerLease(
       runtimeRecoveryMutationToolClaimed = true;
       return true;
     },
+    factoryResetFence: (commandId) => {
+      const commandDigest = createHash("sha256").update(commandId, "utf8").digest("hex");
+      return {
+        begin: (backupId, manifestSha256) => ownerLease.beginRecoveryMutation({
+          operation: "recovery.factory_reset", command_digest: commandDigest,
+          backup_id: backupId, manifest_sha256: manifestSha256,
+        }),
+        finish: (backupId, manifestSha256) => ownerLease.finishRecoveryMutation({
+          operation: "recovery.factory_reset", command_digest: commandDigest,
+          backup_id: backupId, manifest_sha256: manifestSha256,
+        }),
+      };
+    },
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();

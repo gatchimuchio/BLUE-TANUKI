@@ -411,6 +411,10 @@ powershell -NoProfile -File "$env:LOCALAPPDATA\Programs\BlueTanuki\BlueTanukiLau
 終了コード2は未確認・欠落・不一致など確認が必要な状態です。診断は常駐プロセスの起動・停止、復元、承認要求を行いません。
 各台帳の取得時点は独立しているため、すべて揃っていても仕事全体を同じ時点へ復元できるとは限りません。
 
+通常起動が `gateway_runtime_recovery_pending` で止まった場合は、同じ設置先で
+`recovery-inspect --json` を実行します。`runtime_recovery_fence` の事前バックアップIDと
+マニフェストSHA-256を確認できます。照合状態が `pending` の間は初期化の再送が停止されます。
+
 ## Reinstall and upgrade
 
 `-Force` on Windows and `FORCE=1` on macOS/Linux apply only to the developer

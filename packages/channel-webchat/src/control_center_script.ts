@@ -3571,7 +3571,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("approval-emergency-status", emergencyStopStatus);
         byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
         byId("clear-emergency-stop").disabled = !emergencyStopActive ||
-          (emergencyStop && emergencyStop.clear_blocked_by_active_work === true);
+          emergencyStop.clear_blocked_by_active_work === true || emergencyStop.clear_state_conflict === true ||
+          emergencyStop.audit_recovery_status === "state_unavailable";
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);
         setText("active-execution-count", activeExecutions.length);
@@ -6156,6 +6157,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           renderApprovals(body);
         } catch (error) {
           if (requestId !== state.approvalSnapshotRequestId) return;
+          byId("clear-emergency-stop").disabled = true;
           setHtml("approval-list", '<div class="queue-item">' + escapeHtml(error.message) + '</div>');
           setText("approval-summary", "error");
           byId("approval-summary").className = "badge bad";
@@ -9475,6 +9477,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
         if (!response.ok) {
           const text = await response.text();
+          if (action === "clear" && response.status === 409) {
+            byId("clear-emergency-stop").disabled = true;
+            await loadApprovals();
+          }
           throw new Error("emergency stop failed: HTTP " + response.status + " " + text);
         }
         await loadApprovals();
@@ -9958,6 +9964,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           alert(error.message);
         });
       });
+      byId("clear-emergency-stop").disabled = true;
       byId("clear-emergency-stop").addEventListener("click", function () {
         setEmergencyStop("clear").catch(function (error) {
           alert(error.message);

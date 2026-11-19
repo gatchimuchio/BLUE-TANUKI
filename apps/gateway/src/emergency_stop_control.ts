@@ -29,11 +29,16 @@ interface AuthorityEventLike {
   readonly occurred_at_ms?: unknown;
 }
 
+interface EmergencyStopAuditEntry {
+  readonly entry_hash: string;
+  readonly log: unknown;
+}
+
 interface EmergencyStopAuthority {
   getAudit(): {
     isPersistent(): boolean;
     verify(): boolean;
-    list(): readonly { readonly entry_hash: string; readonly log: unknown }[];
+    list(): readonly EmergencyStopAuditEntry[];
   };
   onAuthorityEvent(event: "emergency_stop_activated" | "emergency_stop_cleared", opts: {
     actor: string;
@@ -72,9 +77,8 @@ export class EmergencyStopControl {
   snapshot(): EmergencyStopSnapshot {
     const active = this.durable.active;
     const clearBlockedByActiveWork = active && (this.options.hasUnsettledWork?.() ?? false);
-    const clearStateConflict = active && this.durable.activation
-      ? emergencyStopAuditStateConflict(this.options.authority, this.durable.activation.control_event_id)
-      : false;
+    const clearStateConflict = active &&
+      this.hasClearStateConflict(() => this.options.authority.getAudit().list());
     return {
       active,
       activated_at: this.durable.activation?.occurred_at_ms ?? null,
@@ -128,11 +132,18 @@ export class EmergencyStopControl {
     if (!this.durable.active) return this.snapshot();
     if (!this.stateStoreAvailable) throw new Error("emergency_stop_state_store_unavailable");
     if (this.options.hasUnsettledWork?.()) throw new Error("emergency_stop_clear_blocked_active_work");
-    if (!this.durable.activation?.audit_recorded && !this.recordActivationIfPossible(true)) {
-      throw new Error("emergency_stop_audit_recovery_pending");
+    if (!this.durable.activation?.audit_recorded) {
+      if (this.hasClearStateConflict(() => this.options.authority.getAudit().list())) {
+        throw new Error("emergency_stop_clear_state_conflict");
+      }
+      if (!this.recordActivationIfPossible(true)) throw new Error("emergency_stop_audit_recovery_pending");
     }
+    if (!this.stateStoreAvailable) throw new Error("emergency_stop_state_store_unavailable");
     const audit = this.options.authority.getAudit();
     if (!audit.isPersistent() || !audit.verify()) throw new Error("emergency_stop_clear_requires_persistent_audit");
+    if (this.hasClearStateConflict(() => audit.list())) {
+      throw new Error("emergency_stop_clear_state_conflict");
+    }
 
     const clear = { control_event_id: randomUUID(), actor: context.actor, occurred_at_ms: this.now() };
     this.options.authority.onAuthorityEvent("emergency_stop_cleared", {
@@ -145,30 +156,41 @@ export class EmergencyStopControl {
     return this.snapshot();
   }
 
+  private hasClearStateConflict(list: () => readonly EmergencyStopAuditEntry[]): boolean {
+    try {
+      const activation = this.durable.activation;
+      const persisted = this.options.store.load();
+      if (!activation || !persisted.active || !persisted.activation ||
+          persisted.activation.audit_recorded !== activation.audit_recorded ||
+          persisted.activation.control_event_id !== activation.control_event_id ||
+          persisted.activation.actor !== activation.actor ||
+          persisted.activation.occurred_at_ms !== activation.occurred_at_ms) return true;
+      const entries = list();
+      if (!activation.audit_recorded && !hasActivationAudit(entries, activation.control_event_id)) {
+        return !mayRecoverMissingActivation(entries, activation.occurred_at_ms);
+      }
+      const latest = latestEmergencyStopAudit(entries);
+      return !latest || latest.log.event !== "emergency_stop_activated" ||
+        auditControlEventId(latest.log, latest.entry_hash) !== activation.control_event_id;
+    } catch {
+      return true;
+    }
+  }
+
   private restoreFromAudit(): void {
     const auditEntries = this.options.authority.getAudit().list();
     if (this.durable.active && this.durable.activation) {
-      const exists = auditEntries.some((entry) => isAuthorityEvent(entry.log) &&
-        entry.log.event === "emergency_stop_activated" && entry.log.control_event_id === this.durable.activation!.control_event_id);
+      const exists = hasActivationAudit(auditEntries, this.durable.activation.control_event_id);
       if (exists && !this.durable.activation.audit_recorded) {
         try { this.durable = this.options.store.markActivationAudited(this.durable.activation.control_event_id); }
-        catch { this.stateStoreAvailable = false; }
-      } else if (!exists && this.durable.activation.audit_recorded) {
-        try { this.durable = this.options.store.markActivationPending(this.durable.activation.control_event_id); }
         catch { this.stateStoreAvailable = false; }
       }
       this.reasonText = "Emergency stop restored from durable state.";
       return;
     }
-    const events = auditEntries.flatMap((entry) => {
-      if (!isAuthorityEvent(entry.log)) return [];
-      if (entry.log.event !== "emergency_stop_activated" && entry.log.event !== "emergency_stop_cleared") return [];
-      return [{ entry, log: entry.log }];
-    });
-    const latest = events.at(-1);
+    const latest = latestEmergencyStopAudit(auditEntries);
     if (!latest || latest.log.event !== "emergency_stop_activated") return;
-    const eventId = typeof latest.log.control_event_id === "string" && latest.log.control_event_id.length > 0
-      ? latest.log.control_event_id : latest.entry.entry_hash;
+    const eventId = auditControlEventId(latest.log, latest.entry_hash);
     const activation = {
       control_event_id: eventId,
       actor: typeof latest.log.actor === "string" && latest.log.actor.trim() ? latest.log.actor : "system",
@@ -176,8 +198,9 @@ export class EmergencyStopControl {
         ? Number(latest.log.occurred_at_ms)
         : Number.isSafeInteger(latest.log.timestamp) && Number(latest.log.timestamp) > 0 ? Number(latest.log.timestamp) : this.now(),
     };
+    this.durable = { ...this.durable, active: true, activation: { ...activation, audit_recorded: true } };
     try {
-      this.durable = this.options.store.activate(activation);
+      this.options.store.activate(activation);
       this.durable = this.options.store.markActivationAudited(eventId);
     } catch { this.stateStoreAvailable = false; }
     if (this.durable.active) this.reasonText = "Emergency stop restored from the HDS audit record.";
@@ -187,14 +210,15 @@ export class EmergencyStopControl {
     const activation = this.durable.activation;
     if (!this.durable.active || !activation) return false;
     const audit = this.options.authority.getAudit();
-    const existing = audit.list().some((entry) => isAuthorityEvent(entry.log) &&
-      entry.log.event === "emergency_stop_activated" && entry.log.control_event_id === activation.control_event_id);
+    const entries = audit.list();
+    const existing = hasActivationAudit(entries, activation.control_event_id);
     if (existing) {
       try { this.durable = this.options.store.markActivationAudited(activation.control_event_id); }
       catch { this.durable = { ...this.durable, activation: { ...activation, audit_recorded: true } }; this.stateStoreAvailable = false; }
       return true;
     }
-    if (!audit.isPersistent() || !audit.verify()) return false;
+    if (!mayRecoverMissingActivation(entries, activation.occurred_at_ms) ||
+        !audit.isPersistent() || !audit.verify()) return false;
     try {
       this.options.authority.onAuthorityEvent("emergency_stop_activated", {
         actor: activation.actor,
@@ -203,8 +227,7 @@ export class EmergencyStopControl {
         occurred_at_ms: activation.occurred_at_ms,
         audit_gap_recovered: recovered,
       });
-      const appended = this.options.authority.getAudit().list().some((entry) => isAuthorityEvent(entry.log) &&
-        entry.log.event === "emergency_stop_activated" && entry.log.control_event_id === activation.control_event_id);
+      const appended = hasActivationAudit(this.options.authority.getAudit().list(), activation.control_event_id);
       if (!appended) return false;
       try { this.durable = this.options.store.markActivationAudited(activation.control_event_id); }
       catch { this.durable = { ...this.durable, activation: { ...activation, audit_recorded: true } }; this.stateStoreAvailable = false; }
@@ -219,19 +242,26 @@ function isAuthorityEvent(value: unknown): value is AuthorityEventLike {
   return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "authority_event";
 }
 
-function emergencyStopAuditStateConflict(
-  authority: EmergencyStopAuthority,
-  activationId: string,
-): boolean {
-  try {
-    const controlEvents = authority.getAudit().list().flatMap((entry) => {
-      const log = entry.log;
-      return isAuthorityEvent(log) &&
-        (log.event === "emergency_stop_activated" || log.event === "emergency_stop_cleared") ? [log] : [];
-    });
-    const latest = controlEvents.at(-1);
-    return !latest || latest.event !== "emergency_stop_activated" || latest.control_event_id !== activationId;
-  } catch {
-    return true;
-  }
+function auditControlEventId(log: AuthorityEventLike, entryHash: string): string {
+  return typeof log.control_event_id === "string" && log.control_event_id.length > 0
+    ? log.control_event_id : entryHash;
+}
+
+function hasActivationAudit(entries: readonly EmergencyStopAuditEntry[], activationId: string): boolean {
+  return entries.some(({ log, entry_hash }) => isAuthorityEvent(log) && log.event === "emergency_stop_activated" &&
+    auditControlEventId(log, entry_hash) === activationId);
+}
+
+function latestEmergencyStopAudit(entries: readonly EmergencyStopAuditEntry[]) {
+  return entries.flatMap(({ log, entry_hash }) => isAuthorityEvent(log) &&
+    (log.event === "emergency_stop_activated" || log.event === "emergency_stop_cleared")
+    ? [{ log, entry_hash }] : []).at(-1);
+}
+
+function mayRecoverMissingActivation(entries: readonly EmergencyStopAuditEntry[], activationTime: number): boolean {
+  const latest = latestEmergencyStopAudit(entries);
+  if (!latest) return true;
+  const time = latest.log.occurred_at_ms ?? latest.log.timestamp;
+  return latest.log.event === "emergency_stop_cleared" && Number.isSafeInteger(time) &&
+    Number(time) > 0 && Number(time) < activationTime;
 }

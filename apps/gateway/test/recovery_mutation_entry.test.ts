@@ -15,6 +15,7 @@ import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
+import { inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -76,6 +77,7 @@ describe("Recovery mutation HDS L3 entry", () => {
     expect(readFileSync(marker, "utf8")).toBe("retained audit fixture\n");
     expect(existsSync(join(root, "recovery"))).toBe(false);
     expect(readdirSync(root).filter(name => name.startsWith("product.env."))).toEqual([]);
+    expect(inspectRuntimeRecoveryFence(runtimeEnv).status).toBe("clear");
 
     const brokerPath = join(root, "state", "private-state", "execution-intents", "executor.sqlite");
     const broker = new DatabaseSync(brokerPath, { readOnly: true });
@@ -90,6 +92,35 @@ describe("Recovery mutation HDS L3 entry", () => {
     } finally {
       broker.close();
     }
+  }, 60_000);
+
+  it("settles the durable hold only after a factory reset verifies its persisted changes", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-factory-reset-completed-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const sessionDir = join(root, "sessions");
+    mkdirSync(sessionDir);
+    writeFileSync(join(sessionDir, "fixture.txt"), "old session fixture\n");
+    writeFileSync(envFile, "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n");
+    const port = await reserveLoopbackPort();
+    const env = isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port);
+    const gateway = spawnGateway(env);
+    await waitForHealth(port, gateway, 40_000);
+    const queued = await requestJson(port, "/recovery/factory-reset", {
+      method: "POST", token: maintenanceToken, body: { confirm: "FACTORY_RESET" },
+    });
+    expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+    const queue = await requestJson(port, "/approval", { token: resumeToken });
+    const pending = (queue.body.pending_approvals as Array<Record<string, string>>)
+      .find(item => item.operation === "recovery.factory_reset")!;
+    const approved = await requestJson(port, `/approval/${encodeURIComponent(pending.command_id!)}`, {
+      method: "POST", token: resumeToken, body: { verdict: "approve", approval_token: pending.approval_token },
+    });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body).toMatchObject({ result: { approval: "approve", executed: true, status: "success" } });
+    expect(existsSync(sessionDir)).toBe(false);
+    expect(readFileSync(envFile, "utf8")).toContain("COMPOSIO_DRY_RUN=true");
+    expect(inspectRuntimeRecoveryFence(env).status).toBe("clear");
   }, 60_000);
 
   it("reconstructs a persisted operation-plan restore hold during Gateway startup and restart", async () => {

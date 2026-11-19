@@ -5,6 +5,7 @@ import {
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
+  type FactoryResetRecoveryFence,
   type RecoveryActionResult,
 } from "./recovery_surface.js";
 import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
@@ -122,6 +123,7 @@ export function createRecoveryMutationTools(
       toolName: RecoveryToolName,
       context?: Pick<ToolContext, "command_id">,
     ) => boolean;
+    readonly factoryResetFence?: (commandId: string) => FactoryResetRecoveryFence;
   } = {},
 ): readonly Tool[] {
   const restoreRecoveryTool: Tool = {
@@ -206,7 +208,10 @@ export function createRecoveryMutationTools(
       if (options.runtimeResetQuiesced?.("recovery.factory_reset", ctx) !== true) {
         throw new Error("recovery_mutation_consumers_not_quiesced");
       }
-      return operatorSafeRecoveryResult(await invokeRecoverySafely(() => factoryResetRecovery(env, { confirm: args.confirm })));
+      const fence = ctx?.command_id ? options.factoryResetFence?.(ctx.command_id) : undefined;
+      if (!fence) throw new Error("factory_reset_recovery_fence_unavailable");
+      return operatorSafeRecoveryResult(await invokeRecoverySafely(() =>
+        factoryResetRecovery(env, { confirm: args.confirm, fence })));
     },
   };
   return [restoreRecoveryTool, resetRecoveryProviderTool, resetRecoveryConnectorTool, factoryResetRecoveryTool];

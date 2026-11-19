@@ -108,11 +108,20 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
     process.exitCode = 2;
     return;
   }
+  const { inspectRuntimeRecoveryFence } = await import("./runtime_owner_lease.js");
+  const runtimeRecoveryFence = inspectRuntimeRecoveryFence(env);
+  if (!json) {
+    writeStdout(`復旧処理の照合状態 ${runtimeRecoveryFence.status}`);
+    if (runtimeRecoveryFence.status === "pending") {
+      writeStdout(`事前バックアップID ${runtimeRecoveryFence.backup_id}`);
+      writeStdout(`事前マニフェストSHA-256 ${runtimeRecoveryFence.manifest_sha256}`);
+    }
+  }
   if (backupId !== undefined) {
     const { inspectRecoveryBackupById } = await import("./recovery_surface.js");
     const backup = await inspectRecoveryBackupById(env, backupId);
     if (json) {
-      writeStdout(JSON.stringify(backup, null, 2));
+      writeStdout(JSON.stringify({ ...backup, runtime_recovery_fence: runtimeRecoveryFence }, null, 2));
     } else {
       writeStdout(`バックアップ検査 ${backup.status}`);
       writeStdout(`マニフェストSHA-256 ${backup.manifest_sha256 ?? "未確認"}`);
@@ -120,7 +129,7 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
       writeStdout(`正本台帳 ${backup.canonical_state_verified_store_count ?? "未確認"}/${backup.canonical_state_expected_store_count ?? "未確認"} (${backup.canonical_state_coverage})`);
       writeStdout("読み取り専用の検査です。台帳は個別に取得されており、仕事全体の復元可否はこの結果から判定できません。");
     }
-    process.exitCode = backup.status === "verified" &&
+    process.exitCode = runtimeRecoveryFence.status === "clear" && backup.status === "verified" &&
       (backup.coverage === "complete_for_configured_targets" || backup.coverage === "none_configured") &&
       backup.canonical_state_coverage === "complete" ? 0 : 2;
     return;
@@ -128,7 +137,7 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
   const { inspectGatewayRecoveryState, projectGatewayRecoveryInspectionForOperator } = await import("./recovery_inspection.js");
   const report = inspectGatewayRecoveryState(env);
   if (json) {
-    writeStdout(JSON.stringify(report, null, 2));
+    writeStdout(JSON.stringify({ ...report, runtime_recovery_fence: runtimeRecoveryFence }, null, 2));
   } else {
     writeStdout(`Recovery inspection: ${report.status}`);
     for (const ledger of [report.ledgers.j, report.ledgers.m]) {
@@ -179,7 +188,7 @@ async function runRecoveryInspectCli(argv: string[]): Promise<void> {
     }
     writeStdout(report.next_safe_action);
   }
-  process.exitCode = report.status === "verified" ? 0 : 2;
+  process.exitCode = runtimeRecoveryFence.status === "clear" && report.status === "verified" ? 0 : 2;
 }
 
 async function runSetupCliMode(): Promise<void> {

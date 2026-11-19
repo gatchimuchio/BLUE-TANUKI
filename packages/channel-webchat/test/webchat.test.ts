@@ -6772,8 +6772,42 @@ describe("WebChatChannel — approval API", () => {
     }
   });
 
+  it("disables emergency stop clear for mismatched state, but allows audit gap recovery", () => {
+    const html = renderControlCenterHtml();
+    const inline = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+    new Script(inline);
+    const start = inline.indexOf("function renderApprovals(body)");
+    const end = inline.indexOf("function renderApprovalGrants(", start);
+    const render = new Script(`${inline.slice(start, end)}\nrenderApprovals({ emergency_stop: snapshot })`);
+    type ElementState = { textContent?: string; disabled?: boolean };
+    const elements = new Map<string, ElementState>();
+    function byId(id: string): ElementState {
+      if (!elements.has(id)) elements.set(id, {});
+      return elements.get(id)!;
+    }
+    const context = {
+      state: { approvalContentDigests: {} },
+      byId,
+      setText(id: string, value: unknown) { byId(id).textContent = String(value); },
+      setHtml() {},
+      renderApprovalGrants() {},
+      renderApprovalHistory() {},
+      renderActiveExecutions() {},
+    };
+
+    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "recorded", clear_state_conflict: true } });
+    expect(byId("approval-emergency-status").textContent).toContain("audit/state conflict");
+    expect(byId("clear-emergency-stop").disabled).toBe(true);
+    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "state_unavailable" } });
+    expect(byId("clear-emergency-stop").disabled).toBe(true);
+    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "pending", clear_state_conflict: false } });
+    expect(byId("approval-emergency-status").textContent).toBe("active · audit pending");
+    expect(byId("clear-emergency-stop").disabled).toBe(false);
+  });
+
   it("exposes grants, approval history, and emergency stop through the resume-token gate", async () => {
     const calls: unknown[] = [];
+    let clearConflict = false;
     const ctx = await setup({
       approval: {
         list: async () => [],
@@ -6818,14 +6852,15 @@ describe("WebChatChannel — approval API", () => {
         ],
         emergencyStop: {
           getSnapshot: async () => ({
-            active: false,
+            active: clearConflict,
             activated_at: null,
             activated_by: null,
             reason: null,
             cleared_at: null,
             cleared_by: null,
             clear_reason: null,
-            execution_blocked: false,
+            execution_blocked: clearConflict,
+            clear_state_conflict: clearConflict,
             hds_brain_remains_authority: true,
             used_for_authority: false,
             evidence_source: ["INTERNAL_STATE", "LIVE_RUNTIME"],
@@ -6835,6 +6870,7 @@ describe("WebChatChannel — approval API", () => {
             return { active: true };
           },
           clear: async (controlCtx) => {
+            if (clearConflict) throw new Error("emergency_stop_clear_state_conflict");
             calls.push({ kind: "clear", controlCtx });
             return { active: false };
           },
@@ -6877,6 +6913,24 @@ describe("WebChatChannel — approval API", () => {
       );
       expect(stop.status).toBe(200);
 
+      clearConflict = true;
+      const conflictedClear = await postJson(
+        ctx.port,
+        "/approval/emergency-stop",
+        { action: "clear" },
+        { authorization: `Bearer ${RESUME_TOKEN}` },
+      );
+      expect(conflictedClear.status).toBe(409);
+      expect(conflictedClear.headers.get("cache-control")).toBe("no-store");
+      expect(conflictedClear.body).toEqual({ error: "emergency_stop_clear_state_conflict" });
+      const conflictedSnapshot = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(JSON.parse(conflictedSnapshot.text).emergency_stop).toMatchObject({
+        active: true, execution_blocked: true, clear_state_conflict: true,
+      });
+
+      clearConflict = false;
       const clear = await postJson(
         ctx.port,
         "/approval/emergency-stop",

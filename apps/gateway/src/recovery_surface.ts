@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
   CANONICAL_STATE_STORE_PATHS,
@@ -439,6 +440,11 @@ export interface RestoreRecoveryOptions {
 
 export interface RecoveryResetOptions {
   confirm?: string;
+}
+
+export interface FactoryResetRecoveryFence {
+  begin(backupId: string, manifestSha256: string): void;
+  finish(backupId: string, manifestSha256: string): void;
 }
 
 interface RecoveryAuthorityBoundary {
@@ -3082,7 +3088,7 @@ async function verifyFactoryResetTarget(
 
 export async function factoryResetRecovery(
   env: NodeJS.ProcessEnv = process.env,
-  options: RecoveryResetOptions = {},
+  options: RecoveryResetOptions & { fence?: FactoryResetRecoveryFence } = {},
 ): Promise<RecoveryActionResult> {
   assertConfirmation(options.confirm, "FACTORY_RESET");
   const config = { ...env };
@@ -3103,6 +3109,7 @@ export async function factoryResetRecovery(
   values.COMPOSIO_DRY_RUN = "true";
   values.COMPOSIO_LIVE_EXECUTION = "false";
   let removed = 0;
+  options.fence?.begin(preFactory.backup_id, manifestDigest);
   try {
     await writeEnvValues({ ...config }, values, "factory-reset");
     Object.assign(env, values);
@@ -3113,6 +3120,15 @@ export async function factoryResetRecovery(
       await fs.rm(target.path, { recursive: target.kind === "directory" });
       if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
       removed += 1;
+    }
+    if (options.fence) {
+      if (!isDeepStrictEqual(await readEnvValues(config), values)) {
+        throw new Error("factory_reset_configuration_unverified");
+      }
+      for (const target of targets) {
+        if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
+      }
+      options.fence.finish(preFactory.backup_id, manifestDigest);
     }
   } catch {
     // Earlier effects may have committed. Leave the pre-action backup and let the
