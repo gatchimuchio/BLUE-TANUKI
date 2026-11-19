@@ -1057,6 +1057,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     return this.resumeApprovalTokenStore.issue(request_id, ttl_ms);
   }
 
+  /** 公開前に審査が終了した場合、発行された単回tokenを破棄する。 */
+  async discardUnpublishedResumeApprovalToken(issued: ResumeApprovalTokenIssued): Promise<void> {
+    await this.resumeApprovalTokenStore?.consume(issued.request_id, issued.token);
+  }
+
   async start(handler: InboundHandler): Promise<void> {
     if (this.started || this.starting) {
       throw new Error("WebChatChannel: already started");

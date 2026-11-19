@@ -92,5 +92,6 @@ D4 Runtime は専用 bearer と BLUE 側で登録された単一の `runtime_id`
 - `POST /runtime/intent/status` は同じ runtime／session／submission scope で処理状態を照会する。応答には J／M による task outcome、非権威の cancel 状態、および保持中に限る同一 request の上限付き結果内容・SHA-256・取得時刻が含まれる場合がある。`execution_observation` は同じ受付の承認待ち、保留、Gatewayの実行中、またはBrokerとHDSを照合できたアダプター応答等を示す。照合不能な場合は `unknown` とし、実行観測から仕事の達成や結果の配送を判定しない。結果本文を runtime snapshot や通知一覧へ混ぜず、承認の詳細、HDS 内部状態、実行権限を含めない。
 - 認証済みRuntimeの受理後にGateway内の処理が例外終了したとき、受付は `outcome_unknown` を保持する。元の例外内容はログや応答に出さず、同じセッションに限定した失敗通知だけを発行する。同じ受付の再送は既存の状態を返す。
 - `POST /runtime/intent/cancel` は同じ runtime／session／submission の受付だけを対象とする。Gateway内の処理開始より先に取消が台帳へ記録されると `cancelled_before_dispatch` を返す。この受付は `rejected` として保持され、再起動後も同じ取消状態を照会できる。同じ受付を再送するとHTTP 409を返す。処理が始まった受付では、承認待ちの取下げや実行中のAbortSignalを既存の経路で扱う。HTTP 202の取消受理では外部処理の停止は未確認のため、`external_processing_stop` は `unknown` とする。結果不明のときは自動再送しない。
+- HDSが承認待ちを記録した受付は、承認用トークンの発行中でも `approval_withdrawn` として取り下げられる。承認一覧は発行と現在条件の確認が済んだ承認だけを公開する。取下げの成立後に返ったトークンは破棄し、承認待ち通知は送らない。コマンドを発行せずHDSが処理を保留したときも、D4の応答に承認用トークンを含めない。
 
 これらは BLUE 側 producer の API 契約であり、D4 側 Adapter／Mobile UI の実装、Device Link 接続、OS 上の秘密保管、installed 実動を証明しない。D4 repository への実装は別の限定委任に従う。

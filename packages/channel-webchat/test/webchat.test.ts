@@ -9217,6 +9217,33 @@ describe("WebChatChannel — POST /resume", () => {
     expect(second.status).toBe(403);
     await ctx.teardown();
   });
+
+  it("discards only the unpublished resume approval token for the same request", async () => {
+    const resumed: string[] = [];
+    const ctx = await setup({ onResume: async (id) => {
+      resumed.push(id);
+      return { ok: true };
+    } });
+    try {
+      await ctx.ch.start(async () => {});
+      const unpublished = await ctx.ch.issueResumeApprovalToken("rA");
+      const current = await ctx.ch.issueResumeApprovalToken("rA");
+      if (!unpublished || !current) throw new Error("expected approval tokens");
+      await ctx.ch.discardUnpublishedResumeApprovalToken(unpublished);
+      await ctx.ch.discardUnpublishedResumeApprovalToken(unpublished);
+
+      const submit = (token: string) => postJson(ctx.port, "/resume", {
+        request_id: "rA", verdict: "approve", approval_token: token,
+      }, { authorization: `Bearer ${RESUME_TOKEN}` });
+      expect((await submit(unpublished.token)).status).toBe(403);
+      expect(resumed).toEqual([]);
+      expect((await submit(current.token)).status).toBe(200);
+      expect((await submit(current.token)).status).toBe(403);
+      expect(resumed).toEqual(["rA"]);
+    } finally {
+      await ctx.teardown();
+    }
+  });
 });
 
 describe("WebChatChannel — rate limiting", () => {

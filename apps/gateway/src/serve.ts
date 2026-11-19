@@ -1577,6 +1577,7 @@ async function serveWithOwnerLease(
   for (const tool of runtimeSchedules.tools()) tools.register(tool);
   const approval = buildApprovalRuntime(process.env);
   const pendingApprovals = new Map<string, PendingApproval>();
+  const preparingD4Approvals = new Map<string, PendingApproval>();
   let initialPurposeSubmissionInFlight = false;
   const activeTaskExecutions = new ActiveTaskExecutionRegistry();
   const executionTasks = new Set<Promise<ExecuteFeedback>>();
@@ -2669,31 +2670,7 @@ async function serveWithOwnerLease(
           });
           throw error;
         }
-        const issued = await webchat.issueResumeApprovalToken(cmd.id);
-        if (!hds.operationPlanCommandIsCurrent(cmd)) {
-          discardPendingApproval(cmd.id);
-          if (cronEvent) {
-            cronEventStore.resolvePendingApproval(
-              cronEvent.event_id,
-              cronEvent.payload_digest,
-              cmd.id,
-              log.request_id,
-              "cancelled",
-            );
-          }
-          hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_changed_while_issuing_token" });
-          return { status: "plan_binding_stale" };
-        }
-        recordApprovalHistory("approval_pending", cmd, log, origin, actor, evaluation, {
-          failure_memory_required: failureMemoryRequiresApproval,
-          failure_memory_reason: failureMemoryRequiresApproval ? failureGate.reason : undefined,
-          failure_memory_gate_digest: failureGateDigest,
-          failure_memory_condition_change_matches: failureMemoryRequiresApproval
-            ? failureGate.condition_change_matches : undefined,
-          approval_token_issued: Boolean(issued?.token),
-          approval_token_expires_at_ms: issued?.expires_at_ms,
-        });
-        pendingApprovals.set(cmd.id, {
+        const pending: PendingApproval = {
           command: cmd,
           command_digest: reviewedDigest,
           log,
@@ -2702,8 +2679,6 @@ async function serveWithOwnerLease(
           failure_memory_gate_digest: failureGateDigest,
           failure_memory_gate_actor: failureMemoryGateActor,
           failure_memory_gate_requires_approval: failureMemoryRequiresApproval,
-          approval_token: issued?.token,
-          approval_token_expires_at_ms: issued?.expires_at_ms,
           ...(opts.recovery_archive_sha256 ? { recovery_archive_sha256: opts.recovery_archive_sha256 } : {}),
           ...(opts.goal_purpose_repair ? { goal_purpose_repair: opts.goal_purpose_repair } : {}),
           ...(cronEvent ? { cron_event: cronEvent } : {}),
@@ -2715,7 +2690,56 @@ async function serveWithOwnerLease(
           ...(opts.memory_judgment_reassessment_proposal
             ? { memory_judgment_reassessment_proposal: opts.memory_judgment_reassessment_proposal } : {}),
           ...(opts.daily_brief_read ? { daily_brief_read: opts.daily_brief_read } : {}),
-        });
+        };
+        const d4Preparation = d4RuntimeExecutionBinding(cmd, log, origin) !== undefined;
+        if (d4Preparation) preparingD4Approvals.set(cmd.id, pending);
+        let issued: Awaited<ReturnType<WebChatChannel["issueResumeApprovalToken"]>> | undefined;
+        let published = false;
+        try {
+          issued = await webchat.issueResumeApprovalToken(cmd.id).catch(error => {
+            if (d4Preparation && preparingD4Approvals.get(cmd.id) !== pending) return null;
+            throw error;
+          });
+          if (d4Preparation && preparingD4Approvals.get(cmd.id) !== pending) return { status: "approval_cancelled" };
+
+          let unavailableReason = hds.operationPlanCommandIsCurrent(cmd) ? null : "plan_changed_while_issuing_token";
+          if (d4Preparation && unavailableReason === null) {
+            ownerLease.assertActive();
+            if (emergencyStop.active) unavailableReason = "emergency_stop_active";
+            else if (approvalRecoveryStore.lookupState(cmd.id, log.request_id) !== "pending") {
+              unavailableReason = "approval_recovery_unavailable";
+            }
+          }
+          if (unavailableReason) {
+            discardPendingApproval(cmd.id);
+            resolveCronApprovalHandoff(pending, "cancelled");
+            if (d4Preparation) runtimeSchedules.rejectPending(cmd.id, actor, unavailableReason);
+            hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: unavailableReason });
+            return { status: unavailableReason === "plan_changed_while_issuing_token" ? "plan_binding_stale" : unavailableReason };
+          }
+          recordApprovalHistory("approval_pending", cmd, log, origin, actor, evaluation, {
+            failure_memory_required: failureMemoryRequiresApproval,
+            failure_memory_reason: failureMemoryRequiresApproval ? failureGate.reason : undefined,
+            failure_memory_gate_digest: failureGateDigest,
+            failure_memory_condition_change_matches: failureMemoryRequiresApproval
+              ? failureGate.condition_change_matches : undefined,
+            approval_token_issued: Boolean(issued?.token),
+            approval_token_expires_at_ms: issued?.expires_at_ms,
+          });
+          pendingApprovals.set(cmd.id, {
+            ...pending,
+            approval_token: issued?.token,
+            approval_token_expires_at_ms: issued?.expires_at_ms,
+          });
+          published = true;
+        } finally {
+          if (d4Preparation && preparingD4Approvals.get(cmd.id) === pending) preparingD4Approvals.delete(cmd.id);
+          if (d4Preparation && !published && issued) {
+            await webchat.discardUnpublishedResumeApprovalToken(issued).catch(() => {
+              gatewayLog.error("unpublished D4 approval token could not be discarded", { used_for_authority: false });
+            });
+          }
+        }
         approvalAdmission.lease.release();
         const changedConditions = [...new Set(
           failureGate.condition_change_matches.flatMap((match) => match.changed_conditions),
@@ -5235,9 +5259,8 @@ async function serveWithOwnerLease(
             onD4RuntimeIntentCancellation: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeIntentCancellation | null> => {
               ownerLease.assertActive();
               const commands = new Set(activeTaskExecutions.d4RuntimeCommands(scope));
-              for (const pending of pendingApprovals.values()) {
-                if (pendingD4ApprovalMatchesScope(pending, scope)) commands.add(pending.command.id);
-              }
+              const scopedApprovals = d4PendingApprovalsForScope(scope);
+              for (const pending of scopedApprovals) commands.add(pending.command.id);
               if (commands.size === 0) {
                 const queuedCancellation = d4BeforeDecisionCancellation(
                   ownerTaskSubmissionStore.cancelD4RuntimeIntentBeforeDecision(scope),
@@ -5254,8 +5277,8 @@ async function serveWithOwnerLease(
               }
               const [commandId] = commands;
               if (commands.size !== 1 || !commandId) return null;
-              const pending = pendingApprovals.get(commandId);
-              if (pending && pendingD4ApprovalMatchesScope(pending, scope)) return withdrawD4PendingApproval(scope, pending);
+              const pending = scopedApprovals.find(item => item.command.id === commandId);
+              if (pending) return withdrawD4PendingApproval(scope, pending);
               const cancellation = requestTaskExecutionCancellation(commandId, {
                 actor: "d4-runtime-adapter-token-holder",
                 token_kind: "d4_runtime",
@@ -7884,6 +7907,7 @@ async function serveWithOwnerLease(
   }
 
   function discardPendingApproval(commandId: string): void {
+    preparingD4Approvals.delete(commandId);
     pendingApprovals.delete(commandId);
     try {
       approvalRecoveryStore.clearPending(commandId);
@@ -7905,6 +7929,11 @@ async function serveWithOwnerLease(
     const binding = d4RuntimeExecutionBinding(pending.command, pending.log, pending.origin);
     return binding !== undefined && binding.request_id === scope.request_id &&
       binding.runtime_ref_digest === scope.runtime_ref_digest && binding.session_ref_digest === scope.session_ref_digest;
+  }
+
+  function d4PendingApprovalsForScope(scope: WebChatD4RuntimeCancellationScope): PendingApproval[] {
+    return [...pendingApprovals.values(), ...preparingD4Approvals.values()]
+      .filter(pending => pendingD4ApprovalMatchesScope(pending, scope));
   }
 
   function ownerTaskRelationReviewMatchesPlan(
@@ -8044,7 +8073,7 @@ async function serveWithOwnerLease(
     scope: WebChatD4RuntimeCancellationScope, boundCommandIds: readonly string[],
   ): WebChatD4RuntimeApprovalWithdrawal | null {
     if (boundCommandIds.length !== 1 ||
-        [...pendingApprovals.values()].some(pending => pendingD4ApprovalMatchesScope(pending, scope)) ||
+        d4PendingApprovalsForScope(scope).length > 0 ||
         activeTaskExecutions.d4RuntimeCommands(scope).length > 0) return null;
     const commandId = boundCommandIds[0]!;
     if (approvalRecoveryStore.state(commandId) !== null) return null;
@@ -8054,7 +8083,7 @@ async function serveWithOwnerLease(
   function withdrawD4PendingApproval(
     scope: WebChatD4RuntimeCancellationScope, pending: PendingApproval,
   ): WebChatD4RuntimeApprovalWithdrawal | null {
-    return withdrawPendingTaskApproval(pending, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON, { persistBinding: () => {
+    return withdrawPendingTaskApproval(pending, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON, { includeD4Preparation: true, persistBinding: () => {
       ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, pending.command.id);
       if (!ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope).matching.includes(pending.command.id)) {
         throw new Error("d4_approval_withdrawal_binding_unavailable");
@@ -8064,12 +8093,13 @@ async function serveWithOwnerLease(
 
   function withdrawPendingTaskApproval(
     pending: PendingApproval, actor: string, reason: string, options: {
-      persistBinding?: () => void; ownerTaskPlans?: readonly OwnerTaskCancellationPlanReference[];
+      includeD4Preparation?: boolean; persistBinding?: () => void; ownerTaskPlans?: readonly OwnerTaskCancellationPlanReference[];
     } = {},
   ): WebChatTaskApprovalWithdrawal | null {
     const commandId = pending.command.id;
     const requestId = pending.log.request_id;
-    if (pendingApprovals.get(commandId) !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
+    const current = pendingApprovals.get(commandId) ?? (options.includeD4Preparation ? preparingD4Approvals.get(commandId) : undefined);
+    if (current !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command) || pending.cron_event ||
         pending.goal_purpose_adoption || pending.goal_purpose_proposal ||
         pending.meaning_update_proposal || pending.memory_judgment_reassessment_proposal) return null;
@@ -8943,11 +8973,12 @@ async function serveWithOwnerLease(
     if (authorityReq.metadata?.["blue_tanuki.operation_plan.wait_deadline_id"] !== undefined) return;
 
     // No command means the upstream decision is sent back to the user.
+    const d4Suspended = log.commit.decision === "SUSPEND" && isGatewayInternalD4RuntimeIntentRequest(authorityReq);
     const issued =
-      log.commit.decision === "SUSPEND"
+      log.commit.decision === "SUSPEND" && !d4Suspended
         ? await webchat.issueResumeApprovalToken(authorityReq.id)
         : null;
-    const human = humanizeDecision(
+    const human = d4Suspended ? "この依頼は保留されています。状態は認証済みの画面で確認してください。" : humanizeDecision(
       log.commit.decision,
       log.commit.reason,
       authorityReq.id,

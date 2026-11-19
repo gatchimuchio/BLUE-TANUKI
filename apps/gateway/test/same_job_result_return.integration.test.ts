@@ -850,6 +850,209 @@ HDSUpperController.prototype.decide = function (request, options) {
     }
   }, 120_000);
 
+  it("withdraws the scoped D4 approval while its token is being issued", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-approval-issuance-"));
+    const token = "synthetic-d4-issuance-runtime-token-only";
+    const resumeToken = "synthetic-d4-issuance-resume-token";
+    const input = { runtime_id: "blue_tanuki", session_id: "synthetic-runtime-approval-issuance",
+      submission_id: "c724b78e-05a6-4e54-b0e6-c2258c1d7f8e" };
+    const intent = "合成試験の承認処理として、青い花の題名を提案してください。";
+    const suspendedIntent = "合成試験の保留として、緑の花の題名を提案してください。";
+    const markers = { reached: join(root, "issuance-held"), release: join(root, "release"),
+      finished: join(root, "handler-finished"), discarded: join(root, "discarded"), executed: join(root, "executed"),
+      suspended: join(root, "suspended-handler-finished"), suspendedIssue: join(root, "suspended-issue-attempted") };
+    let providerRequests = 0;
+    const provider = createServer((request, response) => {
+      providerRequests += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    const frames: string[] = [];
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const envFile = join(root, "fixture.env");
+      writeFileSync(envFile, "# isolated test configuration\n", "utf8");
+      mkdirSync(join(root, "files"));
+      const preload = join(root, "hold-d4-approval-issuance.mjs");
+      const webchatModule = pathToFileURL(join(ROOT, "packages/channel-webchat/dist/index.js")).href;
+      const coreModule = pathToFileURL(join(ROOT, "packages/blue-tanuki/dist/index.js")).href;
+      const hdsModule = pathToFileURL(join(ROOT, "packages/hds-brain/dist/index.js")).href;
+      writeFileSync(preload, `
+import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+import { MemoryResumeApprovalTokenStore, WebChatChannel } from ${JSON.stringify(webchatModule)};
+import { Executor } from ${JSON.stringify(coreModule)};
+import { HDSUpperController } from ${JSON.stringify(hdsModule)};
+const intent = ${JSON.stringify(intent)};
+const suspendedIntent = ${JSON.stringify(suspendedIntent)};
+const markers = ${JSON.stringify(markers)};
+const scope = new AsyncLocalStorage();
+let heldCommandId;
+let heldToken;
+const start = WebChatChannel.prototype.start;
+WebChatChannel.prototype.start = function (handler) {
+  return start.call(this, (request, context) => {
+    const suspended = request.content === suspendedIntent;
+    if (request.content !== intent && !suspended) return handler(request, context);
+    return scope.run({ requestId: request.id, suspended }, async () => {
+      await handler(request, context);
+      writeFileSync(suspended ? markers.suspended : markers.finished, request.id, { flag: "wx" });
+    });
+  });
+};
+const selfHealth = HDSUpperController.prototype.evaluateSelfHealth;
+HDSUpperController.prototype.evaluateSelfHealth = function (...args) {
+  const health = selfHealth.apply(this, args);
+  return scope.getStore()?.suspended ? { ...health, status: "fail_safe", hds_available: false, fail_safe: true,
+    fail_safe_reason: "hds_fail_safe:fixture", failed_preconditions: ["hds_available"], command_execution_allowed: false,
+    downstream_execution_allowed: false } : health;
+};
+const issue = WebChatChannel.prototype.issueResumeApprovalToken;
+WebChatChannel.prototype.issueResumeApprovalToken = async function (commandId, ttl) {
+  const scoped = scope.getStore();
+  if (scoped?.suspended) writeFileSync(markers.suspendedIssue, scoped.requestId);
+  const issued = await issue.call(this, commandId, ttl);
+  if (!scoped || scoped.suspended) return issued;
+  if (!issued?.token) throw new Error("synthetic approval issuance did not return a token");
+  heldCommandId = commandId;
+  heldToken = issued.token;
+  writeFileSync(markers.reached, JSON.stringify({ requestId: scoped.requestId, commandId }) + "\\n", { flag: "wx" });
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(markers.release) && Date.now() < deadline) await setTimeout(20);
+  if (!existsSync(markers.release)) throw new Error("synthetic approval issuance hold expired");
+  return issued;
+};
+const consume = MemoryResumeApprovalTokenStore.prototype.consume;
+MemoryResumeApprovalTokenStore.prototype.consume = async function (requestId, token) {
+  const consumed = await consume.call(this, requestId, token);
+  if (consumed && requestId === heldCommandId && token === heldToken) {
+    writeFileSync(markers.discarded, requestId, { flag: "wx" });
+  }
+  return consumed;
+};
+const execute = Executor.prototype.execute;
+Executor.prototype.execute = function (command, context) {
+  if (command.id === heldCommandId) writeFileSync(markers.executed, command.id);
+  return execute.call(this, command, context);
+};
+`, "utf8");
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: resumeToken, BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-d4-issuance-maintenance",
+        BLUE_TANUKI_D4_RUNTIME_ID: input.runtime_id, BLUE_TANUKI_D4_RUNTIME_TOKEN: token,
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: join(root, "files"), BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"),
+        BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl"),
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_BACKEND_HINT: "d4-issuance-fixture",
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ "d4-issuance-fixture": {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: "d4-issuance-fixture", LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: "d4-issuance-fixture", type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: "d4-issuance-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      seedD4ApprovalFixture(env, token, input.runtime_id, input.session_id, intent);
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+      });
+      const ticketResponse = await post("/runtime/ws-ticket", { runtime_id: input.runtime_id, session_id: input.session_id });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      socket.on("message", data => frames.push(String(data)));
+      await once(socket, "open");
+      const submitted = await post("/runtime/intent", { ...input, intent });
+      expect(submitted.status).toBe(202);
+      const receipt = await submitted.json() as { request_id: string };
+      const held = await waitFor(() => {
+        const raw = readCaptureText(markers.reached);
+        return raw?.endsWith("\n") ? JSON.parse(raw) as { requestId: string; commandId: string } : null;
+      }, gateway, "the scoped D4 work did not reach genuine approval token issuance");
+      expect(held.requestId).toBe(receipt.request_id);
+      const listApprovals = async () => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+          headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(8_000),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json() as { pending_approvals: { command_id: string }[] }).pending_approvals;
+      };
+      expect(await listApprovals()).not.toContainEqual(expect.objectContaining({ command_id: held.commandId }));
+      expect((await post("/runtime/intent/cancel", input, WEBCHAT_TOKEN)).status).toBe(401);
+      expect((await post("/runtime/intent/cancel", { ...input, session_id: "unrelated-d4-session" })).status).toBe(404);
+      const response = await post("/runtime/intent/cancel", input);
+      expect(response.status).toBe(202);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const withdrawn = await response.json() as { cancellation: Record<string, unknown> };
+      expect(withdrawn).toEqual({ found: true, accepted: true, cancellation: {
+        status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+        external_processing_stop: "unknown", cancel_requested_at_ms: expect.any(Number),
+        used_for_authority: false, may_execute: false,
+      } });
+      writeFileSync(markers.release, "release", { flag: "wx" });
+      await waitFor(() => readCaptureText(markers.finished) === receipt.request_id ? true : null, gateway,
+        "the cancelled D4 handler did not finish after token issuance returned");
+      expect(readCaptureText(markers.discarded)).toBe(held.commandId);
+      expect(readCaptureText(markers.executed)).toBeUndefined();
+      expect(await listApprovals()).not.toContainEqual(expect.objectContaining({ command_id: held.commandId }));
+      const staleApproval = await post(`/approval/${encodeURIComponent(held.commandId)}`, {
+        verdict: "approve", approval_token: "synthetic-stale-approval-input",
+      }, resumeToken);
+      expect(staleApproval.status).toBe(409);
+      expect(await staleApproval.json()).toEqual({ error: "approval_content_review_stale" });
+      expect(providerRequests).toBe(0);
+      expect(frames.join("")).not.toContain("承認待ちです。");
+      expect(frames.join("")).not.toContain(held.commandId);
+      const expectWithdrawn = async () => {
+        const status = await post("/runtime/intent/status", input);
+        expect(status.status).toBe(200);
+        expect(await status.json()).toMatchObject({ found: true, request_id: receipt.request_id, cancellation: withdrawn.cancellation });
+      };
+      await expectWithdrawn();
+
+      const paused = await post("/runtime/intent", { ...input, submission_id: "31a3c5ba-1287-4f18-8c43-282c9cd9bf25",
+        intent: suspendedIntent });
+      expect(paused.status).toBe(202);
+      const pausedReceipt = await paused.json() as { request_id: string };
+      await waitFor(() => readCaptureText(markers.suspended) === pausedReceipt.request_id &&
+        frames.some(frame => (JSON.parse(frame) as WebSocketFrame).content ===
+          "この依頼は保留されています。状態は認証済みの画面で確認してください。") ? true : null,
+      gateway, "the no-command D4 suspension did not return its generic notice");
+      expect(readCaptureText(markers.suspendedIssue)).toBeUndefined();
+      expect(providerRequests).toBe(0);
+
+      socket.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      expect(gateway.stdout.concat(gateway.stderr).join("")).not.toContain("[webchat] D4 Runtime intent handler error");
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      await expectWithdrawn();
+      const repeated = await post("/runtime/intent/cancel", input);
+      expect(repeated.status).toBe(202);
+      expect(await repeated.json()).toEqual(withdrawn);
+      expect(providerRequests).toBe(0);
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 90_000);
+
   it("interrupts scoped compute and withdraws pending approval, retaining both observations after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));
     const token = "synthetic-d4-runtime-cancellation-token-only";
@@ -907,34 +1110,7 @@ HDSUpperController.prototype.decide = function (request, options) {
           model: "d4-cancel-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
         }]),
       };
-      const actor = "d4-runtime-adapter-token-holder";
-      const ref = (kind: "runtime" | "session", value: string) =>
-        createHmac("sha256", token).update(`blue-tanuki.d4-runtime.${kind}.v1\0`).update(value).digest("hex");
-      const sessionRef = ref("session", session);
-      const sessionTarget = `d4-runtime:${sessionRef}`;
-      const seedRequest = createGatewayInternalInboundRequest({
-        id: "da37e92e-3358-4bdc-9a36-959263871b20", user: actor, channel: "webchat",
-        content: pendingIntent, timestamp: Date.now(), session_id: sessionTarget,
-        metadata: {
-          reply_to: sessionTarget, "blue_tanuki.authority_context": "gateway_internal_v1",
-          "blue_tanuki.actor_kind": "user", "blue_tanuki.trust_level": "limited", "blue_tanuki.process_kind": "chat",
-          "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
-          "blue_tanuki.runtime_ingress.runtime_id_digest": ref("runtime", runtime),
-          "blue_tanuki.runtime_ingress.session_id_digest": sessionRef,
-          "blue_tanuki.runtime_ingress.used_for_authority": false,
-        },
-      });
-      const seedCommand = new HDSUpperController({ llm_route: buildLLMCommandRouteFromEnv(env) }).decide(seedRequest).command;
-      if (!seedCommand || seedCommand.type !== "llm_call") throw new Error("the pending fixture did not produce a compute decision");
-      const context = { actor, channel: "webchat", origin_user: actor };
-      const candidate = candidateFromCommand(seedCommand, context);
-      const failureMemory = new FailureMemoryStore({ filepath: env.BLUE_TANUKI_FAILURE_MEMORY_FILE });
-      failureMemory.addSignature({
-        scope: candidate.scope, failure_type: "logic_drift", input_pattern: candidate.input_pattern,
-        action_pattern: candidate.action_pattern, context_pattern: candidate.context_pattern,
-        state: "active", suppression_policy: "require_approval", match_level: 1,
-      });
-      expect(failureMemory.evaluateCommandGate(seedCommand, context).decision).toBe("require_approval");
+      seedD4ApprovalFixture(env, token, runtime, session, pendingIntent);
       gateway = spawnGateway(env);
       await waitForHealth(gatewayPort, gateway, 40_000);
       const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
@@ -1052,6 +1228,38 @@ HDSUpperController.prototype.decide = function (request, options) {
     }
   }, 120_000);
 });
+
+function seedD4ApprovalFixture(env: NodeJS.ProcessEnv & { BLUE_TANUKI_FAILURE_MEMORY_FILE: string },
+  token: string, runtime: string, session: string, intent: string): void {
+  const actor = "d4-runtime-adapter-token-holder";
+  const ref = (kind: "runtime" | "session", value: string) =>
+    createHmac("sha256", token).update(`blue-tanuki.d4-runtime.${kind}.v1\0`).update(value).digest("hex");
+  const sessionRef = ref("session", session);
+  const sessionTarget = `d4-runtime:${sessionRef}`;
+  const seedRequest = createGatewayInternalInboundRequest({
+    id: "da37e92e-3358-4bdc-9a36-959263871b20", user: actor, channel: "webchat",
+    content: intent, timestamp: Date.now(), session_id: sessionTarget,
+    metadata: {
+      reply_to: sessionTarget, "blue_tanuki.authority_context": "gateway_internal_v1",
+      "blue_tanuki.actor_kind": "user", "blue_tanuki.trust_level": "limited", "blue_tanuki.process_kind": "chat",
+      "blue_tanuki.runtime_ingress.version": "d4-runtime-intent.v1",
+      "blue_tanuki.runtime_ingress.runtime_id_digest": ref("runtime", runtime),
+      "blue_tanuki.runtime_ingress.session_id_digest": sessionRef,
+      "blue_tanuki.runtime_ingress.used_for_authority": false,
+    },
+  });
+  const seedCommand = new HDSUpperController({ llm_route: buildLLMCommandRouteFromEnv(env) }).decide(seedRequest).command;
+  if (!seedCommand || seedCommand.type !== "llm_call") throw new Error("the pending fixture did not produce a compute decision");
+  const context = { actor, channel: "webchat", origin_user: actor };
+  const candidate = candidateFromCommand(seedCommand, context);
+  const failureMemory = new FailureMemoryStore({ filepath: env.BLUE_TANUKI_FAILURE_MEMORY_FILE });
+  failureMemory.addSignature({
+    scope: candidate.scope, failure_type: "logic_drift", input_pattern: candidate.input_pattern,
+    action_pattern: candidate.action_pattern, context_pattern: candidate.context_pattern,
+    state: "active", suppression_policy: "require_approval", match_level: 1,
+  });
+  expect(failureMemory.evaluateCommandGate(seedCommand, context).decision).toBe("require_approval");
+}
 
 function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): {
   readonly waitId: string;
