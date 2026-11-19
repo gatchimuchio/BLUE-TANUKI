@@ -22,6 +22,7 @@ import { storeBlueTanukiSecret } from "../src/secret_store.js";
 import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_config.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayTelegramUpdateStore } from "../src/telegram_update_store.js";
+import { GatewayWebChatOwnerTaskStore } from "../src/webchat_owner_task_store.js";
 const ROOT = process.cwd();
 const WEBCHAT_TOKEN = "f1003-synthetic-inbound-token";
 const OWNER_TOKEN = "f1003-synthetic-owner-token";
@@ -1454,9 +1455,11 @@ describe("Webhookの永続受付", () => {
 });
 
 describe("served owner Work approval withdrawal", () => {
-  it("withdraws the same Work while its approval token is being issued and restores the withdrawal after restart", async () => {
+  it("withdraws rediscovered Work while its approval token is being issued and restores the withdrawal after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-owner-work-approval-issuance-"));
     const resumeToken = "synthetic-owner-work-resume-token";
+    const maintenanceToken = "synthetic-owner-work-maintenance";
+    const runtimeToken = "synthetic-owner-work-other-scope";
     const submission = { submission_id: "810edbf0-0569-484f-8447-3226631a9ade" };
     const task = "合成試験用の青い花を探すための読取計画を作成してください。";
     const markers = { reached: join(root, "issuance-held"), release: join(root, "release"),
@@ -1519,7 +1522,7 @@ WebChatChannel.prototype.issueResumeApprovalToken = async function (commandId, t
   heldCommandId = commandId;
   heldToken = issued.token;
   writeFileSync(markers.reached, JSON.stringify({ requestId, commandId }) + "\\n", { flag: "wx" });
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 15_000;
   while (!existsSync(markers.release) && Date.now() < deadline) await setTimeout(20);
   if (!existsSync(markers.release)) throw new Error("synthetic owner Work approval issuance hold expired");
   return issued;
@@ -1542,7 +1545,8 @@ Executor.prototype.execute = function (command, context) {
         ...fixtureOsEnvironment(),
         WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
         WEBCHAT_RESUME_TOKEN: resumeToken, BLUE_TANUKI_OWNER_TOKEN: OWNER_TOKEN,
-        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-owner-work-maintenance",
+        BLUE_TANUKI_MAINTENANCE_TOKEN: maintenanceToken,
+        BLUE_TANUKI_D4_RUNTIME_TOKEN: runtimeToken, BLUE_TANUKI_D4_RUNTIME_ID: "blue_tanuki",
         BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"),
         BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_FILE_ROOT: fileRoot, BLUE_TANUKI_LOG_DIR: join(root, "logs"),
         BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
@@ -1559,9 +1563,24 @@ Executor.prototype.execute = function (command, context) {
           model: "owner-work-approval-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
         }]),
       };
-      const request = (route: string, authorization: string, body?: object) =>
-        fetch(`http://127.0.0.1:${gatewayPort}${route}`, { method: body ? "POST" : "GET",
-          headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+      // 同じ台帳に別スコープの受付を置く。実行対象は下で正規に受け付ける所有者の仕事だけとする。
+      const foreignSelector = { request_id: "5aae1129-a49f-4bff-8e56-0a73ba18a596" };
+      const foreignScope = { ...foreignSelector, scope_digest: createHash("sha256").update("other-work-scope").digest("hex") };
+      const fixtureStore = GatewayWebChatOwnerTaskStore.fromEnvironment(env);
+      try {
+        expect(fixtureStore.claimD4RuntimeIntent({ ...foreignScope, dispatch_available: true,
+          submission_id: "5aae1129-a49f-4bff-8e56-0a73ba18a597",
+          payload_digest: createHash("sha256").update("other-work-payload").digest("hex") })).toMatchObject({ status: "accepted" });
+        expect(fixtureStore.beginD4RuntimeIntentDecision(foreignSelector.request_id)).toBe(true);
+        fixtureStore.markD4RuntimeIntentHandlerReturned(foreignScope);
+      } finally {
+        fixtureStore.close();
+      }
+      const baseUrl = `http://127.0.0.1:${gatewayPort}`;
+      const request = (route: string, authorization: string, body?: object, origin?: string) =>
+        fetch(`${baseUrl}${route}`, { method: body ? "POST" : "GET",
+          headers: { ...(authorization ? { authorization: `Bearer ${authorization}` } : {}),
+            "content-type": "application/json", ...(origin ? { origin } : {}) },
           ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(8_000) });
       const listApprovals = async () => {
         const response = await request("/approval", resumeToken);
@@ -1570,8 +1589,20 @@ Executor.prototype.execute = function (command, context) {
       };
       const cancelRoute = "/owner/task-submission-cancel";
       const statusRoute = "/owner/task-submission-status";
+      const postAsFreshOwner = (route: string, body: object, authorization = OWNER_TOKEN, origin = baseUrl) =>
+        request(route, authorization, body, origin);
+      const discoverWork = async (state: "dispatching" | "handler_returned") => {
+        const response = await postAsFreshOwner("/owner/task-submissions/recent", {});
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        const list = await response.json() as { submissions: { request_id: string }[] };
+        expect(list).toEqual({ submissions: [{ request_id: expect.any(String), state,
+          created_at_ms: expect.any(Number) }], used_for_authority: false, may_execute: false });
+        expect(JSON.stringify(list)).not.toContain(submission.submission_id);
+        return { request_id: list.submissions[0]!.request_id };
+      };
       gateway = spawnGateway(env, preload);
-      await waitForHealth(gatewayPort, gateway, 40_000);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       const proposed = await request("/owner/goal-purpose-adoption", OWNER_TOKEN, {
         purpose_text: "合成試験として花の情報を読取専用で整理する。",
       });
@@ -1607,7 +1638,31 @@ Executor.prototype.execute = function (command, context) {
       expect(await listApprovals()).not.toContainEqual(expect.objectContaining({ command_id: held.commandId }));
       expect((await request(cancelRoute, WEBCHAT_TOKEN, submission)).status).toBe(401);
       expect((await request(cancelRoute, OWNER_TOKEN, { submission_id: "5aae1129-a49f-4bff-8e56-0a73ba18a593" })).status).toBe(404);
-      const cancelled = await request(cancelRoute, OWNER_TOKEN, submission);
+      const recovered = await discoverWork("dispatching");
+      expect(recovered.request_id).toBe(receipt.request_id);
+      const status = () => postAsFreshOwner(statusRoute, recovered);
+      const beforeDenials = await status();
+      expect(beforeDenials.status).toBe(200);
+      expect(beforeDenials.headers.get("cache-control")).toBe("no-store");
+      const beforeDenialsBody = await beforeDenials.json();
+      expect(beforeDenialsBody).toMatchObject({ found: true, ...recovered, state: "dispatching" });
+      for (const bearer of ["", WEBCHAT_TOKEN, runtimeToken, resumeToken, maintenanceToken]) {
+        const denied = await postAsFreshOwner(cancelRoute, recovered, bearer);
+        expect(denied.status).toBe(401);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+      }
+      expect((await postAsFreshOwner(cancelRoute, recovered, OWNER_TOKEN, "https://other.invalid")).status).toBe(403);
+      expect((await request(cancelRoute, OWNER_TOKEN, recovered)).status).toBe(403);
+      expect((await postAsFreshOwner(cancelRoute, { ...submission, ...recovered })).status).toBe(400);
+      const foreign = await postAsFreshOwner(cancelRoute, foreignSelector);
+      expect(foreign.status).toBe(404);
+      expect(await foreign.json()).toEqual({ found: false });
+      const afterDenials = await status();
+      expect(afterDenials.status).toBe(200);
+      expect(await afterDenials.json()).toEqual(beforeDenialsBody);
+      expect(readCaptureText(markers.discarded)).toBeUndefined();
+
+      const cancelled = await postAsFreshOwner(cancelRoute, recovered);
       expect(cancelled.status, await cancelled.clone().text()).toBe(202);
       expect(cancelled.headers.get("cache-control")).toBe("no-store");
       const withdrawal = await cancelled.json() as { cancellation: Record<string, unknown> };
@@ -1617,7 +1672,6 @@ Executor.prototype.execute = function (command, context) {
         used_for_authority: false, may_execute: false,
       } });
       writeFileSync(markers.release, "", { flag: "wx" });
-      const status = () => request(statusRoute, OWNER_TOKEN, submission);
       await waitFor(async () => {
         const response = await status();
         expect(response.status).toBe(200);
@@ -1645,8 +1699,10 @@ Executor.prototype.execute = function (command, context) {
       socket = undefined;
       await stopChild(gateway);
       gateway = spawnGateway(env);
-      await waitForHealth(gatewayPort, gateway, 40_000);
-      const restored = await status();
+      await waitForHealth(gatewayPort, gateway, 60_000);
+      const restoredSelector = await discoverWork("handler_returned");
+      expect(restoredSelector).toEqual(recovered);
+      const restored = await postAsFreshOwner(statusRoute, restoredSelector);
       expect(restored.status).toBe(200);
       expect(await restored.json()).toMatchObject({ found: true, request_id: receipt.request_id, cancellation: withdrawal.cancellation });
       const repeated = await request(cancelRoute, OWNER_TOKEN, submission);
@@ -1660,7 +1716,7 @@ Executor.prototype.execute = function (command, context) {
       await closeServer(provider);
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
-  }, 90_000);
+  }, 145_000);
 });
 
 describe("served D4 Runtime work observation", () => {

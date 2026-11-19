@@ -1081,6 +1081,7 @@ describe("WebChatChannel — Control Center shell", () => {
     const result = await new Script(`
       let ownerTaskSavedResultGeneration = 0;
       let ownerTaskStatusRequest = null;
+      let ownerTaskCancellationRequest = null;
       let resolveStatus;
       let resolveCancel;
       let resolveRuntime;
@@ -7012,7 +7013,9 @@ describe("WebChatChannel — HTTP inbound", () => {
       const auth = { authorization: `Bearer ${OWNER_TOKEN}` };
       expect((await postJson(ownerCtx.port, statusRoute, body)).status).toBe(401);
       expect((await postJson(ownerCtx.port, cancelRoute, body)).status).toBe(401);
-      expect((await postJson(ownerCtx.port, cancelRoute, { ...body, request_id: requestId }, auth)).status).toBe(400);
+      expect((await postJson(ownerCtx.port, cancelRoute, { ...body, request_id: requestId }, {
+        ...auth, origin: `http://127.0.0.1:${ownerCtx.port}`,
+      })).status).toBe(400);
       expect((await postJson(ownerCtx.port, cancelRoute,
         { submission_id: "00000000-0000-4000-8000-000000000163" }, auth)).status).toBe(404);
       expect(projected).toEqual([]);
@@ -7193,8 +7196,73 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(readResult).toHaveBeenCalledTimes(1);
       expect(readResult).toHaveBeenCalledWith({ request_id: requestId, ...resultFields });
 
-      expect((await post("/owner/task-submission-cancel", { request_id: requestId })).status).toBe(400);
+      expect((await post("/owner/task-submission-cancel", { request_id: requestId }, { authorization: owner.authorization })).status).toBe(403);
       expect(cancel).not.toHaveBeenCalled();
+      expect(ownerCtx.received).toEqual([]);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("cancels recovered work only through the exact local owner receipt and reports acknowledgement without claiming stop", async () => {
+    const requestId = "00000000-0000-4000-8000-000000000065";
+    const otherId = "00000000-0000-4000-8000-000000000066";
+    const rejectedId = "00000000-0000-4000-8000-000000000067";
+    const mismatchedId = "00000000-0000-4000-8000-000000000068";
+    const lookup = vi.fn(({ request_id }: { request_id: string }) => {
+      if (request_id === requestId || request_id === mismatchedId) return { request_id: requestId, state: "dispatching" } as const;
+      if (request_id === rejectedId) return { request_id: rejectedId, state: "rejected" } as const;
+      return null;
+    });
+    const accepted = {
+      status: "cancel_requested", cancel_request_accepted: true, executor_settled: false,
+      execution_signal_aborted: true, executor_state: "cancel_requested", local_worker_stop: "not_observed",
+      external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+    } as const;
+    const cancel = vi.fn(async () => accepted);
+    const ownerCtx = await setup({
+      owner_token: OWNER_TOKEN,
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      owner_task_submission_store: { ...createTestOwnerTaskSubmissionStore(), getOwnerTaskStatusByRequestId: lookup },
+      onOwnerTaskSubmissionCancellation: cancel,
+    });
+    try {
+      await ownerCtx.ch.start(async () => {});
+      const route = "/owner/task-submission-cancel";
+      const origin = `http://127.0.0.1:${ownerCtx.port}`;
+      const owner = { authorization: `Bearer ${OWNER_TOKEN}`, origin, "sec-fetch-site": "same-origin" };
+      const post = (body: unknown, headers: Record<string, string> = owner) => postJson(ownerCtx.port, route, body, headers);
+      const input = { request_id: requestId };
+      for (const headers of [{ origin }, ...[TOKEN, RESUME_TOKEN, D4_RUNTIME_TOKEN].map(token => ({ ...owner, authorization: `Bearer ${token}` }))]) {
+        const response = await post(input, headers);
+        expect(response.status).toBe(401);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+      for (const headers of [{ authorization: owner.authorization }, { ...owner, origin: "https://unrelated.invalid" },
+        { ...owner, "x-forwarded-host": "127.0.0.1" }]) {
+        expect((await post(input, headers)).status).toBe(403);
+      }
+      const quoted = await fetch(origin + route, { method: "POST", headers: { ...owner, "content-type": "text/plain" }, body: JSON.stringify(input) });
+      expect(quoted.status).toBe(415);
+      expect((await post({ ...input, submission_id: rejectedId })).status).toBe(400);
+      expect((await post({ ...input, command_id: otherId })).status).toBe(400);
+      expect((await post({ request_id: requestId + "\n" })).status).toBe(400);
+      expect(lookup).not.toHaveBeenCalled();
+
+      for (const id of [otherId, mismatchedId]) {
+        const response = await post({ request_id: id });
+        expect(response.status).toBe(404);
+        expect(response.body).toEqual({ found: false });
+      }
+      expect((await post({ request_id: rejectedId })).status).toBe(409);
+      expect(cancel).not.toHaveBeenCalled();
+
+      const response = await post(input);
+      expect(response.status).toBe(202);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.body).toEqual({ found: true, accepted: true, cancellation: accepted });
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledWith(input);
       expect(ownerCtx.received).toEqual([]);
     } finally {
       await ownerCtx.teardown();

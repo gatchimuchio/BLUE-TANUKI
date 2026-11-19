@@ -51,7 +51,7 @@ function scriptBetween(from: string, to: string) {
 }
 
 describe("Control Center recent owner requests", () => {
-  it("restores a recent request in a blank tab with owner-only read actions and discards stale reads", async () => {
+  it("restores a recent request in a blank tab and separately requests cancellation for its selected receipt", async () => {
     const requestId = "00000000-0000-4000-8000-000000000099";
     const legacyId = "00000000-0000-4000-8000-000000000001";
     const resultRef = "a".repeat(64);
@@ -64,16 +64,24 @@ describe("Control Center recent owner requests", () => {
         verification: "result_and_memory_confirmed", result_ref: resultRef }], ...flags },
       result: { status: "not_ready", ...flags } };
     const resultBody = { status: "available", result_ref: resultRef, content_sha256: contentHash, content, ...flags };
+    const cancelBody = { found: true, accepted: true, cancellation: {
+      status: "cancel_requested", cancel_request_accepted: true, executor_settled: false,
+      execution_signal_aborted: true, executor_state: "cancel_requested", local_worker_stop: "not_observed",
+      external_processing_stop: "unknown", ...flags,
+    } };
     const recentPath = "/owner/task-submissions/recent";
     const statusPath = "/owner/task-submission-status";
     const resultPath = "/owner/task-submission-result";
-    const respond = (body: object, noStore = true) =>
-      Response.json(body, noStore ? { headers: { "cache-control": "no-store" } } : undefined);
+    const cancelPath = "/owner/task-submission-cancel";
+    const respond = (body: object, noStore = true, status = 200) =>
+      Response.json(body, { status, ...(noStore ? { headers: { "cache-control": "no-store" } } : {}) });
 
     const html = renderControlCenterDocument();
+    expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
     expect(html).toContain('id="load-owner-task-recent" type="button">最近の依頼を読み込む');
     expect(html).toContain('id="owner-task-recent-request-id"');
     expect(html).toContain('id="check-owner-task-recent-status" type="button" hidden disabled');
+    expect(html).toContain('id="cancel-owner-task-recent-submission" type="button" hidden disabled');
 
     const nodes = new Map<string, UiElement>();
     function byId(id: string): UiElement {
@@ -116,6 +124,7 @@ describe("Control Center recent owner requests", () => {
     const check = byId("check-owner-task-recent-status");
     const badge = byId("owner-task-status");
     const legacyCancel = byId("cancel-owner-task-submission");
+    const recentCancel = byId("cancel-owner-task-recent-submission");
     const actions = byId("owner-task-saved-result-actions");
     const saved = byId("owner-task-saved-result");
     expect(calls).toEqual([]);
@@ -128,11 +137,16 @@ describe("Control Center recent owner requests", () => {
     expect(select.children[1]?.textContent).toBe("1970-01-01T00:00:00.000Z · 受付処理終了 · 000000000099");
     expect(select.value).toBe("");
     expect(check.disabled).toBe(true);
+    expect(recentCancel.hidden).toBe(true);
     expect(token.value).toBe("");
 
     select.value = requestId;
     await select.fire("change");
     expect(check.disabled).toBe(false);
+    expect(recentCancel.hidden).toBe(false);
+    await recentCancel.fire("click");
+    expect(calls).toHaveLength(1);
+    expect(badge.textContent).toContain("中止要求にはowner tokenを入力");
     token.value = "owner-token";
     responses.set(statusPath, new Response("private-fixture", { headers: { "cache-control": "no-store" } }));
     await check.fire("click");
@@ -175,12 +189,77 @@ describe("Control Center recent owner requests", () => {
     token.value = "owner-token";
     await controls.cancelOwnerTaskSubmission();
     expect(calls).toHaveLength(5);
+    responses.set(cancelPath, respond(cancelBody, false, 202));
+    await recentCancel.fire("click");
+    expect(badge.textContent).toContain("応答を確認できませんでした");
+    expect(saved.hidden).toBe(true);
+
+    token.value = "owner-token";
+    responses.set(cancelPath, respond(cancelBody, true, 200));
+    await recentCancel.fire("click");
+    expect(badge.textContent).toContain("停止完了とみなしていません");
+
+    token.value = "owner-token";
+    responses.set(cancelPath, respond(cancelBody, true, 202));
+    await recentCancel.fire("click");
+    expect(badge.textContent).toContain("Gateway参照ID末尾: 000000000099。中止要求を受理しました");
+    expect(badge.textContent).toContain("外部処理停止は別途未確定");
+    expect(token.value).toBe("");
+    expect(calls.at(-1)).toMatchObject({ path: cancelPath, options: {
+      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error",
+      headers: { Authorization: "Bearer owner-token" }, body: JSON.stringify({ request_id: requestId }),
+    } });
+    expect(calls).toHaveLength(8);
+
+    token.value = "owner-token";
+    let finishCancel!: (response: Response) => void;
+    responses.set(cancelPath, new Promise<Response>((resolve) => { finishCancel = resolve; }));
+    const pendingCancellation = recentCancel.fire("click");
+    expect(recentCancel.disabled).toBe(true);
+    await recentCancel.fire("click");
+    await check.fire("click");
+    await load.fire("click");
+    await byId("check-owner-task-status").fire("click");
+    expect(calls).toHaveLength(9);
+    expect(legacyCalls).toEqual([]);
+    expect(select.value).toBe(requestId);
+    token.value = "updated-owner-token";
+    await token.fire("input");
+    token.value = "owner-token";
+    await token.fire("input");
+    finishCancel(respond(cancelBody, true, 202));
+    await pendingCancellation;
+    expect(badge.textContent).toContain("認証情報が変更されました");
+    expect(token.value).toBe("owner-token");
+    expect(recentCancel.disabled).toBe(false);
+
     await byId("check-owner-task-status").fire("click");
     expect(legacyCancel.hidden).toBe(false);
+    expect(recentCancel.hidden).toBe(true);
     expect(select.value).toBe("");
     expect(legacyCalls).toEqual([{ submission_id: legacyId }]);
     expect(saved.hidden).toBe(true);
     expect(storageWrites).toEqual([]);
+    token.value = "owner-token";
+    responses.set(cancelPath, respond(cancelBody, true, 202));
+    await legacyCancel.fire("click");
+    expect(badge.textContent).toContain("依頼ID末尾: 000000000001。中止要求を受理しました");
+    expect(calls.at(-1)).toMatchObject({ path: cancelPath, options: { body: JSON.stringify({ submission_id: legacyId }) } });
+
+    token.value = "owner-token";
+    let finishLegacyCancel!: (response: Response) => void;
+    responses.set(cancelPath, new Promise<Response>((resolve) => { finishLegacyCancel = resolve; }));
+    const pendingLegacyCancellation = legacyCancel.fire("click");
+    select.value = requestId;
+    await select.fire("change");
+    expect(recentCancel.disabled).toBe(true);
+    finishLegacyCancel(respond(cancelBody, true, 202));
+    await pendingLegacyCancellation;
+    expect(badge.textContent).toContain("Gateway参照ID末尾: 000000000099 を選択しました");
+    expect(badge.textContent).not.toContain("中止要求を受理しました");
+    expect(token.value).toBe("owner-token");
+    expect(legacyCancel.hidden).toBe(true);
+    expect(recentCancel.disabled).toBe(false);
 
     token.value = "owner-token";
     responses.set(recentPath, respond(recentBody, false));

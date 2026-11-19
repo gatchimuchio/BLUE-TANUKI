@@ -108,7 +108,9 @@ Control Centerの通知欄から所有者資格で `GET /notifications` を照�
 
 Control Centerの仕事画面から `POST /owner/task-submissions/recent` に `{}` を送ると、所有者の受付を新しい順に最大20件取得する。各項目はGateway受付ID `request_id`、受付状態 `state`、受付時刻 `created_at_ms` のみ。応答は `no-store`、利用条件はローカルの同一オリジンと所有者専用認証。
 
-選択した `request_id` は、同じローカル認証の `POST /owner/task-submission-status` と `POST /owner/task-submission-result` で `submission_id` に代えて使える。保存結果には、既存の `step_index` と `result_ref` の照合と、J・実行結果・M記憶の検証が必要。画面は一覧をページ内で保持する。送信と取消は既存の依頼IDの経路に従う。
+選択した `request_id` は、同じローカル認証の `POST /owner/task-submission-status` と `POST /owner/task-submission-result` で `submission_id` に代えて使える。保存結果には、既存の `step_index` と `result_ref` の照合と、J・実行結果・M記憶の検証が必要。画面は一覧をページ内で保持する。
+
+最近の受付から仕事を中止するには、選択した受付に対して画面の中止ボタンを操作する。画面は `POST /owner/task-submission-cancel` に JSON の `{request_id}` を送り、所有者専用Bearer認証とローカルの同一オリジンを要求する。応答は `no-store`。Gatewayは所有者の受付台帳でそのIDを照合し、既存の取消処理で現在の待機・承認・実行の対象を確認する。一覧の表示・状態照会・保存結果の取得は読み取り操作。従来の `{submission_id}` による取消と依頼送信は引き続きそれぞれの経路を使う。実行中の取消受理は中止信号の送信を示し、実行の終了とローカル・外部の処理停止は別の観測を要する。
 
 ## 12. WebChat Webhookの永続受付
 

@@ -217,6 +217,7 @@ ${CONTROL_CENTER_STYLE}    </style>
               <button id="load-owner-task-recent" type="button">最近の依頼を読み込む</button>
               <select id="owner-task-recent-request-id" aria-label="最近の依頼を選択" hidden></select>
               <button id="check-owner-task-recent-status" type="button" hidden disabled>選択した受付を確認</button>
+              <button id="cancel-owner-task-recent-submission" type="button" hidden disabled>選択した受付へ中止要求</button>
               <span id="owner-task-recent-status" role="status" class="muted"></span>
             </div>
             <p id="owner-task-result-status" class="muted" aria-live="polite" hidden></p>

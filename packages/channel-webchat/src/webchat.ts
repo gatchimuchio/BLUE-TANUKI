@@ -953,6 +953,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/task-submission-status body:{request_id} auth:local same-origin owner bearer, no-store
  *   POST /owner/task-submission-result body:{submission_id|request_id,step_index,result_ref} auth:local same-origin owner bearer, no-store
  *   POST /owner/task-submission-cancel body:{submission_id} auth:dedicated owner bearer
+ *   POST /owner/task-submission-cancel body:{request_id} auth:local same-origin owner bearer, no-store
  *   GET  /owner/goal-purpose-change-candidates auth:dedicated owner bearer, no-store
  *   POST /webhook    body:{content|text|event,user?,source?,reply_to?} auth:Bearer webhook-token
  *   POST /resume     body:{request_id, verdict, approval_token}  auth:Bearer  rate-limited (global)
@@ -1669,7 +1670,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-content-type-options", "nosniff");
     }
-    if (url.pathname === "/owner/task-submission-status") {
+    if (url.pathname === "/owner/task-submission-status" || url.pathname === "/owner/task-submission-cancel") {
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-content-type-options", "nosniff");
     }
@@ -1833,27 +1834,42 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "method_not_allowed" }));
         return;
       }
-      const submissionStore = this.opts.owner_task_submission_store;
-      if (!submissionStore?.getStatus || !this.opts.onOwnerTaskSubmissionCancellation) {
-        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ error: "owner_task_submission_cancellation_unavailable" }));
+      const byRequestId = Object.hasOwn(body ?? {}, "request_id");
+      if (byRequestId && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
         return;
       }
-      if (!body || Object.keys(body).some((key) => key !== "submission_id")) {
+      if (byRequestId && String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "application_json_required" }));
+        return;
+      }
+      const locator = byRequestId ? "request_id" : "submission_id";
+      if (!body || Object.keys(body).some((key) => key !== locator)) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "invalid_owner_task_submission_cancel_input" }));
         return;
       }
-      const submissionId = typeof body.submission_id === "string" ? body.submission_id : "";
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(submissionId)) {
+      const receiptId = body[locator];
+      if (!isOwnerTaskReceiptId(receiptId)) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
-        res.end(JSON.stringify({ error: "invalid_owner_task_submission_id" }));
+        res.end(JSON.stringify({ error: byRequestId ? "invalid_owner_task_request_id" : "invalid_owner_task_submission_id" }));
+        return;
+      }
+      const submissionStore = this.opts.owner_task_submission_store;
+      if (!submissionStore || (byRequestId ? !submissionStore.getOwnerTaskStatusByRequestId : !submissionStore.getStatus) ||
+          !this.opts.onOwnerTaskSubmissionCancellation) {
+        res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "owner_task_submission_cancellation_unavailable" }));
         return;
       }
       if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
       try {
-        const status = submissionStore.getStatus({ submission_id: submissionId });
-        if (!status) {
+        const status = byRequestId
+          ? submissionStore.getOwnerTaskStatusByRequestId?.({ request_id: receiptId })
+          : submissionStore.getStatus?.({ submission_id: receiptId });
+        if (!status || (byRequestId && status.request_id !== receiptId)) {
           res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ found: false }));
           return;

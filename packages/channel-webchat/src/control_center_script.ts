@@ -1187,6 +1187,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       let ownerTaskStatusSubmissionIdsMemory = [];
       let ownerTaskSavedResultGeneration = 0;
       let ownerTaskStatusRequest = null;
+      let ownerTaskCancellationRequest = null;
       let ownerTaskRecentLoadRequest = null;
       let ownerTaskRecentSubmissions = [];
       const OWNER_TASK_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1220,6 +1221,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         ownerTaskRecentSubmissions = rows;
         const select = byId("owner-task-recent-request-id");
         const check = byId("check-owner-task-recent-status");
+        const cancel = byId("cancel-owner-task-recent-submission");
         const states = { dispatching: "受付処理中", handler_returned: "受付処理終了", outcome_unknown: "受付結果不明" };
         select.replaceChildren(new Option("最近の依頼を選択", ""));
         for (const row of rows) {
@@ -1229,6 +1231,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         select.hidden = rows.length === 0;
         check.hidden = rows.length === 0;
         check.disabled = true;
+        cancel.hidden = true;
+        cancel.disabled = true;
         byId("cancel-owner-task-submission").hidden = byId("check-owner-task-status").hidden;
       }
 
@@ -1238,6 +1242,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         select.value = "";
         clearOwnerTaskReceiptDisplay();
         byId("check-owner-task-recent-status").disabled = true;
+        byId("cancel-owner-task-recent-submission").hidden = true;
+        byId("cancel-owner-task-recent-submission").disabled = true;
         byId("cancel-owner-task-submission").hidden = byId("check-owner-task-status").hidden;
       }
 
@@ -1272,7 +1278,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       async function loadOwnerTaskRecentSubmissions() {
         const button = byId("load-owner-task-recent");
-        if (ownerTaskRecentLoadRequest || byId("cancel-owner-task-submission").disabled || ownerTaskStatusRequest) return;
+        if (ownerTaskRecentLoadRequest || ownerTaskCancellationRequest || ownerTaskStatusRequest ||
+            byId("submit-owner-task").disabled) return;
         const input = byId("owner-task-token");
         const token = input.value.trim();
         const status = byId("owner-task-recent-status");
@@ -1646,7 +1653,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       async function readOwnerTaskSavedResult(receiptId, step, button, recovered = false) {
         const selectedId = recovered ? ownerTaskRecentRequestId : ownerTaskStatusSubmissionId;
-        if (!button.isConnected || button.disabled || selectedId() !== receiptId) return;
+        if (!button.isConnected || button.disabled || selectedId() !== receiptId ||
+            byId("cancel-owner-task-submission")?.disabled || (recovered && ownerTaskCancellationRequest)) return;
         clearOwnerTaskSavedResult(false);
         const generation = ownerTaskSavedResultGeneration;
         const ownerTokenInput = byId("owner-task-token");
@@ -1816,8 +1824,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       async function checkOwnerTaskSubmissionStatus(recovered = false) {
         const button = byId(recovered ? "check-owner-task-recent-status" : "check-owner-task-status");
-        const cancelButton = byId("cancel-owner-task-submission");
-        if (button.disabled || cancelButton.disabled || ownerTaskStatusRequest || byId("load-owner-task-recent")?.disabled) return;
+        if (button.disabled || ownerTaskCancellationRequest || ownerTaskStatusRequest ||
+            byId("load-owner-task-recent")?.disabled || (recovered && byId("submit-owner-task").disabled)) return;
         clearOwnerTaskSavedResult(true);
         const savedResultGeneration = ownerTaskSavedResultGeneration;
         const ownerTokenInput = byId("owner-task-token");
@@ -1933,60 +1941,81 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
-      async function cancelOwnerTaskSubmission() {
-        const button = byId("cancel-owner-task-submission");
-        const statusButton = byId("check-owner-task-status");
-        if (button.disabled || button.hidden || ownerTaskStatusRequest?.recovered ||
-            byId("owner-task-recent-request-id")?.value || byId("load-owner-task-recent")?.disabled) return;
+      async function cancelOwnerTaskSubmission(recovered = false) {
+        const button = byId(recovered ? "cancel-owner-task-recent-submission" : "cancel-owner-task-submission");
+        const statusButton = byId(recovered ? "check-owner-task-recent-status" : "check-owner-task-status");
+        if (button.disabled || button.hidden || ownerTaskCancellationRequest || byId("load-owner-task-recent")?.disabled ||
+            byId("submit-owner-task")?.disabled ||
+            (!recovered && (ownerTaskStatusRequest?.recovered || byId("owner-task-recent-request-id")?.value))) return;
         const ownerTokenInput = byId("owner-task-token");
         const status = byId("owner-task-status");
-        const submissionSelect = byId("owner-task-status-submission-id");
+        const submissionSelect = byId(recovered ? "owner-task-recent-request-id" : "owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
-        const submissionId = ownerTaskStatusSubmissionId();
+        const selectedId = recovered ? ownerTaskRecentRequestId : ownerTaskStatusSubmissionId;
+        const receiptId = selectedId();
         if (!ownerToken) throw new Error("中止要求にはowner tokenを入力してください");
-        if (!submissionId) throw new Error("中止対象のowner task依頼IDがありません");
+        if (!receiptId) throw new Error("中止対象の受付を選択してください");
+        const idLabel = recovered ? "Gateway参照ID末尾: " : "依頼ID末尾: ";
+        const receiptLabel = idLabel + receiptId.slice(-12);
         const previousStatus = ownerTaskStatusRequest;
         const wasSubmissionSelectDisabled = previousStatus?.wasSubmissionSelectDisabled ?? submissionSelect.disabled;
         ownerTaskStatusRequest = null;
         previousStatus?.controller.abort();
-        const selectionChanged = function () {
-          return ownerTaskStatusSubmissionId() !== submissionId || ownerTokenInput.value.trim() !== ownerToken;
+        if (recovered) clearOwnerTaskReceiptDisplay();
+        const request = { displayGeneration: ownerTaskSavedResultGeneration };
+        ownerTaskCancellationRequest = request;
+        const isCurrent = function () {
+          return ownerTaskCancellationRequest === request && selectedId() === receiptId &&
+            (recovered || !byId("owner-task-recent-request-id")?.value) &&
+            ownerTaskSavedResultGeneration === request.displayGeneration && ownerTokenInput.value.trim() === ownerToken;
         };
         button.disabled = true;
         submissionSelect.disabled = true;
         statusButton.disabled = true;
         byId("owner-task-new-submission").hidden = true;
-        status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + " の中止可能な実行を照合しています";
+        status.textContent = receiptLabel + " の中止可能な実行を照合しています";
         status.className = "badge warn";
+        const unconfirmed = "中止要求の応答を確認できませんでした。状態を再照会してください。";
         try {
           const response = await fetch("/owner/task-submission-cancel", {
             method: "POST",
+            ...(recovered ? { cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin" } : {}),
             headers: Object.assign({ "content-type": "application/json" }, authHeaders(ownerToken)),
-            body: JSON.stringify({ submission_id: submissionId })
+            body: JSON.stringify(recovered ? { request_id: receiptId } : { submission_id: receiptId })
+          }).catch(function (error) {
+            if (recovered) throw new Error(unconfirmed);
+            throw error;
           });
+          if (!isCurrent()) return;
+          if (recovered && !hasNoStore(response)) throw new Error(unconfirmed);
           const result = await response.json().catch(function () { return {}; });
-          if (selectionChanged()) return;
+          if (!isCurrent()) return;
           if (response.status === 404 && result && result.found === false) {
-            throw new Error("Gateway受付記録がありません。未送信の証明ではないため、新しい依頼IDへ切り替えないでください。");
+            throw new Error(recovered
+              ? "Gateway受付記録がありません。最近の依頼を読み込み直してください。"
+              : "Gateway受付記録がありません。未送信の証明ではないため、新しい依頼IDへ切り替えないでください。");
           }
           if (response.status === 409 && result && result.found === true && result.accepted === false) {
             throw new Error("この依頼で中止できる対象を一意に確認できません。状態を再照会してください。");
           }
           const cancellation = result && result.cancellation;
-          if (response.ok && result?.found === true && result.accepted === true && ownerTaskApprovalWithdrawn(cancellation)) {
-            status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。承認待ちを取り消しました。この承認での実行は開始していません。";
+          const accepted = response.ok && result?.found === true && result.accepted === true &&
+            (!recovered || (response.status === 202 && isObject(result) && Object.keys(result).length === 3 &&
+              Object.hasOwn(result, "cancellation")));
+          if (accepted && ownerTaskApprovalWithdrawn(cancellation)) {
+            status.textContent = receiptLabel + "。承認待ちを取り消しました。この承認での実行は開始していません。";
             status.className = "badge warn";
             return;
           }
           const waitSummary = cancellation?.status === "wait_cancelled" ? ownerTaskWaitSummary(cancellation) : null;
-          if (response.ok && result?.found === true && result.accepted === true && waitSummary) {
-            status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。" + waitSummary;
+          if (accepted && waitSummary) {
+            status.textContent = receiptLabel + "。" + waitSummary;
             status.className = "badge warn";
             return;
           }
           const allowedKeys = ["status", "cancel_request_accepted", "executor_settled", "execution_signal_aborted",
             "executor_state", "local_worker_stop", "external_processing_stop", "used_for_authority", "may_execute"];
-          if (!response.ok || !result || result.found !== true || result.accepted !== true || !isObject(cancellation) ||
+          if (!accepted || !isObject(cancellation) ||
               Object.keys(cancellation).length !== allowedKeys.length || Object.keys(cancellation).some(function (key) {
                 return allowedKeys.indexOf(key) < 0;
               }) || ["cancel_requested", "already_requested"].indexOf(cancellation.status) < 0 ||
@@ -1997,18 +2026,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               cancellation.used_for_authority !== false || cancellation.may_execute !== false) {
             throw new Error("中止要求応答が不正または未確認です。停止完了とみなしていません。");
           }
-          status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。中止要求を" +
+          status.textContent = receiptLabel + "。中止要求を" +
             (cancellation.status === "already_requested" ? "既に受理済みです" : "受理しました") +
             "。executor終了・worker停止・外部処理停止は別途未確定です。状態を再照会してください。";
           status.className = "badge warn";
         } catch (error) {
-          if (selectionChanged()) return;
+          if (!isCurrent()) return;
           throw error;
         } finally {
-          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          if (isCurrent()) ownerTokenInput.value = "";
+          ownerTaskCancellationRequest = null;
           submissionSelect.disabled = wasSubmissionSelectDisabled;
-          statusButton.disabled = false;
-          button.disabled = false;
+          statusButton.disabled = recovered && !selectedId();
+          button.disabled = recovered && !selectedId();
+          const recentCancelButton = byId("cancel-owner-task-recent-submission");
+          if (recentCancelButton && !recentCancelButton.hidden) recentCancelButton.disabled = false;
         }
       }
 
@@ -11416,12 +11448,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (byId("approval-token").value.trim()) void loadApprovals();
       });
       byId("submit-owner-task").addEventListener("click", function () {
+        const button = byId("submit-owner-task");
+        if (button.disabled || ownerTaskCancellationRequest || ownerTaskRecentLoadRequest) return;
         clearOwnerTaskRecentSelection();
-        submitOwnerTask().catch(function (error) {
+        button.disabled = true;
+        return submitOwnerTask().catch(function (error) {
           const status = byId("owner-task-status");
           status.textContent = error.message || "仕事を送信できませんでした";
           status.className = error.message && error.message.includes("委任目的") ? "badge warn" : "badge bad";
           byId("owner-task-token").value = "";
+        }).finally(function () {
+          button.disabled = false;
         });
       });
       byId("owner-audio-transcription-submit").addEventListener("click", function () {
@@ -11448,6 +11485,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge warn";
       });
       byId("check-owner-task-status").addEventListener("click", function () {
+        if (ownerTaskCancellationRequest) return;
         clearOwnerTaskRecentSelection();
         return checkOwnerTaskSubmissionStatus().catch(function (error) {
           const status = byId("owner-task-status");
@@ -11464,11 +11502,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         clearOwnerTaskReceiptDisplay();
         const requestId = ownerTaskRecentRequestId();
         byId("check-owner-task-recent-status").disabled = !requestId;
+        const cancel = byId("cancel-owner-task-recent-submission");
+        cancel.hidden = !requestId;
+        cancel.disabled = !requestId || Boolean(ownerTaskCancellationRequest);
         byId("cancel-owner-task-submission").hidden = Boolean(requestId) || byId("check-owner-task-status").hidden;
         byId("owner-task-new-submission").hidden = true;
         const status = byId("owner-task-status");
         status.textContent = requestId
-          ? "Gateway参照ID末尾: " + requestId.slice(-12) + " を選択しました。owner tokenを入力して状態を確認してください。"
+          ? "Gateway参照ID末尾: " + requestId.slice(-12) + " を選択しました。owner tokenを入力して状態確認または中止要求ができます。"
           : "最近の依頼を選択してください。";
         status.className = "badge warn";
       });
@@ -11479,12 +11520,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           status.className = "badge bad";
         });
       });
+      function renderOwnerTaskCancellationError(error) {
+        const status = byId("owner-task-status");
+        status.textContent = error.message || "中止要求を確認できませんでした。停止完了とは扱っていません。";
+        status.className = "badge bad";
+      }
       byId("cancel-owner-task-submission").addEventListener("click", function () {
-        cancelOwnerTaskSubmission().catch(function (error) {
-          const status = byId("owner-task-status");
-          status.textContent = error.message || "中止要求を確認できませんでした。停止完了とは扱っていません。";
-          status.className = "badge bad";
-        });
+        return cancelOwnerTaskSubmission().catch(renderOwnerTaskCancellationError);
+      });
+      byId("cancel-owner-task-recent-submission").addEventListener("click", function () {
+        return cancelOwnerTaskSubmission(true).catch(renderOwnerTaskCancellationError);
       });
       byId("owner-task-status-submission-id").addEventListener("change", function () {
         byId("owner-task-new-submission").hidden = true;
@@ -11495,8 +11540,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         status.className = "badge warn";
       });
       byId("owner-task-token").addEventListener("input", function () {
+        const cancellingDisplayedReceipt = ownerTaskCancellationRequest?.displayGeneration === ownerTaskSavedResultGeneration;
         clearOwnerTaskSavedResult(false);
         byId("owner-task-new-submission").hidden = true;
+        if (cancellingDisplayedReceipt) {
+          const status = byId("owner-task-status");
+          status.textContent = "認証情報が変更されました。中止要求の状態を再照会してください。";
+          status.className = "badge warn";
+        }
       });
       window.addEventListener("pagehide", function () {
         ownerTaskRecentLoadRequest?.abort();
@@ -11504,6 +11555,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("load-owner-task-recent").disabled = false;
         byId("owner-task-recent-status").textContent = "";
         byId("owner-task-token").value = "";
+        if (ownerTaskRecentRequestId()) {
+          const status = byId("owner-task-status");
+          status.textContent = "最近の依頼を読み込んでください。";
+          status.className = "badge warn";
+        }
         renderOwnerTaskRecentSubmissions([]);
         clearOwnerTaskReceiptDisplay();
       });
