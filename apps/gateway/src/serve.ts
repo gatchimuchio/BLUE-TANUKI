@@ -1595,6 +1595,12 @@ async function serveWithOwnerLease(
   hds.onRuntimeInvariantsEvidence({ reason: "gateway_startup" });
   const runtimeSchedules = await RuntimeScheduleManager.open({
     env: process.env,
+    beforePersist: (kind) => {
+      ownerLease.assertActive();
+      if (kind === "approve" && (gatewayShuttingDown || emergencyStop.active)) {
+        throw new Error("runtime_schedule_mutation_blocked");
+      }
+    },
     onLifecycle: (event, lifecycle) => {
       hds.onScheduleLifecycle(event, lifecycle);
     },
@@ -1613,7 +1619,7 @@ async function serveWithOwnerLease(
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
-    hasUnsettledWork: () => activeCommandFinalizations.size > 0 || executionTasks.size > 0 ||
+    hasUnsettledWork: () => runtimeSchedules.hasPendingPersistence() || activeCommandFinalizations.size > 0 || executionTasks.size > 0 ||
       activeTaskExecutions.snapshot().length > 0,
     abortRunningExecutions: ({ actor, requested_at_ms }) => {
       telegramOutboundStop.abort();
@@ -9367,6 +9373,7 @@ async function serveWithOwnerLease(
       runtimeKernelShadowObserver = undefined;
       // workerのcloseと最終receipt保存が済む前にDBを閉じない。
       await Promise.allSettled([...executionTasks]);
+      await runtimeSchedules.drain();
       telegramUpdateStore?.close();
       ownerTaskSubmissionStore.close();
       slackEventStore?.close();
@@ -9380,6 +9387,7 @@ async function serveWithOwnerLease(
       operationPlanState.close();
       emergencyStopStateStore.close();
       hds.closeOperationPlanMemory();
+      hds.close();
       executionStore.close();
       approvalRecoveryStore.close();
       mcpRuntimeObservations.close();

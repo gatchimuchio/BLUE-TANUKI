@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, renameSync } from "node:fs";
 import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import { runtimeScheduleScopeDigest, type ApprovalEvaluation, type RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
@@ -82,6 +82,7 @@ export interface RuntimeScheduleManagerOptions {
   env?: Env;
   safe_mode?: boolean;
   now?: () => number;
+  beforePersist?: (kind: "approve" | "reject") => void;
   onLifecycle?: (
     event:
       | "schedule.lifecycle.requested"
@@ -98,22 +99,28 @@ export class RuntimeScheduleManager {
   private readonly schedules = new Map<string, RuntimeSchedule>();
   private readonly pending = new Map<string, PendingRuntimeScheduleOperation>();
   private readonly pendingBySchedule = new Map<string, string>();
+  private readonly committingCommands = new Set<string>();
+  private commitQueue: Promise<void> = Promise.resolve();
+  private pendingPersistence = 0;
   private scheduler: CronSchedulerChannel | null = null;
   private readonly now: () => number;
   private readonly file: string;
   private readonly safeMode: boolean;
   private readonly approvalTimeoutMs: number;
   private readonly onLifecycle?: RuntimeScheduleManagerOptions["onLifecycle"];
+  private readonly beforePersist?: RuntimeScheduleManagerOptions["beforePersist"];
 
   private constructor(
     file: string,
     schedules: readonly RuntimeSchedule[],
-    opts: Required<Pick<RuntimeScheduleManagerOptions, "now" | "safe_mode">> & Pick<RuntimeScheduleManagerOptions, "onLifecycle"> & { approvalTimeoutMs: number },
+    opts: Required<Pick<RuntimeScheduleManagerOptions, "now" | "safe_mode">> &
+      Pick<RuntimeScheduleManagerOptions, "onLifecycle" | "beforePersist"> & { approvalTimeoutMs: number },
   ) {
     this.file = file;
     this.now = opts.now;
     this.safeMode = opts.safe_mode;
     this.onLifecycle = opts.onLifecycle;
+    this.beforePersist = opts.beforePersist;
     this.approvalTimeoutMs = opts.approvalTimeoutMs;
     for (const schedule of schedules) {
       this.schedules.set(schedule.id, schedule);
@@ -130,6 +137,7 @@ export class RuntimeScheduleManager {
       now: opts.now ?? (() => Date.now()),
       safe_mode: opts.safe_mode ?? env.BLUE_TANUKI_SAFE_MODE === "1",
       onLifecycle: opts.onLifecycle,
+      beforePersist: opts.beforePersist,
       approvalTimeoutMs,
     });
   }
@@ -159,21 +167,21 @@ export class RuntimeScheduleManager {
         adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule create request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.create").required_capabilities,
-        invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
+        invoke: async (_args, ctx) => this.approvePending(ctx.command_id, ctx.signal),
       },
       {
         name: "schedule.update",
         adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule update request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.update").required_capabilities,
-        invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
+        invoke: async (_args, ctx) => this.approvePending(ctx.command_id, ctx.signal),
       },
       {
         name: "schedule.delete",
         adapter_version: "1.0.0-rc.1",
         description: "Activate a previously approved runtime schedule delete request.",
         required_capabilities: requireToolOperationDescriptor("schedule.delete").required_capabilities,
-        invoke: async (_args, ctx) => this.approvePending(ctx.command_id),
+        invoke: async (_args, ctx) => this.approvePending(ctx.command_id, ctx.signal),
       },
     ];
   }
@@ -206,7 +214,7 @@ export class RuntimeScheduleManager {
 
   hasPending(command_id: string): boolean {
     this.pruneExpiredPending("system");
-    return this.pending.has(command_id);
+    return this.pending.has(command_id) && !this.committingCommands.has(command_id);
   }
 
   preparePending(
@@ -245,6 +253,9 @@ export class RuntimeScheduleManager {
       };
     }
 
+    if (this.pending.has(command.id) || this.committingCommands.has(command.id)) {
+      return { ok: false, message: scheduleErrorMessage("this command already has a pending schedule operation") };
+    }
     try {
       const pending = this.buildPending(tool, command, evaluation, opts);
       this.pending.set(command.id, pending);
@@ -268,56 +279,81 @@ export class RuntimeScheduleManager {
 
   rejectPending(command_id: string, actor: string, _reason: string): PendingRuntimeScheduleOperation | null {
     const pending = this.pending.get(command_id);
-    if (!pending) return null;
+    if (!pending || this.committingCommands.has(command_id)) return null;
+    this.committingCommands.add(command_id);
     this.pending.delete(command_id);
-    this.pendingBySchedule.delete(pending.schedule_id);
-    if (pending.operation === "create") {
-      const rejected: RuntimeSchedule = {
-        ...pending.proposed,
-        enabled: false,
-        status: "rejected",
-        updated_at_ms: this.now(),
-      };
-      this.schedules.set(rejected.id, rejected);
-      this.persistSoon();
+    try {
+      this.onLifecycle?.("schedule.lifecycle.rejected", { ...lifecycleFromPending(pending), actor });
+    } catch (error) {
+      this.releasePending(pending);
+      throw error;
     }
-    this.onLifecycle?.("schedule.lifecycle.rejected", {
-      ...lifecycleFromPending(pending),
-      actor,
-      operation: pending.operation,
-      command_id,
-    });
+    if (pending.operation !== "create") {
+      this.releasePending(pending);
+      return pending;
+    }
+    const rejected: RuntimeSchedule = { ...pending.proposed, enabled: false, status: "rejected", updated_at_ms: this.now() };
+    void this.enqueueCommit(async () => {
+      const check = () => {
+        this.beforePersist?.("reject");
+        this.assertPreviousSchedule(pending);
+      };
+      try {
+        check();
+        await this.persistChange(rejected, check);
+      } finally {
+        this.releasePending(pending);
+      }
+    }).catch(() => { /* Rejection is final even when the inactive tombstone cannot be retained. */ });
     return pending;
   }
 
-  private async approvePending(command_id: string): Promise<unknown> {
+  private async approvePending(command_id: string, signal?: AbortSignal): Promise<unknown> {
     if (this.safeMode) {
       throw new Error("schedule approval unavailable in Safe Mode; nothing was changed; restart normally to resume saved schedules");
     }
     this.pruneExpiredPending("system");
     const pending = this.pending.get(command_id);
-    if (!pending) {
+    if (!pending || this.committingCommands.has(command_id)) {
       throw new Error("schedule approval missing or expired; nothing was activated; submit the schedule request again and approve the new command_id");
     }
-    this.pending.delete(command_id);
-    this.pendingBySchedule.delete(pending.schedule_id);
+    this.committingCommands.add(command_id);
+    return this.enqueueCommit(async () => {
+      const check = () => {
+        signal?.throwIfAborted();
+        this.beforePersist?.("approve");
+        signal?.throwIfAborted();
+        this.assertPreviousSchedule(pending);
+        if (pending.expires_at_ms <= this.now()) {
+          throw new Error("schedule approval expired before persistence; the approved change was not committed");
+        }
+      };
+      try {
+        check();
+        return await this.commitApproval(pending, check);
+      } finally {
+        this.releasePending(pending);
+      }
+    });
+  }
 
+  private async commitApproval(pending: PendingRuntimeScheduleOperation, beforeRename: () => void): Promise<unknown> {
+    const recordApproval = () => {
+      beforeRename();
+      this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
+    };
     if (pending.operation === "delete") {
       const previous = pending.previous;
       if (!previous || previous.status !== "active") {
         throw new Error("schedule.delete target is no longer active; nothing was deleted; run tool:schedule.list and retry");
       }
-      this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
       const deleted: RuntimeSchedule = {
         ...previous,
         enabled: false,
         status: "deleted",
         updated_at_ms: this.now(),
       };
-      const nextSchedules = new Map(this.schedules);
-      nextSchedules.set(deleted.id, deleted);
-      await this.persist(nextSchedules.values());
-      this.schedules.set(deleted.id, deleted);
+      await this.persistChange(deleted, recordApproval);
       this.scheduler?.removeTask(deleted.id);
       this.onLifecycle?.("schedule.lifecycle.deleted", lifecycleFromPending(pending));
       return {
@@ -335,15 +371,16 @@ export class RuntimeScheduleManager {
       enabled: true,
       updated_at_ms: this.now(),
     };
-    this.onLifecycle?.("schedule.lifecycle.approved", lifecycleFromPending(pending));
-    const nextSchedules = new Map(this.schedules);
-    nextSchedules.set(activated.id, activated);
-    await this.persist(nextSchedules.values());
-    this.schedules.set(activated.id, activated);
-    this.onLifecycle?.(
-      pending.operation === "create" ? "schedule.lifecycle.activated" : "schedule.lifecycle.updated",
-      lifecycleFromPending(pending),
-    );
+    await this.persistChange(activated, recordApproval);
+    try {
+      this.onLifecycle?.(
+        pending.operation === "create" ? "schedule.lifecycle.activated" : "schedule.lifecycle.updated",
+        lifecycleFromPending(pending),
+      );
+    } catch (error) {
+      this.scheduler?.removeTask(activated.id);
+      throw error;
+    }
     const schedulerSnapshot = this.scheduler?.upsertTask(this.toCronTask(activated));
     return {
       schedule_id: activated.id,
@@ -487,13 +524,51 @@ export class RuntimeScheduleManager {
   private pruneExpiredPending(actor: string): void {
     const now = this.now();
     for (const pending of Array.from(this.pending.values())) {
-      if (pending.expires_at_ms <= now) {
+      if (!this.committingCommands.has(pending.command_id) && pending.expires_at_ms <= now) {
         this.rejectPending(pending.command_id, actor, "schedule approval timed out");
       }
     }
   }
 
-  private async persist(schedules: Iterable<RuntimeSchedule> = this.schedules.values()): Promise<void> {
+  hasPendingPersistence(): boolean {
+    return this.pendingPersistence > 0;
+  }
+
+  async drain(): Promise<void> {
+    let tail: Promise<void>;
+    do {
+      tail = this.commitQueue;
+      await tail;
+    } while (this.commitQueue !== tail);
+  }
+
+  private enqueueCommit<T>(commit: () => Promise<T>): Promise<T> {
+    this.pendingPersistence += 1;
+    const result = this.commitQueue.then(commit).finally(() => { this.pendingPersistence -= 1; });
+    this.commitQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private assertPreviousSchedule(pending: PendingRuntimeScheduleOperation): void {
+    if (this.schedules.get(pending.schedule_id) !== pending.previous) {
+      throw new Error("schedule target changed since review; the approved change was not committed");
+    }
+  }
+
+  private releasePending(pending: PendingRuntimeScheduleOperation): void {
+    this.committingCommands.delete(pending.command_id);
+    if (this.pending.get(pending.command_id) === pending) this.pending.delete(pending.command_id);
+    if (this.pendingBySchedule.get(pending.schedule_id) === pending.command_id) this.pendingBySchedule.delete(pending.schedule_id);
+  }
+
+  private async persistChange(schedule: RuntimeSchedule, beforeRename: () => void): Promise<void> {
+    const schedules = new Map(this.schedules);
+    schedules.set(schedule.id, schedule);
+    await this.persist(schedules.values(), beforeRename);
+    this.schedules.set(schedule.id, schedule);
+  }
+
+  private async persist(schedules: Iterable<RuntimeSchedule>, beforeRename: () => void): Promise<void> {
     const records = Array.from(schedules).sort((a, b) => a.id.localeCompare(b.id));
     const directory = path.dirname(this.file);
     const temporary = path.join(directory, `.${path.basename(this.file)}.${process.pid}.${randomUUID()}.tmp`);
@@ -506,15 +581,12 @@ export class RuntimeScheduleManager {
       } finally {
         await handle.close();
       }
-      await fs.rename(temporary, this.file);
+      beforeRename();
+      renameSync(temporary, this.file);
     } catch (error) {
       await fs.unlink(temporary).catch(() => undefined);
       throw error;
     }
-  }
-
-  private persistSoon(): void {
-    void this.persist().catch(() => undefined);
   }
 }
 

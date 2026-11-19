@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluateApproval } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { cronPayloadHash, CronSchedulerChannel } from "../src/cron_channel.js";
@@ -17,6 +17,15 @@ const upstream = {
   commit_hash: "abc123",
   commit_decision: "ASSERT" as const,
 };
+
+const scheduleFixtures: { directory: string; manager?: RuntimeScheduleManager }[] = [];
+
+afterEach(async () => {
+  for (const fixture of scheduleFixtures.splice(0)) {
+    await fixture.manager?.drain();
+    rmSync(fixture.directory, { recursive: true, force: true });
+  }
+});
 
 function command(
   tool_name: "schedule.list" | "schedule.create" | "schedule.update" | "schedule.delete",
@@ -35,24 +44,41 @@ function command(
   };
 }
 
-async function manager(opts: { now?: () => number; timeout_ms?: number; lifecycle?: unknown[] } = {}): Promise<RuntimeScheduleManager> {
-  const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-"));
-  return await RuntimeScheduleManager.open({
-    env: {
-      BLUE_TANUKI_SCHEDULES_DIR: dir,
-      BLUE_TANUKI_SCHEDULE_APPROVAL_TIMEOUT_MS: String(opts.timeout_ms ?? 86_400_000),
-    },
+interface ScheduleFixtureOptions {
+  now?: () => number;
+  timeout_ms?: number;
+  lifecycle?: unknown[];
+  beforePersist?: (kind: "approve" | "reject") => void;
+}
+
+async function scheduleFixture(opts: ScheduleFixtureOptions = {}) {
+  const directory = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-"));
+  const fixture: (typeof scheduleFixtures)[number] = { directory };
+  scheduleFixtures.push(fixture);
+  const env = {
+    BLUE_TANUKI_SCHEDULES_DIR: directory,
+    BLUE_TANUKI_SCHEDULE_APPROVAL_TIMEOUT_MS: String(opts.timeout_ms ?? 86_400_000),
+  };
+  const manager = await RuntimeScheduleManager.open({
+    env,
     now: opts.now,
+    beforePersist: opts.beforePersist,
     onLifecycle: (event, lifecycle) => {
       opts.lifecycle?.push({ event, ...lifecycle });
     },
   });
+  fixture.manager = manager;
+  return { manager, directory, env };
 }
 
-async function approve(m: RuntimeScheduleManager, cmd: ExecuteCommand): Promise<unknown> {
+async function manager(opts: ScheduleFixtureOptions = {}): Promise<RuntimeScheduleManager> {
+  return (await scheduleFixture(opts)).manager;
+}
+
+async function approve(m: RuntimeScheduleManager, cmd: ExecuteCommand, signal?: AbortSignal): Promise<unknown> {
   const tool = m.tools().find((candidate) => candidate.name === (cmd as Extract<ExecuteCommand, { type: "tool_call" }>).payload.tool_name);
   if (!tool) throw new Error("tool not found");
-  return await tool.invoke({}, { command_id: cmd.id, upstream_commit_hash: "abc123" });
+  return await tool.invoke({}, { command_id: cmd.id, upstream_commit_hash: "abc123", signal });
 }
 
 function evaluation(cmd: ExecuteCommand) {
@@ -303,9 +329,7 @@ describe("RuntimeScheduleManager", () => {
   });
 
   it("reloads only exact persisted schedules and rejects an unknown state instead of activating it", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-reload-"));
-    const env = { BLUE_TANUKI_SCHEDULES_DIR: dir };
-    const m = await RuntimeScheduleManager.open({ env });
+    const { manager: m, directory: dir, env } = await scheduleFixture();
     const create = command("schedule.create", {
       id: "reload-safe",
       channel: "webchat",
@@ -344,13 +368,10 @@ describe("RuntimeScheduleManager", () => {
     stored[0]!.payload_hash = "0".repeat(64);
     writeFileSync(file, `${JSON.stringify(stored)}\n`, "utf8");
     await expect(RuntimeScheduleManager.open({ env })).rejects.toThrow(/payload hash does not match/);
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it("does not activate an approved change when atomic persistence fails", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-write-failure-"));
-    const env = { BLUE_TANUKI_SCHEDULES_DIR: dir };
-    const m = await RuntimeScheduleManager.open({ env });
+    const { manager: m, directory: dir } = await scheduleFixture();
     const cron = new CronSchedulerChannel({ tasks: [], log: () => undefined });
     m.attachScheduler(cron);
     const create = command("schedule.create", {
@@ -373,7 +394,130 @@ describe("RuntimeScheduleManager", () => {
     expect(m.activeCount()).toBe(1);
     expect(m.snapshot()[0]?.payload_hash).toBe(oldHash);
     expect(cron.snapshot()[0]?.payload_hash).toBe(oldHash);
-    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps concurrent approved deletion and creation in both Cron and the reopened schedule store", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
+    const { manager: m, directory, env } = await scheduleFixture();
+    const eventStore = new GatewayCronEventStore(join(directory, "cron-events.sqlite"));
+    const cron = new CronSchedulerChannel({ tasks: [], event_store: eventStore, log: () => undefined });
+    const received: unknown[] = [];
+    m.attachScheduler(cron);
+    try {
+      await cron.start(async req => { received.push(req.metadata?.["blue_tanuki.cron.task_id"]); });
+      const args = { channel: "webchat", target: "local-user", content: "synthetic schedule", interval_ms: 1000 };
+      const original = command("schedule.create", { ...args, id: "old-schedule" });
+      expect(m.preparePending(original, evaluation(original), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+      await approve(m, original);
+      expect(cron.snapshot().map(item => item.id)).toEqual(["old-schedule"]);
+
+      const deletion = command("schedule.delete", { id: "old-schedule" });
+      const creation = command("schedule.create", { ...args, id: "new-schedule" });
+      expect(m.preparePending(deletion, evaluation(deletion), { request_id: "delete-approval", actor: "alice" }).ok).toBe(true);
+      expect(m.preparePending(creation, evaluation(creation), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
+      const [deleted, created] = await Promise.all([approve(m, deletion), approve(m, creation)]);
+      expect(deleted).toMatchObject({ schedule_id: "old-schedule", status: "deleted", can_fire: false });
+      expect(created).toMatchObject({ schedule_id: "new-schedule", status: "active", can_fire: true });
+
+      const reopened = await RuntimeScheduleManager.open({ env });
+      expect(reopened.snapshot()).toEqual(m.snapshot());
+      expect(reopened.snapshot()).toMatchObject([
+        { id: "new-schedule", status: "active", enabled: true },
+        { id: "old-schedule", status: "deleted", enabled: false },
+      ]);
+      expect(reopened.activeCronTasks().map(item => item.id)).toEqual(["new-schedule"]);
+      expect(cron.snapshot().map(item => item.id)).toEqual(["new-schedule"]);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(received).toEqual(["new-schedule"]);
+    } finally {
+      await cron.stop();
+      eventStore.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reserves the same schedule through the approved update's final rename", async () => {
+    let beforeCommit: (() => void) | undefined;
+    let boundaries = 0;
+    const { manager: m, env } = await scheduleFixture({ beforePersist(kind) {
+      if (kind === "approve" && beforeCommit && ++boundaries === 2) beforeCommit();
+    } });
+    const create = command("schedule.create", {
+      id: "reserved-id", channel: "webchat", target: "local-user", content: "previous content", interval_ms: 1000,
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+    const update = command("schedule.update", { id: "reserved-id", content: "updated content" });
+    const competing = command("schedule.delete", { id: "reserved-id" });
+    expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
+    let admitted: boolean | undefined;
+    beforeCommit = () => {
+      admitted = m.preparePending(competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok;
+    };
+    await approve(m, update);
+    expect(admitted).toBe(false);
+    expect(m.activeCronTasks()).toMatchObject([{ id: "reserved-id", content: "updated content" }]);
+    const reopened = await RuntimeScheduleManager.open({ env });
+    expect(reopened.activeCronTasks()).toEqual(m.activeCronTasks());
+    expect(m.preparePending(competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok).toBe(true);
+  });
+
+  it("persists a rejected create without discarding a distinct successful approval", async () => {
+    const { manager: m, env } = await scheduleFixture();
+    const args = { channel: "webchat", target: "local-user", content: "synthetic schedule", interval_ms: 1000 };
+    const approved = command("schedule.create", { ...args, id: "approved-schedule" });
+    const rejected = command("schedule.create", { ...args, id: "rejected-schedule" });
+    expect(m.preparePending(approved, evaluation(approved), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
+    expect(m.preparePending(rejected, evaluation(rejected), { request_id: "rejected-approval", actor: "alice" }).ok).toBe(true);
+    const applying = approve(m, approved);
+    expect(m.rejectPending(rejected.id, "alice", "owner declined")).not.toBeNull();
+    await applying;
+    await m.drain();
+    const reopened = await RuntimeScheduleManager.open({ env });
+    expect(reopened.snapshot()).toEqual(m.snapshot());
+    expect(reopened.snapshot()).toMatchObject([
+      { id: "approved-schedule", status: "active", enabled: true },
+      { id: "rejected-schedule", status: "rejected", enabled: false },
+    ]);
+    expect(reopened.activeCronTasks().map(item => item.id)).toEqual(["approved-schedule"]);
+  });
+
+  it("leaves disk and attached Cron unchanged on an abort before rename and accepts a fresh approval afterward", async () => {
+    const controller = new AbortController();
+    let abortBeforeRename = false;
+    let boundaries = 0;
+    const { manager: m, directory, env } = await scheduleFixture({ beforePersist(kind) {
+      if (kind === "approve" && abortBeforeRename && ++boundaries === 2) controller.abort();
+    } });
+    const cron = new CronSchedulerChannel({ tasks: [], log: () => undefined });
+    m.attachScheduler(cron);
+    const create = command("schedule.create", {
+      id: "abort-target", channel: "webchat", target: "local-user", content: "previous content", interval_ms: 1000,
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+    const path = join(directory, "runtime-schedules.json");
+    const before = readFileSync(path);
+    const cronBefore = cron.snapshot();
+    const update = command("schedule.update", { id: "abort-target", content: "uncommitted content" });
+    expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
+    abortBeforeRename = true;
+    await expect(approve(m, update, controller.signal)).rejects.toThrow(/abort|cancel/iu);
+    await m.drain();
+    expect(boundaries).toBe(2);
+    expect(readFileSync(path)).toEqual(before);
+    expect(readdirSync(directory)).toEqual(["runtime-schedules.json"]);
+    expect(cron.snapshot()).toEqual(cronBefore);
+    expect((await RuntimeScheduleManager.open({ env })).activeCronTasks()).toEqual(m.activeCronTasks());
+
+    abortBeforeRename = false;
+    const retry = command("schedule.update", { id: "abort-target", content: "freshly approved content" });
+    expect(m.preparePending(retry, evaluation(retry), { request_id: "fresh-approval", actor: "alice" }).ok).toBe(true);
+    await approve(m, retry);
+    expect((await RuntimeScheduleManager.open({ env })).activeCronTasks()).toMatchObject([
+      { id: "abort-target", content: "freshly approved content" },
+    ]);
   });
 
   it("rejects invalid schedule create fields with owner-actionable output", async () => {
@@ -410,6 +554,7 @@ describe("RuntimeScheduleManager", () => {
     expect(m.pendingCount()).toBe(0);
     expect(m.activeCount()).toBe(0);
     await expect(approve(m, cmd)).rejects.toThrow(/approval missing or expired/);
+    await m.drain();
     expect(lifecycle).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "schedule.lifecycle.rejected", operation: "create" }),
     ]));
