@@ -3169,13 +3169,14 @@ describe("WebChatChannel — Control Center shell", () => {
     const end = inline.indexOf("function renderRecoveryActionResult(", start);
     const renderer = new Script(`${inline.slice(start, end)}\nrenderRecoverySnapshot(snapshot)`);
     const observe = (overrides: Record<string, unknown>) => {
-      type Element = { value: string; text?: string; className?: string; disabled?: boolean; setAttribute(): void };
+      type Element = { value: string; text?: string; className?: string; disabled?: boolean; options: []; setAttribute(): void };
       const elements = new Map<string, Element>();
       const byId = (id: string) => {
-        if (!elements.has(id)) elements.set(id, { value: "", setAttribute() {} });
+        if (!elements.has(id)) elements.set(id, { value: "", options: [], setAttribute() {} });
         return elements.get(id)!;
       };
       renderer.runInNewContext({
+        state: {},
         snapshot: {
           restore: { full_restore_review_request_available: false,
             full_restore_blocked_reason: "blocked_runtime_restore_requires_offline_gateway",
@@ -3217,67 +3218,98 @@ describe("WebChatChannel — Control Center shell", () => {
   });
 
   it("submits exactly one fixed canonical store for owner L3 review", async () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("async function restoreRecoveryStore(");
-    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function resetRecoveryProvider", start + 1);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const functionSource = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
-
-    const run = async (storeKey: string, scopeKind = "operation_plan", scopeDigest = "a".repeat(64)) => {
-      const raw = await new Script(`
-        const elements = {
-          "recovery-restore-store": { value: ${JSON.stringify(storeKey)} },
-          "recovery-backup-id": { value: "backup-2026-10-18" },
-          "recovery-scope-kind": { value: ${JSON.stringify(scopeKind)} },
-          "recovery-scope-digest": { value: ${JSON.stringify(scopeDigest)} },
-          "recovery-action-status": { textContent: "" },
-        };
-        let request = null;
-        const prompts = [];
-        const window = { confirm(message) { prompts.push(message); return true; } };
-        function byId(id) { return elements[id]; }
-        function setText(id, value) { elements[id].textContent = value; }
-        async function runRecoveryAction(path, body) { request = { path, body }; }
-        ${functionSource}
-        restoreRecoveryStore().then(() => JSON.stringify({ request, prompts, status: elements["recovery-action-status"].textContent }));
-      `).runInNewContext() as Promise<string>;
-      return JSON.parse(raw) as {
-        request: { path: string; body: Record<string, unknown> } | null;
-        prompts: string[];
-        status: string;
+    const inline = CONTROL_CENTER_SCRIPT;
+    const selectionStart = inline.indexOf("function selectedRecoveryRestore(");
+    const selectionEnd = inline.indexOf("function renderRecoverySnapshot(", selectionStart);
+    const handlerStart = inline.indexOf("async function restoreRecoveryStore(");
+    const handlerEnd = inline.indexOf("async function resetRecoveryProvider(", handlerStart);
+    const script = new Script(`
+      ${inline.slice(selectionStart, selectionEnd)}
+      ${inline.slice(handlerStart, handlerEnd)}
+      restoreRecoveryStore()
+    `);
+    const run = async (
+      storeKey: string,
+      scopeKind = "whole_store",
+      { backupId = "", scopeDigest = "A".repeat(64), sourceLoaded = true, accepted = true } = {},
+    ) => {
+      const elements = {
+        "recovery-restore-store": { value: storeKey },
+        "recovery-backup-id": { value: backupId },
+        "recovery-restore-scope-kind": { value: scopeKind, options: [] },
+        "recovery-restore-scope-digest": { value: scopeDigest, disabled: true },
+        "recovery-restore-source": { textContent: "" },
+        "restore-recovery-store": { disabled: true },
       };
+      const state = { recoveryRestoreSource: sourceLoaded ? { latestId: "backup-reviewed" } : null };
+      const requests: unknown[] = [];
+      const prompts: string[] = [];
+      await script.runInNewContext({
+        state,
+        byId: (id: keyof typeof elements) => elements[id],
+        setText(id: "recovery-restore-source", value: string) { elements[id].textContent = value; },
+        window: { confirm(message: string) {
+          prompts.push(message);
+          if (state.recoveryRestoreSource) state.recoveryRestoreSource.latestId = "backup-created-after-review";
+          return accepted;
+        } },
+        async runRecoveryAction(path: string, body: unknown) {
+          expect(elements["restore-recovery-store"].disabled).toBe(true);
+          requests.push({ path, body });
+        },
+      });
+      return { requests, prompts, disabled: elements["restore-recovery-store"].disabled };
     };
 
-    const valid = await run("operation_plans");
-    expect(valid).toMatchObject({
-      request: {
-        path: "/recovery/restore",
-        body: {
-          confirm: "RESTORE",
-          store_key: "operation_plans",
-          backup_id: "backup-2026-10-18",
-          scope_kind: "operation_plan",
-          scope_digest: "a".repeat(64),
-        },
+    const valid = await run("operation_plans", "operation_plan", { backupId: "backup-operator-selected" });
+    expect(valid.requests).toEqual([{
+      path: "/recovery/restore",
+      body: {
+        confirm: "RESTORE",
+        store_key: "operation_plans",
+        backup_id: "backup-operator-selected",
+        scope_kind: "operation_plan",
+        scope_digest: "a".repeat(64),
       },
-    });
-
+    }]);
     expect(valid.prompts[0]).toContain("owner L3 review");
-    expect(valid.prompts[0]).toContain("Only this store will be selected");
+    expect(valid.prompts[0]).toContain("backup-operator-selected");
     expect(valid.prompts[0]).toContain("pre-action backup");
-    expect(valid.prompts[0]).toContain("Operation Plan ledger");
-    expect(valid.prompts[0]).toContain("entire selected Operation Plan store");
-    expect(await run("operation_plans", "request_scope", "a".repeat(64))).toMatchObject({
-      request: null,
-      status: "Operation Plan digestを指定してください",
-    });
-    expect(await run("operation_plans", "operation_plan", "invalid")).toMatchObject({
-      request: null,
-      status: "Operation Plan digestを指定してください",
-    });
-    expect(await run("unknown_store")).toMatchObject({
-      request: null,
-      status: "select one verified store",
+    expect(valid.prompts[0]).toContain("Only the bound Operation Plan scope will be merged");
+    expect(valid.prompts[0]).toContain("Bound scope digest: " + "a".repeat(64));
+    expect((await run("broker", "task_identity")).requests).toEqual([{
+      path: "/recovery/restore",
+      body: {
+        confirm: "RESTORE",
+        store_key: "broker",
+        backup_id: "backup-reviewed",
+        scope_kind: "task_identity",
+        scope_digest: "a".repeat(64),
+      },
+    }]);
+    for (const [store, label, backupId] of [
+      ["meaning_update_j_control", "意味更新J制御台帳", ""],
+      ["meaning_update_m_state", "意味更新M状態台帳", "latest"],
+    ]) {
+      const result = await run(store, "whole_store", { backupId });
+      expect(result.prompts[0]).toContain(label + " from backup-reviewed");
+      expect(result.prompts[0]).toContain("The entire selected store is in scope.");
+      expect(result.requests).toEqual([{
+        path: "/recovery/restore",
+        body: { confirm: "RESTORE", store_key: store, backup_id: "backup-reviewed" },
+      }]);
+    }
+    const refused = { requests: [], prompts: [], disabled: true };
+    expect(await run("operation_plans")).toEqual(refused);
+    expect(await run("operation_plans", "operation_plan", { scopeDigest: "invalid" })).toEqual(refused);
+    expect(await run("unknown_store")).toEqual(refused);
+    expect(await run("meaning_update_m_state", "task_identity")).toEqual(refused);
+    expect(await run("meaning_update_j_control", "")).toEqual(refused);
+    expect(await run("meaning_update_j_control", "whole_store", { backupId: "../other" })).toEqual(refused);
+    expect(await run("meaning_update_j_control", "whole_store", { sourceLoaded: false })).toEqual(refused);
+    expect(await run("meaning_update_j_control", "whole_store", { accepted: false })).toMatchObject({
+      requests: [],
+      prompts: [expect.stringContaining("backup-reviewed")],
     });
   });
 

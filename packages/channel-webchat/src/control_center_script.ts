@@ -55,6 +55,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
+        recoveryRestoreSource: null,
+        recoveryLoadGeneration: 0,
+        recoveryRestorePending: false,
         chatToken: sessionStorage.getItem("bt.chatToken") || "",
         chatUser: sessionStorage.getItem("bt.chatUser") || "owner",
         activeScreen: storedActiveScreen && storedActiveScreen !== "home" ? storedActiveScreen : "conversation",
@@ -2308,7 +2311,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("connectors-token").value = state.connectorsToken || state.settingsToken;
         byId("about-token").value = state.aboutToken || state.chatToken;
         byId("update-token").value = state.updateToken || state.chatToken;
-        byId("recovery-token").value = state.recoveryToken || state.chatToken;
+        const recoveryToken = byId("recovery-token");
+        const nextRecoveryToken = state.recoveryToken || state.chatToken;
+        if (recoveryToken.value !== nextRecoveryToken) {
+          recoveryToken.value = nextRecoveryToken;
+          invalidateRecoveryRestoreSource();
+        }
         byId("chat-token").value = state.chatToken;
         byId("chat-user").value = state.chatUser;
         syncMascotSettingsInputs();
@@ -4296,6 +4304,44 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return digestLabel + "・" + associationLabel + "\\n" + (rows.length > 0 ? rows.join("\\n") : "対象計画なし");
       }
 
+      function selectedRecoveryRestore() {
+        const labels = {
+          j_control: "J control ledger",
+          m_state: "M state ledger",
+          broker: "Broker execution ledger",
+          operation_plans: "Operation Plan ledger",
+          cron_events: "Cron event ledger",
+          meaning_update_j_control: "意味更新J制御台帳",
+          meaning_update_m_state: "意味更新M状態台帳"
+        };
+        const storeKey = byId("recovery-restore-store").value;
+        const scope = byId("recovery-restore-scope-kind");
+        const digest = byId("recovery-restore-scope-digest");
+        const knownStore = Object.prototype.hasOwnProperty.call(labels, storeKey);
+        const allowedScopes = storeKey === "operation_plans" ? ["operation_plan", "task_identity"]
+          : storeKey === "broker" ? ["whole_store", "task_identity"] : knownStore ? ["whole_store"] : [];
+        for (const option of scope.options) {
+          option.disabled = option.value !== "" && !allowedScopes.includes(option.value);
+        }
+        if (!allowedScopes.includes(scope.value)) scope.value = "";
+        const scoped = scope.value === "operation_plan" || scope.value === "task_identity";
+        digest.disabled = !scoped;
+        const scopeDigest = digest.value.trim().toLowerCase();
+        const source = state.recoveryRestoreSource;
+        const input = byId("recovery-backup-id");
+        const typedId = input.value.trim();
+        const backupId = typedId === "" || typedId === "latest" ? source?.latestId : typedId;
+        input.placeholder = source?.latestId || "空欄は読み込み済みの最新ID";
+        const validBackupId = typeof backupId === "string" &&
+          backupId !== "latest" && /^[A-Za-z0-9_.-]{1,128}$/.test(backupId);
+        setText("recovery-restore-source", !source ? "復旧状態を読み込んでください。"
+          : validBackupId ? "復元元バックアップID " + backupId : "有効なバックアップIDを指定してください。");
+        const ready = source && knownStore && validBackupId && scope.value &&
+          (!scoped || /^[a-f0-9]{64}$/.test(scopeDigest)) && !state.recoveryRestorePending;
+        byId("restore-recovery-store").disabled = !ready;
+        return ready ? { storeKey, label: labels[storeKey], backupId, scopeKind: scope.value, scopeDigest, scoped } : null;
+      }
+
       function renderRecoverySnapshot(snapshot) {
         const envFile = snapshot.env_file || {};
         const packs = snapshot.recovery_backups || {};
@@ -4386,7 +4432,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("recovery-env-backup-count", envFile.backup_count ?? 0);
         setText("recovery-pack-count", packs.backup_count ?? 0);
         setText("recovery-latest-backup", packs.latest_backup_id || envFile.latest_backup_path || "none");
-        if (packs.latest_backup_id) byId("recovery-backup-id").placeholder = packs.latest_backup_id;
         const fullRestoreReviewAvailable = restore.full_restore_review_request_available === true;
         const storeRestoreReviewAvailable = restore.store_restore_review_request_available === true;
         const providerReviewAvailable = restore.provider_reset_review_request_available === true;
@@ -4404,8 +4449,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ? "Submitting a request only queues the exact action for owner L3 review. No recovery change runs until the owner approves it in the approval queue."
             : "Recovery mutation status is unavailable.");
         byId("restore-recovery-backup").disabled = !fullRestoreReviewAvailable;
-        byId("recovery-restore-store").setAttribute("data-review-available", storeRestoreReviewAvailable ? "true" : "false");
-        byId("restore-recovery-store").disabled = !storeRestoreReviewAvailable || !byId("recovery-restore-store").value;
+        state.recoveryRestoreSource = storeRestoreReviewAvailable ? { latestId: packs.latest_backup_id } : null;
+        selectedRecoveryRestore();
         byId("reset-recovery-provider").disabled = !providerReviewAvailable;
         byId("reset-recovery-connector").disabled = !connectorReviewAvailable;
         byId("factory-reset-recovery").disabled = !factoryReviewAvailable;
@@ -5771,14 +5816,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         await runUpdateAction("/update/prepare", { confirm: "PRE_UPDATE_BACKUP" });
       }
 
+      function invalidateRecoveryRestoreSource() {
+        state.recoveryLoadGeneration += 1;
+        state.recoveryRestoreSource = null;
+        selectedRecoveryRestore();
+      }
+
       async function loadRecovery() {
+        invalidateRecoveryRestoreSource();
+        const generation = state.recoveryLoadGeneration;
         const token = byId("recovery-token").value.trim();
         state.recoveryToken = token;
         sessionStorage.setItem("bt.recoveryToken", token);
         try {
           const body = await fetchJson("/recovery/snapshot", token);
-          renderRecoverySnapshot(body);
+          if (generation === state.recoveryLoadGeneration) renderRecoverySnapshot(body);
         } catch (error) {
+          if (generation !== state.recoveryLoadGeneration) return;
           setText("recovery-boundary-status", "error");
           byId("recovery-boundary-status").className = "badge bad";
           setText("recovery-json", error.message);
@@ -5865,37 +5919,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       }
 
       async function restoreRecoveryStore() {
-        const storeKey = byId("recovery-restore-store").value;
-        const labels = {
-          j_control: "J control ledger",
-          m_state: "M state ledger",
-          broker: "Broker execution ledger",
-          operation_plans: "Operation Plan ledger",
-          cron_events: "Cron event ledger"
-        };
-        if (!Object.prototype.hasOwnProperty.call(labels, storeKey)) {
-          setText("recovery-action-status", "select one verified store");
-          return;
-        }
-        const scopeKind = byId("recovery-restore-scope-kind").value;
-        const scopeDigest = byId("recovery-restore-scope-digest").value.trim();
-        const scopedRestore = scopeKind === "operation_plan" || scopeKind === "task_identity";
-        if (storeKey === "operation_plans" &&
-            (!scopedRestore || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
-          setText("recovery-action-status", "Operation Plan digestまたはtask identity digestを指定してください");
-          return;
-        }
-        if (storeKey === "broker" && scopeKind !== "whole_store" &&
-            (scopeKind !== "task_identity" || !/^[a-f0-9]{64}$/i.test(scopeDigest))) {
-          setText("recovery-action-status", "Broker全体またはtask identity digestを指定してください");
-          return;
-        }
-        if (!["operation_plans", "broker"].includes(storeKey) && scopeKind !== "whole_store") {
-          setText("recovery-action-status", "このstoreでは全体scopeだけ指定できます");
-          return;
-        }
-        const backupId = byId("recovery-backup-id").value.trim();
-        const backupLabel = backupId || "latest backup";
+        const request = selectedRecoveryRestore();
+        if (!request) return;
+        const { storeKey, label, backupId, scopeKind, scopeDigest, scoped } = request;
         const scopeDescription = scopeKind === "operation_plan"
           ? " Only the bound Operation Plan scope will be merged; unrelated plans are preserved."
           : scopeKind === "task_identity" && storeKey === "operation_plans"
@@ -5903,15 +5929,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : scopeKind === "task_identity" && storeKey === "broker"
               ? " Only missing Broker receipts for the matching HDS-J task lineage will be appended; current and unrelated history is preserved."
               : " The entire selected store is in scope.";
-        const scopeIdentityPrompt = scopedRestore ? " Bound scope digest: " + scopeDigest.toLowerCase() + "." : "";
-        if (!window.confirm("Submit " + labels[storeKey] + " from " + backupLabel + " for owner L3 review? No change runs before approval and a pre-action backup." + scopeDescription + scopeIdentityPrompt + " Cross-store atomicity and automatic resume are not implied.")) return;
-        const body = { confirm: "RESTORE", store_key: storeKey };
-        if (backupId) body.backup_id = backupId;
-        if (scopedRestore && (storeKey === "operation_plans" || (storeKey === "broker" && scopeKind === "task_identity"))) {
+        const scopeIdentityPrompt = scoped ? " Bound scope digest: " + scopeDigest + "." : "";
+        if (!window.confirm("Submit " + label + " from " + backupId + " for owner L3 review? No change runs before approval and a pre-action backup." + scopeDescription + scopeIdentityPrompt + " Cross-store atomicity and automatic resume are not implied.")) return;
+        const body = { confirm: "RESTORE", store_key: storeKey, backup_id: backupId };
+        if (scoped) {
           body.scope_kind = scopeKind;
-          body.scope_digest = scopeDigest.toLowerCase();
+          body.scope_digest = scopeDigest;
         }
-        await runRecoveryAction("/recovery/restore", body);
+        state.recoveryRestorePending = true;
+        selectedRecoveryRestore();
+        try {
+          await runRecoveryAction("/recovery/restore", body);
+        } finally {
+          state.recoveryRestorePending = false;
+          selectedRecoveryRestore();
+        }
       }
 
       async function resetRecoveryProvider() {
@@ -9991,11 +10023,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("recovery-json", error.message);
         });
       });
-      byId("recovery-restore-store").addEventListener("change", function () {
-        byId("restore-recovery-store").disabled =
-          byId("recovery-restore-store").getAttribute("data-review-available") !== "true" ||
-          !byId("recovery-restore-store").value;
-      });
+      byId("recovery-token").addEventListener("input", invalidateRecoveryRestoreSource);
+      byId("recovery-restore-store").addEventListener("change", selectedRecoveryRestore);
+      byId("recovery-restore-scope-kind").addEventListener("change", selectedRecoveryRestore);
+      byId("recovery-restore-scope-digest").addEventListener("input", selectedRecoveryRestore);
+      byId("recovery-backup-id").addEventListener("input", selectedRecoveryRestore);
       byId("restore-recovery-store").addEventListener("click", function () {
         restoreRecoveryStore().catch(function (error) {
           setText("recovery-action-status", "error");

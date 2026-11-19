@@ -509,7 +509,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="load-recovery" class="primary" type="button">Load Recovery</button>
           </div>
           <div class="status-grid">
-            <input id="recovery-backup-id" type="text" autocomplete="off" placeholder="backup id or latest" />
+            <label>復元元バックアップID<input id="recovery-backup-id" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="空欄は読み込み済みの最新ID" /></label>
             <button id="create-recovery-backup" type="button">Backup Now</button>
             <button id="restore-recovery-backup" type="button" disabled>Full Restore Unavailable</button>
             <button id="reset-recovery-provider" type="button" disabled>Request Provider Reset Review</button>
@@ -524,6 +524,8 @@ ${CONTROL_CENTER_STYLE}    </style>
               <option value="broker">Broker execution ledger</option>
               <option value="operation_plans">Operation Plan ledger</option>
               <option value="cron_events">Cron event ledger</option>
+              <option value="meaning_update_j_control">意味更新J制御台帳</option>
+              <option value="meaning_update_m_state">意味更新M状態台帳</option>
             </select></label>
             <label>Restore effect scope<select id="recovery-restore-scope-kind">
               <option value="">Select scope</option>
@@ -531,9 +533,10 @@ ${CONTROL_CENTER_STYLE}    </style>
               <option value="operation_plan">One Operation Plan</option>
               <option value="task_identity">One HDS-J task lineage</option>
             </select></label>
-            <label>Restore scope digest<input id="recovery-restore-scope-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false"></label>
+            <label>Restore scope digest<input id="recovery-restore-scope-digest" type="text" inputmode="text" maxlength="64" autocomplete="off" spellcheck="false" disabled></label>
             <button id="restore-recovery-store" type="button" disabled>Request selected-store restore review</button>
           </div>
+          <p id="recovery-restore-source" class="muted" aria-live="polite">復旧状態を読み込んでください。</p>
           <p id="recovery-action-guard">Recovery changes require owner L3 review. Backup and read-only inspection remain available.</p>
           <div class="status-grid">
             <div class="metric"><span>Env file</span><span id="recovery-env-file-status">not loaded</span></div>
