@@ -23,7 +23,7 @@ private struct MobileTaskListResult {
   let allStatusesObserved: Bool
 }
 
-private struct MobileTaskCancellationResult {
+private struct MobileTaskMutationResult {
   let status: MobileTaskStatus
   let requestSent: Bool
 }
@@ -100,6 +100,7 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var taskNotificationsEnabled = false
   @Published private(set) var mcpSnapshot: MobileMCPCapabilitySnapshot?
   @Published private(set) var taskSubmissionNeedsReconciliation = false
+  @Published private(set) var taskMutationNeedsReconciliation = false
   @Published private(set) var reinstallReviewRequired = false
   @Published var selectedRuntimeID = ""
   @Published var selectedWorkspaceID = ""
@@ -163,6 +164,7 @@ final class DeviceLinkViewModel: ObservableObject {
         taskMessage = "前回のTask申請をDesktop一覧と照合するまで新規申請を停止しています。"
       }
     } catch {
+      taskMutationNeedsReconciliation = true
       message = "端末内の安全な状態を確認できません。ネットワーク操作を停止しています。"
     }
   }
@@ -265,11 +267,9 @@ final class DeviceLinkViewModel: ObservableObject {
         var allStatusesObserved = true
         for draft in entries {
           do {
-            let statusBody = try self.mobileTaskBody(
-              credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
-              allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
+            statuses[draft.id] = try self.readTaskStatus(
+              draft, credential: credential, pending: state.pendingTaskMutation, epoch: epoch, evidence: evidence
             )
-            statuses[draft.id] = try MobileTaskContract.status(statusBody, draft: draft)
           } catch {
             allStatusesObserved = false
             break
@@ -475,11 +475,9 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let body = try self.mobileTaskBody(
-          credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
-          allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
+        return try self.readTaskStatus(
+          draft, credential: credential, pending: state.pendingTaskMutation, epoch: epoch, evidence: evidence
         )
-        return try MobileTaskContract.status(body, draft: draft)
       },
       onSuccess: { status in
         self.taskStatuses[draft.id] = status
@@ -490,72 +488,96 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func startTask(_ draft: MobileTaskDraft) {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
-    let epoch = lifecycle.capture()
-    runTaskOperation(
-      progressMessage: "申請状態を再確認してからBrokerへ開始要求を一度だけ送ります。",
-      failureMessage: { _, _ in "開始結果を確認できません。再送せず、状態を更新してください。" },
-      action: { evidence in
-        let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let statusBody = try self.mobileTaskBody(
-          credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
-          allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
-        )
-        let status = try MobileTaskContract.status(statusBody, draft: draft)
-        guard case .startCandidate = status else { return (status, false) }
-        let body = try self.mobileTaskBody(
-          credential, operation: "AgentTask端末実行", payload: ["申請ID": draft.id],
-          allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
-        )
-        return (.task(try MobileTaskContract.started(body, draft: draft)), true)
-      },
-      onSuccess: { result in
-        let status = result.0
-        self.taskStatuses[draft.id] = status
-        _ = self.observeTaskStatus(draft.id, status: status)
-        self.taskMessage = result.1
-          ? "Brokerが開始要求を処理しました。権限はBrokerで再検査され、Task本文は表示しません。"
-          : "開始候補ではなくなりました。開始要求は送信せず、最新状態を表示しています。"
-      }
-    )
+    mutateTask(.start, draft: draft)
   }
 
   func cancelTask(_ draft: MobileTaskDraft) {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    mutateTask(.cancel, draft: draft)
+  }
+
+  private func mutateTask(_ kind: MobileTaskMutationKind, draft: MobileTaskDraft) {
+    guard lifecycle.isForeground(), paired, !credentialExpired, !busy, !taskMutationNeedsReconciliation else { return }
     let epoch = lifecycle.capture()
+    let label = kind == .start ? "開始" : "取消"
     runTaskOperation(
-      progressMessage: "申請状態を照合してから取消要求を一度だけ送ります。",
-      failureMessage: { _, _ in "取消結果を確認できません。再送せず、Task状態を更新してください。" },
+      progressMessage: "申請状態を照合してからBrokerへ\(label)要求を送ります。",
+      failureMessage: { _, _ in "\(label)の結果を確認できません。Task状態を照会してください。" },
       action: { evidence in
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-        let statusBody = try self.mobileTaskBody(
-          credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
-          allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
-        )
-        let status = try MobileTaskContract.status(statusBody, draft: draft)
-        guard case .task(let record) = status,
-              ["pending", "running"].contains(record.state) else {
-          return MobileTaskCancellationResult(status: status, requestSent: false)
+        guard state.pendingTaskMutation == nil else { throw DeviceLinkFailure.storage }
+        guard let credential = state.credential, !credential.isExpired(), !self.store.reinstallReviewRequired else {
+          throw DeviceLinkFailure.invalid
         }
-        let body = try self.mobileTaskBody(
-          credential, operation: "AgentTask端末取消", payload: ["申請ID": draft.id],
-          allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
+        let status = try self.readTaskStatus(draft, credential: credential, pending: nil, epoch: epoch, evidence: evidence)
+        let taskID: String?
+        switch (kind, status) {
+        case (.start, .startCandidate):
+          taskID = nil
+        case (.cancel, .task(let record)) where record.state == "pending" || record.state == "running":
+          taskID = record.taskID
+        default:
+          return MobileTaskMutationResult(status: status, requestSent: false)
+        }
+        let pending = try PendingMobileTaskMutation(
+          kind: kind, credential: credential, draft: draft, taskID: taskID
         )
-        return MobileTaskCancellationResult(
-          status: .task(try MobileTaskContract.cancellationRequested(body, draft: draft)),
-          requestSent: true
-        )
+        _ = try self.store.markTaskMutationPending(pending, credential: credential)
+        let body: [String: Any]
+        do {
+          body = try self.mobileTaskBody(
+            credential, operation: kind.operation, payload: ["申請ID": draft.id],
+            allowedEvidence: ["LIVE_RUNTIME"], epoch: epoch, evidence: evidence
+          )
+        } catch let failure as DeviceLinkFailure {
+          if case .transport(let mayHaveReachedDesktop) = failure, !mayHaveReachedDesktop {
+            _ = try self.store.clearTaskMutationPending(pending)
+          }
+          throw failure
+        }
+        let record: MobileTaskRecord
+        switch kind {
+        case .start:
+          record = try MobileTaskContract.started(body, draft: draft)
+        case .cancel:
+          record = try MobileTaskContract.cancellationRequested(body, draft: draft)
+          guard record.taskID == taskID else { throw DeviceLinkFailure.invalid }
+        }
+        _ = try self.store.clearTaskMutationPending(pending)
+        return MobileTaskMutationResult(status: .task(record), requestSent: true)
       },
       onSuccess: { result in
         self.taskStatuses[draft.id] = result.status
         _ = self.observeTaskStatus(draft.id, status: result.status)
-        self.taskMessage = result.requestSent
-          ? "取消要求の記録を照会しました。workerまたは外部処理の停止は別途確認されるまで不明です。"
-          : "最新状態は取消対象外です。取消要求は送信していません。"
+        if !result.requestSent {
+          self.taskMessage = "最新状態では\(label)の対象外です。要求は送信していません。"
+        } else if kind == .start {
+          self.taskMessage = "Brokerが開始要求を処理しました。Task状態を確認できます。"
+        } else {
+          self.taskMessage = "取消要求の受付を確認しました。workerと外部処理の停止は引き続き未確認です。"
+        }
       }
     )
+  }
+
+  private func readTaskStatus(
+    _ draft: MobileTaskDraft,
+    credential: DeviceLinkCredential,
+    pending: PendingMobileTaskMutation?,
+    epoch: UInt64,
+    evidence: DeviceLinkAttemptEvidence
+  ) throws -> MobileTaskStatus {
+    let response = try mobileTaskResponse(
+      credential, operation: "AgentTask端末状態", payload: ["申請ID": draft.id],
+      allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"], epoch: epoch, evidence: evidence
+    )
+    let status = try MobileTaskContract.status(response.body, draft: draft)
+    if let pending, pending.isResolved(
+      credential: credential, draft: draft, status: status, liveRuntime: response.source == "LIVE_RUNTIME"
+    ) {
+      // Keep the observation available if the Keychain record cannot be cleared.
+      _ = try? store.clearTaskMutationPending(pending)
+    }
+    return status
   }
 
   private func mobileTaskBody(
@@ -566,6 +588,19 @@ final class DeviceLinkViewModel: ObservableObject {
     epoch: UInt64,
     evidence: DeviceLinkAttemptEvidence
   ) throws -> [String: Any] {
+    try mobileTaskResponse(
+      credential, operation: operation, payload: payload, allowedEvidence: allowedEvidence, epoch: epoch, evidence: evidence
+    ).body
+  }
+
+  private func mobileTaskResponse(
+    _ credential: DeviceLinkCredential,
+    operation: String,
+    payload: [String: Any],
+    allowedEvidence: Set<String>,
+    epoch: UInt64,
+    evidence: DeviceLinkAttemptEvidence
+  ) throws -> (body: [String: Any], source: String) {
     let allowedOperations: Set<String> = [
       "実行系列挙", "作業領域一覧", "対話開始", "対話終了", "AgentTask端末申請", "AgentTask端末申請一覧",
       "AgentTask端末MCP能力取得", "AgentTask端末状態", "AgentTask端末実行", "AgentTask端末取消",
@@ -585,7 +620,7 @@ final class DeviceLinkViewModel: ObservableObject {
     guard lifecycle.isCurrent(epoch) else {
       throw DeviceLinkFailure.transport(mayHaveReachedDesktop: true)
     }
-    return body
+    return (body, source)
   }
 
   private func runTaskOperation<Value>(
@@ -602,7 +637,9 @@ final class DeviceLinkViewModel: ObservableObject {
       guard let self else { return }
       let evidence = DeviceLinkAttemptEvidence()
       let result = Result { try action(evidence) }
+      let taskMutationPending = (try? self.store.hasPendingTaskMutation()) ?? true
       DispatchQueue.main.async {
+        self.taskMutationNeedsReconciliation = taskMutationPending
         self.busy = false
         defer { self.scheduleOwnedTaskRefreshAfterForeground() }
         guard self.lifecycle.isCurrent(epoch) else {
@@ -1001,6 +1038,7 @@ final class DeviceLinkViewModel: ObservableObject {
     recoveryAuditCount = state.recoveryAudit.count
     pendingTaskSessionID = state.pendingTaskSessionID
     taskSubmissionNeedsReconciliation = state.pendingTaskSessionID != nil
+    taskMutationNeedsReconciliation = state.pendingTaskMutation != nil
     reinstallReviewRequired = store.reinstallReviewRequired
   }
 

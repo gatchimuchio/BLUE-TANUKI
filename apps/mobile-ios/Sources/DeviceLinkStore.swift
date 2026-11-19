@@ -6,6 +6,7 @@ struct DeviceLinkStoredState {
   let credential: DeviceLinkCredential?
   let recoveryAudit: [[String: Any]]
   let pendingTaskSessionID: String?
+  let pendingTaskMutation: PendingMobileTaskMutation?
   let installScopeID: String?
 }
 
@@ -52,6 +53,7 @@ final class DeviceLinkStore {
         credential: stored.credential,
         recoveryAudit: stored.recoveryAudit,
         pendingTaskSessionID: stored.pendingTaskSessionID,
+        pendingTaskMutation: stored.pendingTaskMutation,
         installScopeID: install.id
       )
       try write(migrated)
@@ -76,6 +78,7 @@ final class DeviceLinkStore {
       credential: nil,
       recoveryAudit: [],
       pendingTaskSessionID: nil,
+      pendingTaskMutation: nil,
       installScopeID: installScopeID
     )
   }
@@ -98,6 +101,7 @@ final class DeviceLinkStore {
       credential: nil,
       recoveryAudit: audit,
       pendingTaskSessionID: stored.pendingTaskSessionID,
+      pendingTaskMutation: stored.pendingTaskMutation,
       installScopeID: installScopeID
     )
   }
@@ -121,6 +125,7 @@ final class DeviceLinkStore {
       credential: credential,
       recoveryAudit: before.recoveryAudit,
       pendingTaskSessionID: before.pendingTaskSessionID,
+      pendingTaskMutation: before.pendingTaskMutation,
       installScopeID: before.installScopeID
     )
     try write(next)
@@ -128,6 +133,7 @@ final class DeviceLinkStore {
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
           verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.pendingTaskMutation == next.pendingTaskMutation,
           verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
@@ -142,6 +148,7 @@ final class DeviceLinkStore {
       credential: nil,
       recoveryAudit: before.recoveryAudit,
       pendingTaskSessionID: before.pendingTaskSessionID,
+      pendingTaskMutation: before.pendingTaskMutation,
       installScopeID: before.installScopeID
     )
     try write(next)
@@ -149,6 +156,7 @@ final class DeviceLinkStore {
           verified.credential == nil,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
           verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.pendingTaskMutation == next.pendingTaskMutation,
           verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
@@ -165,6 +173,7 @@ final class DeviceLinkStore {
       credential: nil,
       recoveryAudit: nextAudit,
       pendingTaskSessionID: before.pendingTaskSessionID,
+      pendingTaskMutation: before.pendingTaskMutation,
       installScopeID: before.installScopeID
     )
     try write(next)
@@ -172,6 +181,7 @@ final class DeviceLinkStore {
           verified.credential == nil,
           auditEquals(verified.recoveryAudit, nextAudit),
           verified.pendingTaskSessionID == next.pendingTaskSessionID,
+          verified.pendingTaskMutation == next.pendingTaskMutation,
           verified.installScopeID == next.installScopeID,
           let recorded = verified.recoveryAudit.last,
           NSDictionary(dictionary: recorded).isEqual(to: event) else {
@@ -191,6 +201,7 @@ final class DeviceLinkStore {
       credential: before.credential,
       recoveryAudit: before.recoveryAudit,
       pendingTaskSessionID: sessionID,
+      pendingTaskMutation: before.pendingTaskMutation,
       installScopeID: before.installScopeID
     )
     try write(next)
@@ -198,6 +209,7 @@ final class DeviceLinkStore {
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
           verified.pendingTaskSessionID == sessionID,
+          verified.pendingTaskMutation == next.pendingTaskMutation,
           verified.installScopeID == next.installScopeID else {
       throw DeviceLinkFailure.storage
     }
@@ -212,6 +224,7 @@ final class DeviceLinkStore {
       credential: before.credential,
       recoveryAudit: before.recoveryAudit,
       pendingTaskSessionID: nil,
+      pendingTaskMutation: before.pendingTaskMutation,
       installScopeID: before.installScopeID
     )
     try write(next)
@@ -219,7 +232,46 @@ final class DeviceLinkStore {
           verified.credential == next.credential,
           auditEquals(verified.recoveryAudit, next.recoveryAudit),
           verified.pendingTaskSessionID == nil,
+          verified.pendingTaskMutation == next.pendingTaskMutation,
           verified.installScopeID == next.installScopeID else {
+      throw DeviceLinkFailure.storage
+    }
+    return verified
+  }
+
+  func hasPendingTaskMutation() throws -> Bool {
+    try read()?.pendingTaskMutation != nil
+  }
+
+  func markTaskMutationPending(_ mutation: PendingMobileTaskMutation,
+                               credential: DeviceLinkCredential) throws -> DeviceLinkStoredState {
+    let before = try loadOrCreate()
+    guard !reinstallReviewRequired, before.credential == credential, !credential.isExpired(),
+          before.pendingTaskMutation == nil else {
+      throw DeviceLinkFailure.storage
+    }
+    return try updateTaskMutation(mutation, from: before)
+  }
+
+  func clearTaskMutationPending(_ expected: PendingMobileTaskMutation) throws -> DeviceLinkStoredState {
+    guard let before = try read(), before.pendingTaskMutation == expected else {
+      throw DeviceLinkFailure.storage
+    }
+    return try updateTaskMutation(nil, from: before)
+  }
+
+  private func updateTaskMutation(_ mutation: PendingMobileTaskMutation?,
+                                  from before: DeviceLinkStoredState) throws -> DeviceLinkStoredState {
+    let next = DeviceLinkStoredState(
+      deviceID: before.deviceID,
+      credential: before.credential,
+      recoveryAudit: before.recoveryAudit,
+      pendingTaskSessionID: before.pendingTaskSessionID,
+      pendingTaskMutation: mutation,
+      installScopeID: before.installScopeID
+    )
+    try write(next)
+    guard let verified = try read(), equivalent(verified, next) else {
       throw DeviceLinkFailure.storage
     }
     return verified
@@ -257,9 +309,11 @@ final class DeviceLinkStore {
     let versionOneKeys: Set<String> = ["version", "device_id", "credential", "local_recovery_audit"]
     let versionTwoKeys = versionOneKeys.union(["pending_task_session_id"])
     let versionThreeKeys = versionTwoKeys.union(["install_scope_id"])
+    let versionFourKeys = versionThreeKeys.union(["pending_task_mutation"])
     let validShape = (version == 1 && DeviceLinkJSON.exactKeys(object, versionOneKeys)) ||
       (version == 2 && DeviceLinkJSON.exactKeys(object, versionTwoKeys)) ||
-      (version == 3 && DeviceLinkJSON.exactKeys(object, versionThreeKeys))
+      (version == 3 && DeviceLinkJSON.exactKeys(object, versionThreeKeys)) ||
+      (version == 4 && DeviceLinkJSON.exactKeys(object, versionFourKeys))
     guard validShape,
           let deviceID = object["device_id"] as? String,
           DeviceLinkJSON.isHex(deviceID, length: 32),
@@ -293,11 +347,20 @@ final class DeviceLinkStore {
     } else {
       throw DeviceLinkFailure.storage
     }
+    let pendingTaskMutation: PendingMobileTaskMutation?
+    if version < 4 || object["pending_task_mutation"] is NSNull {
+      pendingTaskMutation = nil
+    } else if let raw = object["pending_task_mutation"] as? [String: Any] {
+      pendingTaskMutation = try PendingMobileTaskMutation(stored: raw)
+    } else {
+      throw DeviceLinkFailure.storage
+    }
     return DeviceLinkStoredState(
       deviceID: deviceID,
       credential: credential,
       recoveryAudit: rawAudit,
       pendingTaskSessionID: pendingTaskSessionID,
+      pendingTaskMutation: pendingTaskMutation,
       installScopeID: installScopeID
     )
   }
@@ -306,7 +369,7 @@ final class DeviceLinkStore {
     guard let installScopeID = state.installScopeID, DeviceLinkJSON.isHex(installScopeID, length: 32) else {
       throw DeviceLinkFailure.storage
     }
-    let object: [String: Any] = [
+    var object: [String: Any] = [
       "version": 3,
       "device_id": state.deviceID,
       "credential": state.credential.map { $0.storageObject() as Any } ?? NSNull(),
@@ -314,6 +377,11 @@ final class DeviceLinkStore {
       "pending_task_session_id": state.pendingTaskSessionID.map { $0 as Any } ?? NSNull(),
       "install_scope_id": installScopeID,
     ]
+    // An older app can read the original format after the pending action is reconciled.
+    if let pending = state.pendingTaskMutation {
+      object["version"] = 4
+      object["pending_task_mutation"] = pending.storageObject()
+    }
     var data = try DeviceLinkJSON.encode(object, maximumBytes: 16 * 1024)
     defer { data.resetBytes(in: 0..<data.count) }
     var attributes: [String: Any] = [
@@ -341,6 +409,7 @@ final class DeviceLinkStore {
     left.deviceID == right.deviceID && left.credential == right.credential &&
       auditEquals(left.recoveryAudit, right.recoveryAudit) &&
       left.pendingTaskSessionID == right.pendingTaskSessionID &&
+      left.pendingTaskMutation == right.pendingTaskMutation &&
       left.installScopeID == right.installScopeID
   }
 

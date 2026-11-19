@@ -201,6 +201,12 @@ struct ContentView: View {
             .disabled(model.busy || model.credentialExpired)
         }
 
+        if model.taskMutationNeedsReconciliation {
+          Text("開始・取消の照合が必要です。申請一覧か対象の状態を照会してください。確認できるまで、この端末からの開始・取消を保留します。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+
         Button(model.taskNotificationsEnabled ? "Task状態通知を無効化" : "Task状態通知を有効化") {
           model.toggleTaskNotifications()
         }
@@ -316,12 +322,12 @@ struct ContentView: View {
           .disabled(model.busy || model.credentialExpired)
         if case .startCandidate? = model.taskStatuses[task.id] {
           Button("開始要求") { model.startTask(task) }
-            .disabled(model.busy || model.credentialExpired)
+            .disabled(model.busy || model.credentialExpired || model.taskMutationNeedsReconciliation)
         }
         if case .task(let record)? = model.taskStatuses[task.id],
            ["pending", "running"].contains(record.state) {
           Button("取消要求") { model.cancelTask(task) }
-            .disabled(model.busy || model.credentialExpired)
+            .disabled(model.busy || model.credentialExpired || model.taskMutationNeedsReconciliation)
             .foregroundStyle(.red)
         }
       }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct MobileTaskWorkspace: Identifiable, Equatable {
@@ -31,6 +32,72 @@ enum MobileTaskStatus: Equatable {
   case ownerReviewPending
   case startCandidate
   case task(MobileTaskRecord)
+}
+
+enum MobileTaskMutationKind: String {
+  case start
+  case cancel
+
+  var operation: String {
+    switch self {
+    case .start: return "AgentTask端末実行"
+    case .cancel: return "AgentTask端末取消"
+    }
+  }
+}
+
+/// 端末内の結果照合に使う記録。資格と権限を持たない。
+struct PendingMobileTaskMutation: Equatable {
+  let kind: MobileTaskMutationKind
+  private let scopeDigest: String
+
+  init(kind: MobileTaskMutationKind, credential: DeviceLinkCredential,
+       draft: MobileTaskDraft, taskID: String?) throws {
+    let boundTaskID: String
+    switch kind {
+    case .start:
+      boundTaskID = ""
+    case .cancel:
+      guard let taskID, DeviceLinkJSON.isHex(taskID, length: 32) else {
+        throw DeviceLinkFailure.invalid
+      }
+      boundTaskID = taskID
+    }
+    let fields = [
+      kind.rawValue, credential.hostID, credential.certificateHash, credential.deviceID,
+      draft.id, draft.runtimeID, draft.sessionID, draft.workspaceID, draft.instructionHash, boundTaskID,
+    ]
+    // 各識別子は区切り文字を含まない厳密な形式でパース済み。
+    self.kind = kind
+    self.scopeDigest = SHA256.hash(data: Data(fields.joined(separator: "|").utf8))
+      .map { String(format: "%02x", $0) }.joined()
+  }
+
+  init(stored object: [String: Any]) throws {
+    guard DeviceLinkJSON.exactKeys(object, ["kind", "scope_digest"]),
+          let value = DeviceLinkJSON.string(object["kind"]),
+          let kind = MobileTaskMutationKind(rawValue: value),
+          let digest = DeviceLinkJSON.string(object["scope_digest"]),
+          DeviceLinkJSON.isHex(digest, length: 64) else {
+      throw DeviceLinkFailure.storage
+    }
+    self.kind = kind
+    self.scopeDigest = digest
+  }
+
+  func storageObject() -> [String: Any] {
+    ["kind": kind.rawValue, "scope_digest": scopeDigest]
+  }
+
+  func isResolved(credential: DeviceLinkCredential, draft: MobileTaskDraft,
+                  status: MobileTaskStatus, liveRuntime: Bool) -> Bool {
+    guard liveRuntime, case .task(let record) = status, MobileTaskContract.matches(record, draft: draft),
+          let observed = try? Self(kind: kind, credential: credential, draft: draft, taskID: record.taskID),
+          observed == self else {
+      return false
+    }
+    return kind == .start || ["cancelled", "completed", "failed"].contains(record.state)
+  }
 }
 
 struct MobileMCPCapabilitySnapshot: Equatable {
@@ -329,7 +396,7 @@ enum MobileTaskContract {
     )
   }
 
-  private static func matches(_ record: MobileTaskRecord, draft: MobileTaskDraft) -> Bool {
+  static func matches(_ record: MobileTaskRecord, draft: MobileTaskDraft) -> Bool {
     record.runtimeID == draft.runtimeID && record.sessionID == draft.sessionID &&
       record.workspaceID == draft.workspaceID && record.instructionHash == draft.instructionHash &&
       (draft.taskID == nil || draft.taskID == record.taskID)

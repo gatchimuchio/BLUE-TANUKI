@@ -41,6 +41,16 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphonesimulator --show-sdk-version
 
+      - name: 開始と取消の照合規則を合成データで検査
+        shell: bash
+        run: |
+          xcrun --sdk macosx swiftc -parse-as-library \
+            apps/mobile-ios/Sources/DeviceLinkModels.swift \
+            apps/mobile-ios/Sources/MobileTaskModels.swift \
+            apps/mobile-ios/Tests/PendingTaskMutationTests.swift \
+            -o "$RUNNER_TEMP/blue-tanuki-ios-mutation-tests"
+          "$RUNNER_TEMP/blue-tanuki-ios-mutation-tests"
+
       - name: iOS Simulatorアプリを署名なしでbuild
         shell: bash
         run: |
