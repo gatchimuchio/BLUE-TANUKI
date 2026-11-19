@@ -107,7 +107,7 @@ import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
-import { isSettingsWriteTool } from "./tools/settings_write.js";
+import { isSettingsWriteTool, settingsWriteActivationReview } from "./tools/settings_write.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
   resolveComposioActionEffectRegistryBinding, composioExecuteTool } from "./tools/composio.js";
@@ -1749,8 +1749,12 @@ export class Executor {
       }
       const { review_digest, ...reviewBase } = review;
       const parsedArgs = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
+      const llm = parsedArgs.success ? parsedArgs.data.patch.llm : undefined;
+      const activation = llm?.activation;
       if (!parsedArgs.success || review.operation !== "settings.write" ||
           review.expected_llm_provider !== parsedArgs.data.expected_llm_provider ||
+          operationPlanDigest(review.activation ?? null) !==
+            operationPlanDigest(activation ? settingsWriteActivationReview(activation) : null) ||
           review.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
           review.target_version_digest !== operationPlanDigest(observation) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
@@ -1759,6 +1763,16 @@ export class Executor {
           !Array.isArray(review.changes) || review.changes.length < 1 || review.changes.length > 10 ||
           !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("settings.write content review returned evidence for another command or target");
+      }
+      if (activation) {
+        const exactChanges = new Map(review.changes.map((change) => [change.key, change]));
+        const providerChange = exactChanges.get("llm.provider");
+        if (exactChanges.size !== review.changes.length || providerChange?.before !== review.expected_llm_provider ||
+            providerChange?.after !== activation.provider || exactChanges.get("llm.model")?.after !== llm.model ||
+            exactChanges.get("llm.max_tokens")?.after !== llm.max_tokens ||
+            exactChanges.get("llm.timeout_ms")?.after !== llm.timeout_ms) {
+          throw new Error("settings.write content review returned different provider settings");
+        }
       }
       return review;
     }

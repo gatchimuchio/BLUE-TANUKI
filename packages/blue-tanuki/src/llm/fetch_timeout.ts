@@ -1,3 +1,4 @@
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 import {
   LLMProviderError,
   LLM_EXECUTION_TIMEOUT_REASON,
@@ -32,6 +33,8 @@ export async function fetchWithProviderTimeout<T>(
   try {
     const response = await fetch(input, {
       ...init,
+      ...(Object.values(SETTINGS_WRITE_ACTIVATION_DESTINATIONS).some((destination) => input === destination)
+        ? { redirect: "error" as const } : {}),
       signal: controller.signal,
     });
     return await consumeResponse(response);

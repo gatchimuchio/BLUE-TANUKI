@@ -21,6 +21,7 @@ import {
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
 import { connectorSecretStorageStatus, llmSecretStorageStatus } from "./secret_store.js";
+import { prepareLlmProviderActivation } from "./llm_provider_activation.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { inspectMcpCatalogFromSettings, type McpCatalogProjection } from "./mcp_connection_client.js";
 import { parseLoopbackMcpEndpoint } from "./mcp_endpoint.js";
@@ -215,7 +216,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
   const defaultLlmProvider = (config: Env) => (envValue(config, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub").trim().toLowerCase();
   const hasAlternateLlmRoute = (config: Env) => Boolean(envValue(config, "BLUE_TANUKI_LLM_BACKEND_HINT", "LLM_PROVIDERS_JSON",
     "BLUE_TANUKI_LLM_FALLBACK_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"));
-  const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider) => {
+  const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider,
+    activationPatch?: NonNullable<SettingsWritePatch["llm"]>) => {
     const target = envFilePath(env);
     if (!target) throw new Error("settings_write_env_file_unavailable");
     const before = await fs.lstat(target).catch(() => undefined);
@@ -244,14 +246,19 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         after.mtimeMs, after.ctimeMs]), "utf8")
       .update(rawBytes)
       .digest("hex");
+    const managedLlmSettings = env.BLUE_TANUKI_SAFE_MODE !== "1" && !hasInheritedLlmSettings &&
+      !hasAlternateLlmRoute(env) && !hasAlternateLlmRoute(configuredEnv) &&
+      defaultLlmProvider(env) === config.llm.provider && defaultLlmProvider(configuredEnv) === config.llm.provider;
+    const activationUpdates = activationPatch?.activation && expectedLlmProvider === config.llm.provider && managedLlmSettings
+      ? prepareLlmProviderActivation(activationPatch, expectedLlmProvider, parsed.values, configuredEnv, inheritedEnvKeys)
+      : undefined;
     return {
       target,
       raw,
       target_state_digest: targetStateDigest,
       llm_provider: config.llm.provider,
-      managed_llm_settings: env.BLUE_TANUKI_SAFE_MODE !== "1" && !hasInheritedLlmSettings &&
-        !hasAlternateLlmRoute(env) && !hasAlternateLlmRoute(configuredEnv) &&
-        defaultLlmProvider(env) === config.llm.provider && defaultLlmProvider(configuredEnv) === config.llm.provider,
+      managed_llm_settings: managedLlmSettings,
+      activationUpdates,
       values: {
         model: boundModel ?? null,
         temperature: config.llm.temperature ?? null,
@@ -271,12 +278,15 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     };
   };
   return {
-    inspect: async (expectedLlmProvider) => {
-      const { target_state_digest, llm_provider, managed_llm_settings, values } = await inspectCurrent(expectedLlmProvider);
-      return { target_state_digest, llm_provider, managed_llm_settings, values };
+    inspect: async (expectedLlmProvider, activationPatch) => {
+      const { target_state_digest, llm_provider, managed_llm_settings, values, activationUpdates } =
+        await inspectCurrent(expectedLlmProvider, activationPatch);
+      return { target_state_digest, llm_provider, managed_llm_settings, values,
+        ...(activationUpdates ? { provider_activation_ready: true as const } : {}) };
     },
     apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider) => serializeWrite(async () => {
-      const state = await inspectCurrent(expectedLlmProvider);
+      const activationPatch = patch.llm?.activation ? patch.llm : undefined;
+      const state = await inspectCurrent(expectedLlmProvider, activationPatch);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
           state.target_state_digest !== expectedTargetStateDigest) {
         throw new Error("settings_write_target_changed_before_invoke");
@@ -285,7 +295,9 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
           (!patch.llm || state.llm_provider !== expectedLlmProvider || !state.managed_llm_settings)) {
         throw new Error("settings_write_bound_llm_target_unavailable");
       }
-      const updates = patch.llm ? llmSettingsWriteEnvPatch(patch.llm, state.llm_provider, expectedLlmProvider !== undefined) : {};
+      if (activationPatch && !state.activationUpdates) throw new Error("llm_activation_not_ready");
+      const updates = state.activationUpdates ??
+        (patch.llm ? llmSettingsWriteEnvPatch(patch.llm, state.llm_provider, expectedLlmProvider !== undefined) : {});
       const composio = patch.composio;
       if (composio) {
         if (composio.user_id !== undefined) updates.COMPOSIO_USER_ID = composio.user_id ?? "";
@@ -305,7 +317,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       }
       if (Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
       const content = patchEnvDocument(state.raw, updates);
-      const latest = await inspectCurrent(expectedLlmProvider);
+      const latest = await inspectCurrent(expectedLlmProvider, activationPatch);
       if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
         throw new Error("settings_write_target_changed_before_persist");
       }
@@ -313,8 +325,16 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
           (latest.llm_provider !== expectedLlmProvider || !latest.managed_llm_settings)) {
         throw new Error("settings_write_bound_llm_target_unavailable");
       }
+      if (activationPatch && !latest.activationUpdates) throw new Error("llm_activation_not_ready");
       await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write" });
       const saved = await inspectCurrent(expectedLlmProvider);
+      if (activationPatch) {
+        const observed = parseEnvFile(saved.raw);
+        if (saved.llm_provider !== activationPatch.activation?.provider ||
+            Object.entries(updates).some(([key, value]) => observed.values[key] !== value)) {
+          throw new Error("llm_activation_readback_mismatch");
+        }
+      }
       const expectedValues = {
         model: patch.llm?.model ?? state.values.model,
         temperature: patch.llm?.temperature ?? state.values.temperature,

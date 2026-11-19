@@ -1,22 +1,26 @@
 import {
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SettingsWriteArgumentsSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
   settingsWriteRequestBinding,
   settingsWriteTargetIdentityDigest,
+  type SettingsWriteActivation,
   type SettingsWriteArguments,
   type SettingsWriteLlmProvider,
   type SettingsWritePatch,
   type SettingsWriteTargetVersionObservation,
 } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import type { SettingsWriteContentReview, Tool } from "./registry.js";
+import { assertToolExecutionNotCancelled, type SettingsWriteContentReview, type Tool } from "./registry.js";
 
 export interface SettingsWritePort {
-  inspect(expectedLlmProvider?: SettingsWriteLlmProvider): Promise<{
+  inspect(expectedLlmProvider?: SettingsWriteLlmProvider,
+    activationPatch?: NonNullable<SettingsWritePatch["llm"]>): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
+    provider_activation_ready?: true;
     values: {
       model: string | null;
       temperature: number | null;
@@ -68,11 +72,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       const args = parseArgs(rawArgs);
       const commandDigest = requireDigest(options.command_digest, "command");
       const planDigest = requireDigest(options.operation_plan_binding_digest, "operation plan");
-      const target = await port.inspect(args.expected_llm_provider);
-      if (args.expected_llm_provider !== undefined &&
-          (target.llm_provider !== args.expected_llm_provider || target.managed_llm_settings !== true)) {
-        throw new Error("settings_write_bound_llm_target_unavailable");
-      }
+      const target = await inspectBoundTarget(port, args);
       return SettingsWriteTargetVersionObservationSchema.parse({
         schema_version: "blue-tanuki.settings-write-target-version.v1",
         target_identity_digest: settingsWriteTargetIdentityDigest(),
@@ -85,29 +85,26 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       });
     },
     async inspect_content_review(rawArgs, options = {}): Promise<SettingsWriteContentReview> {
-      const { patch, expected_llm_provider } = parseArgs(rawArgs);
+      const args = parseArgs(rawArgs);
+      const { patch, expected_llm_provider } = args;
       const observation = SettingsWriteTargetVersionObservationSchema.parse(
         await tool.inspect_target_version!(rawArgs, options),
       );
       const commandDigest = requireDigest(options.command_digest, "command");
       const planDigest = requireDigest(options.operation_plan_binding_digest, "operation plan");
-      const target = await port.inspect(expected_llm_provider);
+      const target = await inspectBoundTarget(port, args);
       if (target.target_state_digest !== observation.target_state_digest) {
         throw new Error("settings_write_target_changed_during_review");
       }
       const changes = patch.llm
-        ? Object.entries(patch.llm).map(([field, after]) => {
-          const key = field as keyof typeof PATCH_FIELDS;
-          const before = target.values[key];
-          if (before === after) return null;
-          return { key: PATCH_FIELDS[key], before, after };
-        }).filter((change): change is NonNullable<typeof change> => change !== null)
+        ? buildLlmChanges(patch.llm, target)
         : buildComposioChanges(patch.composio!, target.values.composio);
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
         kind: "settings_write" as const,
         operation: "settings.write" as const,
         ...(expected_llm_provider !== undefined ? { expected_llm_provider } : {}),
+        ...(patch.llm?.activation ? { activation: settingsWriteActivationReview(patch.llm.activation) } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -120,14 +117,16 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       return { ...reviewBase, review_digest: operationPlanDigest(reviewBase) };
     },
     async invoke(rawArgs, context): Promise<unknown> {
-      const { patch, expected_llm_provider } = parseArgs(rawArgs);
+      const args = parseArgs(rawArgs);
       const observation = SettingsWriteTargetVersionObservationSchema.parse(context.target_version_observation);
       if (observation.target_identity_digest !== settingsWriteTargetIdentityDigest() ||
           observation.command_digest !== context.operation_plan_command_digest ||
+          observation.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(args)) ||
           !context.operation_plan_command_digest || !context.upstream_commit_hash) {
         throw new Error("settings_write_approved_target_mismatch");
       }
-      return port.apply(patch, observation.target_state_digest, expected_llm_provider);
+      assertToolExecutionNotCancelled(context.signal, "settings.write");
+      return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider);
     },
   };
   BUILTIN_SETTINGS_WRITE_TOOLS.add(tool);
@@ -142,6 +141,44 @@ function parseArgs(value: Record<string, unknown>): SettingsWriteArguments {
   const parsed = SettingsWriteArgumentsSchema.safeParse(value);
   if (!parsed.success) throw new Error("settings_write_arguments_invalid");
   return parsed.data;
+}
+
+export function settingsWriteActivationReview(activation: SettingsWriteActivation):
+  NonNullable<SettingsWriteContentReview["activation"]> {
+  return {
+    ...activation,
+    destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS[activation.provider],
+    protected_reference_configured: true,
+  };
+}
+
+async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteArguments) {
+  const expectedProvider = args.expected_llm_provider;
+  const activationPatch = args.patch.llm?.activation ? args.patch.llm : undefined;
+  const target = await port.inspect(expectedProvider, activationPatch);
+  if (expectedProvider !== undefined &&
+      (target.llm_provider !== expectedProvider || target.managed_llm_settings !== true)) {
+    throw new Error("settings_write_bound_llm_target_unavailable");
+  }
+  if (activationPatch && target.provider_activation_ready !== true) {
+    throw new Error("settings_write_provider_activation_unavailable");
+  }
+  return target;
+}
+
+function buildLlmChanges(patch: NonNullable<SettingsWritePatch["llm"]>,
+  target: Awaited<ReturnType<SettingsWritePort["inspect"]>>): SettingsWriteContentReview["changes"] {
+  const changes: SettingsWriteContentReview["changes"][number][] = [];
+  if (patch.activation) {
+    changes.push({ key: "llm.provider", before: target.llm_provider ?? null, after: patch.activation.provider });
+  }
+  for (const field of Object.keys(PATCH_FIELDS) as Array<keyof typeof PATCH_FIELDS>) {
+    const after = patch[field];
+    if (after === undefined) continue;
+    const before = target.values[field];
+    if (before !== after || patch.activation) changes.push({ key: PATCH_FIELDS[field], before, after });
+  }
+  return changes;
 }
 
 function buildComposioChanges(

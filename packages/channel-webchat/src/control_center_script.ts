@@ -1,5 +1,9 @@
 import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
-import { OPERATION_ADAPTER_REGISTRY, SettingsWriteLlmProviderSchema } from "@blue-tanuki/protocol";
+import {
+  OPERATION_ADAPTER_REGISTRY,
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SettingsWriteLlmProviderSchema,
+} from "@blue-tanuki/protocol";
 
 const AOTANU_SPRITE_SPECS_JSON = JSON.stringify(AOTANU_SPRITE_SPECS);
 const OPERATION_ADAPTER_REGISTRY_JSON = JSON.stringify(OPERATION_ADAPTER_REGISTRY);
@@ -8,6 +12,7 @@ const SETTINGS_LLM_PROVIDERS_JSON = JSON.stringify(SettingsWriteLlmProviderSchem
 export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU_SPRITE_SPECS_JSON};
       const OPERATION_ADAPTER_REGISTRY = ${OPERATION_ADAPTER_REGISTRY_JSON};
       const SETTINGS_LLM_PROVIDERS = ${SETTINGS_LLM_PROVIDERS_JSON};
+      const SETTINGS_LLM_ACTIVATION_DESTINATIONS = ${JSON.stringify(SETTINGS_WRITE_ACTIVATION_DESTINATIONS)};
       const controlCenterLaunchTicket = (() => {
         try {
           const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -4138,6 +4143,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
         const actions = Array.isArray(composio.allowed_actions) ? composio.allowed_actions : [];
         const revoked = Array.isArray(composio.revoked_actions) ? composio.revoked_actions : [];
+        byId("settings-provider-choice").value = "";
+        byId("settings-activation-budget").hidden = true;
+        byId("settings-cost-per-attempt").value = "";
+        byId("settings-cost-per-24h").value = "";
         byId("settings-model").value = model;
         byId("settings-temperature").value = String(llm.temperature ?? "");
         byId("settings-max-tokens").value = String(llm.max_tokens ?? "");
@@ -5803,12 +5812,37 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      function parseSettingsActivationUsd(id, label) {
+        const text = byId(id).value.trim();
+        if (!/^(?:[0-9]+(?:\\.[0-9]{1,6})?|\\.[0-9]{1,6})$/.test(text)) {
+          throw new Error(label + "は小数点以下6桁までのUSDで指定してください。");
+        }
+        const [whole, fraction = ""] = text.split(".");
+        const micros = Number(whole) * 1000000 + Number(fraction.padEnd(6, "0"));
+        if (!Number.isSafeInteger(micros) || micros < 1 || micros > 1000000000) {
+          throw new Error(label + "は0.000001〜1000 USDで指定してください。");
+        }
+        return micros;
+      }
+
       function llmSettingsProposal() {
         const current = state.settingsRuntimeSnapshot;
         if (!current) throw new Error("先に現行の設定を読み込んでください。");
         const llm = {};
+        const provider = byId("settings-provider-choice").value;
+        if (provider) {
+          if (!Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, provider) || provider === current.provider) {
+            throw new Error("現行とは異なる切り替え先を選択してください。");
+          }
+          const max_cost_per_attempt_micros = parseSettingsActivationUsd("settings-cost-per-attempt", "1回の試行あたりの上限");
+          const max_cost_per_24h_micros = parseSettingsActivationUsd("settings-cost-per-24h", "UTC日ごとの上限");
+          if (max_cost_per_attempt_micros > max_cost_per_24h_micros) {
+            throw new Error("1回の試行あたりの上限はUTC日ごとの上限以下にしてください。");
+          }
+          llm.activation = { provider, currency: "USD", max_cost_per_attempt_micros, max_cost_per_24h_micros };
+        }
         const model = byId("settings-model").value.trim();
-        if (model !== current.model) {
+        if (provider || model !== current.model) {
           if (!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(model) ||
               /^(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})$/iu.test(model)) {
             throw new Error("モデル名を確認してください。資格情報は入力しないでください。");
@@ -5821,12 +5855,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ["timeout_ms", "settings-timeout-ms", 100, 600000, "制限時間"]
         ]) {
           const text = String(byId(id).value).trim();
-          if (text === current[key]) continue;
+          const requiredByActivation = provider && key !== "temperature";
+          if (!requiredByActivation && text === current[key]) continue;
           const value = Number(text);
           const valid = key === "temperature" ? /^[0-9]+(?:\\.[0-9]+)?$/.test(text) && Number.isFinite(value)
             : /^[0-9]+$/.test(text) && Number.isSafeInteger(value);
           if (!valid || value < min || value > max) throw new Error(label + "は" + min + "〜" + max + "で指定してください。");
-          if (String(value) !== current[key]) llm[key] = value;
+          if (requiredByActivation || String(value) !== current[key]) llm[key] = value;
         }
         if (Object.keys(llm).length === 0) throw new Error("変更できる項目に差分がありません。");
         const goal = byId("settings-goal-ref");
@@ -7104,7 +7139,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "settings_write") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
-          const allowedKeys = ["llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms",
+          const allowedKeys = ["llm.provider", "llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms",
             "composio.user_id", "composio.allowed_toolkits", "composio.allowed_actions", "composio.revoked_actions",
             "composio.api_base_url", "composio.dry_run", "composio.live_execution", "composio.api_key"];
           const changesValid = Array.isArray(review.changes) && review.changes.length > 0 && review.changes.length <= 10 &&
@@ -7118,9 +7153,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const llmChange = changesValid && review.changes.every(function (change) { return change.key.startsWith("llm."); });
           const provider = review.expected_llm_provider;
           const providerValid = provider === undefined || (llmChange && SETTINGS_LLM_PROVIDERS.includes(provider));
+          const activation = review.activation;
+          const transition = llmChange ? review.changes.filter(function (change) { return change.key === "llm.provider"; }) : [];
+          const validCost = function (value) { return Number.isSafeInteger(value) && value >= 1 && value <= 1000000000; };
+          const activationValid = activation === undefined ? transition.length === 0
+            : activation && llmChange && provider !== undefined && transition.length === 1 &&
+              transition[0].before === provider && transition[0].after === activation.provider && activation.provider !== provider &&
+              Object.keys(activation).length === 6 && Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, activation.provider) &&
+              activation.destination === SETTINGS_LLM_ACTIVATION_DESTINATIONS[activation.provider] &&
+              activation.protected_reference_configured === true && activation.currency === "USD" &&
+              validCost(activation.max_cost_per_attempt_micros) && validCost(activation.max_cost_per_24h_micros) &&
+              activation.max_cost_per_attempt_micros <= activation.max_cost_per_24h_micros &&
+              ["llm.model", "llm.max_tokens", "llm.timeout_ms"].every(function (key) {
+                return review.changes.filter(function (change) { return change.key === key; }).length === 1;
+              });
           if (!hasNoStore(response) || !card.isConnected || token !== byId("approval-token").value.trim() ||
               review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
               review.used_for_authority !== false || review.may_execute !== false || !(llmChange || composioChange) || !providerValid ||
+              !activationValid ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
               !isDigest(review.operation_plan_binding_digest)) {
@@ -7128,11 +7178,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = llmChange ? "GatewayのLLM運転設定変更" : "GatewayのComposio設定変更";
+          heading.textContent = activation ? "GatewayのLLM運転プロバイダー切り替え"
+            : llmChange ? "GatewayのLLM運転設定変更" : "GatewayのComposio設定変更";
           view.appendChild(heading);
           if (provider !== undefined) {
             const target = document.createElement("p");
-            target.textContent = "対象Provider " + provider;
+            target.textContent = activation ? "現在のプロバイダー " + provider : "対象Provider " + provider;
             view.appendChild(target);
           }
           review.changes.forEach(function (change) {
@@ -7145,9 +7196,26 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             row.append(label, value);
             view.appendChild(row);
           });
+          if (activation) {
+            for (const [labelText, valueText] of [
+              ["切り替え先の送信先", activation.destination],
+              ["保護保管された資格情報", "設定済み"],
+              ["計算予算台帳の1試行あたりの上限", String(activation.max_cost_per_attempt_micros / 1000000) + " USD"],
+              ["計算予算台帳のUTC日ごとの上限", String(activation.max_cost_per_24h_micros / 1000000) + " USD"]
+            ]) {
+              const row = document.createElement("p");
+              const label = document.createElement("strong");
+              label.textContent = labelText + " ";
+              const value = document.createElement("span");
+              value.textContent = valueText;
+              row.append(label, value);
+              view.appendChild(row);
+            }
+          }
           const note = document.createElement("p");
           note.className = "muted";
           note.textContent = "承認後に対象版を再照合して設定へ反映します。反映後はGatewayを再起動してください。" +
+            (activation ? " 費用上限はシステム全体、親成果、個別タスクの各範囲に適用し、既存のトークン数と時間の予算を維持します。" : "") +
             (composioChange ? " API keyの切断はdry-run=true／live=falseへ戻します。" : "");
           view.appendChild(note);
           const digests = document.createElement("small");
@@ -10572,6 +10640,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       });
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("settings-token").addEventListener("input", function () { state.settingsRuntimeSnapshot = null; });
+      byId("settings-provider-choice").addEventListener("change", function () {
+        const provider = byId("settings-provider-choice").value;
+        const current = state.settingsRuntimeSnapshot;
+        const activating = Boolean(provider && provider !== current?.provider);
+        byId("settings-activation-budget").hidden = !activating;
+        byId("settings-model").value = activating ? "" : (current?.model || "");
+        byId("settings-cost-per-attempt").value = "";
+        byId("settings-cost-per-24h").value = "";
+      });
       byId("settings-owner-token").addEventListener("input", resetSettingsProposalGoals);
       byId("load-settings-goals").addEventListener("click", loadSettingsProposalGoals);
       byId("prepare-llm-settings-plan").addEventListener("click", prepareLlmSettingsPlan);

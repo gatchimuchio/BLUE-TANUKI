@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LLMRequest } from "../src/llm/base.js";
 import { AnthropicBackend } from "../src/llm/anthropic.js";
@@ -34,6 +35,24 @@ afterEach(() => {
 });
 
 describe("LLM provider structured responses", () => {
+  it.each(Object.entries(SETTINGS_WRITE_ACTIVATION_DESTINATIONS))(
+    "never follows an HTTP redirect from the fixed %s destination",
+    async (provider, destination) => {
+      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.redirect === "error") throw new TypeError("fixture redirect refused");
+        throw new Error("redirect would have forwarded the request");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const backend = provider === "anthropic"
+        ? new AnthropicBackend("fixture-key-not-a-credential", "fixture-model", destination)
+        : new OpenAICompatibleBackend({ name: provider, defaultModel: "fixture-model", endpoint: destination });
+
+      await expect(backend.call(request)).rejects.toMatchObject({ kind: "disconnected" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(destination, expect.objectContaining({ redirect: "error" }));
+    },
+  );
+
   it("rejects image input before network access when the exact OpenAI-compatible model is not enabled", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -64,6 +83,7 @@ describe("LLM provider structured responses", () => {
     };
 
     expect(response.content).toBe("observed");
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBeUndefined();
     expect(sent.messages[0]?.content).toEqual([
       { type: "text", text: "fixture request" },
       { type: "image_url", image_url: {

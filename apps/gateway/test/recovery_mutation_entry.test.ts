@@ -16,6 +16,7 @@ import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_even
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 import { inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
+import { storeLlmApiKeySecret } from "../src/secret_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -34,6 +35,113 @@ afterEach(async () => {
 });
 
 describe("First-use Gateway settings", () => {
+  it.runIf(process.platform === "win32")("activates a protected native provider only after L3 and reserves the approved budget after restart", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-native-activation-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const preload = join(root, "capture-provider.cjs");
+    const attemptsFile = join(root, "captured-provider-attempts.jsonl");
+    const fixtureSecret = "synthetic-anthropic-credential-for-dpapi-fixture";
+    const model = "fixture-native-text-model";
+    const endpoint = "https://api.anthropic.com/v1/messages";
+    const port = await reserveLoopbackPort();
+    const ownerToken = "activation-fixture-owner-token";
+    const settingsToken = "activation-fixture-settings-token";
+    const env = { ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+      BLUE_TANUKI_OWNER_TOKEN: ownerToken, BLUE_TANUKI_SETTINGS_TOKEN: settingsToken };
+    delete (env as NodeJS.ProcessEnv).LLM_BACKEND;
+    writeFileSync(preload, `const { appendFileSync } = require("node:fs");
+const attempts = ${JSON.stringify(attemptsFile)};
+globalThis.fetch = async (url, init) => {
+  if (process.env.BT_ACTIVATION_FIXTURE_COMPUTE !== "1" || url !== ${JSON.stringify(endpoint)} || init?.method !== "POST") {
+    appendFileSync(attempts, JSON.stringify({unexpected:true}) + "\\n");
+    throw new Error("unexpected network attempt in activation fixture");
+  }
+  const body = JSON.parse(init.body);
+  appendFileSync(attempts, JSON.stringify({endpoint:url,model:body.model,max_tokens:body.max_tokens,
+    credential_matched:new Headers(init.headers).get("x-api-key") === ${JSON.stringify(fixtureSecret)},redirect:init.redirect}) + "\\n");
+  return new Response(JSON.stringify({model:body.model,content:[{type:"text",text:"青"}],usage:{input_tokens:9,output_tokens:2},stop_reason:"end_turn"}),
+    {status:200,headers:{"content-type":"application/json"}});
+};`);
+    const base = "LLM_BACKEND=stub\nUNRELATED_SETTING=kept\n";
+    writeFileSync(envFile, base);
+    let gateway = spawnGateway(env, preload);
+    await waitForHealth(port, gateway, 40_000);
+
+    const activation = { provider: "anthropic", currency: "USD", max_cost_per_attempt_micros: 12_000,
+      max_cost_per_24h_micros: 50_000 };
+    const submit = () => requestJson(port, "/owner/llm-settings-proposal", { method: "POST", token: ownerToken,
+      body: { expected_provider: "stub", patch: { llm: { model, max_tokens: 384, timeout_ms: 4_000, activation } } },
+      signal: AbortSignal.timeout(10_000) });
+    expect((await submit()).status).toBe(409);
+    const stored = storeLlmApiKeySecret("ANTHROPIC_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
+    const eligible = base + `${stored.ref_key}=${JSON.stringify(stored.ref)}\n`;
+    writeFileSync(envFile, eligible + 'anthropic_endpoint="https://example.invalid/v1/messages"\n');
+    expect((await submit()).status).toBe(409);
+    writeFileSync(envFile, eligible + 'ANTHROPIC_ENDPOINT="https://example.invalid/v1/messages"\n');
+    expect((await submit()).status).toBe(409);
+    writeFileSync(envFile, eligible);
+    const proposal = await submit();
+    expect(proposal.status, JSON.stringify(proposal.body)).toBe(202);
+    expect(proposal.body).toMatchObject({ status: "approval_required", accepted: true, command_id: expect.any(String) });
+    expect(readFileSync(envFile, "utf8")).toBe(eligible);
+    expect(existsSync(attemptsFile)).toBe(false);
+
+    const commandId = String(proposal.body.command_id);
+    const approvalRoute = `/approval/${encodeURIComponent(commandId)}`;
+    const queue = await requestJson(port, "/approval", { token: resumeToken, signal: AbortSignal.timeout(10_000) });
+    const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((item) => item.command_id === commandId);
+    expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
+    const review = await fetch(`http://127.0.0.1:${port}${approvalRoute}/content`, { method: "POST",
+      headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(10_000) });
+    expect(review.status).toBe(200);
+    expect(review.headers.get("cache-control")).toBe("no-store");
+    const reviewText = await review.text();
+    expect(reviewText).not.toContain(fixtureSecret);
+    expect(reviewText).not.toContain(stored.ref);
+    const evidence = JSON.parse(reviewText);
+    expect(evidence).toMatchObject({ expected_llm_provider: "stub", activation: {
+      ...activation, destination: endpoint, protected_reference_configured: true,
+    }, changes: expect.arrayContaining([{ key: "llm.provider", before: "stub", after: "anthropic" }]) });
+
+    const applied = await requestJson(port, approvalRoute, { method: "POST", token: resumeToken,
+      body: { verdict: "approve", approval_token: pending!.approval_token, content_review_digest: evidence.review_digest },
+      signal: AbortSignal.timeout(10_000) });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    expect(applied.body).toMatchObject({ result: { approval: "approve", status: "success" } });
+    const saved = readFileSync(envFile, "utf8");
+    expect(saved).toContain('LLM_BACKEND="anthropic"');
+    expect(saved).toContain('UNRELATED_SETTING=kept');
+    expect(saved).toContain(stored.ref);
+    expect(saved).not.toContain(fixtureSecret);
+    expect(existsSync(attemptsFile)).toBe(false);
+
+    await stopChild(gateway.child);
+    gateway = spawnGateway({ ...env, BT_ACTIVATION_FIXTURE_COMPUTE: "1" }, preload);
+    await waitForHealth(port, gateway, 60_000);
+    const settings = await requestJson(port, "/settings/config", { token: settingsToken, signal: AbortSignal.timeout(10_000) });
+    expect(settings.status).toBe(200);
+    expect(settings.body).toMatchObject({ llm: { provider: "anthropic", command_route: { model, max_tokens: "384", timeout_ms: "4000" },
+      compute_readiness: { status: "ready", max_cost_amount: 0.012, maximum_provider_attempts: 1, currency: "USD" } } });
+    expect(existsSync(attemptsFile)).toBe(false);
+
+    const inbound = await requestJson(port, "/inbound", { method: "POST", token: inboundToken,
+      body: { user: "activation-fixture", content: "次の文字だけを返してください。青" }, signal: AbortSignal.timeout(10_000) });
+    expect(inbound.status, JSON.stringify(inbound.body)).toBe(202);
+    const budgetFile = join(root, "state", "private-state", "compute-budget", "ledger.sqlite");
+    const budget = new DatabaseSync(budgetFile, { readOnly: true });
+    try {
+      await expect.poll(() => budget.prepare(`SELECT reserved_tokens, reserved_cost_micros,
+        charged_cost_micros, currency, state FROM compute_budget_reservations`).all(), { timeout: 10_000 })
+        .toEqual([{ reserved_tokens: 384, reserved_cost_micros: 12_000, charged_cost_micros: 12_000,
+          currency: "USD", state: "settled" }]);
+    } finally { budget.close(); }
+    await stopChild(gateway.child);
+    expect(readFileSync(attemptsFile, "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      { endpoint, model, max_tokens: 384, credential_matched: true, redirect: "error" },
+    ]);
+  }, 150_000);
+
   it("applies exact owner-selected settings through L3 without a planning provider and uses them after restart", async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-first-use-settings-"));
     temporaryRoots.push(root);

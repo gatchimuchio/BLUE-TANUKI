@@ -1,6 +1,7 @@
 import { CONTROL_CENTER_SCRIPT } from "./control_center_script.js";
 import { CONTROL_CENTER_STYLE } from "./control_center_style.js";
 import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 
 export function renderControlCenterDocument(): string {
   return `<!doctype html>
@@ -372,11 +373,23 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <div class="status-grid">
             <input id="settings-token" type="password" autocomplete="current-password" placeholder="settings token" />
+            <label>運転プロバイダー<select id="settings-provider-choice">
+              <option value="">現行のまま</option>
+              ${Object.keys(SETTINGS_WRITE_ACTIVATION_DESTINATIONS).map(provider => `<option value="${provider}">${provider}</option>`).join("")}
+            </select></label>
             <label>モデル名<input id="settings-model" type="text" autocomplete="off" maxlength="128" /></label>
             <label>温度<input id="settings-temperature" type="number" min="0" max="2" step="any" /></label>
             <label>最大トークン数<input id="settings-max-tokens" type="number" min="1" max="1048576" step="1" /></label>
             <label>計算の制限時間（ms）<input id="settings-timeout-ms" type="number" min="100" max="600000" step="1" /></label>
           </div>
+          <fieldset id="settings-activation-budget" hidden>
+            <legend>切り替え先の計算予算</legend>
+            <div class="status-grid">
+              <label>1回の試行あたり（USD）<input id="settings-cost-per-attempt" type="number" min="0.000001" max="1000" step="0.000001" autocomplete="off" /></label>
+              <label>UTC日ごとの合計（USD）<input id="settings-cost-per-24h" type="number" min="0.000001" max="1000" step="0.000001" autocomplete="off" /></label>
+            </div>
+            <p class="muted">OSの保護ストアに登録済みの資格情報が必要です。設定した上限は計算予算台帳でシステム全体、親成果、個別タスクに適用します。請求額はプロバイダー側で確定します。</p>
+          </fieldset>
           <p id="settings-compute-readiness" class="badge warn" role="status">通常Computeの設定は未確認です。</p>
           <div class="action-row">
             <button id="load-settings" class="primary" type="button">設定を読み込む</button>
@@ -391,7 +404,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="prepare-llm-settings-plan" class="primary" type="button">LLM運転設定の変更を申請</button>
             <button id="open-llm-settings-review" type="button" hidden>審査を開く</button>
           </div>
-          <p class="muted">現行のProviderに対する変更です。差分を審査して承認すると設定に反映されます。反映後はGatewayを再起動してください。</p>
+          <p class="muted">差分を審査して承認すると設定に反映されます。反映後はGatewayを再起動してください。</p>
           <p id="settings-plan-status" class="muted" role="status"></p>
           <div class="status-grid">
             <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>

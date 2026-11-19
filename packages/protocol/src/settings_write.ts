@@ -7,13 +7,33 @@ const ModelSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:/
   .refine((value) => !/^(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})$/iu.test(value),
     "credential-like values are not model identifiers");
 
+export const SETTINGS_WRITE_ACTIVATION_DESTINATIONS = Object.freeze({
+  anthropic: "https://api.anthropic.com/v1/messages",
+  openai: "https://api.openai.com/v1/chat/completions",
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+} as const);
+
+const ActivationCostMicrosSchema = z.number().int().min(1).max(1_000_000_000);
+
+export const SettingsWriteActivationSchema = z.object({
+  provider: z.enum(["anthropic", "openai", "openrouter"]),
+  currency: z.literal("USD"),
+  max_cost_per_attempt_micros: ActivationCostMicrosSchema,
+  max_cost_per_24h_micros: ActivationCostMicrosSchema,
+}).strict().refine((activation) => activation.max_cost_per_attempt_micros <= activation.max_cost_per_24h_micros,
+  "per-attempt cost must not exceed the 24-hour budget");
+
 export const SettingsWritePatchSchema = z.object({
   llm: z.object({
     model: ModelSchema.optional(),
     temperature: z.number().finite().min(0).max(2).optional(),
     max_tokens: z.number().int().min(1).max(1_048_576).optional(),
     timeout_ms: z.number().int().min(100).max(600_000).optional(),
-  }).strict().refine((llm) => Object.keys(llm).length > 0, "at least one supported LLM setting is required").optional(),
+    activation: SettingsWriteActivationSchema.optional(),
+  }).strict().refine((llm) => Object.keys(llm).length > 0, "at least one supported LLM setting is required")
+    .refine((llm) => llm.activation === undefined ||
+      (llm.model !== undefined && llm.max_tokens !== undefined && llm.timeout_ms !== undefined),
+    "provider activation requires a model, token limit, and timeout").optional(),
   composio: z.object({
     user_id: z.string().trim().min(1).max(512).nullable().optional(),
     allowed_toolkits: z.string().trim().max(4_096).nullable().optional(),
@@ -43,7 +63,10 @@ export const SettingsWriteArgumentsSchema = z.object({
   patch: SettingsWritePatchSchema,
   expected_llm_provider: SettingsWriteLlmProviderSchema.optional(),
 }).strict().refine(({ patch, expected_llm_provider }) => expected_llm_provider === undefined || patch.llm !== undefined,
-  "a provider expectation applies only to the LLM domain");
+  "a provider expectation applies only to the LLM domain")
+  .refine(({ patch, expected_llm_provider }) => patch.llm?.activation === undefined ||
+    (expected_llm_provider !== undefined && expected_llm_provider !== patch.llm.activation.provider),
+  "provider activation requires the current provider to differ from the selected provider");
 
 /** Non-authority target evidence for one explicitly selected Gateway settings patch. */
 export const SettingsWriteTargetVersionObservationSchema = z.object({
@@ -59,6 +82,7 @@ export const SettingsWriteTargetVersionObservationSchema = z.object({
 
 export type SettingsWritePatch = z.infer<typeof SettingsWritePatchSchema>;
 export type SettingsWriteArguments = z.infer<typeof SettingsWriteArgumentsSchema>;
+export type SettingsWriteActivation = z.infer<typeof SettingsWriteActivationSchema>;
 export type SettingsWriteLlmProvider = z.infer<typeof SettingsWriteLlmProviderSchema>;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
@@ -92,4 +116,13 @@ export function llmSettingsWriteEnvPatch(patch: NonNullable<SettingsWritePatch["
   if (patch.max_tokens !== undefined) updates.BLUE_TANUKI_LLM_MAX_TOKENS = String(patch.max_tokens);
   if (patch.timeout_ms !== undefined) updates.BLUE_TANUKI_LLM_TIMEOUT_MS = String(patch.timeout_ms);
   return updates;
+}
+
+export function llmSettingsWriteEnvKeys(patch: NonNullable<SettingsWritePatch["llm"]>,
+  currentProvider: SettingsWriteLlmProvider): string[] {
+  const keys = Object.keys(llmSettingsWriteEnvPatch(patch, patch.activation?.provider ?? currentProvider));
+  if (patch.activation) {
+    keys.push("LLM_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON", "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON");
+  }
+  return keys.sort();
 }

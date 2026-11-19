@@ -1,6 +1,7 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
-  ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteLlmProvider, SettingsWritePatch,
+  ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
+  SettingsWriteLlmProvider, SettingsWritePatch,
 } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
@@ -960,8 +961,9 @@ export interface WebChatSettingsWriteContentReview {
   review_digest: string;
   operation: "settings.write";
   expected_llm_provider?: SettingsWriteLlmProvider;
+  activation?: SettingsWriteActivation & { destination: string; protected_reference_configured: true };
   changes: readonly {
-    key: "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
+    key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";

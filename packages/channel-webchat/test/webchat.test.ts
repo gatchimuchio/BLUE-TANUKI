@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import {
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
@@ -32,6 +33,7 @@ import {
   type WebChatD4RuntimeCancellationStatus,
   type WebChatD4RuntimeIntentCancellation,
   type WebChatRuntimeSurface,
+  type WebChatSettingsWriteContentReview,
   type WebChatSettingsSurface,
   type WebChatOptions,
   AOTANU_ASSET_ROUTE_PREFIX,
@@ -67,6 +69,12 @@ const D4_SUBMISSION_ID_1 = "00000000-0000-4000-8000-000000000001";
 const D4_SUBMISSION_ID_2 = "00000000-0000-4000-8000-000000000002";
 const D4_SUBMISSION_ID_3 = "00000000-0000-4000-8000-000000000003";
 const D4_SUBMISSION_ID_4 = "00000000-0000-4000-8000-000000000004";
+const LLM_ACTIVATION = {
+  provider: "openai",
+  currency: "USD",
+  max_cost_per_attempt_micros: 1501,
+  max_cost_per_24h_micros: 5_000_000,
+} as const;
 
 type TestSubmission = {
   payload_digest: string;
@@ -923,6 +931,9 @@ describe("WebChatChannel — Control Center shell", () => {
   it("checks only the running configuration and submits exact non-secret settings for owner review", async () => {
     const html = renderControlCenterHtml();
     expect(html).toContain('id="prepare-llm-settings-plan"');
+    expect(html).toContain('id="settings-provider-choice"');
+    expect(html).toContain('id="settings-cost-per-attempt"');
+    expect(html).toContain('id="settings-cost-per-24h"');
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
     const section = (startText: string, endText: string) => {
@@ -965,6 +976,7 @@ describe("WebChatChannel — Control Center shell", () => {
       "({ renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
       byId: node, state: {}, sessionStorage: { setItem: () => {} },
+      SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
       isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
       setText: (id: string, value: string) => { node(id).textContent = value; },
       setActiveScreen: (screen: string) => screens.push(screen),
@@ -1039,6 +1051,35 @@ describe("WebChatChannel — Control Center shell", () => {
     await preparePlan();
     expect(planStatus.textContent).toContain("受付を確認できませんでした");
     expect(node("open-llm-settings-review").hidden).toBe(true);
+
+    noStore = true;
+    api.renderSettingsSnapshot(snapshot);
+    const provider = node("settings-provider-choice");
+    const settingsBudget = node("settings-activation-budget");
+    expect(settingsBudget.hidden).toBe(true);
+    provider.value = "openai";
+    provider.events.get("change")!();
+    expect(settingsBudget.hidden).toBe(false);
+    expect(node("settings-model").value).toBe("");
+    const priorCallCount = calls.length;
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await preparePlan();
+    expect(planStatus.textContent).toContain("小数点以下6桁");
+    node("settings-cost-per-24h").value = "5.000000";
+    node("settings-cost-per-attempt").value = "5.000001";
+    await preparePlan();
+    expect(planStatus.textContent).toContain("UTC日ごとの上限以下");
+    node("settings-cost-per-attempt").value = ".001501";
+    await preparePlan();
+    expect(planStatus.textContent).toContain("モデル名を確認");
+    expect(calls).toHaveLength(priorCallCount);
+    node("settings-model").value = "fixture-openai-model";
+    await preparePlan();
+    expect(calls[priorCallCount]).toEqual({ path: "/owner/llm-settings-proposal", token: OWNER_TOKEN, body: {
+      expected_provider: "openai-compatible",
+      goal_ref: goal.value, purpose_version: 2,
+      patch: { llm: { activation: LLM_ACTIVATION, model: "fixture-openai-model", max_tokens: 128, timeout_ms: 5000 } },
+    } });
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2109,8 +2150,9 @@ describe("WebChatChannel — Control Center shell", () => {
       ${CONTROL_CENTER_SCRIPT.slice(start, end)}
       reviewApprovalContent(commandId, { textContent: "設定差分を確認" });
     `);
-    const evaluate = (reviewData: typeof review, cacheControl = "no-store") => render.runInNewContext({
+    const evaluate = (reviewData: unknown, cacheControl = "no-store") => render.runInNewContext({
       state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub"],
+      SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
     });
     await evaluate(review);
     expect(view.children.some(child => child.textContent === "対象Provider stub")).toBe(true);
@@ -2119,6 +2161,28 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(state.approvalContentDigests[commandId]).toBe(review.review_digest);
     await expect(evaluate(review, "private, max-age=60")).rejects.toThrow();
     await expect(evaluate({ ...review, expected_llm_provider: "invalid-backend" })).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+
+    const activationReview = { ...review, activation: {
+      ...LLM_ACTIVATION,
+      destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+      protected_reference_configured: true,
+    }, changes: [
+      { key: "llm.provider", before: "stub", after: "openai" },
+      ...review.changes,
+      { key: "llm.max_tokens", before: 128, after: 128 },
+      { key: "llm.timeout_ms", before: 5000, after: 5000 },
+    ] };
+    await evaluate(activationReview);
+    expect(JSON.stringify(view.children)).toContain("stub → openai");
+    expect(JSON.stringify(view.children)).toContain("0.001501 USD");
+    expect(JSON.stringify(view.children)).toContain("UTC日ごとの上限");
+    expect(JSON.stringify(view.children)).toContain("Gatewayを再起動");
+    expect(JSON.stringify(view.children)).toContain(activationReview.activation.destination);
+    expect(approve.disabled).toBe(false);
+    await expect(evaluate({ ...activationReview, activation: { ...activationReview.activation,
+      destination: "https://unlisted.example.test" } })).rejects.toThrow();
     expect(approve.disabled).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
   });
@@ -5739,6 +5803,8 @@ describe("WebChatChannel — HTTP inbound", () => {
     const route = "/owner/llm-settings-proposal";
     const owner = { authorization: `Bearer ${OWNER_TOKEN}` };
     const proposal = { expected_provider: "stub", patch: { llm: { model: "fixture-model", max_tokens: 128 } } };
+    const activationLlm = { ...proposal.patch.llm, timeout_ms: 5000, activation: LLM_ACTIVATION };
+    const activationProposal = { ...proposal, patch: { llm: activationLlm } };
     const goal = { goal_ref: "goal_0000000000000001", purpose_version: 2 };
     const proposals: unknown[] = [];
     const receipt = { accepted: true, request_id: "settings-fixture-request", used_for_authority: false, may_execute: false };
@@ -5766,6 +5832,12 @@ describe("WebChatChannel — HTTP inbound", () => {
         { ...proposal, patch: { llm: { model: "fixture-model", api_key: "synthetic-invalid" } } },
         { ...proposal, patch: { llm: { model: "fixture-model", provider: "openai" } } },
         { ...proposal, patch: { composio: { dry_run: true } } },
+        { ...activationProposal, expected_provider: LLM_ACTIVATION.provider },
+        { ...activationProposal, patch: { llm: { ...activationLlm, timeout_ms: undefined } } },
+        { ...activationProposal, patch: { llm: { ...activationLlm, activation: { ...LLM_ACTIVATION,
+          protected_reference: "invalid-input-fixture" } } } },
+        { ...activationProposal, patch: { llm: { ...activationLlm, activation: { ...LLM_ACTIVATION,
+          destination: "https://invalid-input.example.test" } } } },
       ]) expect((await postJson(context.port, route, invalid, owner)).status).toBe(400);
       expect((await postJson(context.port, route, { ...proposal, oversized: "x".repeat(4_097) }, owner)).status).toBe(413);
       expect(proposals).toHaveLength(0);
@@ -5777,8 +5849,12 @@ describe("WebChatChannel — HTTP inbound", () => {
       const current = await postJson(context.port, route, { ...proposal, ...goal }, owner);
       expect(current.status).toBe(202);
       expect(current.body).toEqual({ ...receipt, status: "candidate_ready", plan_id_digest: "a".repeat(64) });
+      const activation = await postJson(context.port, route, activationProposal, owner);
+      expect(activation.status).toBe(202);
+      expect(activation.headers.get("cache-control")).toBe("no-store");
       expect(proposals).toEqual([{ ...proposal, actor: "webchat-owner-token-holder" },
-        { ...proposal, ...goal, actor: "webchat-owner-token-holder" }]);
+        { ...proposal, ...goal, actor: "webchat-owner-token-holder" },
+        { ...activationProposal, actor: "webchat-owner-token-holder" }]);
       expect(context.received).toHaveLength(0);
     } finally {
       await context.teardown();
@@ -7085,6 +7161,50 @@ describe("WebChatChannel — approval API", () => {
       });
       expect(queue.text).not.toContain("synthetic body");
       expect(reviewCalls).toBe(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("projects only valid provider activation metadata through no-store L3 review", async () => {
+    const commandId = "cmd-activation-fixture";
+    const route = "/approval/" + commandId + "/content";
+    const safeReview = {
+      kind: "settings_write", operation: "settings.write", command_id: commandId, expected_llm_provider: "stub",
+      activation: { ...LLM_ACTIVATION, destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+        protected_reference_configured: true },
+      changes: [
+        { key: "llm.provider", before: "stub", after: "openai" },
+        { key: "llm.model", before: "fixture-local-model", after: "fixture-remote-model" },
+        { key: "llm.max_tokens", before: 128, after: 128 },
+        { key: "llm.timeout_ms", before: 5000, after: 5000 },
+      ],
+      command_digest: "a".repeat(64), review_digest: "b".repeat(64), request_payload_digest: "c".repeat(64),
+      target_version_digest: "d".repeat(64), operation_plan_binding_digest: "e".repeat(64),
+      no_store: true, used_for_authority: false, may_execute: false,
+    } satisfies WebChatSettingsWriteContentReview;
+    let review: WebChatSettingsWriteContentReview = safeReview;
+    const ctx = await setup({ approval: { list: async () => [], reviewContent: async () => review } });
+    await ctx.ch.start(async () => {});
+    try {
+      const authorized = { authorization: "Bearer " + RESUME_TOKEN };
+      const result = await postJson(ctx.port, route, {}, authorized);
+      expect(result.status).toBe(200);
+      expect(result.headers.get("cache-control")).toBe("no-store");
+      expect(result.body).toEqual(safeReview);
+      for (const invalid of [
+        { ...safeReview, activation: { ...safeReview.activation, destination: "https://invalid-input.example.test" } },
+        { ...safeReview, activation: { ...safeReview.activation, protected_reference: "forbidden-review-fixture" } },
+        { ...safeReview, protected_reference: "forbidden-review-fixture" },
+        { ...safeReview, changes: safeReview.changes.filter(change => change.key !== "llm.timeout_ms") },
+        { ...safeReview, activation: undefined },
+      ]) {
+        review = invalid;
+        const denied = await postJson(ctx.port, route, {}, authorized);
+        expect(denied.status).toBe(409);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+        expect(denied.body).toEqual({ error: "approval_content_review_unavailable" });
+      }
     } finally {
       await ctx.teardown();
     }

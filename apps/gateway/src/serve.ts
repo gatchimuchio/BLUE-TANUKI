@@ -5592,10 +5592,15 @@ async function serveWithOwnerLease(
         gatewayShuttingDown || emergencyStop.active || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return unavailable;
     try {
       ownerLease.assertActive();
-      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider);
+      const patch = arguments_.data.patch.llm;
+      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider, patch.activation ? patch : undefined);
+      const hasChange = patch.activation ? target.provider_activation_ready === true :
+        (patch.model !== undefined && patch.model !== target.values.model) ||
+        (patch.temperature !== undefined && patch.temperature !== target.values.temperature) ||
+        (patch.max_tokens !== undefined && patch.max_tokens !== target.values.max_tokens) ||
+        (patch.timeout_ms !== undefined && patch.timeout_ms !== target.values.timeout_ms);
       if (target.llm_provider !== input.expected_provider || target.managed_llm_settings !== true ||
-          !Object.entries(arguments_.data.patch.llm).some(([key, value]) => target.values[key as "model" | "temperature" | "max_tokens" | "timeout_ms"] !== value) ||
-          emergencyStop.active || gatewayShuttingDown) return unavailable;
+          !hasChange || emergencyStop.active || gatewayShuttingDown) return unavailable;
       const projection = hds.getGoalGovernanceProjection();
       const goal = projection?.goals.find((candidate) => candidate.goal_kind === "delegated" &&
         candidate.goal_ref === input.goal_ref && candidate.current_version === input.purpose_version &&
@@ -5607,7 +5612,8 @@ async function serveWithOwnerLease(
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.source_interface": "gui" } as const;
       const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
-        content: "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
+        content: patch.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
+          : "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
       const plan = hds.prepareSettingsWritePlan(origin, arguments_.data, binding);
       if (binding) return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
         plan_id_digest: plan.plan_id_digest, used_for_authority: false as const, may_execute: false as const };
@@ -6436,6 +6442,7 @@ async function serveWithOwnerLease(
           review_digest: snapshot.review_digest,
           operation: "settings.write",
           ...(snapshot.expected_llm_provider ? { expected_llm_provider: snapshot.expected_llm_provider } : {}),
+          ...(snapshot.activation ? { activation: snapshot.activation } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,

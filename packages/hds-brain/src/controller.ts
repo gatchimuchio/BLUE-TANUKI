@@ -45,7 +45,7 @@ import {
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
-  llmSettingsWriteEnvPatch,
+  llmSettingsWriteEnvKeys,
   settingsWriteRequestBinding,
   SettingsWriteTargetVersionObservationSchema,
   McpCallTargetVersionObservationSchema,
@@ -5054,7 +5054,7 @@ ${planControl.question}`,
     }
     const target = { kind: "settings", id: "gateway.runtime-config", scope: "llm.runtime" } as const;
     const stepId = "llm-runtime-settings";
-    const changedKeys = Object.keys(llmSettingsWriteEnvPatch(args.data.patch.llm, args.data.expected_llm_provider)).sort();
+    const changedKeys = llmSettingsWriteEnvKeys(args.data.patch.llm, args.data.expected_llm_provider);
     const plan: OperationPlan = {
       version: "operation-core.v1",
       plan_id: `owner-settings-${operationPlanDigest(caller.id)}`,
@@ -5095,7 +5095,8 @@ ${planControl.question}`,
         "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui",
         ...(binding ? { "blue_tanuki.operation_core.goal_purpose_binding": binding } : {}) },
     });
-    const plan_id_digest = this.operationPlans.retainCandidate(plan, origin);
+    const plan_id_digest = this.operationPlans.retainCandidate(plan, origin, undefined, undefined, undefined,
+      undefined, args.data.patch.llm.activation !== undefined);
     return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
       used_for_authority: false, may_execute: false };
   }

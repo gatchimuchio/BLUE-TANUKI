@@ -10,7 +10,7 @@ import {
   type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
-import { LLMFallbackAuthorizationSchema } from "@blue-tanuki/protocol";
+import { LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 import {
   hasLLMSecretMaterial,
   LLM_SECRET_KEYS,
@@ -248,9 +248,6 @@ function wantsBackend(env: Env, name: string): boolean {
     .toLowerCase() === name;
 }
 
-const OPENROUTER_DEFAULT_ENDPOINT =
-  "https://openrouter.ai/api/v1/chat/completions";
-
 function parsePositiveIntEnv(
   env: Env,
   name: string,
@@ -353,7 +350,7 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
         envValue(resolvedEnv, "ANTHROPIC_MODEL", "LLM_MODEL") ??
           "claude-opus-4-7",
         envValue(resolvedEnv, "ANTHROPIC_ENDPOINT") ??
-          "https://api.anthropic.com/v1/messages",
+          SETTINGS_WRITE_ACTIVATION_DESTINATIONS.anthropic,
         envValue(resolvedEnv, "ANTHROPIC_API_VERSION") ?? "2023-06-01",
         imageModelsFor("anthropic"),
       ),
@@ -392,7 +389,7 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
   ) {
     const endpoint =
       openaiEndpoint ??
-      (wantsNativeOpenAI ? "https://api.openai.com/v1/chat/completions" : "");
+      (wantsNativeOpenAI ? SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai : "");
     const headers = parseHeadersJson(envValue(resolvedEnv, "OPENAI_COMPAT_HEADERS_JSON", "LLM_HEADERS_JSON"));
     registry.register(
       new OpenAICompatibleBackend({
@@ -412,7 +409,7 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
   const openrouterModel = envValue(resolvedEnv, "OPENROUTER_MODEL", "LLM_MODEL");
   const openrouterKey = envValue(resolvedEnv, "OPENROUTER_API_KEY");
   const openrouterEndpoint =
-    envValue(resolvedEnv, "OPENROUTER_ENDPOINT") ?? OPENROUTER_DEFAULT_ENDPOINT;
+    envValue(resolvedEnv, "OPENROUTER_ENDPOINT") ?? SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openrouter;
   const openrouterSelected = wantsBackend(resolvedEnv, "openrouter");
   const wantsOpenRouter = openrouterSelected || Boolean(openrouterKey && openrouterModel);
   if (wantsOpenRouter) {

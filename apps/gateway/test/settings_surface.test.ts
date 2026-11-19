@@ -12,6 +12,7 @@ import { PluginRuntime } from "../src/plugin_loader.js";
 import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
 import { parseEnvFile } from "../src/env_file.js";
 import { buildLLMBackendFromEnv } from "../src/llm_config.js";
+import { prepareLlmProviderActivation } from "../src/llm_provider_activation.js";
 import { McpRuntimeObservationStore } from "../src/mcp_connection_observation.js";
 import {
   buildSettingsSnapshot,
@@ -36,6 +37,31 @@ const fakeSecretProtector = {
     return decoded.slice("protected:".length);
   },
 };
+
+it.runIf(process.platform === "win32")("binds the other native text routes to their protected credential and one cost profile", () => {
+  const referencePath = path.resolve(os.tmpdir(), "bt-synthetic-activation-ref.dpapi");
+  const reference = `win32-dpapi-current-user:file:${Buffer.from(referencePath, "utf8").toString("base64url")}`;
+  const routes = [
+    { provider: "openai", id: "openai-compatible", key: "OPENAI_API_KEY_REF", conflict: "OPENAI_COMPAT_API_KEY_REF" },
+    { provider: "openrouter", id: "openrouter", key: "OPENROUTER_API_KEY_REF", conflict: "OPENROUTER_SITE_URL" },
+  ] as const;
+  for (const { provider, id, key, conflict } of routes) {
+    const current = { LLM_BACKEND: "stub", [key]: reference };
+    const patch = { model: "fixture-text", max_tokens: 384, timeout_ms: 4_000, activation: {
+      provider, currency: "USD" as const, max_cost_per_attempt_micros: 12_000, max_cost_per_24h_micros: 50_000,
+    } };
+    const updates = prepareLlmProviderActivation(patch, "stub", current, current, []);
+    expect(updates.LLM_BACKEND).toBe(provider);
+    expect(Object.hasOwn(updates, key)).toBe(false);
+    expect(JSON.parse(updates.BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON!)).toStrictEqual({
+      [id]: { capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.012, currency: "USD" } },
+    });
+    expect(() => prepareLlmProviderActivation(patch, "stub", current, { ...current, [conflict]: "synthetic-override" }, []))
+      .toThrow("llm_activation_conflicting_route_overrides");
+    expect(() => prepareLlmProviderActivation(patch, "stub", current, current, [key.toLowerCase()]))
+      .toThrow("llm_activation_protected_route_unavailable");
+  }
+});
 
 it("rejects ambiguous LLM provider routing for a structured settings write", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bt-settings-provider-scope-"));

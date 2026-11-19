@@ -8,8 +8,10 @@ import {
   type ExecuteCommand,
   type ExecuteFeedback,
   type InboundRequest,
+  type OperationPlanCheckpoint,
 } from "@blue-tanuki/protocol";
 import { HDSUpperController } from "../src/controller.js";
+import { operationPlanDigest, OperationPlanLedger, type OperationPlanStatePort } from "../src/operation_plan.js";
 import { createFailureReviewProjection, FailureMemoryStore, failureLearningLineageReference,
   failureReviewProjectionDigest } from "../src/failure-memory/index.js";
 import { AuditLog, type AuditEntry } from "../src/audit.js";
@@ -155,6 +157,66 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       expect(() => new HDSUpperController().prepareSettingsWritePlan(origin, args))
         .toThrow("settings_plan_authority_unavailable");
       expect(controller.getRuntimeSnapshot().operation_plans.plans).toEqual([]);
+    } finally {
+      controller.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds native activation and its exact restart receipt to authenticated structured input", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-settings-activation-"));
+    let saved: OperationPlanCheckpoint | undefined;
+    let recoveryHolds: unknown;
+    const planState: OperationPlanStatePort = { load: () => saved,
+      compareAndSet: (_expected, checkpoint) => { saved = checkpoint; },
+      loadRecoveryHoldState: () => recoveryHolds,
+      compareAndSetRecoveryHoldState: (_expected, state) => { recoveryHolds = state; } };
+    const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+      operation_plan_state: planState });
+    const llm = { model: "fixture-openai-model", max_tokens: 256, timeout_ms: 1_000,
+      activation: { provider: "openai", currency: "USD", max_cost_per_attempt_micros: 5_000,
+        max_cost_per_24h_micros: 20_000 } };
+    const activationArgs = { expected_llm_provider: "stub", patch: { llm } };
+    try {
+      const origin = ownerOrigin("settings-activation", "prepare owner settings activation");
+      for (const invalid of [
+        { patch: activationArgs.patch },
+        { ...activationArgs, expected_llm_provider: "openai" },
+        { ...activationArgs, patch: { llm: { ...llm, model: undefined } } },
+        ...[
+          { provider: "openai-compatible" }, { currency: "JPY" }, { credential_ref: "fixture-ref" },
+          { max_cost_per_attempt_micros: 0 }, { max_cost_per_attempt_micros: 20_001 },
+          { max_cost_per_attempt_micros: 5_000.5 }, { max_cost_per_24h_micros: 1_000_000_001 },
+        ].map((field) => ({ ...activationArgs, patch: { llm: { ...llm, activation: { ...llm.activation, ...field } } } })),
+      ]) {
+        expect(() => controller.prepareSettingsWritePlan(origin, invalid)).toThrow("settings_plan_arguments_invalid");
+      }
+      const candidate = controller.prepareSettingsWritePlan(origin, activationArgs);
+      expect(saved?.plans[0]?.owner_settings_activation).toBe(true);
+      const plan = saved!.plans[0]!.revisions[0]!.plan;
+      expect(plan.steps[0]?.preparation?.validation[0]?.expected).toEqual({
+        changed_keys: ["BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON", "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON",
+          "BLUE_TANUKI_LLM_MAX_TOKENS", "BLUE_TANUKI_LLM_MODEL", "BLUE_TANUKI_LLM_TIMEOUT_MS", "LLM_BACKEND",
+          "LLM_MODEL", "OPENAI_MODEL"],
+        restart_required: true,
+      });
+
+      const genericLedger = new OperationPlanLedger();
+      expect(() => genericLedger.retainCandidate(plan, origin)).toThrow("plan_settings_activation_requires_owner_input");
+      const ordinaryPlan = { ...plan, steps: [{ ...plan.steps[0]!, parameters: args }] };
+      const ordinaryId = genericLedger.retainCandidate(ordinaryPlan, origin);
+      expect(() => genericLedger.revise({ action: "revise", plan_id: ordinaryId,
+        expected_revision_digest: operationPlanDigest(ordinaryPlan), plan }, origin))
+        .toThrow("plan_settings_activation_requires_owner_input");
+
+      const review = ownerOrigin("settings-activation-review", `plan:review ${JSON.stringify({
+        plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, step_id: candidate.step_id_digest,
+      })}`);
+      expect(controller.decide({ ...review }).command).toBeNull();
+      const selected = controller.decide(review).command;
+      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: activationArgs } });
+      expect(evaluateApproval(selected!, [], { actor: origin.user, default_mode: "full_access" }))
+        .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write" } });
     } finally {
       controller.close();
       rmSync(root, { recursive: true, force: true });

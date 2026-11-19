@@ -840,6 +840,8 @@ export const OperationPlanCheckpointPlanSchema = z.object({
     compute_source_observations: z.array(OperationPlanComputeSourceObservationSchema).max(8).optional(),
     memory_interpretation_dependencies: z.array(OperationPlanMemoryInterpretationDependencySchema).max(64).optional(),
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
+    /** Records that J received an activation from the authenticated structured owner input. */
+    owner_settings_activation: z.literal(true).optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
     receipt_memory: z.array(OperationPlanReceiptMemoryDeliverySchema).max(100).optional(),

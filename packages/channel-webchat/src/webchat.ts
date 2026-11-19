@@ -23,6 +23,8 @@ import {
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
   RuntimeSessionInputSchema,
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SettingsWriteActivationSchema,
   SettingsWriteArgumentsSchema,
   SettingsWriteLlmProviderSchema,
   detectTransientAudioFormat,
@@ -108,6 +110,7 @@ import type {
   WebChatResumeContext,
   WebChatRuntimeSurface,
   WebChatRuntimeResultReconciliation,
+  WebChatSettingsWriteContentReview,
   WebChatSettingsSurface,
   WebChatUpdateSurface,
 } from "./webchat_types.js";
@@ -263,6 +266,39 @@ interface CanvasArtifactReference {
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
+function validSettingsActivationReview(review: WebChatSettingsWriteContentReview): boolean {
+  if (!Array.isArray(review.changes)) return false;
+  if (review.activation === undefined) return !review.changes.some(change => change?.key === "llm.provider");
+  if (!review.activation || !hasExactKeys({ ...review }, [
+    "kind", "command_id", "command_digest", "review_digest", "operation", "expected_llm_provider",
+    "activation", "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
+    "no_store", "used_for_authority", "may_execute",
+  ])) return false;
+  const { destination, protected_reference_configured, ...selection } = review.activation;
+  const parsed = SettingsWriteActivationSchema.safeParse(selection);
+  if (!parsed.success || protected_reference_configured !== true ||
+      destination !== SETTINGS_WRITE_ACTIVATION_DESTINATIONS[parsed.data.provider]) return false;
+  const fields = new Map<string, unknown>();
+  for (const change of review.changes) {
+    if (!change || !hasExactKeys({ ...change }, ["key", "before", "after"]) || fields.has(change.key) ||
+        !["llm.provider", "llm.model", "llm.max_tokens", "llm.timeout_ms", "llm.temperature"].includes(change.key) ||
+        (change.before !== null && typeof change.before !== (change.key === "llm.provider" || change.key === "llm.model"
+          ? "string" : "number"))) return false;
+    if (change.key === "llm.provider" && change.before !== review.expected_llm_provider) return false;
+    fields.set(change.key, change.after);
+  }
+  return fields.get("llm.provider") === parsed.data.provider && SettingsWriteArgumentsSchema.safeParse({
+    expected_llm_provider: review.expected_llm_provider,
+    patch: { llm: {
+      activation: parsed.data,
+      model: fields.get("llm.model"),
+      max_tokens: fields.get("llm.max_tokens"),
+      timeout_ms: fields.get("llm.timeout_ms"),
+      temperature: fields.get("llm.temperature"),
+    } },
+  }).success;
 }
 
 function readCanvasArtifactReference(value: unknown): CanvasArtifactReference | null {
@@ -2894,10 +2930,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (content.kind === "settings_write" && content.expected_llm_provider !== undefined &&
-          (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
-            !Array.isArray(content.changes) || content.changes.length === 0 ||
-            !content.changes.every(change => typeof change?.key === "string" && change.key.startsWith("llm.")))) {
+      if (content.kind === "settings_write" && (!validSettingsActivationReview(content) ||
+          (content.expected_llm_provider !== undefined &&
+            (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
+              content.changes.length === 0 ||
+              !content.changes.every(change => typeof change?.key === "string" && change.key.startsWith("llm.")))))) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
@@ -4040,7 +4077,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     const hasGoal = Object.hasOwn(body ?? {}, "goal_ref") || Object.hasOwn(body ?? {}, "purpose_version");
     const fields = hasGoal ? ["expected_provider", "patch", "goal_ref", "purpose_version"] : ["expected_provider", "patch"];
-    const parsed = SettingsWriteArgumentsSchema.safeParse({ patch: body?.patch });
+    const parsed = SettingsWriteArgumentsSchema.safeParse({ patch: body?.patch, expected_llm_provider: body?.expected_provider });
     const provider = SettingsWriteLlmProviderSchema.safeParse(body?.expected_provider);
     const goal_ref = body?.goal_ref;
     const purpose_version = body?.purpose_version;
