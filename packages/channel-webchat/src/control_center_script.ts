@@ -4309,6 +4309,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           broker: "Broker台帳",
           operation_plans: "Operation Plan台帳",
           cron_events: "Cron台帳",
+          meaning_update_j_control: "意味更新J制御台帳",
+          meaning_update_m_state: "意味更新M状態台帳",
         };
         const storeLedgerStatusLabels = {
           verified: "検証済み",
@@ -4322,23 +4324,41 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const operationLabel = Object.prototype.hasOwnProperty.call(operationLabels, observation.operation)
           ? operationLabels[observation.operation]
           : "復旧操作";
-        const storeLabel = Object.prototype.hasOwnProperty.call(storeLabels, observation.store_key)
+        const storeLabel = typeof observation.store_key === "string" && Object.hasOwn(storeLabels, observation.store_key)
           ? storeLabels[observation.store_key]
           : null;
+        const observationBoundaryValid = observation.used_for_authority === false && observation.may_execute === false;
+        const liveEvidence = observation.evidence_source === "COMPLETE_HISTORY_AND_LIVE_RUNTIME";
         let observationLabel = "未確認";
         let observationTone = "warn";
-        if (observation.operation === "restore" && observation.status === "matched" && storeLabel) {
-          observationLabel = storeLabel + "・復元直後の状態と一致";
-          observationTone = "good";
-        } else if (observation.operation === "restore" && observation.status === "changed" && storeLabel) {
-          observationLabel = storeLabel + "・復元後に状態変更を観測";
-          observationTone = "warn";
-        } else if (observation.operation === "restore" && observation.status === "mismatch" && storeLabel) {
-          observationLabel = storeLabel + "・復元状態と不一致";
-          observationTone = "bad";
-        } else if (observation.operation === "restore" && observation.status === "unverified") {
-          observationLabel = storeLabel ? storeLabel + "・再起動後の状態は未確認" : "復元操作・未確認";
-        } else if (observation.status === "changed") {
+        if (!observationBoundaryValid) {
+          observationLabel = "未確認";
+        } else if (observation.operation === "restore") {
+          observationLabel = (storeLabel || "復元操作") + "・現状態は未確認";
+          if (observation.status === "failed") {
+            observationLabel = (storeLabel || "復元操作") + "・操作失敗、現状態は未確認";
+            observationTone = "bad";
+          } else if (storeLabel && liveEvidence) {
+            const ledgerStatus = observation.store_ledger_status;
+            const residualCount = Number.isSafeInteger(observation.store_ledger_residual_count) &&
+              observation.store_ledger_residual_count >= 0 ? observation.store_ledger_residual_count : "未観測";
+            if (observation.status === "matched") {
+              observationLabel = storeLabel + "・復元直後の状態と一致";
+              if (ledgerStatus === "verified" && residualCount === 0) observationTone = "good";
+            } else if (observation.status === "changed") {
+              observationLabel = storeLabel + "・復元後に状態変更を観測";
+            } else if (observation.status === "mismatch") {
+              observationLabel = storeLabel + "・復元状態と不一致";
+              observationTone = "bad";
+            }
+            if (["projection_mismatch", "corrupt", "schema_mismatch"].includes(ledgerStatus)) observationTone = "bad";
+            const ledgerLabel = typeof ledgerStatus === "string" && Object.hasOwn(storeLedgerStatusLabels, ledgerStatus)
+              ? storeLedgerStatusLabels[ledgerStatus] : "未確認";
+            observationLabel += "・台帳検査: " + ledgerLabel + "（残件 " + residualCount + "）";
+          }
+        } else if (observation.status === "changed" && liveEvidence &&
+            ((observation.operation === "provider_reset" && observation.configuration_state === "provider_stub") ||
+             (observation.operation === "connector_reset" && observation.configuration_state === "connector_dry_run"))) {
           observationLabel = operationLabel + "・設定変更済み";
           observationTone = "good";
         } else if (observation.status === "failed") {
@@ -4347,22 +4367,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } else if (observation.status === "no_record") {
           observationLabel = "実行記録なし・未確認";
         } else if (observation.status === "unverified" && observation.operation) {
-          observationLabel = observation.configuration_state === "provider_connector_dry_run"
+          observationLabel = observation.operation === "factory_reset" && liveEvidence &&
+            observation.configuration_state === "provider_connector_dry_run"
             ? "工場リセット・設定変更確認、全体は未確認"
             : operationLabel + "・未確認";
         }
-        if (observation.operation === "restore" && storeLabel &&
-            Object.prototype.hasOwnProperty.call(storeLedgerStatusLabels, observation.store_ledger_status)) {
-          const ledgerStatusLabel = storeLedgerStatusLabels[observation.store_ledger_status];
-          const residualCount = Number.isSafeInteger(observation.store_ledger_residual_count) &&
-            observation.store_ledger_residual_count >= 0
-            ? observation.store_ledger_residual_count
-            : "未観測";
-          observationLabel += "・台帳検査: " + ledgerStatusLabel + "（残件 " + residualCount + "）";
-        }
         setText("recovery-post-action-observation", observationLabel);
         byId("recovery-post-action-observation").className = "badge " + observationTone;
-        setText("recovery-post-action-plan-residuals", formatRecoveryPostActionPlanResiduals(observation));
+        setText("recovery-post-action-plan-residuals", observationBoundaryValid
+          ? formatRecoveryPostActionPlanResiduals(observation) : "未確認（表示を抑止）");
         setText("recovery-env-file-status", envFile.exists ? "present" : envFile.configured ? "missing" : "not configured");
         setText("recovery-env-backup-count", envFile.backup_count ?? 0);
         setText("recovery-pack-count", packs.backup_count ?? 0);

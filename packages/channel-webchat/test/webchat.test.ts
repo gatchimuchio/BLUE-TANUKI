@@ -3128,6 +3128,61 @@ describe("WebChatChannel — Control Center shell", () => {
     }
   });
 
+  it("renders meaning-update restore observations without promoting residuals or unknown stores to success", () => {
+    const html = renderControlCenterHtml();
+    const inline = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+    new Script(inline);
+    const start = inline.indexOf("function formatRecoveryPostActionPlanResiduals(");
+    const end = inline.indexOf("function renderRecoveryActionResult(", start);
+    const renderer = new Script(`${inline.slice(start, end)}\nrenderRecoverySnapshot(snapshot)`);
+    const observe = (overrides: Record<string, unknown>) => {
+      type Element = { value: string; text?: string; className?: string; disabled?: boolean; setAttribute(): void };
+      const elements = new Map<string, Element>();
+      const byId = (id: string) => {
+        if (!elements.has(id)) elements.set(id, { value: "", setAttribute() {} });
+        return elements.get(id)!;
+      };
+      renderer.runInNewContext({
+        snapshot: {
+          restore: { full_restore_review_request_available: false,
+            full_restore_blocked_reason: "blocked_runtime_restore_requires_offline_gateway",
+            blocked_reason: "owner_l3_review_required" },
+          post_action_observation: {
+            operation: "restore", store_key: "meaning_update_j_control", status: "matched",
+            evidence_source: "COMPLETE_HISTORY_AND_LIVE_RUNTIME", used_for_authority: false, may_execute: false,
+            store_ledger_status: "verified", store_ledger_residual_count: 0, ...overrides,
+          },
+        },
+        byId,
+        setText(id: string, value: unknown) { byId(id).text = String(value); },
+        setHtml() {},
+        compactJson: JSON.stringify,
+        redactRuntimeValue: (value: unknown) => value,
+      });
+      expect(byId("restore-recovery-backup").disabled).toBe(true);
+      expect(byId("restore-recovery-store").disabled).toBe(true);
+      const { text, className } = byId("recovery-post-action-observation");
+      return { text, className };
+    };
+
+    expect(observe({})).toEqual({ text: "意味更新J制御台帳・復元直後の状態と一致・台帳検査: 検証済み（残件 0）", className: "badge good" });
+    const m = { store_key: "meaning_update_m_state" };
+    expect(observe({ ...m, status: "changed", store_ledger_status: "residuals_present", store_ledger_residual_count: 2 }))
+      .toEqual({ text: "意味更新M状態台帳・復元後に状態変更を観測・台帳検査: 残差あり（残件 2）", className: "badge warn" });
+    expect(observe({ ...m, status: "mismatch" })).toMatchObject({ text: expect.stringContaining("意味更新M状態台帳・復元状態と不一致"), className: "badge bad" });
+    expect(observe({ ...m, status: "failed", evidence_source: "COMPLETE_HISTORY" }))
+      .toEqual({ text: "意味更新M状態台帳・操作失敗、現状態は未確認", className: "badge bad" });
+    expect(observe({ store_ledger_status: "residuals_present", store_ledger_residual_count: 2 }).className).toBe("badge warn");
+    expect(observe({ store_ledger_status: "corrupt" }).className).toBe("badge bad");
+    expect(observe({ store_ledger_residual_count: null }).className).toBe("badge warn");
+    expect(observe({ evidence_source: "COMPLETE_HISTORY", status: "unverified" }))
+      .toEqual({ text: "意味更新J制御台帳・現状態は未確認", className: "badge warn" });
+    expect(observe({ store_key: "__proto__", status: "changed" })).toEqual({ text: "復元操作・現状態は未確認", className: "badge warn" });
+    expect(observe({ may_execute: true })).toEqual({ text: "未確認", className: "badge warn" });
+    expect(observe({ operation: "provider_reset", status: "changed", configuration_state: "provider_stub" }))
+      .toEqual({ text: "プロバイダー設定リセット・設定変更済み", className: "badge good" });
+  });
+
   it("submits exactly one fixed canonical store for owner L3 review", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function restoreRecoveryStore(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function resetRecoveryProvider", start + 1);

@@ -1263,7 +1263,7 @@ async function serveWithOwnerLease(
         : storeKey === "cron_events" ? cronEventsStoreQuiesced
         : storeKey === "broker" ? brokerRestoreStoreQuiesced
           : storeKey === "meaning_update_j_control" || storeKey === "meaning_update_m_state"
-            ? storeKey === meaningUpdateRestoreStoreQuiesced
+            ? storeKey === meaningUpdateRestoreStoreQuiesced && canonicalStoreRestoreMaintenanceCommandId === context?.command_id
           : storeKey === jMRestoreStoreQuiesced,
     runtimeResetQuiesced: (toolName, context) => {
       if (toolName !== runtimeRecoveryMutationToolName ||
@@ -2142,7 +2142,7 @@ async function serveWithOwnerLease(
     if (trackFinalization) activeCommandFinalizations.add(finalization);
     let result: { status: string } | undefined;
     try {
-      result = await executeAndEchoCore(cmd, log, origin, opts, ephemeralContext, executionController,
+      result = await executeAndEchoCore(cmd, log, origin, finalization, opts, ephemeralContext, executionController,
         () => {
           if (taskExecutionRegistered) return;
           activeTaskExecutions.register(cmd.id, executionController);
@@ -2178,6 +2178,7 @@ async function serveWithOwnerLease(
     cmd: ExecuteCommand,
     log: DecisionLog,
     origin: InboundRequest,
+    currentFinalization: Promise<void>,
     opts: ExecuteAndEchoOptions = {},
     ephemeralContext?: InboundEphemeralContext,
     executionController: AbortController = new AbortController(),
@@ -2930,11 +2931,14 @@ async function serveWithOwnerLease(
     let meaningUpdateRestoreQuiesced = false;
     if (meaningUpdateRestoreStoreKey) {
       canonicalStoreRestoreMaintenanceCommandId = cmd.id;
-      while (activeCommandFinalizations.size > 1 || executionTasks.size > 0) {
-        await Promise.allSettled([
-          ...Array.from(activeCommandFinalizations),
-          ...Array.from(executionTasks),
-        ]);
+      for (;;) {
+        // この復元も停止判定の追跡対象。静止待ちからだけ自身を外す。
+        const pending = [
+          ...Array.from(activeCommandFinalizations).filter(finalization => finalization !== currentFinalization),
+          ...executionTasks,
+        ];
+        if (pending.length === 0) break;
+        await Promise.allSettled(pending);
       }
       if (!hds.quiesceMeaningUpdateMemoryForCanonicalRestore()) {
         canonicalStoreRestoreMaintenanceCommandId = null;

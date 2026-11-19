@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
@@ -637,6 +637,93 @@ describe("Recovery mutation HDS L3 entry", () => {
       await stopChild(gateway.child);
     }
   }, 30_000);
+
+  it("drains another running command before an approved meaning-update restore without waiting on itself", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-meaning-restore-drain-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "", "utf8");
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>(resolve => { releaseProvider = resolve; });
+    let providerWaiting = false;
+    const provider = await startSyntheticPlanProvider(() => {
+      providerWaiting = true;
+      return providerGate;
+    });
+    const gateway = spawnGateway({
+      ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+      LLM_BACKEND: "synthetic-plan-provider",
+      BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+        "synthetic-plan-provider": { capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" } },
+      }),
+      LLM_PROVIDERS_JSON: JSON.stringify([
+        { name: "synthetic-plan-provider", endpoint: provider.endpoint, model: "synthetic-plan-model" },
+      ]),
+    });
+    let approvalRequest: Promise<{ status: number; body: Record<string, unknown> }> | undefined;
+    try {
+      await waitForHealth(port, gateway, 40_000);
+      const backup = await requestJson(port, "/recovery/backup", { method: "POST", token: maintenanceToken, body: {} });
+      const backupId = (backup.body.result as { backup_id: string }).backup_id;
+      const fullRestore = await requestJson(port, "/recovery/restore", {
+        method: "POST", token: maintenanceToken, body: { backup_id: backupId, confirm: "RESTORE" },
+      });
+      expect(fullRestore.body).toMatchObject({ result: {
+        status: "blocked_runtime_restore_requires_offline_gateway", executed: false, l3_request_created: false,
+      } });
+      const storeRequest = {
+        method: "POST", token: maintenanceToken,
+        body: { backup_id: backupId, store_key: "meaning_update_j_control", confirm: "RESTORE" },
+      };
+      const unauthenticated = await requestJson(port, "/recovery/restore", { ...storeRequest, token: undefined });
+      expect(unauthenticated.status).toBe(401);
+      const queued = await requestJson(port, "/recovery/restore", storeRequest);
+      expect(queued.status).toBe(202);
+      const queue = await requestJson(port, "/approval", { token: resumeToken });
+      const approvals = queue.body.pending_approvals as Array<{ command_id: string; operation: string; approval_token: string }>;
+      expect(approvals).toHaveLength(1);
+      const [pending] = approvals;
+      expect(pending).toMatchObject({ operation: "recovery.restore", approval_level: "L3_final_review" });
+
+      const compute = await requestJson(port, "/operators/developer/invoke", {
+        method: "POST", token: inboundToken,
+        body: { user: "fixture-owner", content: "plan:compute synthetic work overlapping the restore" },
+      });
+      expect(compute.status, JSON.stringify(compute.body)).toBe(202);
+      await vi.waitFor(() => expect(providerWaiting, gateway.output.join("")).toBe(true), { timeout: 5_000 });
+
+      approvalRequest = requestJson(port, `/approval/${encodeURIComponent(pending!.command_id)}`, {
+        method: "POST", token: resumeToken, signal: AbortSignal.timeout(10_000),
+        body: { verdict: "approve", approval_token: pending!.approval_token },
+      });
+      // Attach a rejection handler immediately while waiting for the lock to become observable.
+      void approvalRequest.catch(() => undefined);
+      await vi.waitFor(async () => {
+        const overlappingRequest = await requestJson(port, "/recovery/restore", {
+          method: "POST", token: maintenanceToken, body: { backup_id: backupId, confirm: "RESTORE" },
+        });
+        expect(overlappingRequest.body).toMatchObject({ result: {
+          status: "blocked_restore_in_progress", executed: false, l3_request_created: false,
+        } });
+      }, { timeout: 4_000 });
+      releaseProvider();
+      const approved = await approvalRequest;
+      expect(approved.status, gateway.output.join("")).toBe(200);
+      expect(approved.body, gateway.output.join("")).toMatchObject({ ok: true, result: { executed: true, status: "success" } });
+      const snapshot = await requestJson(port, "/recovery/snapshot", { token: maintenanceToken });
+      expect(snapshot.body).toMatchObject({ post_action_observation: {
+        operation: "restore", store_key: "meaning_update_j_control", status: "unverified", may_execute: false,
+      } });
+      expect((await requestJson(port, "/recovery/restore", storeRequest)).status).toBe(202);
+    } finally {
+      releaseProvider();
+      await stopChild(gateway.child);
+      await approvalRequest?.catch(() => undefined);
+      await provider.close();
+    }
+  }, 65_000);
 
   it("restores one verified plan through L3, preserves the collateral plan hold, and gates dependent review on its result", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-operation-plan-restore-l3-"));
@@ -1555,7 +1642,7 @@ function syntheticOperationPlan(requestId: string, planId: string, stepId: strin
   };
 }
 
-async function startSyntheticPlanProvider(): Promise<{
+async function startSyntheticPlanProvider(beforeReply?: () => Promise<void>): Promise<{
   endpoint: string;
   callCount(): number;
   requestIds(): readonly string[];
@@ -1568,7 +1655,7 @@ async function startSyntheticPlanProvider(): Promise<{
   const server: Server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
-    request.on("end", () => {
+    request.on("end", async () => {
       calls++;
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
@@ -1586,6 +1673,7 @@ async function startSyntheticPlanProvider(): Promise<{
           response.end(JSON.stringify({ error: "synthetic request binding missing" }));
           return;
         }
+        await beforeReply?.();
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({
           id: "chatcmpl-synthetic-plan",
@@ -1671,8 +1759,12 @@ function spawnGateway(env: NodeJS.ProcessEnv): { child: ChildProcessWithoutNullS
   return { child, output };
 }
 
-async function waitForHealth(port: number, gateway: { child: ChildProcessWithoutNullStreams; output: string[] }): Promise<void> {
-  const deadline = Date.now() + 15_000;
+async function waitForHealth(
+  port: number,
+  gateway: { child: ChildProcessWithoutNullStreams; output: string[] },
+  startupTimeoutMs = 15_000,
+): Promise<void> {
+  const deadline = Date.now() + startupTimeoutMs;
   while (Date.now() < deadline) {
     if (gateway.child.exitCode !== null) throw new Error(`Gateway exited early: ${gateway.output.join("")}`);
     try {
@@ -1699,10 +1791,11 @@ async function reserveLoopbackPort(): Promise<number> {
 async function requestJson(
   port: number,
   route: string,
-  options: { method?: string; token?: string; body?: Record<string, unknown> } = {},
+  options: { method?: string; token?: string; body?: Record<string, unknown>; signal?: AbortSignal } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`http://127.0.0.1:${port}${route}`, {
     method: options.method ?? "GET",
+    signal: options.signal,
     headers: {
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
       ...(options.body ? { "content-type": "application/json" } : {}),
