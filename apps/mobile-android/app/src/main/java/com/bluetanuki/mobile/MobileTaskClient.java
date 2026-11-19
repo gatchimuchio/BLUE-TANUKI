@@ -238,8 +238,10 @@ final class MobileTaskClient {
                                                              DeviceLinkTransport.SendGuard canSend,
                                                              Attempt submissionAttempt) throws Exception {
         DeviceLinkTransport.Exchange exchange;
+        DeviceLinkTransport.SendGuard boundSendGuard = () -> canSend != null && canSend.canSend() &&
+                store.canUseCredentialForDeviceLink(credential);
         try {
-            exchange = transport.taskOperation(credential, operation, content, canSend);
+            exchange = transport.taskOperation(credential, operation, content, boundSendGuard);
         } catch (DeviceLinkTransport.TransportException exception) {
             if (submissionAttempt != null && exception.requestMayHaveReachedDesktop) {
                 submissionAttempt.taskSubmissionMayHaveReachedDesktop = true;
@@ -249,14 +251,14 @@ final class MobileTaskClient {
         if (submissionAttempt != null) submissionAttempt.taskSubmissionMayHaveReachedDesktop = true;
         PairingResponseParser.AcceptedResponse response = PairingResponseParser.acceptedResponse(
                 exchange.response, exchange.nonce, operation, allowedEvidence);
-        if (canSend == null || !canSend.canSend()) {
+        if (!boundSendGuard.canSend()) {
             throw new DeviceLinkTransport.TransportException(true);
         }
         return response;
     }
 
     private DeviceCredential requireCredential() throws Exception {
-        DeviceCredential credential = store.read();
+        DeviceCredential credential = store.readForDeviceLink();
         if (credential == null || credential.expiresAt <= System.currentTimeMillis() / 1000L) {
             throw new StrictJson.JsonException();
         }

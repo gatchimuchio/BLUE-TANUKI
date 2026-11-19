@@ -14,6 +14,7 @@ struct PendingTaskMutationTests {
     let request = draft()
     try sessionStartScope()
     try submissionReceiptScope(credential: desktop)
+    try deviceRevocation(credential: desktop)
     let start = try PendingMobileTaskMutation(kind: .start, credential: desktop, draft: request, taskID: nil)
     let restarted = try PendingMobileTaskMutation(stored: start.storageObject())
     try check(restarted == start, "restart round trip")
@@ -64,6 +65,50 @@ struct PendingTaskMutationTests {
     try listRefresh(credential: desktop, pending: cancellation)
     try desktopNotifications()
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func deviceRevocation(credential desktop: DeviceLinkCredential) throws {
+    let before = try PendingDeviceLinkRevocation(credential: desktop)
+    let after = try PendingDeviceLinkRevocation(stored: before.credentialDigest)
+    try check(after == before, "離脱照合記録を復元できる")
+    try check(after.matches(desktop), "同じ資格だけを照合できる")
+    for other in [credential(hostID: otherID), credential(deviceID: otherID), credential(pin: instructionHash),
+                  credential(credentialID: taskID), credential(secret: "different fixture")] {
+      try check(!after.matches(other), "異なる接続先・端末・証明書・資格を照合しない")
+    }
+    do {
+      _ = try PendingDeviceLinkRevocation(stored: "invalid")
+      throw SmokeFailure(label: "破損した離脱照合記録を受理した")
+    } catch DeviceLinkFailure.storage {}
+
+    let accepted: [String: Any] = [
+      "request_id": requestID, "operation": "端末離脱", "status": "accepted",
+      "evidence_source": "INTERNAL_STATE", "audit_event_id": "synthetic-device-revocation",
+      "error": NSNull(), "health": NSNull(), "body": ["状態": "失効"], "shutdown_requested": false,
+    ]
+    try DeviceLinkProtocol.requireConfirmedRevocation(accepted, nonce: requestID)
+    let changedFields: [(String, Any)] = [
+      ("request_id", otherID), ("operation", "端末確認"), ("evidence_source", "FIXTURE"),
+      ("evidence_source", "LIVE_RUNTIME"), ("body", ["状態": "接続中"]),
+      ("body", ["状態": "失効", "未定義": "追加項目"]),
+    ]
+    for (field, value) in changedFields {
+      var other = accepted
+      other[field] = value
+      do {
+        try DeviceLinkProtocol.requireConfirmedRevocation(other, nonce: requestID)
+        throw SmokeFailure(label: "一致しない応答を失効済みと判定した: \(field)")
+      } catch DeviceLinkFailure.invalid {}
+    }
+    var rejected = accepted
+    rejected["status"] = "rejected"
+    rejected["body"] = NSNull()
+    rejected["error"] = ["code": "refused", "message": "synthetic", "recoverable": true,
+      "audit_event_required": true, "fail_closed": true]
+    do {
+      try DeviceLinkProtocol.requireConfirmedRevocation(rejected, nonce: requestID)
+      throw SmokeFailure(label: "一般拒否を失効済みと判定した")
+    } catch DeviceLinkFailure.rejected {}
   }
 
   private static func submissionReceiptScope(credential desktop: DeviceLinkCredential) throws {

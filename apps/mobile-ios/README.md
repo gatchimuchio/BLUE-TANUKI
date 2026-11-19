@@ -10,6 +10,8 @@ BLUE-TANUKIが所有するiOSネイティブ入口である。Desktop Device Lin
 - この端末IDに一致する、上限付き・厳密形式のDesktop招待だけを受け付ける。送信前にHost ID、private IPv4、port、証明書SHA-256指紋を表示し、使用者が照合する。
 - TLS 1.2／1.3で招待されたleaf証明書をpinし、有効性を確認する。接続ごとにnewline-framed requestを一度だけ送り、5秒の期限を設け、不正形式や余分な応答データを拒否する。
 - 明示的なpairing、接続確認、Desktop側の資格失効、および分離された端末内だけの資格削除を提供する。端末内削除では、上限付き・非権威の回復記録を保存し、readbackを確認する。
+- Desktopへ `端末離脱` を送る前に、資格に結び付いた保留記録をKeychainへ保存して再読込する。同じ要求nonceの認証済み `INTERNAL_STATE` 応答が `失効` を示したら、端末内資格と保留記録を削除して再読込する。送信前に止まったと確定できる場合は保留記録だけを外す。
+- 応答不明や中断時は再起動後も保留を引き継ぎ、Desktop通信を停止する。Desktop側を確認し、必要な場合は明示確認のある端末内資格削除を使う。Desktopでの実行中の仕事の停止は別途確認する。
 - アプリがforegroundを離れるとactive transportをcancelする。申請送信前に、同じDesktop・端末、選択した実行系・作業領域、セッションID、送信するUTF-8のSHA-256に結び付いた照合記録をKeychainへ`WhenUnlockedThisDeviceOnly`で保存し、読戻す。受付の指示hashも送信した値に照合する。依頼本文やTask本文は永続保存しない。
 - Desktop Brokerから実行系と登録Workspaceを読み、Workspaceに束縛した新しい対話sessionからTask申請を一度だけ送る。申請はDesktop owner確認待ちとして扱う。
 - この端末のTask申請一覧とrequest-bound状態を明示照会できる。開始候補の場合だけ直前に状態を再照会して開始要求を出し、Broker側のApproval／Permission再検査に委ねる。

@@ -70,6 +70,7 @@ private final class DeviceLinkAttemptEvidence {
   var requestMayHaveReachedDesktop = false
   var responseReceived = false
   var remoteAccepted = false
+  var revocationAttempted = false
   var taskSubmissionMayHaveReachedDesktop = false
   var taskSubmissionPendingRecorded = false
   var taskSubmissionPendingCleared = false
@@ -93,6 +94,7 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published private(set) var deviceID = ""
   @Published private(set) var paired = false
   @Published private(set) var credentialExpired = false
+  @Published private(set) var revocationNeedsReconciliation = false
   @Published private(set) var recoveryAuditCount = 0
   @Published private(set) var hostPreview: DeviceLinkHostPreview?
   @Published private(set) var busy = false
@@ -112,6 +114,8 @@ final class DeviceLinkViewModel: ObservableObject {
   @Published var selectedWorkspaceID = ""
   @Published var taskInstruction = ""
   @Published var includeMcpCapability = false
+
+  private var usableCredential: Bool { paired && !credentialExpired && !revocationNeedsReconciliation }
 
   private let store = DeviceLinkStore()
   private let transport = DeviceLinkTransport()
@@ -152,7 +156,9 @@ final class DeviceLinkViewModel: ObservableObject {
     guard !busy else { return }
     do {
       publish(try store.loadOrCreate())
-      if paired {
+      if revocationNeedsReconciliation {
+        message = "Desktopでの失効結果が不明です。再送せず、Desktop ownerに確認してください。"
+      } else if paired {
         message = credentialExpired
           ? "端末資格の期限が切れています。自動接続・再送は行いません。"
           : "資格はこの端末のKeychainにあります。接続確認は明示操作で行います。"
@@ -170,6 +176,7 @@ final class DeviceLinkViewModel: ObservableObject {
       }
     } catch {
       desktopNotifications = .unobserved
+      revocationNeedsReconciliation = true
       taskMutationNeedsReconciliation = true
       message = "端末内の安全な状態を確認できません。ネットワーク操作を停止しています。"
     }
@@ -194,7 +201,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func resumeTaskState() {
-    guard lifecycle.isForeground(), paired, !credentialExpired else { return }
+    guard lifecycle.isForeground(), usableCredential else { return }
     guard !busy else {
       refreshOwnedTasksAfterForeground = true
       return
@@ -210,7 +217,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func refreshDesktopNotifications() {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     let epoch = lifecycle.capture()
     desktopNotifications = .reading
     busy = true
@@ -218,7 +225,7 @@ final class DeviceLinkViewModel: ObservableObject {
       guard let self else { return }
       let result = Result {
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         let body = try self.deviceLinkBody(
           credential, operation: DesktopNotificationSummary.operation,
           payload: ["版": 1, "未読のみ": false, "上限": DesktopNotificationSummary.maximumEntries],
@@ -240,14 +247,14 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func refreshTaskCatalog() {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     let epoch = lifecycle.capture()
     runTaskOperation(
       progressMessage: "Desktop Brokerから実行系と登録Workspaceを読み込んでいます。",
       failureMessage: { _, _ in "作業先を確認できません。Desktop側の状態を確認してから再試行してください。" },
       action: { evidence in
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         let runtimeBody = try self.deviceLinkBody(
           credential, operation: "実行系列挙", payload: [:], allowedEvidence: ["INTERNAL_STATE", "LIVE_RUNTIME"],
           epoch: epoch, evidence: evidence
@@ -279,7 +286,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func refreshOwnedTasks() {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     taskStatuses = [:]
     let epoch = lifecycle.capture()
     runTaskOperation(
@@ -287,7 +294,7 @@ final class DeviceLinkViewModel: ObservableObject {
       failureMessage: { _, _ in "Task一覧を確認できません。結果不明の操作は再送せず、Desktop側の申請一覧を確認してください。" },
       action: { evidence in
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         let body = try self.deviceLinkBody(
           credential, operation: "AgentTask端末申請一覧", payload: [:], allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
           epoch: epoch, evidence: evidence
@@ -337,14 +344,14 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func refreshMCPCapability() {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     let epoch = lifecycle.capture()
     runTaskOperation(
       progressMessage: "BrokerのMCP能力件数とsnapshot hashだけを確認しています。",
       failureMessage: { _, _ in "MCP能力のmetadataを確認できません。通常のMCPなし申請は利用できます。" },
       action: { evidence in
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         let body = try self.deviceLinkBody(
           credential, operation: "AgentTask端末MCP能力取得", payload: [:], allowedEvidence: ["LIVE_RUNTIME", "INTERNAL_STATE"],
           epoch: epoch, evidence: evidence
@@ -362,7 +369,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func submitTask() {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy,
+    guard lifecycle.isForeground(), usableCredential, !busy,
           !taskSubmissionNeedsReconciliation,
           let workspace = workspaces.first(where: { $0.id == selectedWorkspaceID && $0.runtimeID == selectedRuntimeID }) else {
       taskMessage = taskSubmissionNeedsReconciliation
@@ -409,7 +416,7 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard state.pendingTaskSubmission == nil else { throw DeviceLinkFailure.storage }
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         var sessionID: String?
         var pendingSubmission: PendingMobileTaskSubmission?
         do {
@@ -508,14 +515,14 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func refreshTaskStatus(_ draft: MobileTaskDraft) {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     let epoch = lifecycle.capture()
     runTaskOperation(
       progressMessage: "申請状態をDesktop Brokerへ照会しています。",
       failureMessage: { _, _ in "Task状態を確認できません。実行結果を推測せず、再送しません。" },
       action: { evidence in
         let state = try self.store.loadOrCreate()
-        guard let credential = state.credential, !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+        guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
         return try self.readTaskStatus(
           draft, credential: credential, pending: state.pendingTaskMutation, epoch: epoch, evidence: evidence
         )
@@ -537,7 +544,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   private func mutateTask(_ kind: MobileTaskMutationKind, draft: MobileTaskDraft) {
-    guard lifecycle.isForeground(), paired, !credentialExpired, !busy, !taskMutationNeedsReconciliation else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy, !taskMutationNeedsReconciliation else { return }
     let epoch = lifecycle.capture()
     let label = kind == .start ? "開始" : "取消"
     runTaskOperation(
@@ -546,7 +553,7 @@ final class DeviceLinkViewModel: ObservableObject {
       action: { evidence in
         let state = try self.store.loadOrCreate()
         guard state.pendingTaskMutation == nil else { throw DeviceLinkFailure.storage }
-        guard let credential = state.credential, !credential.isExpired(), !self.store.reinstallReviewRequired else {
+        guard let credential = state.usableCredential, !self.store.reinstallReviewRequired else {
           throw DeviceLinkFailure.invalid
         }
         let status = try self.readTaskStatus(draft, credential: credential, pending: nil, epoch: epoch, evidence: evidence)
@@ -791,10 +798,10 @@ final class DeviceLinkViewModel: ObservableObject {
 
   func preparePairing(rawInvitation: inout String) {
     defer { rawInvitation.removeAll(keepingCapacity: false) }
-    guard lifecycle.isForeground(), !busy, !paired, !reinstallReviewRequired else { return }
+    guard lifecycle.isForeground(), !busy, !paired, !reinstallReviewRequired, !revocationNeedsReconciliation else { return }
     do {
       let state = try store.loadOrCreate()
-      guard state.credential == nil else {
+      guard state.credential == nil, state.pendingRevocation == nil, !store.reinstallReviewRequired else {
         publish(state)
         message = "既にDesktop資格があります。先に状態を確認してください。"
         return
@@ -829,7 +836,7 @@ final class DeviceLinkViewModel: ObservableObject {
     guard lifecycle.isForeground(), !busy, reinstallReviewRequired else { return }
     do {
       try store.acknowledgeReinstallReview()
-      reinstallReviewRequired = store.reinstallReviewRequired
+      publish(try store.loadOrCreate())
       message = "Desktop ownerが旧端末状態を確認しました。新しい招待の接続先と証明書指紋も照合してください。"
     } catch {
       message = "再インストール後の端末状態を安全に更新できません。ネットワーク操作を停止しています。"
@@ -837,7 +844,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func confirmPairing() {
-    guard lifecycle.isForeground(), !busy, !reinstallReviewRequired,
+    guard lifecycle.isForeground(), !busy, !reinstallReviewRequired, !revocationNeedsReconciliation,
           let invitation = pendingInvitation else { return }
     pendingInvitation = nil
     hostPreview = nil
@@ -858,12 +865,17 @@ final class DeviceLinkViewModel: ObservableObject {
         return Self.safeFailure(error, fallback: "結合要求を送れませんでした。端末状態を確認してください。")
       }
     ) { evidence in
+      let state = try self.store.loadOrCreate()
+      guard state.credential == nil, state.pendingRevocation == nil, !self.store.reinstallReviewRequired else {
+        throw DeviceLinkFailure.storage
+      }
       let exchange = try self.exchange(
         invitation,
         operation: "端末結合",
         payload: [:],
         epoch: epoch,
-        evidence: evidence
+        evidence: evidence,
+        beforeSend: { (try? self.store.canUseInvitation(invitation)) == true }
       )
       guard DeviceLinkJSON.string(exchange.envelope["evidence_source"]) == "LIVE_RUNTIME" else {
         throw DeviceLinkFailure.invalid
@@ -883,7 +895,7 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func checkConnection() {
-    guard lifecycle.isForeground(), !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     desktopNotifications = .unobserved
     let epoch = lifecycle.capture()
     run(
@@ -903,8 +915,7 @@ final class DeviceLinkViewModel: ObservableObject {
       }
     ) { evidence in
       let state = try self.store.loadOrCreate()
-      guard let credential = state.credential else { throw DeviceLinkFailure.invalid }
-      guard !credential.isExpired() else { throw DeviceLinkFailure.invalid }
+      guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
       let exchange = try self.exchange(
         credential,
         operation: "端末確認",
@@ -933,55 +944,46 @@ final class DeviceLinkViewModel: ObservableObject {
   }
 
   func disconnectFromDesktop() {
-    guard lifecycle.isForeground(), !busy else { return }
+    guard lifecycle.isForeground(), usableCredential, !busy else { return }
     desktopNotifications = .unobserved
     let epoch = lifecycle.capture()
     run(
       epoch: epoch,
       successMessage: "Desktop失効応答と端末内資格の削除を確認しました。",
       failureMessage: { error, evidence in
-        if let brokerFailure = Self.brokerFailure(error) {
-          return brokerFailure
-        }
         if evidence.remoteAccepted {
-          return "Desktop失効は確認しましたが、端末内資格の削除を確認できません。資格を再送せず、端末内だけの削除を使ってください。"
-        }
-        if evidence.responseReceived {
-          return "Desktop応答を受信しましたが、失効結果を確認できません。資格を保持し、自動再送しません。"
+          return "Desktop失効応答は確認しましたが、端末内資格の削除を確認できません。失効を再送せず、端末内だけの削除を使ってください。"
         }
         if evidence.requestMayHaveReachedDesktop {
-          return "離脱要求がDesktopへ届いた可能性があります。自動再送しません。Desktop側を確認してから端末内状態を整理してください。"
+          return "Desktopでの失効結果が不明です。端末からの操作を保留しています。再送せず、Desktop ownerに確認してください。"
         }
-        return Self.safeFailure(error, fallback: "Desktopから解除できません。資格を保持しました。")
+        if let failure = error as? DeviceLinkFailure, case .transport(false) = failure {
+          return "離脱要求は送信前に停止しました。保存資格を保持しています。"
+        }
+        return "端末内の離脱記録を確定できません。再送せず、Desktop ownerに確認してください。"
       }
     ) { evidence in
+      evidence.revocationAttempted = true
       let state = try self.store.loadOrCreate()
-      guard let credential = state.credential else { return state }
-      guard !credential.isExpired() else { throw DeviceLinkFailure.invalid }
-      let exchange = try self.exchange(
-        credential,
-        operation: "端末離脱",
-        payload: [:],
-        epoch: epoch,
-        evidence: evidence
-      )
-      guard DeviceLinkJSON.string(exchange.envelope["evidence_source"]) == "LIVE_RUNTIME" else {
-        throw DeviceLinkFailure.invalid
+      guard let credential = state.usableCredential else { throw DeviceLinkFailure.invalid }
+      let pending = try self.store.markRevocationPending(credential)
+      let response: (nonce: String, envelope: [String: Any])
+      do {
+        response = try self.exchange(
+          credential, operation: "端末離脱", payload: [:], epoch: epoch, evidence: evidence,
+          beforeSend: {
+            (try? self.store.canUseCredential(credential, pendingRevocation: pending)) == true
+          }
+        )
+      } catch let failure as DeviceLinkFailure {
+        if case .transport(false) = failure {
+          _ = try self.store.clearUnsentRevocation(pending, credential: credential)
+        }
+        throw failure
       }
-      let body = try DeviceLinkProtocol.acceptedBody(
-        exchange.envelope,
-        nonce: exchange.nonce,
-        operation: "端末離脱"
-      )
-      guard DeviceLinkJSON.exactKeys(body, ["状態"]),
-            DeviceLinkJSON.string(body["状態"]) == "失効" else {
-        throw DeviceLinkFailure.invalid
-      }
+      try DeviceLinkProtocol.requireConfirmedRevocation(response.envelope, nonce: response.nonce)
       evidence.remoteAccepted = true
-      guard self.lifecycle.isCurrent(epoch) else {
-        throw DeviceLinkFailure.transport(mayHaveReachedDesktop: true)
-      }
-      return try self.store.clearConfirmedRevocation()
+      return try self.store.clearConfirmedRevocation(pending, credential: credential)
     }
   }
 
@@ -1004,14 +1006,19 @@ final class DeviceLinkViewModel: ObservableObject {
     operation: String,
     payload: [String: Any],
     epoch: UInt64,
-    evidence: DeviceLinkAttemptEvidence
+    evidence: DeviceLinkAttemptEvidence,
+    beforeSend: (() -> Bool)? = nil
   ) throws -> (nonce: String, envelope: [String: Any]) {
     do {
       let result = try transport.exchange(
         credential,
         operation: operation,
         payload: payload,
-        canSend: { [weak self] in self?.lifecycle.isCurrent(epoch) ?? false }
+        canSend: { [weak self] in
+          guard let self, self.lifecycle.isCurrent(epoch) else { return false }
+          let allowed = beforeSend?() ?? ((try? self.store.canUseCredential(credential)) == true)
+          return allowed && self.lifecycle.isCurrent(epoch)
+        }
       )
       evidence.requestMayHaveReachedDesktop = true
       evidence.responseReceived = true
@@ -1046,7 +1053,8 @@ final class DeviceLinkViewModel: ObservableObject {
       let result = Result { try action(evidence) }
       DispatchQueue.main.async {
         self.busy = false
-        guard self.lifecycle.isCurrent(epoch) else {
+        // 離脱は復帰後の送信可否を決める。画面世代が変わっても保存結果を反映する。
+        guard self.lifecycle.isCurrent(epoch) || evidence.revocationAttempted else {
           self.pendingInvitation = nil
           self.hostPreview = nil
           if evidence.remoteAccepted {
@@ -1063,7 +1071,10 @@ final class DeviceLinkViewModel: ObservableObject {
           self.publish(state)
           self.message = successMessage
         case .failure(let error):
-          do { self.publish(try self.store.loadOrCreate()) } catch { }
+          do { self.publish(try self.store.loadOrCreate()) }
+          catch {
+            if evidence.revocationAttempted { self.revocationNeedsReconciliation = true }
+          }
           self.message = failureMessage(error, evidence)
         }
       }
@@ -1074,7 +1085,8 @@ final class DeviceLinkViewModel: ObservableObject {
     deviceID = state.deviceID
     paired = state.credential != nil
     credentialExpired = state.credential?.isExpired() ?? false
-    if !paired || credentialExpired { desktopNotifications = .unobserved }
+    revocationNeedsReconciliation = state.pendingRevocation != nil
+    if !usableCredential { desktopNotifications = .unobserved }
     recoveryAuditCount = state.recoveryAudit.count
     taskSubmissionNeedsReconciliation = state.pendingTaskSubmission != nil
     taskMutationNeedsReconciliation = state.pendingTaskMutation != nil

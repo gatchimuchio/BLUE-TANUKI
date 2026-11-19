@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
+    private static final String REVOCATION_PENDING_MESSAGE =
+            "Desktopの失効結果は未確認です。再送・端末資格を使う通信を停止しています。Desktop ownerへ照会するか、端末内資格だけを削除できます。";
     private static final int REQUEST_LOCAL_NETWORK_PERMISSION = 3701;
     private static final int REQUEST_TASK_NOTIFICATION_PERMISSION = 3702;
     private static final int TASK_STATUS_NOTIFICATION_ID = 3703;
@@ -116,7 +118,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         ensureTaskNotificationChannel();
-        credentialStore = new AndroidCredentialStore(getApplicationContext());
+        credentialStore = AndroidCredentialStore.forApplication(this);
         taskClient = new MobileTaskClient(credentialStore, transport);
         try {
             deviceId = credentialStore.loadOrCreateDeviceId();
@@ -129,7 +131,7 @@ public final class MainActivity extends Activity {
         loadTaskCheckpoint();
         refreshCredentialControls(credentialStore.contains());
         refreshRecoveryAuditSummary();
-        setStatus(identityReady
+        setStatus(credentialStore.hasPendingDesktopRevocation() ? REVOCATION_PENDING_MESSAGE : identityReady
                 ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
                 : credentialStore.hasPendingTaskCheckpoint()
                         ? "未照合のTask記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
@@ -487,7 +489,7 @@ public final class MainActivity extends Activity {
     }
 
     private void beginPairing() {
-        if (busy || !foreground) {
+        if (busy || !foreground || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation()) {
             return;
         }
         if (!identityReady || deviceId == null) {
@@ -529,7 +531,7 @@ public final class MainActivity extends Activity {
             AtomicBoolean stored = new AtomicBoolean(false);
             try {
                 DeviceLinkTransport.Exchange exchange = transport.pair(invitation,
-                        () -> canSend(operationGeneration));
+                        () -> canUseDeviceLink(operationGeneration) && credentialStore.canPair(invitation.deviceId));
                 DeviceCredential credential = PairingResponseParser.parse(exchange.response, invitation,
                         exchange.nonce, System.currentTimeMillis() / 1000L);
                 credentialStore.saveAndVerify(credential);
@@ -564,6 +566,12 @@ public final class MainActivity extends Activity {
             return;
         }
         clearDesktopNotifications();
+        if (credentialStore.hasPendingDesktopRevocation()) {
+            refreshOwnedTaskRequestsAfterForeground = false;
+            refreshCredentialControls(credentialStore.contains());
+            setStatus(REVOCATION_PENDING_MESSAGE);
+            return;
+        }
         if (credentialStateUncertain) {
             refreshOwnedTaskRequestsAfterForeground = false;
             refreshCredentialControls(credentialStore.contains());
@@ -600,14 +608,17 @@ public final class MainActivity extends Activity {
         refreshCredentialControls(true);
         setStatus("foregroundでKeystore資格を再読取し、Desktopへ端末確認を行っています。");
         long operationGeneration = generation.get();
+        DeviceLinkTransport.SendGuard sendGuard = () -> canUseDeviceLink(operationGeneration) &&
+                credentialStore.canUseCredentialForDeviceLink(credential);
         AtomicBoolean connectionConfirmed = new AtomicBoolean(false);
         worker.execute(() -> {
             try {
-                DeviceLinkTransport.Exchange exchange = transport.check(credential,
-                        () -> canSend(operationGeneration));
+                DeviceLinkTransport.Exchange exchange = transport.check(credential, sendGuard);
                 PairingResponseParser.requireConnectedResponse(exchange.response, exchange.nonce);
-                connectionConfirmed.set(true);
-                postStatus(operationGeneration, "Desktop Brokerが端末確認を受理しました。これは現在の接続状態の観測であり、仕事の実行や承認を示しません。");
+                if (sendGuard.canSend()) {
+                    connectionConfirmed.set(true);
+                    postStatus(operationGeneration, "Desktop Brokerが端末確認を受理しました。これは現在の接続状態の観測であり、仕事の実行や承認を示しません。");
+                }
             } catch (PairingResponseParser.PairingRejectedException exception) {
                 postStatus(operationGeneration, "Desktop Brokerが端末確認を拒否または停止しました。資格を使った仕事は行いません。");
             } catch (Exception exception) {
@@ -639,7 +650,7 @@ public final class MainActivity extends Activity {
     }
 
     private void beginDesktopRevocation() {
-        if (!foreground || busy || credentialStateUncertain) return;
+        if (!foreground || busy || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation()) return;
         final DeviceCredential credential;
         try {
             credential = credentialStore.read();
@@ -671,65 +682,46 @@ public final class MainActivity extends Activity {
     }
 
     private void performDesktopRevocation(DeviceCredential selected) {
-        if (!foreground || busy || credentialStateUncertain || !hasLocalNetworkPermission()) return;
-        final DeviceCredential credential;
-        try {
-            credential = credentialStore.read();
-        } catch (AndroidCredentialStore.CredentialStoreException exception) {
-            credentialStateUncertain = true;
-            refreshCredentialControls(true);
-            setStatus("保存資格を再読込できないため、Desktop失効要求を送信しませんでした。");
-            return;
-        }
-        if (credential == null || !selected.sameValue(credential)) {
-            refreshCredentialControls(credential != null);
-            setStatus("確認画面を開いた後に保存資格が変わりました。失効要求を止めました。状態を再確認してください。");
-            return;
-        }
+        if (!foreground || busy || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation() ||
+                !hasLocalNetworkPermission()) return;
         busy = true;
         disconnectInFlight = true;
         clearDesktopNotifications();
         refreshCredentialControls(true);
-        setStatus("Desktopへ端末離脱を送信しています。応答不明時は自動再送しません。");
+        setStatus("端末資格の照合記録を保存し、Desktopへ端末離脱を一度だけ送ります。");
         long operationGeneration = generation.get();
         worker.execute(() -> {
-            try {
-                DeviceLinkTransport.Exchange exchange = transport.leave(credential,
-                        () -> canSend(operationGeneration));
-                PairingResponseParser.requireDisconnectedResponse(exchange.response, exchange.nonce);
-                credentialStore.clearRevokedCredential();
-                postStatus(operationGeneration,
-                        "Desktopの失効応答と端末内資格の削除後readbackを確認しました。実行中・送信済みの仕事の停止は保証されません。");
-            } catch (PairingResponseParser.PairingRejectedException exception) {
-                postStatus(operationGeneration,
-                        "Desktopが端末離脱を拒否または停止しました。保存資格は保持しています。Desktop ownerへ確認してください。");
-            } catch (PairingResponseParser.PairingUnknownException exception) {
-                postStatus(operationGeneration,
-                        "Desktop応答を失効成功と確認できませんでした。資格を保持し、自動再送しません。Desktop側で状態を確認してください。");
-            } catch (DeviceLinkTransport.TransportException exception) {
-                if (exception.requestMayHaveReachedDesktop) {
-                    postStatus(operationGeneration,
-                            "失効要求の結果が不明です。資格を保持し、自動再送しません。Desktop ownerへ失効状態を確認してください。");
-                } else {
-                    postStatus(operationGeneration,
-                            "失効要求は送信前に停止しました。資格は保持しています。接続を確認してから手動で再操作してください。");
+            DeviceLinkRevocation.Outcome outcome = DeviceLinkRevocation.run(selected,
+                    () -> canSend(operationGeneration) && hasLocalNetworkPermission(), credentialStore, transport::leave);
+            mainHandler.post(() -> {
+                busy = false;
+                disconnectInFlight = false;
+                if (isFinishing() || isDestroyed()) return;
+                String status;
+                switch (outcome) {
+                    case REVOKED:
+                        status = "Desktopの失効応答と端末内資格の削除を確認しました。実行中・送信済みの仕事の停止は保証されません。";
+                        break;
+                    case UNSENT:
+                        status = "失効要求は送信前に停止しました。資格を保持しています。";
+                        break;
+                    case UNKNOWN:
+                        status = REVOCATION_PENDING_MESSAGE;
+                        break;
+                    case REVOKED_CLEANUP_UNVERIFIED:
+                        credentialStateUncertain = true;
+                        status = "Desktopの失効応答を確認しました。端末内資格の削除は未確認です。失効を再送せず、アプリを再起動して保存状態を確認してください。";
+                        break;
+                    default:
+                        credentialStateUncertain = true;
+                        status = "失効要求は送っていません。端末内の照合記録を確定できないため通信を停止しました。アプリを再起動して保存状態を確認してください。";
+                        break;
                 }
-            } catch (AndroidCredentialStore.CredentialStoreException exception) {
-                credentialStateUncertain = true;
-                postStatus(operationGeneration,
-                        "Desktopの失効応答は確認しましたが、端末内資格の削除後readbackを確認できません。失効を再送せず、端末内状態を再確認してください。");
-            } finally {
-                mainHandler.post(() -> {
-                    busy = false;
-                    disconnectInFlight = false;
-                    if (foreground && generation.get() == operationGeneration) {
-                        refreshCredentialControls(credentialStore.contains());
-                        refreshRecoveryAuditSummary();
-                    } else if (foreground) {
-                        verifyStoredCredential();
-                    }
-                });
-            }
+                refreshOwnedTaskRequestsAfterForeground = false;
+                setStatus(status);
+                refreshCredentialControls(credentialStore.contains());
+                refreshRecoveryAuditSummary();
+            });
         });
     }
 
@@ -781,8 +773,7 @@ public final class MainActivity extends Activity {
         long operationGeneration = generation.get();
         worker.execute(() -> {
             try {
-                DeviceLinkLocalRecoveryAudit.Event event = credentialStore.deleteCredentialLocally();
-                if (event == null) throw new AndroidCredentialStore.CredentialStoreException();
+                credentialStore.deleteCredentialLocally(credential);
                 postStatus(operationGeneration,
                         "端末内資格の不在と非権威の回復記録を再読込で確認しました。Desktop側の失効は未確認です。");
             } catch (AndroidCredentialStore.CredentialStoreException exception) {
@@ -804,6 +795,10 @@ public final class MainActivity extends Activity {
         return foreground && generation.get() == operationGeneration && !isFinishing() && !isDestroyed();
     }
 
+    private boolean canUseDeviceLink(long operationGeneration) {
+        return canSend(operationGeneration) && !credentialStore.hasPendingDesktopRevocation();
+    }
+
     private void refreshCredentialControls(boolean credentialPresent) {
         if (pairButton == null) return;
         boolean usableCredential = credentialPresent;
@@ -818,15 +813,16 @@ public final class MainActivity extends Activity {
             }
         }
         boolean ready = foreground && !busy && !credentialStateUncertain;
-        pairButton.setEnabled(identityReady && ready && !credentialPresent);
+        boolean revocationPending = credentialStore.hasPendingDesktopRevocation();
+        pairButton.setEnabled(identityReady && ready && !credentialPresent && !revocationPending);
         if (leaveButton != null) {
-            leaveButton.setEnabled(ready && usableCredential && hasLocalNetworkPermission());
+            leaveButton.setEnabled(ready && usableCredential && !revocationPending && hasLocalNetworkPermission());
         }
         if (localDeleteButton != null) {
             localDeleteButton.setEnabled(ready && credentialPresent && !recoveryAuditUnavailable);
         }
         if (refreshDesktopNotificationsButton != null) {
-            boolean available = usableCredential && !credentialStateUncertain && hasLocalNetworkPermission();
+            boolean available = usableCredential && !credentialStateUncertain && !revocationPending && hasLocalNetworkPermission();
             refreshDesktopNotificationsButton.setEnabled(ready && available && notificationForeground);
             if (!available) clearDesktopNotifications();
         }
@@ -951,11 +947,12 @@ public final class MainActivity extends Activity {
     }
 
     private boolean canUseMobileTask() {
-        if (!foreground || busy || credentialStateUncertain || taskStateUncertain || !hasLocalNetworkPermission()) {
+        if (!foreground || busy || credentialStateUncertain || taskStateUncertain ||
+                credentialStore.hasPendingDesktopRevocation() || !hasLocalNetworkPermission()) {
             return false;
         }
         try {
-            DeviceCredential credential = credentialStore.read();
+            DeviceCredential credential = credentialStore.readForDeviceLink();
             return credential != null && credential.expiresAt > System.currentTimeMillis() / 1000L;
         } catch (AndroidCredentialStore.CredentialStoreException exception) {
             credentialStateUncertain = true;
@@ -969,6 +966,9 @@ public final class MainActivity extends Activity {
         if (taskStatusView == null) return;
         boolean ready = canUseMobileTask();
         String display = taskMessage;
+        if (credentialStore.hasPendingDesktopRevocation()) {
+            display += "\nDesktop側の失効状態を確認できるまで、端末資格を使うTask通信を停止しています。";
+        }
         if (taskStateUncertain) {
             display += "\n照合記録が不明なため、新規申請を停止しています。";
         } else if (taskSubmissionNeedsReconciliation) {
@@ -1128,7 +1128,7 @@ public final class MainActivity extends Activity {
 
     private void refreshTaskCatalog() {
         runMobileTaskOperation("Desktop Brokerから実行系と登録Workspaceを読み込んでいます。", false,
-                epoch -> taskClient.refreshCatalog(() -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.refreshCatalog(() -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = "作業先を確認できません。Desktop側の状態を確認して再試行してください。";
                         return;
@@ -1146,10 +1146,11 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshDesktopNotifications() {
-        if (!notificationForeground || busy || credentialStateUncertain || !hasLocalNetworkPermission()) return;
+        if (!notificationForeground || busy || credentialStateUncertain ||
+                credentialStore.hasPendingDesktopRevocation() || !hasLocalNetworkPermission()) return;
         final DeviceCredential credential;
         try {
-            credential = credentialStore.read();
+            credential = credentialStore.readForDeviceLink();
         } catch (AndroidCredentialStore.CredentialStoreException ignored) {
             credentialStateUncertain = true;
             refreshCredentialControls(credentialStore.contains());
@@ -1161,9 +1162,10 @@ public final class MainActivity extends Activity {
         }
         long operationGeneration = generation.get();
         long foregroundEpoch = notificationForegroundEpoch.get();
-        DeviceLinkTransport.SendGuard sendGuard = () -> notificationForeground && canSend(operationGeneration) &&
+        DeviceLinkTransport.SendGuard sendGuard = () -> notificationForeground && canUseDeviceLink(operationGeneration) &&
                 foregroundEpoch == notificationForegroundEpoch.get() &&
-                credential.expiresAt > System.currentTimeMillis() / 1000L;
+                credential.expiresAt > System.currentTimeMillis() / 1000L &&
+                credentialStore.canUseCredentialForDeviceLink(credential);
         busy = true;
         desktopNotificationsInFlight = true;
         refreshCredentialControls(true);
@@ -1172,7 +1174,7 @@ public final class MainActivity extends Activity {
             DesktopNotificationSummary summary = null;
             try {
                 DesktopNotificationSummary observed = DesktopNotificationSummary.parse(transport.notifications(credential, sendGuard));
-                if (sendGuard.canSend() && credential.sameValue(credentialStore.read())) summary = observed;
+                if (sendGuard.canSend()) summary = observed;
             } catch (Exception ignored) {
                 // Reject or lose the observation without displaying details or resending.
             }
@@ -1200,7 +1202,7 @@ public final class MainActivity extends Activity {
         taskStatuses.clear();
         refreshTaskList();
         runMobileTaskOperation("この端末に紐づくTask申請をDesktop Brokerへ照会しています。", false,
-                epoch -> taskClient.refreshOwnedRequests(() -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.refreshOwnedRequests(() -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = "Task一覧を確認できません。結果不明の操作は再送せず、Desktop側の申請一覧を確認してください。";
                         loadTaskCheckpoint();
@@ -1227,7 +1229,7 @@ public final class MainActivity extends Activity {
 
     private void refreshTaskMcpSnapshot() {
         runMobileTaskOperation("Brokerの能力件数とsnapshot hashだけを確認しています。", false,
-                epoch -> taskClient.refreshMcpSnapshot(() -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.refreshMcpSnapshot(() -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = "能力metadataを確認できません。MCPなしの申請は利用できます。";
                         return;
@@ -1280,7 +1282,7 @@ public final class MainActivity extends Activity {
         taskInstructionInput.setText("");
         runMobileTaskOperation("対話sessionを作成し、Task申請を一度だけ送信しています。", true,
                 epoch -> taskClient.submit(runtimeID, workspace.id, instruction, includeMcp,
-                        () -> canSend(epoch)), (result, error) -> {
+                        () -> canUseDeviceLink(epoch)), (result, error) -> {
                     loadTaskCheckpoint();
                     if (error == null) {
                         MobileTaskClient.Submission submission = (MobileTaskClient.Submission) result;
@@ -1320,7 +1322,7 @@ public final class MainActivity extends Activity {
 
     private void refreshTaskStatus(MobileTaskContract.Draft draft) {
         runMobileTaskOperation("申請状態をDesktop Brokerへ照会しています。", false,
-                epoch -> taskClient.refreshStatus(draft, () -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.refreshStatus(draft, () -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = "Task状態を確認できません。結果を推測せず、再送しません。";
                         return;
@@ -1333,7 +1335,7 @@ public final class MainActivity extends Activity {
 
     private void startMobileTask(MobileTaskContract.Draft draft) {
         runMobileTaskOperation("申請状態を再確認してからBrokerへ開始要求を一度だけ送ります。", false,
-                epoch -> taskClient.mutate(PendingTaskMutation.Action.START, draft, () -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.mutate(PendingTaskMutation.Action.START, draft, () -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
                                 ? "未照合の操作があるため、開始要求を送信していません。"
@@ -1354,7 +1356,7 @@ public final class MainActivity extends Activity {
 
     private void cancelMobileTask(MobileTaskContract.Draft draft) {
         runMobileTaskOperation("Task状態を照合してから取消要求を一度だけ送ります。", false,
-                epoch -> taskClient.mutate(PendingTaskMutation.Action.CANCEL, draft, () -> canSend(epoch)), (result, error) -> {
+                epoch -> taskClient.mutate(PendingTaskMutation.Action.CANCEL, draft, () -> canUseDeviceLink(epoch)), (result, error) -> {
                     if (error != null) {
                         taskMessage = error instanceof MobileTaskClient.TaskMutationHeld
                                 ? "未照合の操作があるため、取消要求を送信していません。"

@@ -20,7 +20,8 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - TLS接続ごとに、上限とtimeoutを定めたDevice Link requestを一度だけ送る。requestがDesktopへ届いた可能性がある場合、招待を再送しない。
 - 返却されたdevice credentialはAndroid Keystore鍵で保護するAES-GCM ciphertextとしてのみ保存する。secure storageへの保存またはreadbackに失敗した場合、pairing完了と扱わない。
 - アプリがforegroundへ戻ったときに保存済みcredentialを確認し、Desktop確認に成功した場合はこの端末のTask申請一覧を一度だけread-onlyで再取得する。backgroundへ移る際は接続socketを閉じる。
-- 通常の解除はDesktopへ`端末離脱`を一度だけ送り、要求nonceと正確な失効応答を確認した後、端末内資格を削除してreadbackする。曖昧な応答では資格を保持し、自動再送しない。
+- 通常の解除では、保存資格に結び付いた保留記録をKeystoreで保護して保存・再読込してから、Desktopへ `端末離脱` を一度送る。同じ要求nonceの認証済み `INTERNAL_STATE` 応答が `失効` を示したら端末内資格と保留記録を削除し、保存状態を再読込する。送信前に止まったと確定できる場合は保留記録だけを外す。
+- 応答不明や中断時は再起動後も資格と保留記録を保持し、Desktop通信を停止する。Desktop側の状態を確認し、必要な場合は明示確認のある端末内資格削除を使う。Desktopでの実行中の仕事の停止は別途確認する。
 - 通信不能時の端末内資格削除は、Desktop側の失効と別の回復操作として明示する。資格の削除と、Desktop失効未確認・権限影響なしを固定した最大32件の非権威回復記録を同じKeystore保護状態へ保存し、両方のreadback後にだけ完了表示する。
 - foreground世代が変わった場合、TLS handshake後・要求送信前に再確認し、backgroundから新しい要求を送らない。
 - Desktop Brokerから実行系・登録Workspace・この端末の申請を取得し、MCPはsnapshot hash・件数・利用可否だけを取得する。能力名・schema・credentialは表示しない。

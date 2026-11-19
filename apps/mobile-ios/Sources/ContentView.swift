@@ -98,33 +98,39 @@ struct ContentView: View {
                   .autocorrectionDisabled()
                   .font(.system(.footnote, design: .monospaced))
                   .accessibilityIdentifier("device-link-invitation")
-                  .disabled(model.busy || model.reinstallReviewRequired)
+                  .disabled(model.busy || model.reinstallReviewRequired || model.revocationNeedsReconciliation)
                 Button("招待を検証して接続先を表示") {
                   var raw = invitation
                   invitation = ""
                   model.preparePairing(rawInvitation: &raw)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.busy || invitation.isEmpty || model.reinstallReviewRequired)
+                .disabled(model.busy || invitation.isEmpty || model.reinstallReviewRequired || model.revocationNeedsReconciliation)
               }
               .frame(maxWidth: .infinity, alignment: .leading)
             }
           } else {
             GroupBox("結合状態") {
               VStack(alignment: .leading, spacing: 10) {
-                Label(
-                  model.credentialExpired ? "資格期限切れ" : "端末資格をKeychainで保管中",
-                  systemImage: model.credentialExpired ? "exclamationmark.triangle" : "key.fill"
-                )
-                Button("Desktop接続を明示確認") {
-                  model.checkConnection()
+                if model.revocationNeedsReconciliation {
+                  Label("Desktop失効の確認待ち", systemImage: "exclamationmark.triangle")
+                  Text("再送せず、Desktop ownerに失効状態を確認してください。端末内だけの資格削除は引き続き利用できます。")
+                    .font(.footnote)
+                } else {
+                  Label(
+                    model.credentialExpired ? "資格期限切れ" : "端末資格をKeychainで保管中",
+                    systemImage: model.credentialExpired ? "exclamationmark.triangle" : "key.fill"
+                  )
+                  Button("Desktop接続を明示確認") {
+                    model.checkConnection()
+                  }
+                  .buttonStyle(.borderedProminent)
+                  .disabled(model.busy || model.credentialExpired)
+                  Button("Desktopから端末結合を解除") {
+                    confirmDisconnect = true
+                  }
+                  .disabled(model.busy || model.credentialExpired)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.busy || model.credentialExpired)
-                Button("Desktopから端末結合を解除") {
-                  confirmDisconnect = true
-                }
-                .disabled(model.busy || model.credentialExpired)
                 Button("端末内資格だけを削除") {
                   confirmLocalDelete = true
                 }
@@ -137,7 +143,7 @@ struct ContentView: View {
             }
           }
 
-          if model.paired {
+          if model.paired && !model.revocationNeedsReconciliation {
             mobileTaskSection
             desktopNotificationSection
           }
