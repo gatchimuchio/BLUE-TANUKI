@@ -39,6 +39,7 @@ export {
   type WebChatD4RuntimeCancellationStatus,
   type WebChatD4RuntimeTaskOutcome,
   type WebChatD4RuntimeExecutionObservation,
+  type WebChatD4RuntimeReplyObservation,
   type WebChatD4RuntimeIntentCancellation,
   type WebChatOwnerTaskCancellationStatus,
   type WebChatOwnerTaskCancellation,

@@ -19,12 +19,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   createGatewayInternalInboundRequest,
   GoalCompletionRulesSchema,
+  D4RuntimeIntentReplyObservationSchema,
   D4RuntimeNotificationsProjectionSchema,
   D4RuntimeStatusProjectionSchema,
   InboundRequestSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
+  RuntimeIntentStatusQuerySchema,
   RuntimeSessionInputSchema,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
@@ -938,7 +940,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/inbound body:{user, content} auth:dedicated owner bearer
  *   POST /runtime/ws-ticket body:{runtime_id, session_id} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent body:{runtime_id, session_id, submission_id, intent} auth:dedicated D4 Runtime bearer
- *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
+ *   POST /runtime/intent/status body:{runtime_id, session_id, submission_id, include_reply_observation?} auth:dedicated D4 Runtime bearer
  *   POST /runtime/intent/cancel body:{runtime_id, session_id, submission_id} auth:dedicated D4 Runtime bearer
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
@@ -2473,7 +2475,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     if (url.pathname === "/runtime/intent/status") {
-      const parsed = RuntimeIntentStatusInputSchema.safeParse(body);
+      const parsed = RuntimeIntentStatusQuerySchema.safeParse(body);
       if (!parsed.success) {
         res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "invalid_runtime_intent_status" }));
@@ -2518,9 +2520,20 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               may_execute: false as const,
             })))
           : undefined;
-        const executionObservation = scope && state !== "rejected" && this.opts.onD4RuntimeIntentExecutionObservation
-          ? normalizeTaskExecutionObservation(await this.opts.onD4RuntimeIntentExecutionObservation(scope).catch(() => undefined))
-          : undefined;
+        const includeReply = parsed.data.include_reply_observation === true;
+        let executionObservation;
+        let replyObservation;
+        if (scope && state !== "rejected" && this.opts.onD4RuntimeIntentObservations) {
+          const observations = await this.opts.onD4RuntimeIntentObservations(scope, includeReply).catch(() => undefined);
+          executionObservation = normalizeTaskExecutionObservation(observations?.execution_observation);
+          replyObservation = observations?.reply_observation;
+        }
+        if (status && includeReply) {
+          const parsedReply = D4RuntimeIntentReplyObservationSchema.safeParse(replyObservation);
+          replyObservation = parsedReply.success ? parsedReply.data : {
+            status: "unknown", used_for_authority: false, may_execute: false,
+          };
+        }
         const result = status
           ? state === "rejected"
             ? { status: "unavailable" as const, reason_code: "not_retained" as const,
@@ -2542,6 +2555,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
               ...(cancellationStatus ? { cancellation: cancellationStatus } : {}),
               ...(executionObservation ? { execution_observation: executionObservation } : {}),
+              ...(includeReply && replyObservation ? { reply_observation: replyObservation } : {}),
               ...(result ? { result } : {}) }
           : { found: false }));
       } catch {

@@ -1,4 +1,4 @@
-import type { WebChatD4RuntimeCancellationStatus,
+import type { WebChatD4RuntimeCancellationStatus, WebChatD4RuntimeReplyObservation,
   WebChatOwnerTaskPlanStep, WebChatOwnerTaskPlanSteps, WebChatTaskExecutionObservation, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
 import { MAX_OWNER_TASK_PLAN_STEPS } from "@blue-tanuki/channel-webchat";
 import { createHash } from "node:crypto";
@@ -269,6 +269,71 @@ function projectTaskExecutionObservation(
 export function projectD4RuntimeExecutionObservation(input: TaskExecutionObservationInput): WebChatTaskExecutionObservation {
   try { return projectTaskExecutionObservation(input, "d4_runtime"); }
   catch { return { status: "unknown", used_for_authority: false, may_execute: false }; }
+}
+
+/** 同じD4受付について、通常のC応答を表示用に準備した事実だけを監査から照合する。 */
+export function projectD4RuntimeReplyPreparation(
+  verifiedAudit: readonly AuditEntry[], requestId: string,
+): WebChatD4RuntimeReplyObservation {
+  const flags = { used_for_authority: false, may_execute: false } as const;
+  const unknown = { status: "unknown", ...flags } as const;
+  if (requestId.length !== 36 || !REQUEST_ID.test(requestId)) return unknown;
+  try {
+    const logs = verifiedAudit.flatMap(({ log }) => "request_id" in log && log.request_id === requestId ? [log] : []);
+    const decisions = logs.filter((log): log is DecisionLog => !("kind" in log));
+    const gates = logs.filter(log => "kind" in log && log.kind === "approval_gate");
+    const feedback = logs.filter(log => "kind" in log && log.kind === "executor_feedback");
+    const outputs = logs.filter(log => "kind" in log && log.kind === "output_audit");
+    const [decision] = decisions;
+    const [gate] = gates;
+    const [returned] = feedback;
+    const [output] = outputs;
+    if (decisions.length !== 1 || !decision || gates.length !== 1 || !gate ||
+        feedback.length !== 1 || !returned || outputs.length !== 1 || !output) return unknown;
+
+    const actor = decision.frame.actor;
+    const commit = decision.commit.hash;
+    const command = gate.command_id;
+    if (actor.channel !== "webchat" || actor.actor_kind !== "user" || actor.trust_level !== "limited" ||
+        operationPlanDigest(actor.actor_id) !== D4_RUNTIME_OWNER_DIGEST || decision.commit.decision !== "ASSERT" ||
+        !DIGEST.test(commit) || !COMMAND_ID.test(command)) return unknown;
+    const approval = gate.evaluation;
+    if (gate.upstream_commit_hash !== commit || approval.context.upstream_commit_hash !== commit ||
+        approval.context.command_id !== command || approval.context.actor !== actor.actor_id ||
+        approval.context.command_type !== "llm_call" || approval.context.operation !== "llm.call" ||
+        (approval.decision !== "allow" && approval.decision !== "ask")) return unknown;
+
+    const decisionPosition = logs.indexOf(decision);
+    const gatePosition = logs.indexOf(gate);
+    const feedbackPosition = logs.indexOf(returned);
+    if (!(decisionPosition < gatePosition && gatePosition < feedbackPosition && feedbackPosition < logs.indexOf(output))) return unknown;
+    const phases = logs.filter(log => "kind" in log && log.kind === "command_lifecycle");
+    if (phases.some(phase => phase.command_id !== command || phase.upstream_commit_hash !== commit ||
+      phase.upstream_decision !== "ASSERT" || phase.phase === "approval_rejected" || phase.phase === "approval_cancelled")) return unknown;
+    if (approval.decision === "ask") {
+      const approved = phases.filter(phase => phase.phase === "approval_approved");
+      if (approved.length !== 1 || !approved[0] ||
+          !(gatePosition < logs.indexOf(approved[0]) && logs.indexOf(approved[0]) < feedbackPosition)) return unknown;
+    }
+
+    const resultDigest = returned.feedback.result_digest;
+    if (!returned.known_command || returned.command_id !== command || returned.upstream_commit_hash !== commit ||
+        returned.upstream_decision !== "ASSERT" || returned.feedback.status !== "success" ||
+        !returned.feedback.result_present || returned.feedback.result_digest_status !== "recorded" ||
+        typeof resultDigest !== "string" || !DIGEST.test(resultDigest)) return unknown;
+    const digest = output.rendered_output_digest;
+    const timestamp = output.timestamp;
+    if (output.command_id !== command || output.upstream_commit_hash !== commit || output.upstream_decision !== "ASSERT" ||
+        output.command_type !== "llm_call" || output.output_kind !== "llm_raw_output" || output.target_surface !== "channel" ||
+        output.status !== "success" || !output.result_present || output.result_digest_status !== "recorded" ||
+        output.result_digest !== resultDigest || !output.rendered_output_present || !output.user_visible_output ||
+        output.external_side_effect_result !== false || output.release_decision !== "allow" || output.used_for_authority !== false ||
+        typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest) ||
+        !Number.isSafeInteger(timestamp) || timestamp <= 0 || timestamp > 8_640_000_000_000_000) return unknown;
+    return { status: "prepared", rendered_output_sha256: digest, prepared_at_ms: timestamp, ...flags };
+  } catch {
+    return unknown;
+  }
 }
 
 /** Workの初回計算が対象。後続の審査・計画step・目的達成は別の観測が必要。 */

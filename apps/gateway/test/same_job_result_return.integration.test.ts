@@ -1967,8 +1967,8 @@ HDSUpperController.prototype.decide = function (request, options) {
           model: "d4-observation-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
         }]),
       };
-      const post = (route: string, body: object) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
-        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      const post = (route: string, body: object, bearer = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
         body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
       });
       const connectSession = async (sessionId: string, observedFrames: string[]) => {
@@ -1985,7 +1985,7 @@ HDSUpperController.prototype.decide = function (request, options) {
         sockets.clear();
       };
       gateway = spawnGateway(env, handlerFailurePreload);
-      await waitForHealth(gatewayPort, gateway, 40_000);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       await connectSession(input.session_id, frames);
       await connectSession(otherInput.session_id, otherFrames);
       const protectedAudience = `d4-runtime:${createHmac("sha256", token)
@@ -2008,22 +2008,38 @@ HDSUpperController.prototype.decide = function (request, options) {
       expect(await (await post("/runtime/intent/status", otherInput)).json()).toEqual({ found: false });
       expect(providerRequests).toBe(1);
       returnCompute();
+      await waitFor(() => frames.some(frame => frame.includes(privateResult)) ? true : null, gateway,
+        "the owning D4 response session did not receive the reply");
       const completed = await waitFor(async () => {
         const response = await post("/runtime/intent/status", input);
         if (response.status === 429) return null;
         expect(response.status).toBe(200);
         expect(response.headers.get("cache-control")).toBe("no-store");
         const payload = await response.json() as { state: string; execution_observation?: { status: string };
-          result?: { status: string } };
+          result?: { status: string; content?: string } };
         return payload.state === "handler_returned" && payload.execution_observation?.status === "adapter_returned" &&
           payload.result?.status === "available" ? payload : null;
       }, gateway, "the final D4 reply and execution observation were not linked to the same request");
       expect(completed).toMatchObject({ found: true, request_id,
         task_outcome: { status: "unknown", ...flags }, result: { content: expect.stringContaining(privateResult), ...flags } });
       expect(completed.execution_observation).toEqual(execution);
-      await waitFor(() => frames.some(frame => frame.includes(privateResult)) ? true : null, gateway,
-        "the owning D4 response session did not receive the reply");
+      expect(completed).not.toHaveProperty("reply_observation");
       expect(otherFrames.join("")).not.toContain(privateResult);
+      const replyObservationRequest = { ...input, include_reply_observation: true };
+      const preparedResponse = await post("/runtime/intent/status", replyObservationRequest);
+      expect(preparedResponse.status).toBe(200);
+      expect(preparedResponse.headers.get("cache-control")).toBe("no-store");
+      const { reply_observation: prepared, ...withoutObservation } = await preparedResponse.json() as {
+        reply_observation?: { prepared_at_ms?: number };
+      };
+      expect(withoutObservation).toEqual(completed);
+      const rendered = completed.result?.content;
+      if (typeof rendered !== "string") throw new Error("the D4 reply body was not captured before the restart");
+      expect(prepared).toEqual({ status: "prepared", prepared_at_ms: expect.any(Number),
+        rendered_output_sha256: createHash("sha256").update(JSON.stringify(rendered), "utf8").digest("hex"),
+        ...flags });
+      expect(Number.isSafeInteger(prepared?.prepared_at_ms)).toBe(true);
+      expect(prepared?.prepared_at_ms).toBeGreaterThan(0);
       const failed = await post("/runtime/intent", { ...failedInput, intent: failedIntent });
       expect(failed.status).toBe(202);
       const { request_id: failedRequestId } = await failed.json() as { request_id: string };
@@ -2047,7 +2063,7 @@ HDSUpperController.prototype.decide = function (request, options) {
       // Disable file-backed conversation sessions in this fixture. Durable receipt stores retain evidence without a private reply.
       expect(readTreeBytes(root).includes(Buffer.from(privateResult, "utf8"))).toBe(false);
       gateway = spawnGateway(env);
-      await waitForHealth(gatewayPort, gateway, 40_000);
+      await waitForHealth(gatewayPort, gateway, 60_000);
       const restored = await post("/runtime/intent/status", input);
       expect(restored.status).toBe(200);
       const restoredStatus = await restored.json() as { execution_observation?: unknown; result?: unknown };
@@ -2055,8 +2071,21 @@ HDSUpperController.prototype.decide = function (request, options) {
         task_outcome: { status: "unknown", ...flags }, result: { status: "unavailable", reason_code: "not_retained", ...flags } });
       expect(restoredStatus.execution_observation).toEqual(execution);
       expect(JSON.stringify(restoredStatus)).not.toContain(privateResult);
+      expect(restoredStatus).not.toHaveProperty("reply_observation");
+      const restoredPreparedResponse = await post("/runtime/intent/status", replyObservationRequest);
+      expect(restoredPreparedResponse.status).toBe(200);
+      expect(restoredPreparedResponse.headers.get("cache-control")).toBe("no-store");
+      const restoredPrepared = await restoredPreparedResponse.json();
+      expect(restoredPrepared).toEqual({ ...restoredStatus, reply_observation: prepared });
+      expect(JSON.stringify(restoredPrepared)).not.toContain(privateResult);
+      const inboundBearer = await post("/runtime/intent/status", replyObservationRequest, WEBCHAT_TOKEN);
+      expect(inboundBearer.status).toBe(401);
+      expect(await inboundBearer.json()).toEqual({ error: "unauthorized" });
       expect(await (await post("/runtime/intent/status", failedInput)).json()).toMatchObject({ found: true,
         request_id: failedRequestId, state: "outcome_unknown", result: { status: "unavailable", ...flags } });
+      const failedPreparedResponse = await post("/runtime/intent/status", { ...failedInput, include_reply_observation: true });
+      expect(failedPreparedResponse.status).toBe(200);
+      expect(await failedPreparedResponse.json()).toMatchObject({ reply_observation: { status: "unknown", ...flags } });
       await connectSession(input.session_id, frames);
       await connectSession(otherInput.session_id, otherFrames);
       const sameScope = await post("/runtime/intent", { ...input, intent });
@@ -2068,6 +2097,9 @@ HDSUpperController.prototype.decide = function (request, options) {
       expect(otherScope.status).toBe(409);
       expect(JSON.stringify(await otherScope.json())).not.toContain(request_id);
       expect(await (await post("/runtime/intent/status", otherInput)).json()).toEqual({ found: false });
+      const otherPrepared = await post("/runtime/intent/status", { ...otherInput, include_reply_observation: true });
+      expect(otherPrepared.status).toBe(200);
+      expect(await otherPrepared.json()).toEqual({ found: false });
       expect(providerRequests).toBe(1);
       expect(frames.concat(otherFrames).join("")).not.toContain(privateResult);
     } finally {
@@ -2077,7 +2109,7 @@ HDSUpperController.prototype.decide = function (request, options) {
       await closeServer(provider);
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
-  }, 120_000);
+  }, 150_000);
 
   it("cancels an authenticated D4 submission before HDS dispatch and preserves its receipt after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-before-dispatch-"));

@@ -9,6 +9,7 @@ import {
   projectD4RuntimeActiveCommand,
   projectD4RuntimeCancellationStatus,
   projectD4RuntimeExecutionObservation,
+  projectD4RuntimeReplyPreparation,
   projectD4RuntimeTaskOutcome,
   projectOwnerTaskActiveCommand,
   projectOwnerTaskCancellationScope,
@@ -23,6 +24,68 @@ import {
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
 const rulesDigest = "a".repeat(64);
 const evidenceDigest = "b".repeat(64);
+
+describe("D4 Runtime reply preparation", () => {
+  const flags = { used_for_authority: false, may_execute: false };
+  const unknown = { status: "unknown", ...flags };
+  const actor = "d4-runtime-adapter-token-holder";
+  const commandId = "d4-reply-command";
+  const commitHash = "1".repeat(64);
+  const resultDigest = "2".repeat(64);
+  const renderedDigest = "3".repeat(64);
+  const timestamp = 2000;
+  const decision = { request_id: requestId,
+    frame: { actor: { actor_id: actor, channel: "webchat", actor_kind: "user", trust_level: "limited" } },
+    commit: { hash: commitHash, decision: "ASSERT" } };
+  const binding = { request_id: requestId, command_id: commandId, upstream_commit_hash: commitHash, upstream_decision: "ASSERT" };
+  const gate = { kind: "approval_gate", ...binding, evaluation: { decision: "allow", context: { actor,
+    command_id: commandId, command_type: "llm_call", operation: "llm.call", upstream_commit_hash: commitHash } } };
+  const result = { status: "success", result_present: true, result_digest: resultDigest, result_digest_status: "recorded" };
+  const returned = { kind: "executor_feedback", ...binding, known_command: true, feedback: result };
+  const output = { kind: "output_audit", ...binding, ...result, command_type: "llm_call", output_kind: "llm_raw_output",
+    target_surface: "channel", rendered_output_present: true, rendered_output_digest: renderedDigest, user_visible_output: true,
+    external_side_effect_result: false, release_decision: "allow", used_for_authority: false, timestamp };
+  const observe = (...logs: unknown[]) => projectD4RuntimeReplyPreparation(logs.map((log, index) => ({ log, index })) as AuditEntry[], requestId);
+
+  it("returns just the exact same-request digest and audit timestamp", () => {
+    const unrelated = { ...output, request_id: "b4d61cc0-46c3-49dc-9826-0b8a9fe302da" };
+    expect(observe(decision, unrelated, gate, returned, output)).toEqual({ status: "prepared",
+      rendered_output_sha256: renderedDigest, prepared_at_ms: timestamp, ...flags });
+  });
+
+  it("requires unique evidence in decision, gate, feedback, output order", () => {
+    for (const evidence of [[decision, gate, output], [decision, gate, output, returned], [gate, decision, returned, output],
+      [decision, decision, gate, returned, output], [decision, gate, gate, returned, output],
+      [decision, gate, returned, returned, output], [decision, gate, returned, output, output]]) {
+      expect(observe(...evidence)).toEqual(unknown);
+    }
+  });
+
+  it("rejects other scopes, changed bindings, and contradicted approval", () => {
+    const approval = { kind: "command_lifecycle", ...binding, phase: "approval_approved" };
+    const ask = { ...gate, evaluation: { ...gate.evaluation, decision: "ask" } };
+    for (const evidence of [[{ ...decision, frame: { actor: { ...decision.frame.actor, actor_id: "other-user" } } }, gate, returned, output],
+      [{ ...decision, commit: { ...decision.commit, decision: "SUSPEND" } }, gate, returned, output],
+      [decision, { ...gate, evaluation: { ...gate.evaluation, context: { ...gate.evaluation.context, actor: "other-user" } } }, returned, output],
+      [decision, gate, { ...returned, known_command: false }, output],
+      [decision, gate, returned, { ...output, command_id: "other-command" }],
+      [decision, gate, returned, { ...output, upstream_commit_hash: "4".repeat(64) }],
+      [decision, gate, { ...approval, phase: "approval_cancelled" }, returned, output],
+      [decision, ask, returned, output], [decision, ask, returned, approval, output]]) {
+      expect(observe(...evidence)).toEqual(unknown);
+    }
+    expect(observe(decision, ask, approval, returned, output)).toEqual({ status: "prepared",
+      rendered_output_sha256: renderedDigest, prepared_at_ms: timestamp, ...flags });
+  });
+
+  it("rejects non-result notices, non-channel output or invalid and unverified presentation", () => {
+    const invalidOutputs = [{ kind: "gateway_status_output_audit" }, { target_surface: "control_center" },
+      { output_kind: "tool_result" }, { status: "failed" }, { release_decision: "none" }, { user_visible_output: false },
+      { result_digest: "5".repeat(64) }, { result_digest_status: "unavailable" }, { rendered_output_present: false },
+      { rendered_output_digest: "A".repeat(64) }, { timestamp: 0 }, { timestamp: 1200.5 }, { used_for_authority: true }];
+    for (const fields of invalidOutputs) expect(observe(decision, gate, returned, { ...output, ...fields })).toEqual(unknown);
+  });
+});
 
 describe("D4 runtime approval recovery observation", () => {
   const actor = "d4-runtime-adapter-token-holder";

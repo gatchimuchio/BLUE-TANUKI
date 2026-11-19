@@ -38,6 +38,7 @@ import {
   type WebChatOperatorSurfaces,
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,
+  type WebChatD4RuntimeReplyObservation,
   type WebChatD4RuntimeTaskOutcome,
   type WebChatD4RuntimeCancellationScope,
   type WebChatD4RuntimeCancellationStatus,
@@ -221,6 +222,7 @@ async function setup(
       webhook_event_store?: WebChatOptions["webhook_event_store"];
       d4_runtime_intent?: { token: string; runtime_id: string };
       onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
+      onD4RuntimeIntentObservations?: WebChatOptions["onD4RuntimeIntentObservations"];
       onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) =>
         Promise<WebChatD4RuntimeCancellationStatus>;
       onD4RuntimeIntentCancellation?: (input: WebChatD4RuntimeCancellationScope) =>
@@ -263,6 +265,7 @@ async function setup(
     webhook_event_store: opts.webhook_event_store,
     d4_runtime_intent: opts.d4_runtime_intent,
     onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
+    onD4RuntimeIntentObservations: opts.onD4RuntimeIntentObservations,
     onD4RuntimeIntentCancellationStatus: opts.onD4RuntimeIntentCancellationStatus,
     onD4RuntimeIntentCancellation: opts.onD4RuntimeIntentCancellation,
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
@@ -6010,6 +6013,46 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(JSON.stringify(status.body)).not.toContain("整理して要点を教えて");
     } finally {
       ws?.close();
+      await runtimeCtx.teardown();
+    }
+  });
+
+  it("projects only valid opt-in reply evidence for a known D4 Runtime receipt", async () => {
+    const input = { runtime_id: "blue_tanuki", session_id: "session-1234-abcd", submission_id: D4_SUBMISSION_ID_1 };
+    const auth = { authorization: `Bearer ${D4_RUNTIME_TOKEN}` };
+    const flags = { used_for_authority: false, may_execute: false } as const;
+    const prepared = { status: "prepared", rendered_output_sha256: "a".repeat(64), prepared_at_ms: 17, ...flags } as const;
+    const requestId = "00000000-0000-4000-8000-000000000090";
+    let reply: unknown = prepared;
+    const observe = vi.fn(async () => ({ execution_observation: { status: "unknown" as const, ...flags },
+      reply_observation: reply as WebChatD4RuntimeReplyObservation }));
+    const runtimeCtx = await setup({
+      d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: input.runtime_id },
+      owner_task_submission_store: { ...createTestOwnerTaskSubmissionStore(),
+        getD4RuntimeIntentStatus: ({ submission_id }) => submission_id === input.submission_id
+          ? { request_id: requestId, state: "handler_returned" } : null },
+      onD4RuntimeIntentObservations: observe,
+    });
+    try {
+      await runtimeCtx.ch.start(async () => {});
+      const post = (body: object) => postJson(runtimeCtx.port, "/runtime/intent/status", body, auth);
+      const optIn = { ...input, include_reply_observation: true };
+      expect((await post({ ...input, include_reply_observation: false })).status).toBe(400);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/cancel", optIn, auth)).status).toBe(400);
+      expect((await post({ ...optIn, submission_id: D4_SUBMISSION_ID_2 })).body).toEqual({ found: false });
+      expect(observe).not.toHaveBeenCalled();
+      expect((await post(input)).body).not.toHaveProperty("reply_observation");
+      expect(observe).toHaveBeenLastCalledWith(expect.objectContaining({ request_id: requestId }), false);
+      const valid = await post(optIn);
+      expect(valid.headers.get("cache-control")).toBe("no-store");
+      expect(valid.body).toHaveProperty("reply_observation", prepared);
+      expect(observe).toHaveBeenLastCalledWith(expect.objectContaining({ request_id: requestId }), true);
+
+      reply = { ...prepared, may_execute: true, output: "private reply" };
+      const invalid = await post(optIn);
+      expect(invalid.body).toHaveProperty("reply_observation", { status: "unknown", ...flags });
+      expect(JSON.stringify(invalid.body)).not.toContain("private reply");
+    } finally {
       await runtimeCtx.teardown();
     }
   });

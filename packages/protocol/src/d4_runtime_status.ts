@@ -21,3 +21,16 @@ export const D4RuntimeStatusProjectionSchema = z.object({
 }).strict();
 
 export type D4RuntimeStatusProjection = z.infer<typeof D4RuntimeStatusProjectionSchema>;
+
+const ReplyObservationFlags = { used_for_authority: z.literal(false), may_execute: z.literal(false) };
+
+export const D4RuntimeIntentReplyObservationSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("unknown"), ...ReplyObservationFlags }).strict(),
+  z.object({
+    status: z.literal("prepared"),
+    rendered_output_sha256: z.string().length(64).regex(/^[a-f0-9]{64}$/),
+    prepared_at_ms: z.number().int().nonnegative().safe(),
+    ...ReplyObservationFlags,
+  }).strict(),
+]);
+export type D4RuntimeIntentReplyObservation = z.infer<typeof D4RuntimeIntentReplyObservationSchema>;

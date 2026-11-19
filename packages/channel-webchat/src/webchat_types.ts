@@ -1,6 +1,6 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
-  ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
+  ComposioActionContentReview, D4RuntimeIntentReplyObservation, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
   SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
   SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
   SettingsWriteLlmProvider, SettingsWritePatch, SettingsWriteTelegramBotCredentialReview, TelegramInboundGrant,
@@ -66,6 +66,7 @@ export type WebChatTaskExecutionObservation = {
   { readonly status: "adapter_returned"; readonly feedback_status: "success" | "failed" | "suspended" });
 
 export type WebChatD4RuntimeExecutionObservation = WebChatTaskExecutionObservation;
+export type WebChatD4RuntimeReplyObservation = D4RuntimeIntentReplyObservation;
 
 export const MAX_OWNER_TASK_PLAN_STEPS = 100;
 
@@ -2080,7 +2081,10 @@ export interface WebChatOptions {
   d4_runtime_intent?: WebChatD4RuntimeIntentConfig;
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
-  onD4RuntimeIntentExecutionObservation?: (scope: WebChatD4RuntimeCancellationScope) => Promise<WebChatD4RuntimeExecutionObservation>;
+  onD4RuntimeIntentObservations?: (scope: WebChatD4RuntimeCancellationScope, includeReplyObservation: boolean) => Promise<{
+    execution_observation: WebChatD4RuntimeExecutionObservation;
+    reply_observation?: WebChatD4RuntimeReplyObservation;
+  }>;
   /** Read-only, content-free cancellation evidence for the exact authenticated D4 Runtime request. */
   onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) => Promise<WebChatD4RuntimeCancellationStatus>;
   /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */

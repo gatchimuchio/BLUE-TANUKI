@@ -827,6 +827,10 @@ export const RuntimeIntentStatusInputSchema = z.object({
 }).strict();
 export type RuntimeIntentStatusInput = z.infer<typeof RuntimeIntentStatusInputSchema>;
 
+export const RuntimeIntentStatusQuerySchema = RuntimeIntentStatusInputSchema.extend({
+  include_reply_observation: z.literal(true).optional(),
+});
+
 export type InboundRequestBoundaryFailureReason =
   | "schema_validation_failed"
   | "canonicalization_failed";
