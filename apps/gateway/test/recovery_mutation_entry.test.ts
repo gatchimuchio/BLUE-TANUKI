@@ -1374,6 +1374,197 @@ require("node:module").syncBuiltinESMExports();
     }
   }, 30_000);
 
+  it.runIf(process.platform === "win32")(
+    "Google Calendar読み取り資格を一度だけ保護登録し、再起動後の別個のL3承認で使用する", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-native-google-registration-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const promptsFile = join(root, "native-prompt.log");
+    const preload = join(root, "google-registration-fixture.cjs");
+    const secretDir = join(root, "secrets");
+    const fixtureToken = "synthetic-google-calendar-token-for-registration";
+    const existingToken = "synthetic-existing-calendar-token";
+    const invalidToken = "synthetic-token-in-unsupported-field";
+    const ownerToken = "synthetic-google-calendar-registration-owner";
+    const calendarTitle = "fixture-private-calendar-title-after-registration";
+    const calendarId = "fixture-private-calendar-id-after-registration";
+    const port = await reserveLoopbackPort();
+    const origin = `http://127.0.0.1:${port}`;
+    const env = {
+      ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+      BLUE_TANUKI_OWNER_TOKEN: ownerToken,
+      BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: "calendar",
+      BLUE_TANUKI_DAILY_BRIEF_TARGET: "webchat-owner-token-holder",
+      BLUE_TANUKI_DAILY_BRIEF_CHANNEL: "webchat",
+      BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "600000",
+    };
+    const scheduleDigest = cronSchedulesFromEnv(env).find((schedule) => schedule.id === "daily_brief")?.payload_hash;
+    if (!scheduleDigest) throw new Error("試験用のDaily Brief予定を取得できない");
+    const scheduledAtMs = Date.now() - 5_000;
+    const due = createCronEventIdentity(GOOGLE_DAILY_BRIEF_DUE_SOURCE, scheduledAtMs, scheduleDigest);
+    const cronStore = new GatewayCronEventStore(join(root, "state", "private-state", "cron-events", "cron-events.sqlite"));
+    try {
+      expect(cronStore.claim(due)).toMatchObject({ status: "accepted" });
+      cronStore.recordLocalAcquisitionDue(due);
+    } finally { cronStore.close(); }
+    const occurrence = createHash("sha256").update(due.event_id).digest("hex");
+    const base = "LLM_BACKEND=stub\nUNRELATED_SETTING=kept\n";
+    writeFileSync(envFile, base, "utf8");
+
+    const calls: Array<{ method?: string; path: string; tokenMatched: boolean }> = [];
+    const googleFixture = createServer((request, response) => {
+      const path = request.url ?? "";
+      calls.push({ method: request.method, path, tokenMatched: request.headers.authorization === `Bearer ${fixtureToken}` });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ timeZone: "UTC", items: [{ id: calendarId, status: "confirmed", summary: calendarTitle,
+        start: { dateTime: new Date(scheduledAtMs + 60_000).toISOString() },
+        end: { dateTime: new Date(scheduledAtMs + 120_000).toISOString() } }] }));
+    });
+    const listening = once(googleFixture, "listening");
+    googleFixture.listen(0, "127.0.0.1");
+    await listening;
+    let gateway: ReturnType<typeof spawnGateway> | undefined;
+    try {
+      const address = googleFixture.address();
+      if (!address || typeof address === "string") throw new Error("Calendar試験サーバーがループバックを取得できない");
+      writeFileSync(preload, `const { appendFileSync } = require("node:fs");
+const cp = require("node:child_process");
+const realSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  const script = args?.at(-2) === "-EncodedCommand" ? Buffer.from(args.at(-1), "base64").toString("utf16le") : "";
+  if (!script.includes("UseSystemPasswordChar")) return realSpawn(command, args, options);
+  appendFileSync(${JSON.stringify(promptsFile)}, "native-prompt\\n");
+  const child = new (require("node:events").EventEmitter)();
+  child.stdout = new (require("node:stream").PassThrough)();
+  child.kill = () => true;
+  setTimeout(() => {
+    child.stdout.end(Buffer.from(${JSON.stringify(fixtureToken)}));
+    child.emit("close", 0);
+  }, 5);
+  return child;
+};
+const https = require("node:https");
+const http = require("node:http");
+https.request = (target, ...args) => {
+  if (target.hostname !== "www.googleapis.com" || !target.path?.startsWith("/calendar/v3/calendars/primary/events?")) {
+    throw new Error("Calendar登録試験の対象外のHTTPS要求");
+  }
+  return http.request({ ...target, protocol: "http:", hostname: "127.0.0.1", port: ${address.port} }, ...args);
+};
+https.get = () => { throw new Error("Calendar登録試験の対象外のhttps.get呼び出し"); };
+globalThis.fetch = async () => { throw new Error("Calendar登録試験の対象外のfetch呼び出し"); };
+require("node:module").syncBuiltinESMExports();
+`, "utf8");
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 45_000);
+      const responses: string[] = [];
+      const post = async (route: string, token: string, body?: Record<string, unknown>, requestOrigin = origin) => {
+        const response = await fetch(origin + route, {
+          method: "POST", signal: AbortSignal.timeout(40_000),
+          headers: { authorization: `Bearer ${token}`, origin: requestOrigin,
+            ...(token === resumeToken ? { "x-blue-tanuki-owner-token": ownerToken } : {}),
+            ...(body ? { "content-type": "application/json" } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+        const data = await response.text();
+        responses.push(data);
+        return { status: response.status, headers: response.headers, body: JSON.parse(data) as Record<string, unknown> };
+      };
+      const pendingFor = async (id: unknown, operation: string) => {
+        expect(id).toEqual(expect.any(String));
+        const queue = await requestJson(port, "/approval", { token: resumeToken, signal: AbortSignal.timeout(10_000) });
+        responses.push(JSON.stringify(queue.body));
+        expect(queue.status).toBe(200);
+        const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((entry) => entry.command_id === id);
+        expect(pending).toMatchObject({ operation, approval_level: "L3_final_review", approval_token: expect.any(String) });
+        return { route: `/approval/${encodeURIComponent(String(id))}`,
+          verdict: { verdict: "approve", approval_token: pending!.approval_token } };
+      };
+      const registrationRoute = "/owner/google-read-credential-proposal";
+      const registration = { scope: "calendar" };
+      expect((await post(registrationRoute, inboundToken, registration)).status).toBe(401);
+      expect((await post(registrationRoute, ownerToken, registration, "http://untrusted.invalid")).status).toBe(403);
+      expect((await post(registrationRoute, ownerToken, { ...registration, token: invalidToken })).status).toBe(400);
+      writeFileSync(envFile, base + `GOOGLE_CALENDAR_ACCESS_TOKEN=${existingToken}\n`, "utf8");
+      expect((await post(registrationRoute, ownerToken, registration)).status).toBe(409);
+      writeFileSync(envFile, base, "utf8");
+      const proposal = await post(registrationRoute, ownerToken, registration);
+      expect(proposal.status, JSON.stringify(proposal.body)).toBe(202);
+      expect(proposal.headers.get("cache-control")).toBe("no-store");
+      const pending = await pendingFor(proposal.body.command_id, "settings.write");
+      const review = await post(`${pending.route}/content`, resumeToken);
+      expect(review.status, JSON.stringify(review.body)).toBe(200);
+      expect(review.headers.get("cache-control")).toBe("no-store");
+      expect(review.body).toMatchObject({ kind: "settings_write", operation: "settings.write",
+        google_read_registration: { scope: "calendar", api_hosts: ["www.googleapis.com"], protected_reference_configured: false },
+        changes: [{ key: "google_read.credential_reference", before: "unconfigured", after: "register_on_restart" }],
+        review_digest: expect.stringMatching(/^[a-f0-9]{64}$/), no_store: true, used_for_authority: false, may_execute: false });
+      const verdict = { ...pending.verdict, content_review_digest: review.body.review_digest };
+      const nativeRoute = `${pending.route}/native-credential`;
+      expect((await post(pending.route, resumeToken, verdict)).status).toBe(409);
+      expect((await post(nativeRoute, resumeToken, verdict, "http://untrusted.invalid")).status).toBe(403);
+      expect((await post(nativeRoute, resumeToken, pending.verdict)).status).toBe(400);
+      expect((await post(nativeRoute, resumeToken, { ...verdict, content_review_digest: "0".repeat(64) })).status).toBe(409);
+      expect(readFileSync(envFile, "utf8")).toBe(base);
+      expect(existsSync(promptsFile)).toBe(false);
+      expect(existsSync(secretDir)).toBe(false);
+      expect(calls).toEqual([]);
+
+      const saved = await post(nativeRoute, resumeToken, verdict);
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      expect(saved.headers.get("cache-control")).toBe("no-store");
+      expect(saved.body).toMatchObject({ result: { approval: "approve", status: "success" } });
+      const savedEnv = readFileSync(envFile, "utf8");
+      const savedSettings = parseEnvFile(savedEnv).values;
+      const protectedRef = savedSettings.GOOGLE_CALENDAR_ACCESS_TOKEN_REF;
+      expect(protectedRef).toMatch(/^win32-dpapi-current-user:file:/u);
+      expect(savedSettings).toEqual({ LLM_BACKEND: "stub", UNRELATED_SETTING: "kept",
+        GOOGLE_CALENDAR_ACCESS_TOKEN_REF: protectedRef });
+      expect(savedEnv.includes(fixtureToken)).toBe(false);
+      expect(readdirSync(secretDir)).toHaveLength(1);
+      expect(readFileSync(dpapiSecretPathFromReference(protectedRef!), "utf8").includes(fixtureToken)).toBe(false);
+      expect((await post(nativeRoute, resumeToken, verdict)).status).toBe(409);
+      expect((await post(registrationRoute, ownerToken, registration)).status).toBe(409);
+      expect(readFileSync(promptsFile, "utf8")).toBe("native-prompt\n");
+      expect(calls).toEqual([]);
+
+      await stopChild(gateway.child);
+      const registrationLogs = gateway.output.join("");
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(port, gateway, 45_000);
+      const read = await post("/owner/daily-brief-read", ownerToken, { occurrence_id_digest: occurrence, service: "calendar" });
+      expect(read.status, JSON.stringify(read.body)).toBe(202);
+      const readPending = await pendingFor(read.body.command_id, "credential.access");
+      const readReview = await post(`${readPending.route}/content`, resumeToken);
+      expect(readReview.status, JSON.stringify(readReview.body)).toBe(200);
+      expect(readReview.body).toMatchObject({ kind: "daily_brief_read", service: "calendar", no_store: true });
+      expect(calls).toEqual([]);
+      const readVerdict = { ...readPending.verdict, content_review_digest: readReview.body.review_digest };
+      const acquired = await post(`${readPending.route}/daily-brief-read`, resumeToken, readVerdict);
+      expect(acquired.status, JSON.stringify(acquired.body)).toBe(200);
+      expect(acquired.headers.get("cache-control")).toBe("no-store");
+      expect(acquired.body).toMatchObject({ result: { daily_brief_read: { service: "calendar",
+        items: [{ title: calendarTitle }], used_for_authority: false } } });
+      expect(calls).toEqual([{ method: "GET", path: expect.stringMatching(/^\/calendar\/v3\/calendars\/primary\/events\?/),
+        tokenMatched: true }]);
+      await stopChild(gateway.child);
+      const durable = [readFileSync(historyFile, "utf8"), readFileSync(join(root, "audit", "audit.jsonl"), "utf8"),
+        registrationLogs, gateway.output.join("")];
+      for (const observed of [...responses, ...durable]) {
+        for (const privateValue of [fixtureToken, existingToken, invalidToken, protectedRef!, calendarId]) {
+          expect(observed.includes(privateValue)).toBe(false);
+        }
+      }
+      for (const observed of durable) expect(observed.includes(calendarTitle)).toBe(false);
+    } finally {
+      if (gateway) await stopChild(gateway.child);
+      await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
+    }
+  }, 155_000);
+
   it.each(process.platform === "win32" ? ["raw token", "DPAPI references"] : ["raw token"])(
     "returns privately reviewed Daily Brief sources and rejects stale or repeated acquisition with %s", async (mode) => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-daily-brief-read-l3-"));

@@ -11,7 +11,7 @@
   "debts": [
     { "path": "AUDIT.md", "sha256": "be19096bae5d022ba0ed72a34ca6c7d7bf3fd758fb8e494514290cb4ce6f5608" },
     { "path": "CLAIM.md", "sha256": "02d7f591f16f31099117c8eba386539697f7b5c7e0c6c6acddef2c25f0dcc757" },
-    { "path": "CONFIG.md", "sha256": "4a2bca2ba351783041f562b9c0e511cf81a1b417f62412b4759935163c30fb97" },
+    { "path": "CONFIG.md", "sha256": "30ba800aac5d1118b0f141df70b4540147c1b37fd4fe4b7f2445cfa806199bd0" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
     { "path": "docs/BLUE_TANUKI_AUTHORITY_MODEL.md", "sha256": "f4f66c41a2ba0df24f879729318fb1ee6f81b43d46d16ce50027f621d9c08e21" },
     { "path": "docs/CAPABILITY_ENVELOPE.md", "sha256": "38fd5137502e8d6d3ae0711bc291842c953052f5bc4ae4e621a04655120773fb" },

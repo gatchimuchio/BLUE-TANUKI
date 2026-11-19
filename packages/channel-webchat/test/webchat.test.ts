@@ -8,6 +8,9 @@ import {
   parseInboundRequestAtBoundary,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
+  settingsWriteGoogleReadCredentialReview,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
@@ -1222,6 +1225,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="settings-cost-per-attempt"');
     expect(html).toContain('id="settings-cost-per-24h"');
     expect(html).toContain('id="settings-register-credential" type="checkbox"');
+    expect(html).toContain('id="google-read-credential-scope" disabled');
     expect(html).toContain("専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください");
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
@@ -1235,14 +1239,19 @@ describe("WebChatChannel — Control Center shell", () => {
     const node = (id: string) => {
       if (!nodes.has(id)) {
         const events = new Map<string, () => unknown>();
+        const children: Array<{ value: string; textContent: string }> = [];
         nodes.set(id, { value: "", textContent: "", className: "", placeholder: "", disabled: false, hidden: false, checked: false,
-          selectedOptions: [], events, addEventListener: (name: string, handler: () => unknown) => events.set(name, handler) });
+          selectedOptions: [], events, children, replaceChildren: () => { children.length = 0; },
+          appendChild: child => { children.push(child); },
+          addEventListener: (name: string, handler: () => unknown) => events.set(name, handler) });
       }
       return nodes.get(id)!;
     };
     const nodes = new Map<string, {
       value: string; textContent: string; className: string; placeholder: string; disabled: boolean; hidden: boolean; checked: boolean;
       selectedOptions: Array<{ dataset: { purposeVersion?: string } }>; events: Map<string, () => unknown>;
+      children: Array<{ value: string; textContent: string }>;
+      replaceChildren: () => void; appendChild: (child: { value: string; textContent: string }) => void;
       addEventListener: (name: string, handler: () => unknown) => void;
     }>();
     const computeReady = { status: "ready", detail: "state admits one request",
@@ -1267,6 +1276,8 @@ describe("WebChatChannel — Control Center shell", () => {
       "({ renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
       byId: node, state: {}, sessionStorage: { setItem: () => {} }, window: browser,
+      document: { createElement: () => ({ value: "", textContent: "" }) },
+      GOOGLE_READ_CREDENTIAL_LABELS: { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" },
       SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
       isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
       setText: (id: string, value: string) => { node(id).textContent = value; },
@@ -1419,6 +1430,37 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(node("prepare-llm-credential-rotation").hidden).toBe(true);
     await prepareRotation();
     expect(calls).toHaveLength(beforeRotation + 1);
+
+    const googleScope = node("google-read-credential-scope");
+    const prepareGoogle = node("prepare-google-read-credential");
+    const prepareGooglePlan = prepareGoogle.events.get("click")!;
+    const googleSnapshot = { ...rotationSnapshot, google_read_credential_registration_available: ["gmail", "shared", "unknown"] };
+    browser.location.hostname = "external.example.test";
+    api.renderSettingsSnapshot(googleSnapshot);
+    expect(googleScope.disabled).toBe(true);
+    googleScope.value = "gmail";
+    await prepareGooglePlan();
+    expect(calls).toHaveLength(beforeRotation + 1);
+
+    browser.location.hostname = "127.0.0.1";
+    api.renderSettingsSnapshot(googleSnapshot);
+    expect(googleScope.children.map(option => option.value)).toEqual(["", "gmail", "shared"]);
+    expect(prepareGoogle.disabled).toBe(true);
+    googleScope.value = "shared";
+    googleScope.events.get("change")!();
+    expect(prepareGoogle.disabled).toBe(false);
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareGooglePlan();
+    expect(calls[beforeRotation + 1]).toEqual({ path: "/owner/google-read-credential-proposal", token: OWNER_TOKEN,
+      body: { scope: "shared", goal_ref: goal.value, purpose_version: 2 } });
+    expect(node("settings-owner-token").value).toBe("");
+    expect(node("google-read-credential-status").textContent).toContain("計画候補");
+    expect(node("open-google-read-credential-review").hidden).toBe(false);
+    noStore = false;
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareGooglePlan();
+    expect(node("google-read-credential-status").textContent).toContain("受付を確認できませんでした");
+    expect(node("open-google-read-credential-review").hidden).toBe(true);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2543,7 +2585,10 @@ describe("WebChatChannel — Control Center shell", () => {
     const posts: Array<{ path: string; options: RequestInit }> = [];
     const outputs: Record<string, string> = {};
     const render = new Script(`
-      function byId() { return { value: "resume-token" }; }
+      function byId(id) {
+        if (id === "google-read-credential-scope") return makeNode("select");
+        return { value: "resume-token" };
+      }
       function authHeaders(value) { return { authorization: "Bearer " + value }; }
       function hasNoStore(response) { return response.headers.get("cache-control") === "no-store"; }
       const document = { querySelectorAll: () => [card], createElement: makeNode };
@@ -2566,6 +2611,10 @@ describe("WebChatChannel — Control Center shell", () => {
         state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub", "openai"],
         SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS, posts, submit,
         SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE: SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+        SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+        SETTINGS_GOOGLE_READ_API_HOSTS: Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
+          .map(([scope, target]) => [scope, target.api_hosts])),
+        GOOGLE_READ_CREDENTIAL_LABELS: { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" },
         window: { top: windowIdentity, self: windowIdentity, location: { protocol: "http:", hostname } },
         setText: (id: string, value: string) => { outputs[id] = value; }, loadApprovals: async () => {},
       });
@@ -2614,7 +2663,7 @@ describe("WebChatChannel — Control Center shell", () => {
     await evaluate(nativeReview, "no-store", "127.0.0.1", true);
     expect(posts).toHaveLength(1);
     expect(posts[0]).toMatchObject({ path: `/approval/${commandId}/native-credential`, options: {
-      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer",
+      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
     } });
     expect(JSON.parse(String(posts[0]!.options.body))).toEqual({ verdict: "approve",
       approval_token: "fixture-single-use-token", content_review_digest: nativeReview.review_digest });
@@ -2646,6 +2695,24 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(JSON.stringify(view.children)).toContain(rotationReview.credential_rotation.destination);
     expect(JSON.stringify(view.children)).toContain("現行プロバイダーの資格情報の更新");
     expect(outputs["native-credential-approval-status"]).toContain("更新した資格情報");
+
+    const { expected_llm_provider: _provider, ...baseReview } = review;
+    const googleReview = { ...baseReview, google_read_registration: settingsWriteGoogleReadCredentialReview("shared"),
+      changes: [SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE] };
+    await expect(evaluate(googleReview, "no-store", "external.example.test")).rejects.toThrow();
+    await expect(evaluate(googleReview, "private, max-age=60")).rejects.toThrow();
+    await expect(evaluate({ ...googleReview, google_read_registration: { ...googleReview.google_read_registration,
+      api_hosts: ["unlisted.example.test"] } })).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    await evaluate(googleReview, "no-store", "127.0.0.1", true);
+    expect(JSON.stringify(view.children)).toContain("gmail.googleapis.com");
+    expect(JSON.stringify(view.children)).toContain("www.googleapis.com");
+    expect(attributes.get("data-native-credential-entry")).toBe("google-read");
+    expect(posts[2]?.path).toBe(`/approval/${commandId}/native-credential`);
+    expect(JSON.parse(String(posts[2]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: googleReview.review_digest });
+    expect(outputs["native-credential-approval-status"]).toContain("Googleとの接続とトークンのスコープは未確認");
   });
 
   it("shows only recorded Google Daily Brief occurrences beside independently running schedules", async () => {

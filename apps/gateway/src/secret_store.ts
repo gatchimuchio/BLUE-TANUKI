@@ -350,9 +350,11 @@ export function storeLlmApiKeySecret(
   return storeBlueTanukiSecret(key, plaintext, opts);
 }
 
+export class StagedSecretCleanupError extends Error {}
+
 /** The desktop approval stays cancellable while the current user's keyring handles a request. */
-export async function stageRuntimeLlmApiKeySecret(
-  key: LlmSecretKey,
+export async function stageRuntimeBlueTanukiSecret(
+  key: BlueTanukiSecretKey,
   plaintext: string,
   envFilePath: string,
 ): Promise<LlmSecretStoreResult<boolean | Promise<boolean>>> {
@@ -360,9 +362,9 @@ export async function stageRuntimeLlmApiKeySecret(
   if (platform === "win32") {
     const command = windowsSystemPowerShellCommand();
     if (!command) throw new Error("Windows system PowerShell is unavailable");
-    return storeLlmApiKeySecret(key, plaintext, { envFilePath, protector: defaultProtector(command) });
+    return storeBlueTanukiSecret(key, plaintext, { envFilePath, protector: defaultProtector(command) });
   }
-  if (platform !== "linux" && platform !== "darwin") throw new Error("runtime_llm_keyring_unsupported");
+  if (platform !== "linux" && platform !== "darwin") throw new Error("runtime_keyring_unsupported");
   if (!plaintext) throw new Error("refusing to store an empty secret");
 
   const entryId = randomUUID();
@@ -375,10 +377,10 @@ export async function stageRuntimeLlmApiKeySecret(
   try {
     // Once dispatched, observe the staged write before deciding whether this entry can be discarded.
     await entry.setPassword(plaintext);
-    if (await entry.getPassword() !== plaintext) throw new Error("runtime_llm_keyring_readback_mismatch");
+    if (await entry.getPassword() !== plaintext) throw new Error("runtime_keyring_readback_mismatch");
     return osKeyringStagedResult(key, platform, entryId, discard);
   } catch (error) {
-    if (!(await discard())) throw new Error("runtime_llm_keyring_outcome_unknown", { cause: error });
+    if (!(await discard())) throw new StagedSecretCleanupError("runtime_keyring_outcome_unknown", { cause: error });
     throw error;
   }
 }
@@ -434,7 +436,7 @@ export function storeBlueTanukiSecret(
         try { closeSync(fileDescriptor); } catch { /* The descriptor may already be closed. */ }
       }
       if (ownsFile && !discardStagedSecretFile(secretPath)) {
-        throw new Error("DPAPI secret storage failed and the staged secret file could not be removed", {
+        throw new StagedSecretCleanupError("DPAPI secret storage failed and the staged secret file could not be removed", {
           cause: error,
         });
       }

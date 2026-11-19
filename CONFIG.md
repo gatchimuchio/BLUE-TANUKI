@@ -376,6 +376,12 @@ GatewayとCLIは、上の3操作が承認され実行するときに、対象サ
 順に調べる。設定済みの参照から取得できない場合はその読み取りを止める。
 解決した資格は対象のGoogle APIへの要求だけに使い、環境変数へ書き戻さない。
 
+Windowsの製品画面 `/app` の「設定」から、Gmail・Calendar・Drive・共通のいずれかに
+読み取り用アクセストークンを初回登録できる。対象を選んでL3の変更確認を開き、承認後に
+表示されるOSの伏字入力欄にトークンを入力する。保存した保護参照はGatewayの再起動後に
+読み取りへ適用される。同じ対象に値や参照が既にある場合は登録を受け付けない。
+設定保存の時点ではGoogleへ接続せず、トークンの有効性やOAuth権限は確認しない。
+
 Google write integrations:
 
 - `gmail.write` creates Gmail drafts, sends Gmail messages, or sends an existing draft.

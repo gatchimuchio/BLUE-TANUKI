@@ -134,6 +134,7 @@ import {
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   SettingsWriteArgumentsSchema,
   settingsWriteRequiresNativeCredentialEntry,
+  type SettingsWriteGoogleReadCredentialScope,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
@@ -195,7 +196,7 @@ import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_c
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
-import { nativeLlmCredentialPromptAvailable, promptForLlmCredential } from "./llm_credential_prompt.js";
+import { nativeLlmCredentialPromptAvailable, promptForGoogleReadCredential, promptForLlmCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -1321,6 +1322,7 @@ async function serveWithOwnerLease(
   const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys, {
     available: nativeCredentialPromptAvailable,
     request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
+    requestGoogleRead: (scope, signal) => promptForGoogleReadCredential(scope, signal, nativePromptEnv),
     assertCurrent: (commandDigest) => {
       const approval = nativeCredentialApproval.getStore();
       if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
@@ -5316,6 +5318,7 @@ async function serveWithOwnerLease(
           }
         : {}),
       onOwnerLlmSettingsProposal: submitOwnerLlmSettingsProposal,
+      onOwnerGoogleReadCredentialProposal: submitOwnerGoogleReadCredentialProposal,
       onOwnerDailyBriefRead: submitOwnerDailyBriefRead,
       onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
@@ -5358,6 +5361,10 @@ async function serveWithOwnerLease(
         nativeCredentialPromptAvailable,
         inspectCredentialRotation: async (provider) => {
           try { return (await settingsWritePort.inspect(provider, { rotate_credential: true })).credential_rotation_ready === true; }
+          catch { return false; }
+        },
+        inspectGoogleReadCredentialRegistration: async (scope) => {
+          try { return (await settingsWritePort.inspect(undefined, undefined, scope)).google_read_registration_ready === true; }
           catch { return false; }
         },
       }),
@@ -5931,25 +5938,43 @@ async function serveWithOwnerLease(
     }
   }
 
-  async function submitOwnerLlmSettingsProposal(input: WebChatOwnerLlmSettingsProposal & { actor: string }) {
+  function submitOwnerLlmSettingsProposal(input: WebChatOwnerLlmSettingsProposal & { actor: string }) {
+    return submitOwnerSettingsProposal(input, { patch: input.patch, expected_llm_provider: input.expected_provider });
+  }
+
+  function submitOwnerGoogleReadCredentialProposal(input: { actor: string; scope: SettingsWriteGoogleReadCredentialScope;
+    goal_ref?: string; purpose_version?: number }) {
+    return submitOwnerSettingsProposal(input, { patch: { google_read: { register_credential: input.scope } } });
+  }
+
+  async function submitOwnerSettingsProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }, rawArguments: unknown) {
     const unavailable = { accepted: false as const, status: "settings_proposal_unavailable" as const,
       used_for_authority: false as const, may_execute: false as const };
-    const arguments_ = SettingsWriteArgumentsSchema.safeParse({ patch: input.patch, expected_llm_provider: input.expected_provider });
-    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR || !arguments_.success || !arguments_.data.patch.llm ||
-        !arguments_.data.expected_llm_provider || process.env.BLUE_TANUKI_SAFE_MODE === "1" ||
+    const arguments_ = SettingsWriteArgumentsSchema.safeParse(rawArguments);
+    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR || !arguments_.success || process.env.BLUE_TANUKI_SAFE_MODE === "1" ||
         gatewayShuttingDown || emergencyStop.active || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) return unavailable;
     try {
       ownerLease.assertActive();
-      const patch = arguments_.data.patch.llm;
-      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider, patch.activation || patch.rotate_credential ? patch : undefined);
-      const hasChange = patch.activation ? target.provider_activation_ready === true :
-        patch.rotate_credential ? target.credential_rotation_ready === true :
-        (patch.model !== undefined && patch.model !== target.values.model) ||
-        (patch.temperature !== undefined && patch.temperature !== target.values.temperature) ||
-        (patch.max_tokens !== undefined && patch.max_tokens !== target.values.max_tokens) ||
-        (patch.timeout_ms !== undefined && patch.timeout_ms !== target.values.timeout_ms);
-      if (target.llm_provider !== input.expected_provider || target.managed_llm_settings !== true ||
-          !hasChange || emergencyStop.active || gatewayShuttingDown) return unavailable;
+      const { patch, expected_llm_provider } = arguments_.data;
+      const llm = patch.llm;
+      const googleScope = patch.google_read?.register_credential;
+      const target = await settingsWritePort.inspect(expected_llm_provider,
+        llm?.activation || llm?.rotate_credential ? llm : undefined, googleScope);
+      if (googleScope !== undefined) {
+        if (target.google_read_registration_ready !== true) return unavailable;
+      } else {
+        if (!llm || !expected_llm_provider || target.llm_provider !== expected_llm_provider || target.managed_llm_settings !== true) {
+          return unavailable;
+        }
+        const hasChange = llm.activation ? target.provider_activation_ready === true :
+          llm.rotate_credential ? target.credential_rotation_ready === true :
+          (llm.model !== undefined && llm.model !== target.values.model) ||
+          (llm.temperature !== undefined && llm.temperature !== target.values.temperature) ||
+          (llm.max_tokens !== undefined && llm.max_tokens !== target.values.max_tokens) ||
+          (llm.timeout_ms !== undefined && llm.timeout_ms !== target.values.timeout_ms);
+        if (!hasChange) return unavailable;
+      }
+      if (emergencyStop.active || gatewayShuttingDown) return unavailable;
       const projection = hds.getGoalGovernanceProjection();
       const goal = projection?.goals.find((candidate) => candidate.goal_kind === "delegated" &&
         candidate.goal_ref === input.goal_ref && candidate.current_version === input.purpose_version &&
@@ -5961,8 +5986,9 @@ async function serveWithOwnerLease(
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.source_interface": "gui" } as const;
       const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
-        content: patch.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
-          : patch.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
+        content: googleScope !== undefined ? "選択された Google 読み取り用の資格情報を保護して保存する。"
+          : llm?.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
+          : llm?.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
           : "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
       const plan = hds.prepareSettingsWritePlan(origin, arguments_.data, binding);
       if (binding) return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
@@ -6819,6 +6845,7 @@ async function serveWithOwnerLease(
           ...(snapshot.expected_llm_provider ? { expected_llm_provider: snapshot.expected_llm_provider } : {}),
           ...(snapshot.activation ? { activation: snapshot.activation } : {}),
           ...(snapshot.credential_rotation ? { credential_rotation: snapshot.credential_rotation } : {}),
+          ...(snapshot.google_read_registration ? { google_read_registration: snapshot.google_read_registration } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,

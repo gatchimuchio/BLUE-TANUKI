@@ -46,6 +46,7 @@ import {
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
   settingsWriteRequiresNativeCredentialEntry,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   llmSettingsWriteEnvKeys,
   settingsWriteRequestBinding,
@@ -5087,9 +5088,15 @@ ${planControl.question}`,
       throw new Error("settings_plan_owner_origin_required");
     }
     const args = SettingsWriteArgumentsSchema.safeParse(rawArguments);
-    if (!args.success || !args.data.patch.llm || args.data.expected_llm_provider === undefined) {
+    if (!args.success) {
       throw new Error("settings_plan_arguments_invalid");
     }
+    const { patch, expected_llm_provider } = args.data;
+    const googleScope = patch.google_read?.register_credential;
+    const changedKeys = googleScope
+      ? [`${SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[googleScope].key}_REF`]
+      : patch.llm && expected_llm_provider !== undefined ? llmSettingsWriteEnvKeys(patch.llm, expected_llm_provider) : null;
+    if (!changedKeys) throw new Error("settings_plan_arguments_invalid");
     if (!this.audit.isPersistent() || !this.audit.verify() || !this.getSelfHealth().command_execution_allowed) {
       throw new Error("settings_plan_authority_unavailable");
     }
@@ -5114,9 +5121,8 @@ ${planControl.question}`,
         throw new Error("plan_goal_purpose_relation_unavailable");
       }
     }
-    const target = { kind: "settings", id: "gateway.runtime-config", scope: "llm.runtime" } as const;
-    const stepId = "llm-runtime-settings";
-    const changedKeys = llmSettingsWriteEnvKeys(args.data.patch.llm, args.data.expected_llm_provider);
+    const target = { kind: "settings", id: "gateway.runtime-config", scope: googleScope ? "google.read" : "llm.runtime" } as const;
+    const stepId = googleScope ? "google-read-credentials" : "llm-runtime-settings";
     const plan: OperationPlan = {
       version: "operation-core.v1",
       plan_id: `owner-settings-${operationPlanDigest(caller.id)}`,
@@ -5136,7 +5142,7 @@ ${planControl.question}`,
         command_generated_by_adapter_only: false,
         preparation: {
           depends_on: [], bindings: [], preconditions: [],
-          validation: [{ check_id: "llm-runtime-settings-saved", method: "result_equals", target,
+          validation: [{ check_id: googleScope ? "google-read-credential-saved" : "llm-runtime-settings-saved", method: "result_equals", target,
             expected: { changed_keys: changedKeys, restart_required: true } }],
           compensation: { available: false, reason: "設定復元は別の操作として承認を受ける" },
         },
@@ -5150,7 +5156,7 @@ ${planControl.question}`,
       id: caller.id,
       channel: caller.channel,
       user: caller.user,
-      content: "明示したLLM実行設定を更新する",
+      content: googleScope ? "選択したGoogle読取資格の保護参照を登録する" : "明示したLLM実行設定を更新する",
       timestamp: caller.timestamp,
       metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
@@ -5158,7 +5164,7 @@ ${planControl.question}`,
         ...(binding ? { "blue_tanuki.operation_core.goal_purpose_binding": binding } : {}) },
     });
     const plan_id_digest = this.operationPlans.retainCandidate(plan, origin, undefined, undefined, undefined,
-      undefined, args.data.patch.llm.activation !== undefined || args.data.patch.llm.rotate_credential === true);
+      undefined, googleScope !== undefined || patch.llm?.activation !== undefined || patch.llm?.rotate_credential === true);
     return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
       used_for_authority: false, may_execute: false };
   }

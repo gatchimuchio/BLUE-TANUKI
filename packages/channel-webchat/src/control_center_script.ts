@@ -3,6 +3,8 @@ import {
   OPERATION_ADAPTER_REGISTRY,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SettingsWriteLlmProviderSchema,
 } from "@blue-tanuki/protocol";
 
@@ -15,6 +17,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const SETTINGS_LLM_PROVIDERS = ${SETTINGS_LLM_PROVIDERS_JSON};
       const SETTINGS_LLM_ACTIVATION_DESTINATIONS = ${JSON.stringify(SETTINGS_WRITE_ACTIVATION_DESTINATIONS)};
       const SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE = ${JSON.stringify(SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE)};
+      const SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE)};
+      const SETTINGS_GOOGLE_READ_API_HOSTS = ${JSON.stringify(Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
+        .map(([scope, target]) => [scope, target.api_hosts])))};
+      const GOOGLE_READ_CREDENTIAL_LABELS = { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" };
       const controlCenterLaunchTicket = (() => {
         try {
           const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -58,6 +64,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         evidenceToken: sessionStorage.getItem("bt.evidenceToken") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
         settingsRuntimeSnapshot: null,
+        googleReadCredentialScopes: [],
+        googleReadCredentialNextScreen: null,
+        googleReadCredentialSubmitting: false,
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         connectorsSnapshot: null,
         connectorsCandidateTask: null,
@@ -4441,7 +4450,36 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname);
       }
 
+      function updateGoogleReadCredentialButton() {
+        byId("prepare-google-read-credential").disabled = state.googleReadCredentialSubmitting ||
+          !state.googleReadCredentialScopes.includes(byId("google-read-credential-scope").value);
+      }
+
+      function renderGoogleReadCredentialAvailability(scopes) {
+        const local = isLocalCredentialControlCenter();
+        const available = local && Array.isArray(scopes) ? Object.keys(GOOGLE_READ_CREDENTIAL_LABELS)
+          .filter(function (scope) { return scopes.includes(scope); }) : [];
+        state.googleReadCredentialScopes = available;
+        const select = byId("google-read-credential-scope");
+        select.replaceChildren();
+        const options = [["", available.length ? "登録先を選んでください" : "選択できる登録先はありません"],
+          ...available.map(function (scope) { return [scope, GOOGLE_READ_CREDENTIAL_LABELS[scope]]; })];
+        for (const [value, label] of options) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = label;
+          select.appendChild(option);
+        }
+        select.value = "";
+        select.disabled = available.length === 0;
+        updateGoogleReadCredentialButton();
+        setText("google-read-credential-status", !local ? "設置先のControl Centerを開いて登録してください。"
+          : scopes === undefined ? "設定を読み込んで登録先を確認してください。"
+          : available.length === 0 ? "現在、この端末から新規登録できる登録先はありません。" : "");
+      }
+
       function renderSettingsSnapshot(snapshot) {
+        renderGoogleReadCredentialAvailability(snapshot.google_read_credential_registration_available ?? []);
         const llm = snapshot.llm || {};
         const routeModel = llm.command_route && llm.command_route.model;
         const model = typeof routeModel === "string" && routeModel !== "(provider default)" ? routeModel : String(llm.model ?? "");
@@ -6200,6 +6238,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           throw new Error("現行プロバイダーの保護済み資格情報を、この端末のControl Centerで確認してください。");
         }
         const llm = rotateCredential ? { rotate_credential: true } : llmSettingsPatch(current);
+        return { expected_provider: current.provider, patch: { llm }, ...settingsProposalGoal() };
+      }
+
+      function settingsProposalGoal() {
         const goal = byId("settings-goal-ref");
         const goal_ref = goal.value;
         const purpose_version = Number(goal.selectedOptions[0]?.dataset.purposeVersion);
@@ -6207,7 +6249,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (!/^goal_[a-f0-9]{16,64}$/.test(goal_ref) || !Number.isSafeInteger(purpose_version) || purpose_version < 1))) {
           throw new Error("現在の委任目的を読み込んで選択してください。");
         }
-        return { expected_provider: current.provider, patch: { llm }, ...(goal_ref ? { goal_ref, purpose_version } : {}) };
+        return goal_ref ? { goal_ref, purpose_version } : {};
       }
 
       async function prepareLlmSettingsPlan(rotateCredential = false) {
@@ -6263,6 +6305,69 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function prepareGoogleReadCredentialPlan() {
+        if (state.googleReadCredentialSubmitting) return;
+        const next = byId("open-google-read-credential-review");
+        next.hidden = true;
+        state.googleReadCredentialNextScreen = null;
+        const tokenInput = byId("settings-owner-token");
+        const token = tokenInput.value.trim();
+        const scope = byId("google-read-credential-scope").value;
+        let goal;
+        try {
+          if (!isLocalCredentialControlCenter() || !state.googleReadCredentialScopes.includes(scope)) {
+            throw new Error("この端末で設定を読み込み、登録先を選んでください。");
+          }
+          if (!token) throw new Error("変更申請用のowner tokenを入力してください。");
+          goal = settingsProposalGoal();
+        } catch (error) {
+          setText("google-read-credential-status", error.message);
+          return;
+        }
+        state.googleReadCredentialSubmitting = true;
+        updateGoogleReadCredentialButton();
+        setText("google-read-credential-status", "資格情報を登録するための審査を申請しています。");
+        try {
+          const response = await fetch("/owner/google-read-credential-proposal", {
+            method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
+            headers: { "content-type": "application/json", ...authHeaders(token) },
+            body: JSON.stringify({ scope, ...goal })
+          });
+          const result = response.status === 202 && hasNoStore(response) ? await response.json() : null;
+          const isId = function (value) { return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value); };
+          if (!result || result.accepted !== true || result.used_for_authority !== false ||
+              result.may_execute !== false || !isId(result.request_id)) {
+            throw new Error("invalid_settings_proposal_receipt");
+          }
+          if (!goal.goal_ref && result.status === "approval_required" && isId(result.command_id)) {
+            setText("google-read-credential-status", "承認待ちです。承認画面で登録先を確認してください。");
+            state.googleReadCredentialNextScreen = "approvals";
+            next.textContent = "承認を開く";
+          } else if (goal.goal_ref && result.status === "candidate_ready" &&
+              typeof result.plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(result.plan_id_digest)) {
+            setText("google-read-credential-status", "委任目的に結び付いた計画候補を作成しました。計画画面で目的と登録先を確認してください。");
+            state.googleReadCredentialNextScreen = "tasks";
+            next.textContent = "計画を開く";
+          } else {
+            throw new Error("invalid_settings_proposal_receipt");
+          }
+          next.hidden = false;
+        } catch {
+          setText("google-read-credential-status", "申請の受付を確認できませんでした。再申請の前に計画と承認の状態を確認してください。");
+        } finally {
+          if (tokenInput.value.trim() === token) tokenInput.value = "";
+          state.googleReadCredentialSubmitting = false;
+          updateGoogleReadCredentialButton();
+        }
+      }
+
+      function openSettingsProposalScreen(screen) {
+        if (screen !== "approvals" && screen !== "tasks") return;
+        setActiveScreen(screen);
+        if (screen === "approvals" && byId("approval-token").value.trim()) void loadApprovals();
+        if (screen === "tasks" && byId("runtime-token").value.trim()) void loadRuntime("settings-proposal");
+      }
+
       function connectorsPayload() {
         const current = state.connectorsSnapshot;
         if (!isObject(current)) throw new Error("先にLoad Connectorsで現行設定を読み込んでください");
@@ -6296,6 +6401,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const token = byId("settings-token").value.trim();
         state.settingsToken = token;
         state.settingsRuntimeSnapshot = null;
+        renderGoogleReadCredentialAvailability();
         byId("prepare-llm-credential-rotation").hidden = true;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
@@ -7119,7 +7225,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const dailyBriefService = dailyBriefCard ? card.getAttribute("data-daily-brief-service") : null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
         const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
-        const nativeCredential = verdict === "approve" && (nativeCredentialMode === "register" || nativeCredentialMode === "rotate");
+        const nativeCredential = verdict === "approve" && ["register", "rotate", "google-read"].includes(nativeCredentialMode);
         if (nativeCredential) {
           if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
             throw new Error("この端末のControl Centerで対象を確認してから承認してください。");
@@ -7146,7 +7252,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           (nativeCredential ? "/native-credential" : dailyBriefCard ? "/daily-brief-read" : ""), {
           method: "POST",
           cache: "no-store",
-          ...(nativeCredential || dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
+          ...(nativeCredential || dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "origin" } : {}),
           headers: {
             "content-type": "application/json",
             ...authHeaders(token),
@@ -7167,10 +7273,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const responseBody = response?.ok && hasNoStore(response) ? await response.json().catch(function () { return null; }) : null;
           const result = responseBody?.result;
           const confirmed = responseBody?.ok === true && result?.approval === "approve" && result.executed === true && result.status === "success";
-          const saved = nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
+          const saved = nativeCredentialMode === "google-read"
+            ? "資格情報をこの端末の保護ストアに登録しました。製品を再起動してください。Googleとの接続とトークンのスコープは未確認です。"
+            : nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
             : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
           setText("native-credential-approval-status", confirmed ? saved
             : "資格情報の保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
+          if (confirmed && nativeCredentialMode === "google-read") renderGoogleReadCredentialAvailability();
           await loadApprovals();
           return;
         }
@@ -7259,9 +7368,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           approve.textContent = "Approve";
         }
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
-          method: "POST",
-          cache: "no-store",
-          ...(dailyBriefCard ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
+          method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
           headers: { ...authHeaders(token), ...(dailyBriefCard ? { "x-blue-tanuki-owner-token": dailyBriefOwner } : {}) }
         });
         if (!response.ok) {
@@ -7633,6 +7740,43 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "settings_write") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (Object.hasOwn(review, "google_read_registration")) {
+            const registration = review.google_read_registration;
+            const scope = registration?.scope;
+            const hosts = typeof scope === "string" && Object.hasOwn(SETTINGS_GOOGLE_READ_API_HOSTS, scope)
+              ? SETTINGS_GOOGLE_READ_API_HOSTS[scope] : null;
+            const change = Array.isArray(review.changes) && review.changes.length === 1 ? review.changes[0] : null;
+            if (!isLocalCredentialControlCenter() || !hasNoStore(response) || !card.isConnected ||
+                token !== byId("approval-token").value.trim() || Object.keys(review).length !== 13 ||
+                review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
+                review.used_for_authority !== false || review.may_execute !== false ||
+                ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
+                  review.operation_plan_binding_digest].every(isDigest) ||
+                !hosts || !registration || Object.keys(registration).length !== 3 || registration.protected_reference_configured !== false ||
+                !Array.isArray(registration.api_hosts) || registration.api_hosts.length !== hosts.length ||
+                !hosts.every(function (host, index) { return registration.api_hosts[index] === host; }) ||
+                !change || Object.keys(change).length !== 3 || change.key !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.key ||
+                change.before !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.before || change.after !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.after) {
+              throw new Error("Google資格情報の登録内容がこのL3承認要求に結び付いていません");
+            }
+            view.replaceChildren();
+            const heading = document.createElement("strong");
+            heading.textContent = GOOGLE_READ_CREDENTIAL_LABELS[scope] + "の資格情報を登録";
+            const destination = document.createElement("p");
+            destination.textContent = "対象のGoogle APIホスト " + hosts.join("、");
+            const note = document.createElement("p");
+            note.className = "muted";
+            note.textContent = "承認後に、この端末の専用入力画面で読み取り専用スコープのOAuthアクセストークンを登録します。反映後はGatewayを再起動してください。Googleとの接続とトークンのスコープはこの操作では確認しません。";
+            const digests = document.createElement("small");
+            digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
+            view.append(heading, destination, note, digests);
+            state.approvalContentDigests[commandId] = review.review_digest;
+            approve.setAttribute("data-native-credential-entry", "google-read");
+            approve.textContent = "承認して入力画面を開く";
+            approve.disabled = false;
+            button.textContent = "登録先を再確認";
+            return;
+          }
           const allowedKeys = ["llm.provider", "llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms",
             SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE.key,
             "composio.user_id", "composio.allowed_toolkits", "composio.allowed_actions", "composio.revoked_actions",
@@ -11187,6 +11331,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("settings-token").addEventListener("input", function () {
         state.settingsRuntimeSnapshot = null;
+        renderGoogleReadCredentialAvailability();
         byId("prepare-llm-credential-rotation").hidden = true;
       });
       byId("settings-provider-choice").addEventListener("change", function () {
@@ -11208,11 +11353,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("prepare-llm-settings-plan").addEventListener("click", function () { return prepareLlmSettingsPlan(); });
       byId("prepare-llm-credential-rotation").addEventListener("click", function () { return prepareLlmSettingsPlan(true); });
       byId("open-llm-settings-review").addEventListener("click", function () {
-        const screen = state.settingsProposalNextScreen;
-        if (screen !== "approvals" && screen !== "tasks") return;
-        setActiveScreen(screen);
-        if (screen === "approvals" && byId("approval-token").value.trim()) void loadApprovals();
-        if (screen === "tasks" && byId("runtime-token").value.trim()) void loadRuntime("settings-proposal");
+        openSettingsProposalScreen(state.settingsProposalNextScreen);
+      });
+      byId("google-read-credential-scope").addEventListener("change", updateGoogleReadCredentialButton);
+      byId("prepare-google-read-credential").addEventListener("click", prepareGoogleReadCredentialPlan);
+      byId("open-google-read-credential-review").addEventListener("click", function () {
+        openSettingsProposalScreen(state.googleReadCredentialNextScreen);
       });
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {

@@ -424,6 +424,19 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>OpenRouter</span><span id="settings-openrouter-status">not loaded</span></div>
             <div class="metric"><span>Verify</span><span id="settings-verify-status">not run</span></div>
           </div>
+          <section class="settings-subsection" aria-labelledby="google-read-credential-title">
+            <h3 id="google-read-credential-title">Google読み取り用の資格情報</h3>
+            <p class="muted">読み取り専用スコープで発行したOAuthアクセストークンを用意してください。承認後、この端末の専用入力画面で登録します。</p>
+            <p class="muted">共通を選ぶとGmail、Google Calendar、Google Driveに適用されます。サービス個別の資格情報がある場合は個別の設定が優先されます。</p>
+            <div class="status-grid">
+              <label>登録先<select id="google-read-credential-scope" disabled><option value="">設定を読み込んでください</option></select></label>
+            </div>
+            <div class="action-row">
+              <button id="prepare-google-read-credential" type="button" disabled>資格情報の登録を申請</button>
+              <button id="open-google-read-credential-review" type="button" hidden>審査を開く</button>
+            </div>
+            <p id="google-read-credential-status" class="muted" role="status"></p>
+          </section>
           <section class="settings-subsection" aria-labelledby="mascot-settings-title">
             <div class="row">
               <h3 id="mascot-settings-title">Mascot</h3>

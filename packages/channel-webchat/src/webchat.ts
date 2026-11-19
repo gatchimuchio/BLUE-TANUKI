@@ -28,11 +28,14 @@ import {
   RuntimeSessionInputSchema,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SettingsWriteActivationSchema,
   SettingsWriteArgumentsSchema,
+  SettingsWriteGoogleReadCredentialScopeSchema,
   SettingsWriteLlmProviderSchema,
   SettingsWriteNativeLlmProviderSchema,
   settingsWriteCredentialRotationReview,
+  settingsWriteGoogleReadCredentialReview,
   settingsWriteRequiresNativeCredentialEntry,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
@@ -341,10 +344,33 @@ function dailyBriefReadResult(value: unknown): WebChatDailyBriefReadResult | nul
   return { service: result.service, items, incomplete: result.incomplete, used_for_authority: false };
 }
 
-function validSettingsProviderReview(review: WebChatSettingsWriteContentReview, commandId: string): boolean {
+function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, commandId: string): boolean {
   if (!Array.isArray(review.changes)) return false;
+  if (Object.hasOwn(review, "google_read_registration")) {
+    const registration = review.google_read_registration;
+    const scope = SettingsWriteGoogleReadCredentialScopeSchema.safeParse(registration?.scope);
+    const change = review.changes[0];
+    if (!registration || !scope.success || !hasExactKeys({ ...review }, [
+      "kind", "command_id", "command_digest", "review_digest", "operation", "google_read_registration",
+      "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
+      "no_store", "used_for_authority", "may_execute",
+    ]) || review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
+        review.used_for_authority !== false || review.may_execute !== false ||
+        ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
+          review.operation_plan_binding_digest].every(digest => typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) ||
+        !hasExactKeys({ ...registration }, ["scope", "api_hosts", "protected_reference_configured"]) ||
+        !Array.isArray(registration.api_hosts) || review.changes.length !== 1 || !change ||
+        !hasExactKeys({ ...change }, ["key", "before", "after"])) return false;
+    const expected = settingsWriteGoogleReadCredentialReview(scope.data);
+    const expectedChange = SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE;
+    return registration.protected_reference_configured === expected.protected_reference_configured &&
+      registration.api_hosts.length === expected.api_hosts.length &&
+      expected.api_hosts.every((host, index) => registration.api_hosts[index] === host) &&
+      change.key === expectedChange.key && change.before === expectedChange.before && change.after === expectedChange.after;
+  }
   if (review.activation === undefined && review.credential_rotation === undefined) {
-    return !review.changes.some(change => change?.key === "llm.provider" || change?.key === "llm.credential_reference");
+    return !review.changes.some(change => change?.key === "llm.provider" || change?.key === "llm.credential_reference" ||
+      change?.key === SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE.key);
   }
   if (!hasExactKeys({ ...review }, [
     "kind", "command_id", "command_digest", "review_digest", "operation", "expected_llm_provider",
@@ -852,6 +878,7 @@ function findAotanuAssetRoot(): string {
  *   GET  /runtime/snapshot auth:inbound または専用D4 Runtime bearer、読取専用投影
  *   POST /owner/goal-purpose-adoption body:{purpose_text} auth:dedicated owner bearer, no-store
  *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
+ *   POST /owner/google-read-credential-proposal body:{scope,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
@@ -1428,6 +1455,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     if (url.pathname === "/owner/llm-settings-proposal") {
       await this.handleOwnerLlmSettingsProposal(req, res);
+      return;
+    }
+    if (url.pathname === "/owner/google-read-credential-proposal") {
+      await this.handleOwnerGoogleReadCredentialProposal(req, res, url);
       return;
     }
     if (url.pathname === "/owner/daily-brief-read") {
@@ -3284,7 +3315,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (content.kind === "settings_write" && (!validSettingsProviderReview(content, command_id) ||
+      if (content.kind === "settings_write" && (!validSettingsWriteReview(content, command_id) ||
+          (content.google_read_registration !== undefined && (url.search || !isLocalControlCenterBrowserRequest(req))) ||
           (content.expected_llm_provider !== undefined &&
             (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
               content.changes.length === 0 ||
@@ -3637,8 +3669,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const requiresApprovalEndpoint = this.opts.approval?.requiresApprovalEndpoint?.(approval_id) === true;
     if (nativeCredentialMatch) {
       const reviewed = await this.opts.approval?.reviewContent?.(approval_id).catch(() => null);
-      if (reviewed?.kind !== "settings_write" || !validSettingsProviderReview(reviewed, approval_id) ||
-          (reviewed.activation?.credential_registration_required !== true && reviewed.credential_rotation === undefined) ||
+      if (reviewed?.kind !== "settings_write" || !validSettingsWriteReview(reviewed, approval_id) ||
+          (reviewed.activation?.credential_registration_required !== true && reviewed.credential_rotation === undefined &&
+            reviewed.google_read_registration === undefined) ||
           reviewed.command_id !== approval_id ||
           reviewed.review_digest !== content_review_digest || reviewed.no_store !== true ||
           reviewed.used_for_authority !== false || reviewed.may_execute !== false) {
@@ -4693,13 +4726,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const hasGoal = Object.hasOwn(body ?? {}, "goal_ref") || Object.hasOwn(body ?? {}, "purpose_version");
     const fields = hasGoal ? ["expected_provider", "patch", "goal_ref", "purpose_version"] : ["expected_provider", "patch"];
     const parsed = SettingsWriteArgumentsSchema.safeParse({ patch: body?.patch, expected_llm_provider: body?.expected_provider });
+    const llm = parsed.success ? parsed.data.patch.llm : undefined;
     const provider = SettingsWriteLlmProviderSchema.safeParse(body?.expected_provider);
     const goal_ref = body?.goal_ref;
     const purpose_version = body?.purpose_version;
     const goal = typeof goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goal_ref) &&
       typeof purpose_version === "number" && Number.isSafeInteger(purpose_version) && purpose_version > 0
       ? { goal_ref, purpose_version } : undefined;
-    if (!body || !hasExactKeys(body, fields) || !provider.success || !parsed.success || !parsed.data.patch.llm || (hasGoal && !goal)) {
+    if (!body || !hasExactKeys(body, fields) || !provider.success || !parsed.success || !llm || (hasGoal && !goal)) {
       res.writeHead(400);
       res.end(JSON.stringify({ error: "invalid_owner_llm_settings_proposal" }));
       return;
@@ -4709,9 +4743,74 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
       return;
     }
+    await this.respondToOwnerSettingsProposal(res, Boolean(goal), () =>
+      propose({ expected_provider: provider.data, patch: { llm }, ...goal, actor: OWNER_TOKEN_ACTOR }));
+  }
+
+  private async handleOwnerGoogleReadCredentialProposal(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+      return;
+    }
+    const propose = this.opts.onOwnerGoogleReadCredentialProposal;
+    if (!this.opts.owner_token || !propose) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "owner_google_read_credential_proposal_not_configured" }));
+      return;
+    }
+    if (!this.checkAuth(req, "owner")) {
+      res.writeHead(401);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      res.writeHead(415);
+      res.end(JSON.stringify({ error: "application_json_required" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+
+    let body: Record<string, unknown> | null;
+    try {
+      body = await readJson(req, 512, true);
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "body_too_large") throw error;
+      res.writeHead(413);
+      res.end(JSON.stringify({ error: "request_body_too_large" }));
+      return;
+    }
+    const scope = SettingsWriteGoogleReadCredentialScopeSchema.safeParse(body?.scope);
+    const hasGoal = Object.hasOwn(body ?? {}, "goal_ref") || Object.hasOwn(body ?? {}, "purpose_version");
+    const fields = hasGoal ? ["scope", "goal_ref", "purpose_version"] : ["scope"];
+    const goal_ref = body?.goal_ref;
+    const purpose_version = body?.purpose_version;
+    const goal = typeof goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goal_ref) &&
+      typeof purpose_version === "number" && Number.isSafeInteger(purpose_version) && purpose_version > 0
+      ? { goal_ref, purpose_version } : undefined;
+    if (!body || !hasExactKeys(body, fields) || !scope.success || (hasGoal && !goal)) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "invalid_owner_google_read_credential_proposal" }));
+      return;
+    }
+    await this.respondToOwnerSettingsProposal(res, Boolean(goal), () =>
+      propose({ scope: scope.data, ...goal, actor: OWNER_TOKEN_ACTOR }));
+  }
+
+  private async respondToOwnerSettingsProposal(
+    res: ServerResponse, hasGoal: boolean, propose: () => Promise<Record<string, unknown>>,
+  ): Promise<void> {
     const projection = { used_for_authority: false, may_execute: false } as const;
     try {
-      const result = await propose({ expected_provider: provider.data, patch: { llm: parsed.data.patch.llm }, ...goal, actor: OWNER_TOKEN_ACTOR });
+      const result = await propose();
       if (result.accepted !== true) {
         res.writeHead(409);
         res.end(JSON.stringify({ accepted: false, status: "settings_proposal_unavailable", ...projection }));
@@ -4721,10 +4820,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       if (typeof request_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(request_id)) {
         throw new Error("invalid_settings_proposal_receipt");
       }
-      if (!goal && status === "approval_required" && typeof command_id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(command_id)) {
+      if (!hasGoal && status === "approval_required" && typeof command_id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(command_id)) {
         res.writeHead(202);
         res.end(JSON.stringify({ accepted: true, status, request_id, command_id, ...projection }));
-      } else if (goal && status === "candidate_ready" && typeof plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(plan_id_digest)) {
+      } else if (hasGoal && status === "candidate_ready" && typeof plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(plan_id_digest)) {
         res.writeHead(202);
         res.end(JSON.stringify({ accepted: true, status, request_id, plan_id_digest, ...projection }));
       } else {

@@ -1,16 +1,19 @@
 import {
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
   settingsWriteCredentialRotationReview,
+  settingsWriteGoogleReadCredentialReview,
   settingsWriteRequestBinding,
   settingsWriteRequiresNativeCredentialEntry,
   settingsWriteTargetIdentityDigest,
   type SettingsWriteActivation,
   type SettingsWriteArguments,
+  type SettingsWriteGoogleReadCredentialScope,
   type SettingsWriteLlmProvider,
   type SettingsWritePatch,
   type SettingsWriteTargetVersionObservation,
@@ -20,12 +23,14 @@ import { assertToolExecutionNotCancelled, type SettingsWriteContentReview, type 
 
 export interface SettingsWritePort {
   inspect(expectedLlmProvider?: SettingsWriteLlmProvider,
-    llmPatch?: NonNullable<SettingsWritePatch["llm"]>): Promise<{
+    llmPatch?: NonNullable<SettingsWritePatch["llm"]>,
+    googleScope?: SettingsWriteGoogleReadCredentialScope): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
     provider_activation_ready?: true;
     credential_rotation_ready?: true;
+    google_read_registration_ready?: true;
     values: {
       model: string | null;
       temperature: number | null;
@@ -72,7 +77,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
   const tool: Tool = {
     name: "settings.write",
     adapter_version: "1.0.0-rc.1",
-    description: "Apply one explicit non-secret Gateway LLM or Composio settings patch through the HDS Operation Plan and L3 review. API key bytes are never accepted.",
+    description: "Apply one explicit non-secret Gateway settings patch through the HDS Operation Plan and L3 review. Credential values are never accepted as tool arguments.",
     required_capabilities: requireToolOperationDescriptor("settings.write").required_capabilities,
     async inspect_target_version(rawArgs, options = {}): Promise<SettingsWriteTargetVersionObservation> {
       const args = parseArgs(rawArgs);
@@ -102,9 +107,11 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       if (target.target_state_digest !== observation.target_state_digest) {
         throw new Error("settings_write_target_changed_during_review");
       }
+      const googleScope = patch.google_read?.register_credential;
       const changes = patch.llm
         ? buildLlmChanges(patch.llm, target)
-        : buildComposioChanges(patch.composio!, target.values.composio);
+        : patch.composio ? buildComposioChanges(patch.composio, target.values.composio)
+          : [SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE];
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
         kind: "settings_write" as const,
@@ -113,6 +120,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         ...(patch.llm?.activation ? { activation: settingsWriteActivationReview(patch.llm.activation) } : {}),
         ...(patch.llm?.rotate_credential ? { credential_rotation: settingsWriteCredentialRotationReview(
           SettingsWriteNativeLlmProviderSchema.parse(expected_llm_provider)) } : {}),
+        ...(googleScope ? { google_read_registration: settingsWriteGoogleReadCredentialReview(googleScope) } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -136,7 +144,8 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       assertToolExecutionNotCancelled(context.signal, "settings.write");
       if (settingsWriteRequiresNativeCredentialEntry(args.patch)) {
         if (!context.assert_current_settings_write) throw new Error(args.patch.llm?.rotate_credential
-          ? "llm_credential_rotation_not_authorized" : "llm_credential_registration_not_authorized");
+          ? "llm_credential_rotation_not_authorized" : args.patch.google_read
+            ? "google_read_credential_registration_not_authorized" : "llm_credential_registration_not_authorized");
         return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider, {
           command_digest: context.operation_plan_command_digest,
           assert_current: context.assert_current_settings_write,
@@ -174,7 +183,10 @@ export function settingsWriteActivationReview(activation: SettingsWriteActivatio
 async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteArguments) {
   const expectedProvider = args.expected_llm_provider;
   const llm = args.patch.llm;
-  const target = await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
+  const googleScope = args.patch.google_read?.register_credential;
+  const target = googleScope
+    ? await port.inspect(undefined, undefined, googleScope)
+    : await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
   if (expectedProvider !== undefined &&
       (target.llm_provider !== expectedProvider || target.managed_llm_settings !== true)) {
     throw new Error("settings_write_bound_llm_target_unavailable");
@@ -184,6 +196,9 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   }
   if (llm?.rotate_credential && target.credential_rotation_ready !== true) {
     throw new Error("settings_write_credential_rotation_unavailable");
+  }
+  if (googleScope && target.google_read_registration_ready !== true) {
+    throw new Error("settings_write_google_read_registration_unavailable");
   }
   return target;
 }

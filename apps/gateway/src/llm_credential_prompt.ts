@@ -2,13 +2,20 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { lstatSync, statSync } from "node:fs";
 import { posix } from "node:path";
 import type { Readable } from "node:stream";
-import { SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS, type SettingsWriteActivation } from "@blue-tanuki/protocol";
+import { SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS, type SettingsWriteActivation,
+  type SettingsWriteGoogleReadCredentialScope } from "@blue-tanuki/protocol";
 import { windowsSystemChildEnvironment, windowsSystemPowerShellCommand } from "./child_process_environment.js";
 
 const PROVIDER_LABELS: Record<SettingsWriteActivation["provider"], string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   openrouter: "OpenRouter",
+};
+const GOOGLE_READ_LABELS: Readonly<Record<SettingsWriteGoogleReadCredentialScope, string>> = {
+  gmail: "Gmail 読み取り用アクセストークン",
+  calendar: "Google カレンダー読み取り用アクセストークン",
+  drive: "Google ドライブ読み取り用アクセストークン",
+  shared: "Gmail・Google カレンダー・Google ドライブ共通の読み取り用アクセストークン",
 };
 const NATIVE_PROMPT_TIMEOUT_MS = SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS;
 const CHILD_TIMEOUT_MS = NATIVE_PROMPT_TIMEOUT_MS + 5_000;
@@ -50,12 +57,12 @@ try {
 
   $description = New-Object System.Windows.Forms.Label
   $description.SetBounds(16, 14, 428, 42)
-  $description.Text = '${label} の API キーを入力してください。'
+  $description.Text = '${label}を入力してください。'
   $password = New-Object System.Windows.Forms.TextBox
   $password.SetBounds(16, 56, 428, 22)
   $password.UseSystemPasswordChar = $true
   $password.MaxLength = ${MAX_CREDENTIAL_BYTES}
-  $password.AccessibleName = '${label} API キー'
+  $password.AccessibleName = '${label}'
   $submit = New-Object System.Windows.Forms.Button
   $submit.SetBounds(258, 98, 88, 28)
   $submit.Text = '入力'
@@ -100,7 +107,7 @@ exit $exitCode
 
 function macPromptScript(label: string): string {
   return `try
-    set answer to display dialog "${label} の API キーを入力してください。" with title "${DIALOG_TITLE}" default answer "" with hidden answer giving up after ${NATIVE_PROMPT_TIMEOUT_MS / 1_000}
+    set answer to display dialog "${label}を入力してください。" with title "${DIALOG_TITLE}" default answer "" with hidden answer giving up after ${NATIVE_PROMPT_TIMEOUT_MS / 1_000}
     if gave up of answer then return "TIMEOUT"
     return "OK:" & text returned of answer
 on error number -128
@@ -173,7 +180,7 @@ function linuxPrompt(label: string, uid: number, source: NodeJS.ProcessEnv): Nat
   }
   if (!env.WAYLAND_DISPLAY && !env.DISPLAY) return undefined;
 
-  const text = `${label} の API キーを入力してください。`;
+  const text = `${label}を入力してください。`;
   if (trustedSystemExecutable("/usr/bin/zenity")) {
     env.GDK_BACKEND = env.WAYLAND_DISPLAY ? (env.DISPLAY ? "wayland,x11" : "wayland") : "x11";
     return { kind: "zenity", command: "/usr/bin/zenity", env, args: ["--entry", "--hide-text", `--title=${DIALOG_TITLE}`,
@@ -219,12 +226,28 @@ export async function promptForLlmCredential(
   source: NodeJS.ProcessEnv = process.env,
 ): Promise<Buffer | null> {
   if (signal.aborted) return null;
-  if (!["win32", "linux", "darwin"].includes(process.platform)) throw new Error("llm_credential_prompt_unsupported");
   if (!Object.hasOwn(PROVIDER_LABELS, provider)) throw new Error("llm_credential_prompt_invalid");
+  return promptForNativeCredential(`${PROVIDER_LABELS[provider]} の API キー`, "llm_credential_prompt", signal, source);
+}
+
+export async function promptForGoogleReadCredential(
+  scope: SettingsWriteGoogleReadCredentialScope,
+  signal: AbortSignal,
+  source: NodeJS.ProcessEnv = process.env,
+): Promise<Buffer | null> {
+  if (signal.aborted) return null;
+  if (!Object.hasOwn(GOOGLE_READ_LABELS, scope)) throw new Error("google_read_credential_prompt_invalid");
+  return promptForNativeCredential(GOOGLE_READ_LABELS[scope], "google_read_credential_prompt", signal, source);
+}
+
+async function promptForNativeCredential(label: string, errorPrefix: string, signal: AbortSignal,
+  source: NodeJS.ProcessEnv): Promise<Buffer | null> {
+  if (signal.aborted) return null;
+  if (!["win32", "linux", "darwin"].includes(process.platform)) throw new Error(`${errorPrefix}_unsupported`);
   let prompt: NativePrompt | undefined;
-  try { prompt = resolveNativePrompt(PROVIDER_LABELS[provider], source); }
-  catch { throw new Error("llm_credential_prompt_unavailable"); }
-  if (!prompt) throw new Error("llm_credential_prompt_unavailable");
+  try { prompt = resolveNativePrompt(label, source); }
+  catch { throw new Error(`${errorPrefix}_unavailable`); }
+  if (!prompt) throw new Error(`${errorPrefix}_unavailable`);
   const { kind, command, args, env } = prompt;
   let child: ChildProcessByStdio<null, Readable, null>;
   try {
@@ -234,7 +257,7 @@ export async function promptForLlmCredential(
       windowsHide: true,
     });
   } catch {
-    throw new Error("llm_credential_prompt_unavailable");
+    throw new Error(`${errorPrefix}_unavailable`);
   }
 
   return new Promise((resolve, reject) => {
@@ -256,8 +279,8 @@ export async function promptForLlmCredential(
       else resolve(result);
     };
     const abort = () => finish(null, true);
-    const unavailable = () => finish(new Error("llm_credential_prompt_unavailable"), true);
-    const timeout = setTimeout(() => finish(new Error("llm_credential_prompt_timeout"), true),
+    const unavailable = () => finish(new Error(`${errorPrefix}_unavailable`), true);
+    const timeout = setTimeout(() => finish(new Error(`${errorPrefix}_timeout`), true),
       kind === "kdialog" ? NATIVE_PROMPT_TIMEOUT_MS : CHILD_TIMEOUT_MS);
     timeout.unref();
 
@@ -268,7 +291,7 @@ export async function promptForLlmCredential(
       }
       if (chunk.length > received.length - length) {
         chunk.fill(0);
-        finish(new Error("llm_credential_prompt_invalid"), true);
+        finish(new Error(`${errorPrefix}_invalid`), true);
         return;
       }
       chunk.copy(received, length);
@@ -282,29 +305,29 @@ export async function promptForLlmCredential(
       if (signal.aborted) return finish(null, false);
       if (kind === "windows") {
         if (code === 2 && length === 0) return finish(null, false);
-        if (code === 3 && length === 0) return finish(new Error("llm_credential_prompt_timeout"), false);
-        if (code === 4) return finish(new Error("llm_credential_prompt_invalid"), false);
+        if (code === 3 && length === 0) return finish(new Error(`${errorPrefix}_timeout`), false);
+        if (code === 4) return finish(new Error(`${errorPrefix}_invalid`), false);
       } else if (kind === "zenity" || kind === "kdialog") {
         if (code === 1 && length === 0) return finish(null, false);
-        if (kind === "zenity" && code === 5 && length === 0) return finish(new Error("llm_credential_prompt_timeout"), false);
+        if (kind === "zenity" && code === 5 && length === 0) return finish(new Error(`${errorPrefix}_timeout`), false);
       }
-      if (code !== 0) return finish(new Error("llm_credential_prompt_unavailable"), false);
+      if (code !== 0) return finish(new Error(`${errorPrefix}_unavailable`), false);
 
       let value = received.subarray(0, length);
       if (kind !== "windows") {
-        if (value.at(-1) !== 0x0a) return finish(new Error("llm_credential_prompt_invalid"), false);
+        if (value.at(-1) !== 0x0a) return finish(new Error(`${errorPrefix}_invalid`), false);
         value = value.subarray(0, -1);
         if (kind === "macos") {
           if (value.equals(MAC_CANCEL)) return finish(null, false);
-          if (value.equals(MAC_TIMEOUT)) return finish(new Error("llm_credential_prompt_timeout"), false);
+          if (value.equals(MAC_TIMEOUT)) return finish(new Error(`${errorPrefix}_timeout`), false);
           if (!value.subarray(0, MAC_SUCCESS.length).equals(MAC_SUCCESS)) {
-            return finish(new Error("llm_credential_prompt_invalid"), false);
+            return finish(new Error(`${errorPrefix}_invalid`), false);
           }
           value = value.subarray(MAC_SUCCESS.length);
         }
       }
       if (value.length === 0 || value.some((byte) => byte < 0x21 || byte > 0x7e)) {
-        return finish(new Error("llm_credential_prompt_invalid"), false);
+        return finish(new Error(`${errorPrefix}_invalid`), false);
       }
       finish(Buffer.from(value), false);
     });

@@ -496,6 +496,7 @@ function scopeFromCommand(command: ExecuteCommand, op: ApprovalOperation): Pick<
       if (patch && typeof patch === "object" && !Array.isArray(patch)) {
         if (Object.hasOwn(patch, "llm")) domains.push("llm.runtime");
         if (Object.hasOwn(patch, "composio")) domains.push("composio.connector");
+        if (Object.hasOwn(patch, "google_read")) domains.push("google.read");
       }
       return { target_scope: "task_type", target: `settings.write:gateway.runtime-config:${domains.sort().join("+") || "invalid"}` };
     }

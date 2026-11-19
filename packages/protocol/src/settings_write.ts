@@ -18,6 +18,17 @@ export const SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS = 150_000;
 export const SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE = Object.freeze({
   key: "llm.credential_reference", before: "protected", after: "replace_on_restart",
 } as const);
+export const SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE = Object.freeze({
+  key: "google_read.credential_reference", before: "unconfigured", after: "register_on_restart",
+} as const);
+export const SettingsWriteGoogleReadCredentialScopeSchema = z.enum(["gmail", "calendar", "drive", "shared"]);
+export type SettingsWriteGoogleReadCredentialScope = z.infer<typeof SettingsWriteGoogleReadCredentialScopeSchema>;
+export const SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS = Object.freeze({
+  gmail: { key: "GMAIL_ACCESS_TOKEN", api_hosts: ["gmail.googleapis.com"] },
+  calendar: { key: "GOOGLE_CALENDAR_ACCESS_TOKEN", api_hosts: ["www.googleapis.com"] },
+  drive: { key: "GOOGLE_DRIVE_ACCESS_TOKEN", api_hosts: ["www.googleapis.com"] },
+  shared: { key: "GOOGLE_ACCESS_TOKEN", api_hosts: ["gmail.googleapis.com", "www.googleapis.com"] },
+} as const);
 
 const ActivationCostMicrosSchema = z.number().int().min(1).max(1_000_000_000);
 export const SettingsWriteNativeLlmProviderSchema = z.enum(["anthropic", "openai", "openrouter"]);
@@ -65,7 +76,9 @@ export const SettingsWritePatchSchema = z.object({
     .refine((composio) => composio.clear_api_key !== true ||
       (composio.dry_run === undefined && composio.live_execution === undefined),
     "disconnect resets dry_run and live_execution and cannot be combined with explicit values").optional(),
-}).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) === 1,
+  google_read: z.object({ register_credential: SettingsWriteGoogleReadCredentialScopeSchema }).strict().optional(),
+}).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) +
+  Number(patch.google_read !== undefined) === 1,
   "exactly one settings domain must be changed per request");
 
 export const SettingsWriteLlmProviderSchema = z.enum(["stub", "anthropic", "openai", "openai-compatible", "openrouter"]);
@@ -100,15 +113,22 @@ export type SettingsWriteActivation = z.infer<typeof SettingsWriteActivationSche
 export type SettingsWriteLlmProvider = z.infer<typeof SettingsWriteLlmProviderSchema>;
 export type SettingsWriteNativeLlmProvider = z.infer<typeof SettingsWriteNativeLlmProviderSchema>;
 export type SettingsWriteCredentialRotationReview = ReturnType<typeof settingsWriteCredentialRotationReview>;
+export type SettingsWriteGoogleReadCredentialReview = ReturnType<typeof settingsWriteGoogleReadCredentialReview>;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
 
 export function settingsWriteRequiresNativeCredentialEntry(patch: SettingsWritePatch): boolean {
-  return patch.llm?.activation?.register_credential === true || patch.llm?.rotate_credential === true;
+  return patch.llm?.activation?.register_credential === true || patch.llm?.rotate_credential === true ||
+    patch.google_read !== undefined;
 }
 
 export function settingsWriteCredentialRotationReview(provider: SettingsWriteNativeLlmProvider) {
   return { provider, destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS[provider], protected_reference_configured: true as const };
+}
+
+export function settingsWriteGoogleReadCredentialReview(scope: SettingsWriteGoogleReadCredentialScope) {
+  return { scope, api_hosts: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[scope].api_hosts,
+    protected_reference_configured: false as const };
 }
 
 export function settingsWriteTargetIdentityDigest(): string {
