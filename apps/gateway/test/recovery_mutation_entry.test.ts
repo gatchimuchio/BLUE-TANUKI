@@ -838,6 +838,14 @@ describe("Recovery mutation HDS L3 entry", () => {
       const manifestFile = join(root, "recovery", backupId, "manifest.json");
       const manifestBefore = readFileSync(manifestFile);
       const envBefore = readFileSync(envFile);
+      const goalStores = ["goal_purpose_j_control", "goal_purpose_m_state"];
+      const inspected = await requestJson(port, "/recovery/backup-inspection", { token: maintenanceToken });
+      expect(inspected.status).toBe(200);
+      expect(inspected.body).toMatchObject({
+        canonical_state_expected_store_count: 9,
+        canonical_state_stores: expect.arrayContaining(goalStores.map(store_key => ({ store_key, status: "verified" }))),
+        used_for_authority: false, may_execute: false,
+      });
       const planRequest = { method: "POST", body: { backup_id: backupId } };
       const disallowed = await requestJson(port, "/recovery/restore-plan", { ...planRequest, token: inboundToken });
       expect(disallowed.status).toBe(401);
@@ -848,6 +856,9 @@ describe("Recovery mutation HDS L3 entry", () => {
         manifest_sha256: createHash("sha256").update(manifestBefore).digest("hex"),
         plan_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
         items: expect.arrayContaining([{ role: "env_file", disposition: "preserve_current" }]),
+        canonical_stores: expect.arrayContaining(goalStores.map(store_key => ({
+          store_key, archive_status: "verified", disposition: "requires_store_reconciliation",
+        }))),
         used_for_authority: false, may_execute: false, offline_lease_verified: false, cross_store_atomic: false,
       });
       expect(JSON.stringify(plan.body)).not.toContain("product.env");
@@ -860,6 +871,12 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(fullRestore.body).toMatchObject({ result: {
         status: "blocked_runtime_restore_requires_offline_gateway", executed: false, l3_request_created: false,
       } });
+      for (const store_key of goalStores) {
+        const refused = await requestJson(port, "/recovery/restore", {
+          method: "POST", token: maintenanceToken, body: { backup_id: backupId, store_key, confirm: "RESTORE" },
+        });
+        expect(refused).toEqual({ status: 400, body: { error: "invalid_store_key" } });
+      }
       const storeRequest = {
         method: "POST", token: maintenanceToken,
         body: { backup_id: backupId, store_key: "meaning_update_j_control", confirm: "RESTORE" },

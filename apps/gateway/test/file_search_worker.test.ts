@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Executor, ToolRegistry, fileSearchTool, createExecutorApprovalAuthority, executorCommandDigest,
   type ExecutionIntentStore, type FileSearchWorker } from "@blue-tanuki/core";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { canonicalFileSearchTargetVersionObservation, requireToolOperationDescriptor,
+  type ExecuteCommand } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
 import { currentHostAudienceDigest } from "../src/host_audience_identity.js";
@@ -114,6 +115,36 @@ describe("Gateway組込みfile.searchの専用process境界", () => {
     await expectWorkerHdsMemoryExcluded(store, workspace, { BLUE_TANUKI_MEMORY_DIR: memoryDir }, "HDS_MEMORY_DIR",
       ["HDS_MEMORY_DIR_PRIVATE_SENTINEL", "HDS_MEMORY_DIR_STOP_PRIVATE_SENTINEL"]);
   }));
+
+  it("通常の検索は動作し、親Gatewayの設定で指定された復旧保管先をchildでも検索しない", async () => temporary(async (store, workspace) => {
+    const recovery = join(workspace, "configured-archive");
+    mkdirSync(recovery);
+    writeFileSync(join(recovery, "archive.txt"), "ARCHIVED_PURPOSE_PRIVATE\n");
+    const env = { SystemRoot: process.env.SystemRoot, BLUE_TANUKI_FILE_ROOT: workspace,
+      BLUE_TANUKI_RECOVERY_DIR: recovery };
+    const worker = createFileSearchWorker({ execution_epoch: store.executionEpoch, env });
+    const { executor } = rig(store, workspace, worker);
+    const runWorker = async (query: string) => {
+      const command = source();
+      command.payload.arguments.query = query;
+      const observation = await executor.inspectCommandTargetVersion(command, env);
+      if (observation?.schema_version !== "blue-tanuki.file-search-target-version.v1") {
+        throw new Error("fixture did not observe a file-search target");
+      }
+      const digest = (input: string) => createHash("sha256").update(input).digest("hex");
+      const now = Date.now();
+      // Exercise the real IPC worker with a synthetic admission; HDS admission is covered by Gateway entry tests.
+      return worker.invoke({ command, target_version_observation: observation, ticket: {
+        ticket_id: randomUUID(), command_key: digest(JSON.stringify(["gateway-executor-command.v1", command.id])),
+        command_digest: executorCommandDigest(command), proof_digest: digest("fixture"), execution_epoch: store.executionEpoch,
+        target_version_observation_digest: digest(canonicalFileSearchTargetVersionObservation(observation)),
+        operation_id: "file.search", adapter_version: requireToolOperationDescriptor("file.search").adapter_version,
+        issued_at_ms: now, expires_at_ms: now + 20_000,
+      }, on_started() {}, before_dispatch() {}, on_exit() {} });
+    };
+    expect(await runWorker("ARCHIVED_PURPOSE_PRIVATE")).toMatchObject({ result: { matches: [] } });
+    expect(await runWorker("blue")).toMatchObject({ result: { matches: [{ path: "blue.txt", line_number: 1, line: "blue" }] } });
+  }), 15_000);
 
   it("Operation Plan source digestをtarget observationから隔離workerのresultと永続receiptまで保持する", async () => temporary(async (store, workspace, filename) => {
     const { authority, executor } = rig(store, workspace);

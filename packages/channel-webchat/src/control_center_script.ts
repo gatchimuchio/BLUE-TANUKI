@@ -4565,22 +4565,27 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return typeof value === "string" && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
       }
 
+      function recoveryBackupStoreKeys(count = 9) {
+        if (count !== 5 && count !== 7 && count !== 9) return null;
+        return ["j_control", "m_state", "broker", "operation_plans", "cron_events",
+          "meaning_update_j_control", "meaning_update_m_state",
+          "goal_purpose_j_control", "goal_purpose_m_state"].slice(0, count);
+      }
+
       function recoveryBackupStoreStatuses(value) {
-        const expectedKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
         const allowedStatuses = ["verified", "captured_unverified", "snapshot_failed", "not_present"];
         if (!Array.isArray(value)) return null;
         if (value.length === 0) return [];
-        if (value.length !== expectedKeys.length) return null;
-        const seen = new Set();
+        const expectedKeys = recoveryBackupStoreKeys(value.length);
+        if (!expectedKeys) return null;
         const projected = [];
         for (let index = 0; index < value.length; index += 1) {
           const item = value[index];
           if (!item || typeof item !== "object" || Array.isArray(item) ||
-              item.store_key !== expectedKeys[index] || !allowedStatuses.includes(item.status) || seen.has(item.store_key)) return null;
-          seen.add(item.store_key);
+              item.store_key !== expectedKeys[index] || !allowedStatuses.includes(item.status)) return null;
           projected.push({ store_key: item.store_key, status: item.status });
         }
-        return seen.size === expectedKeys.length ? projected : null;
+        return projected;
       }
 
       function recoveryBackupOperationPlanInventory(value) {
@@ -4754,8 +4759,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           "相関はstore別に独立取得したbackup内診断です。job identity・同時点atomicity・restore point・復元／再開許可ではありません。"].join("\\n");
       }
 
-      function renderRecoveryBackupStoreStatuses(value, coverage, overallStatus) {
-        const expectedKeys = ["j_control", "m_state", "broker", "operation_plans", "cron_events"];
+      function renderRecoveryBackupStoreStatuses(value, overallStatus) {
         const safeRows = recoveryBackupStoreStatuses(value);
         const statusLabels = {
           verified: "アーカイブ検査済み",
@@ -4763,12 +4767,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           snapshot_failed: "取得失敗",
           not_present: "backup時に未存在"
         };
-        const hasVerifiedRows = overallStatus === "verified" && safeRows !== null && safeRows.length === expectedKeys.length;
-        const unavailableLabel = overallStatus === "verified" && coverage === "not_included"
-          ? "このbackupに未収録"
-          : "未確認";
-        for (const key of expectedKeys) {
-          const row = hasVerifiedRows ? safeRows.find((item) => item.store_key === key) : null;
+        const verified = overallStatus === "verified" && safeRows !== null;
+        const unavailableLabel = verified ? "このbackupに未収録" : "未確認";
+        for (const key of recoveryBackupStoreKeys()) {
+          const row = verified ? safeRows.find((item) => item.store_key === key) : null;
           setText("recovery-backup-store-" + key, row ? statusLabels[row.status] : unavailableLabel);
         }
       }
@@ -5483,10 +5485,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const canonicalStores = recoveryBackupStoreStatuses(source.canonical_state_stores);
         let operationPlanInventory = recoveryBackupOperationPlanInventory(source.operation_plan_archive_inventory);
         let operationPlanDependencies = recoveryBackupOperationPlanDependencyInventory(source.operation_plan_archive_dependencies);
-        const canonicalStoreCountsMatch = canonicalStores !== null && canonicalStores.length === 5 &&
+        const knownStoreCount = recoveryBackupStoreKeys(canonicalExpected) !== null;
+        const canonicalStoreCountsMatch = canonicalStores !== null && canonicalStores.length > 0 &&
+          knownStoreCount && canonicalStores.length <= canonicalExpected &&
           canonicalStores.filter((item) => item.status === "verified").length === canonicalVerified &&
           canonicalStores.filter((item) => item.status === "not_present").length === canonicalMissing &&
-          canonicalStores.filter((item) => item.status === "snapshot_failed" || item.status === "captured_unverified").length === canonicalUnverified &&
+          canonicalStores.filter((item) => item.status === "snapshot_failed" || item.status === "captured_unverified").length +
+            (canonicalExpected - canonicalStores.length) === canonicalUnverified &&
           canonicalStores.filter((item) => item.status === "verified" || item.status === "captured_unverified").length === canonicalCaptured;
         let canonicalConsistency = recoveryInspectionEnum(source.canonical_state_store_consistency,
           ["independent_sqlite_online_snapshots", "not_included"]);
@@ -5506,7 +5511,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           canonicalUnverified === null && canonicalConsistency === "not_included" && canonicalCrossStoreAtomic === null &&
           canonicalStores !== null && canonicalStores.length === 0;
         const canonicalIncluded = canonicalCoverage !== "not_included" && canonicalCoverage !== "unknown" &&
-          canonicalExpected === 5 && canonicalCaptured !== null && canonicalVerified !== null &&
+          knownStoreCount && canonicalCaptured !== null && canonicalVerified !== null &&
           canonicalMissing !== null && canonicalUnverified !== null && canonicalConsistency === "independent_sqlite_online_snapshots" &&
           canonicalCrossStoreAtomic === false && canonicalCaptured <= canonicalExpected &&
           canonicalVerified <= canonicalCaptured && canonicalMissing <= canonicalExpected &&
@@ -5579,7 +5584,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("recovery-backup-inspection-status").className = "badge " + (safeStatus === "verified" ? "review" : "warn");
         renderRecoveryBackupStoreStatuses(
           safeStatus === "verified" ? canonicalStores : [],
-          safeStatus === "verified" ? canonicalCoverage : "unknown",
           safeStatus,
         );
         setText("recovery-backup-plan-scopes", formatRecoveryBackupPlanScopes(
@@ -5981,7 +5985,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           operation_plans: "実行計画台帳",
           cron_events: "Cronイベント台帳",
           meaning_update_j_control: "意味更新J制御台帳",
-          meaning_update_m_state: "意味更新M状態台帳"
+          meaning_update_m_state: "意味更新M状態台帳",
+          goal_purpose_j_control: "委任目的J制御台帳",
+          goal_purpose_m_state: "委任目的M状態台帳"
         };
         const dispositionLabels = {
           preserve_current: "現行を保持",

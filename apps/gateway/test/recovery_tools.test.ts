@@ -117,6 +117,13 @@ describe("Recovery mutation tool boundary", () => {
       store_key: "unknown_store",
       confirm: "RESTORE",
     })).toThrow("invalid_store_key");
+    for (const store_key of ["goal_purpose_j_control", "goal_purpose_m_state"]) {
+      expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
+        backup_id: "2026-10-18.backup.abc",
+        store_key,
+        confirm: "RESTORE",
+      })).toThrow("invalid_store_key");
+    }
     expect(() => normalizeRecoveryMutationArguments("recovery.restore", {
       backup_id: "latest",
       confirm: "RESTORE",

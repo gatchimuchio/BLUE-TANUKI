@@ -7039,7 +7039,7 @@ export async function invokeFileSearch(
   const env = opts.env ?? process.env;
   const sandboxRoot = await sandboxRootFromEnv(env);
   const requestedRoot = stringArg(args, "root")!;
-  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
+  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot, env);
   const requestedFilePath = args.file_path === undefined ? undefined : stringArg(args, "file_path")!;
   const query = args.query === "" && requestedFilePath !== undefined ? "" : stringArg(args, "query")!;
   if (query.length === 0 && requestedFilePath === undefined) {
@@ -7121,7 +7121,7 @@ export async function inspectFileSearchTargetVersion(
   const env = opts.env ?? process.env;
   const sandboxRoot = await sandboxRootFromEnv(env);
   const requestedRoot = stringArg(args, "root")!;
-  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot);
+  const root = await resolveFileSearchRoot(requestedRoot, sandboxRoot, env);
   const requestedFilePath = args.file_path === undefined ? undefined : stringArg(args, "file_path")!;
   const stat = await fs.stat(root);
   if (!stat.isDirectory()) throw new Error("root must be a directory");

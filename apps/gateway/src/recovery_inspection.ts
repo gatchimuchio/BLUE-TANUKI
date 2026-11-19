@@ -2,9 +2,12 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import {
   CANONICAL_STATE_STORE_PATHS,
+  RESTORABLE_CANONICAL_STATE_STORES,
+  isCanonicalStateSnapshotManifest,
   resolveCanonicalStateStoreInspectionPath,
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
+  type RestorableCanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 import {
   inspectJControlRecoveryLedger,
@@ -1337,27 +1340,22 @@ function hasSafeCanonicalArchiveStatePaths(
     const archiveRoot = path.join(packPath, "canonical-state");
     const archiveRootStat = lstatSync(archiveRoot);
     if (archiveRootStat.isSymbolicLink() || !archiveRootStat.isDirectory() || realpathSync(archiveRoot) !== archiveRoot) return null;
-    const expectedKeys = new Set(CANONICAL_STATE_STORE_PATHS.map((store) => store.key));
-    if (snapshot.schema_version !== 1 || snapshot.cross_store_atomic !== false ||
-        snapshot.store_consistency !== "independent_sqlite_online_snapshots" ||
-        snapshot.entries.length !== expectedKeys.size || new Set(snapshot.entries.map((entry) => entry.store_key)).size !== expectedKeys.size ||
-        snapshot.entries.some((entry) => !expectedKeys.has(entry.store_key))) return null;
+    if (!isCanonicalStateSnapshotManifest(snapshot) ||
+        snapshot.expected_store_count < RESTORABLE_CANONICAL_STATE_STORES.length) return null;
 
     const pathsByKey = new Map<CanonicalStateStoreKey, string | null>();
-    for (const store of CANONICAL_STATE_STORE_PATHS) {
-      const entry = snapshot.entries.find((candidate) => candidate.store_key === store.key);
-      if (!entry) return null;
+    for (const entry of snapshot.entries) {
       if (entry.status !== "verified") {
-        pathsByKey.set(store.key, null);
+        pathsByKey.set(entry.store_key, null);
         continue;
       }
-      const expectedRelativePath = path.join("canonical-state", `${store.key}.sqlite`);
+      const expectedRelativePath = path.join("canonical-state", `${entry.store_key}.sqlite`);
       if (entry.archive_rel_path !== expectedRelativePath) return null;
       const archivePath = path.join(packPath, expectedRelativePath);
       const archiveStat = lstatSync(archivePath);
       if (archiveStat.isSymbolicLink() || !archiveStat.isFile() || archiveStat.size === 0 ||
           realpathSync(archivePath) !== archivePath) return null;
-      pathsByKey.set(store.key, archivePath);
+      pathsByKey.set(entry.store_key, archivePath);
     }
 
     return {
@@ -1619,7 +1617,7 @@ function selectedLedgerObservation(
 /** Inspect exactly one selected canonical store through its existing read-only ledger inspector. */
 export function inspectCanonicalStateStoreLedger(
   stateRoot: string,
-  storeKey: CanonicalStateStoreKey,
+  storeKey: RestorableCanonicalStateStoreKey,
 ): RecoverySelectedStoreLedgerObservation {
   let databasePath: string;
   let privateRoot: string;

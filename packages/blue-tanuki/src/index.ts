@@ -27,3 +27,4 @@ export {
   type LogLevel,
   type LogFormat,
 } from "./logger.js";
+export { recoveryRootPath } from "./tools/file_safety.js";

@@ -590,7 +590,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="inspect-recovery-backup" type="button">最新backup packの整合性を読み取り検査</button>
             <span id="recovery-backup-inspection-status" class="badge warn">未確認</span>
           </div>
-          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreは実行直前のbackupとowner L3審査を要します。Operation Plan台帳は一つのplanまたはtask lineage、Broker台帳はtask lineageまたはstore全体を対象にできます。その他のstoreは選択store全体が対象です。plan/task scoped操作は選択範囲をmergeし、同じstore内の無関係なplan／receiptを維持します。scopeとsnapshotが一致しない場合は拒否します。store間の原子的同時点、自動resume、復旧可否の自動判定は成立しません。</p>
+          <p class="muted">manifest、pack内保存物、store別SQLite snapshotのdigestと整合性を読み取り検査します。full Restoreはcanonical stateを適用しません。selected-store restoreは実行直前のbackupとowner L3審査を要します。Operation Plan台帳は一つのplanまたはtask lineage、Broker台帳はtask lineageまたはstore全体を対象にできます。選択欄にある他の台帳は、選択した台帳全体が対象です。委任目的のJ・M台帳は検査欄で収録状態を確認できます。plan/task scoped操作は選択範囲をmergeし、同じstore内の無関係なplan／receiptを維持します。scopeとsnapshotが一致しない場合は拒否します。store間の原子的同時点、自動resume、復旧可否の自動判定は成立しません。</p>
           <h3>台帳別snapshot検査</h3>
           <div class="status-grid" aria-label="台帳別SQLite snapshot status">
             <div class="metric"><span>J制御台帳</span><span id="recovery-backup-store-j_control">未確認</span></div>
@@ -598,6 +598,10 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Broker実行台帳</span><span id="recovery-backup-store-broker">未確認</span></div>
             <div class="metric"><span>Operation Plan台帳</span><span id="recovery-backup-store-operation_plans">未確認</span></div>
             <div class="metric"><span>Cronイベント台帳</span><span id="recovery-backup-store-cron_events">未確認</span></div>
+            <div class="metric"><span>意味更新J制御台帳</span><span id="recovery-backup-store-meaning_update_j_control">未確認</span></div>
+            <div class="metric"><span>意味更新M状態台帳</span><span id="recovery-backup-store-meaning_update_m_state">未確認</span></div>
+            <div class="metric"><span>委任目的J制御台帳</span><span id="recovery-backup-store-goal_purpose_j_control">未確認</span></div>
+            <div class="metric"><span>委任目的M状態台帳</span><span id="recovery-backup-store-goal_purpose_m_state">未確認</span></div>
           </div>
           <h3>backup内J計画scope・残差</h3>
           <p class="muted">Operation PlanのJ checkpointを読み取り専用で検査します。scope digestはInboundRequest由来の診断相関であり、仕事IDではありません。</p>

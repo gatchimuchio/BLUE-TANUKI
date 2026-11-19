@@ -2,18 +2,22 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { recoveryRootPath as recoveryRoot } from "@blue-tanuki/core";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import {
   CANONICAL_STATE_STORE_PATHS,
+  RESTORABLE_CANONICAL_STATE_STORES,
   captureCanonicalStateSnapshots,
   inspectCanonicalStateStoreTarget,
   inspectCanonicalStateSnapshots,
+  isRestorableCanonicalStateStore,
   restoreCanonicalStateSnapshotStore,
   resolveCanonicalStateStoreTargetPath,
   type CanonicalStateSnapshotEntryStatus,
   type CanonicalStateSnapshotInspection,
   type CanonicalStateSnapshotManifest,
   type CanonicalStateStoreKey,
+  type RestorableCanonicalStateStoreKey,
 } from "./canonical_state_backup.js";
 import {
   inspectOperationPlanRecoveryLedger,
@@ -115,7 +119,7 @@ export interface RecoverySnapshot {
 export interface RecoveryPostActionObservation {
   status: "changed" | "failed" | "mismatch" | "matched" | "unverified" | "no_record";
   operation: RecoveryMutationAction | null;
-  store_key: CanonicalStateStoreKey | null;
+  store_key: RestorableCanonicalStateStoreKey | null;
   operation_digest: string | null;
   result_digest: string | null;
   /** Internal correlation only; omitted from the Recovery UI projection. */
@@ -241,13 +245,13 @@ export interface RecoveryPostActionObservationOptions {
 
 export interface RecoveryStoreRestoreAttemptEvidence {
   readonly schema_version: 1;
-  readonly store_key: CanonicalStateStoreKey;
+  readonly store_key: RestorableCanonicalStateStoreKey;
   readonly backup_id_digest: string;
 }
 
 export interface RecoveryStoreRestoreHistoryEvidence {
   readonly schema_version: 1;
-  readonly store_key: CanonicalStateStoreKey;
+  readonly store_key: RestorableCanonicalStateStoreKey;
   readonly restored_store_state_digest: string;
   readonly restored_backup_id_digest?: string;
   readonly restore_scope_plan_digest?: string;
@@ -263,7 +267,7 @@ export interface RecoveryActionResult {
   backup_id?: string;
   backup_manifest_path?: string;
   restored_backup_id?: string;
-  restored_store_key?: CanonicalStateStoreKey;
+  restored_store_key?: RestorableCanonicalStateStoreKey;
   restored_store_archive_digest?: string;
   restored_store_state_digest?: string;
   restore_scope_kind?: "operation_plan" | "task_identity";
@@ -342,7 +346,7 @@ export interface RecoveryScopeApplicabilityRequest {
   readonly backup_id_digest: string;
   readonly scope_kind: "request_scope" | "operation_plan" | "task_identity";
   readonly scope_digest: string;
-  readonly store_candidates: readonly CanonicalStateStoreKey[];
+  readonly store_candidates: readonly RestorableCanonicalStateStoreKey[];
 }
 
 export interface RecoveryScopeApplicabilityInspection {
@@ -377,7 +381,7 @@ export interface RecoveryScopeApplicabilityInspection {
   readonly residual_dependencies: readonly RecoveryPlanDependencyCategory[];
   readonly unobserved_dependencies: readonly RecoveryPlanDependencyCategory[];
   readonly store_candidates: readonly {
-    readonly store_key: CanonicalStateStoreKey;
+    readonly store_key: RestorableCanonicalStateStoreKey;
     readonly snapshot_status: CanonicalStateSnapshotEntryStatus | "unknown";
     readonly dependency_status: "residuals_present" | "unobserved" | "no_residual_recorded" | "not_mapped" | "unknown";
     readonly related_dependencies: readonly RecoveryPlanDependencyCategory[];
@@ -650,13 +654,6 @@ async function envBackups(envFile: string | undefined): Promise<{
     backup_pattern: path.join(dir, backupPattern),
     secret_material: true,
   };
-}
-
-function recoveryRoot(env: NodeJS.ProcessEnv): string {
-  return path.resolve(
-    env.BLUE_TANUKI_RECOVERY_DIR ??
-      path.join(env.BLUE_TANUKI_FILE_ROOT ?? ".blue-tanuki", "recovery"),
-  );
 }
 
 async function recoveryBackupInventory(env: NodeJS.ProcessEnv): Promise<RecoveryBackupInventory> {
@@ -1431,7 +1428,7 @@ async function inspectBackupOperationPlanInventory(
 }
 
 const RECOVERY_SCOPE_DIGEST = /^[a-f0-9]{64}$/i;
-const RECOVERY_SCOPE_DEPENDENCIES: Readonly<Record<CanonicalStateStoreKey, readonly RecoveryPlanDependencyCategory[]>> = {
+const RECOVERY_SCOPE_DEPENDENCIES: Readonly<Record<RestorableCanonicalStateStoreKey, readonly RecoveryPlanDependencyCategory[]>> = {
   j_control: [],
   m_state: ["memory"],
   broker: ["broker", "delivery"],
@@ -1504,9 +1501,11 @@ async function inspectRecoveryBackup(
     const canonicalState = manifest.canonical_state_snapshot
       ? await inspectCanonicalStateSnapshots(path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot)
       : null;
-    const canonicalStateStores = manifest.canonical_state_snapshot
-      ? manifest.canonical_state_snapshot.entries.map(({ store_key, status }) => ({ store_key, status }))
-      : [];
+    const canonicalEntries = new Map(manifest.canonical_state_snapshot?.entries.map((entry) => [entry.store_key, entry]));
+    const canonicalStateStores = CANONICAL_STATE_STORE_PATHS.flatMap(({ key }) => {
+      const entry = canonicalEntries.get(key);
+      return entry ? [{ store_key: key, status: entry.status }] : [];
+    });
     const operationPlanArchiveInventory = await inspectBackupOperationPlanInventory(
       path.dirname(manifest.manifest_path), manifest.canonical_state_snapshot,
     );
@@ -1740,9 +1739,8 @@ function normalizeRecoveryScopeApplicabilityRequest(value: unknown): RecoverySco
       (input.scope_kind !== "request_scope" && input.scope_kind !== "operation_plan" && input.scope_kind !== "task_identity") ||
       typeof input.scope_digest !== "string" || !RECOVERY_SCOPE_DIGEST.test(input.scope_digest) ||
       !Array.isArray(input.store_candidates) || input.store_candidates.length < 1 || input.store_candidates.length > 5) return null;
-  const allowedStores = new Set<CanonicalStateStoreKey>(CANONICAL_STATE_STORE_PATHS.map((item) => item.key));
-  if (!input.store_candidates.every((item) => typeof item === "string" && allowedStores.has(item as CanonicalStateStoreKey))) return null;
-  const storeCandidates = input.store_candidates as CanonicalStateStoreKey[];
+  if (!input.store_candidates.every(isRestorableCanonicalStateStore)) return null;
+  const storeCandidates = input.store_candidates;
   if (new Set(storeCandidates).size !== storeCandidates.length) return null;
   return {
     backup_id_digest: input.backup_id_digest.toLowerCase(),
@@ -1852,7 +1850,8 @@ export async function inspectRecoveryScopeApplicability(
     };
   }
   const snapshotStatuses = new Map(backup.canonical_state_stores.map((entry) => [entry.store_key, entry.status]));
-  if (snapshotStatuses.size !== CANONICAL_STATE_STORE_PATHS.length || backup.canonical_state_cross_store_atomic !== false) {
+  if (!RESTORABLE_CANONICAL_STATE_STORES.every(({ key }) => snapshotStatuses.has(key)) ||
+      backup.canonical_state_cross_store_atomic !== false) {
     return emptyRecoveryScopeApplicability("store_unverified", baseRequest);
   }
 
@@ -1944,7 +1943,7 @@ export async function inspectRecoveryTaskRestoreScopeApplicability(
   env: NodeJS.ProcessEnv,
   backupId: string,
   taskIdentityDigest: string,
-  storeKey: CanonicalStateStoreKey = "operation_plans",
+  storeKey: RestorableCanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(backupId) || backupId === "latest" ||
       !RECOVERY_SCOPE_DIGEST.test(taskIdentityDigest)) {
@@ -1985,7 +1984,7 @@ export function isVerifiedRecoveryTaskRestoreScope(
   inspection: RecoveryScopeApplicabilityInspection,
   backupId: string,
   taskIdentityDigest: string,
-  storeKey: CanonicalStateStoreKey = "operation_plans",
+  storeKey: RestorableCanonicalStateStoreKey = "operation_plans",
 ): boolean {
   const store = inspection.store_candidates[0];
   return inspection.status === "matched" && inspection.reason === null &&
@@ -2026,7 +2025,7 @@ async function requireVerifiedRecoveryTaskRestoreScope(
   env: NodeJS.ProcessEnv,
   backupId: string,
   scopeDigest: string | undefined,
-  storeKey: CanonicalStateStoreKey = "operation_plans",
+  storeKey: RestorableCanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (typeof scopeDigest !== "string" || !RECOVERY_SCOPE_DIGEST.test(scopeDigest)) {
     throw new Error("operation_plan_task_scope_required");
@@ -2043,7 +2042,7 @@ async function requireVerifiedRecoveryRestoreScope(
   backupId: string,
   scopeKind: string | undefined,
   scopeDigest: string | undefined,
-  storeKey: CanonicalStateStoreKey = "operation_plans",
+  storeKey: RestorableCanonicalStateStoreKey = "operation_plans",
 ): Promise<RecoveryScopeApplicabilityInspection> {
   if (scopeKind === "operation_plan") {
     return requireVerifiedRecoveryPlanRestoreScope(env, backupId, scopeKind, scopeDigest);
@@ -2141,7 +2140,7 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   if (!isRecoveryObservationRecord(value) || value.action !== "restore" || value.status !== "completed" ||
       value.used_for_authority !== false || value.canonical_state_cross_store_atomic !== false) return undefined;
   const storeKey = value.restored_store_key;
-  if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey)) return undefined;
+  if (!isRestorableCanonicalStateStore(storeKey)) return undefined;
   const archiveDigest = recoveryObservationDigest(value.restored_store_archive_digest);
   const stateDigest = recoveryObservationDigest(value.restored_store_state_digest);
   const backupIdDigest = recoveryBackupIdDigest(value.restored_backup_id);
@@ -2161,7 +2160,7 @@ export function recoveryStoreRestoreHistoryEvidence(value: unknown): RecoverySto
   }
   return {
     schema_version: 1,
-    store_key: storeKey as CanonicalStateStoreKey,
+    store_key: storeKey,
     restored_store_state_digest: stateDigest,
     restored_backup_id_digest: backupIdDigest,
     ...(storeKey === "operation_plans" && scopeKind === "operation_plan" ? { restore_scope_plan_digest: scopeDigest! } : {}),
@@ -2177,20 +2176,18 @@ export function recoveryStoreRestoreAttemptHistoryEvidence(command: unknown): Re
       !isRecoveryObservationRecord(command.payload) || command.payload.tool_name !== "recovery.restore" ||
       !isRecoveryObservationRecord(command.payload.arguments)) return undefined;
   const args = command.payload.arguments;
-  if (typeof args.store_key !== "string" ||
-      !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === args.store_key)) return undefined;
+  if (!isRestorableCanonicalStateStore(args.store_key)) return undefined;
   const backupIdDigest = recoveryBackupIdDigest(args.backup_id);
   if (!backupIdDigest) return undefined;
-  return { schema_version: 1, store_key: args.store_key as CanonicalStateStoreKey, backup_id_digest: backupIdDigest };
+  return { schema_version: 1, store_key: args.store_key, backup_id_digest: backupIdDigest };
 }
 
 function recoveryStoreRestoreAttemptFromHistory(value: unknown): RecoveryStoreRestoreAttemptEvidence | null {
   if (!isRecoveryObservationRecord(value) || value.schema_version !== 1 ||
-      typeof value.store_key !== "string" ||
-      !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === value.store_key)) return null;
+      !isRestorableCanonicalStateStore(value.store_key)) return null;
   const backupIdDigest = recoveryObservationDigest(value.backup_id_digest);
   if (!backupIdDigest) return null;
-  return { schema_version: 1, store_key: value.store_key as CanonicalStateStoreKey, backup_id_digest: backupIdDigest };
+  return { schema_version: 1, store_key: value.store_key, backup_id_digest: backupIdDigest };
 }
 
 function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreRestoreHistoryEvidence | null {
@@ -2204,7 +2201,7 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
   const taskScopeDigest = recoveryObservationDigest(value.restore_scope_task_digest);
   const hasScopeMode = value.restore_scope_mode !== undefined;
   const scopeMode = value.restore_scope_mode;
-  if (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey) ||
+  if (!isRestorableCanonicalStateStore(storeKey) ||
       !stateDigest || (value.restored_backup_id_digest !== undefined && !backupIdDigest) ||
       (hasScopeDigest && !scopeDigest) || (hasTaskScopeDigest && !taskScopeDigest) ||
       (hasScopeDigest && hasTaskScopeDigest) ||
@@ -2218,7 +2215,7 @@ function recoveryStoreRestoreEvidenceFromHistory(value: unknown): RecoveryStoreR
         : scopeMode === "task_scoped_merge_v1" ? !taskScopeDigest || hasScopeDigest : true))) return null;
   return {
     schema_version: 1,
-    store_key: storeKey as CanonicalStateStoreKey,
+    store_key: storeKey,
     restored_store_state_digest: stateDigest,
     ...(backupIdDigest ? { restored_backup_id_digest: backupIdDigest } : {}),
     ...(scopeDigest ? { restore_scope_plan_digest: scopeDigest } : {}),
@@ -2372,7 +2369,7 @@ function unverifiedRecoveryStoreHoldCandidate(
   history: RecoveryHistoryEvidence,
   storeKeyFilter?: CanonicalStateStoreKey,
 ): RecoveryPostActionObservation {
-  let latest: { index: number; storeKey: CanonicalStateStoreKey | null; backupIdDigest: string | null } | undefined;
+  let latest: { index: number; storeKey: RestorableCanonicalStateStoreKey | null; backupIdDigest: string | null } | undefined;
   for (const entry of history.entries) {
     if (entry.kind !== "execution_history" || entry.used_for_authority !== false ||
         !isRecoveryObservationRecord(entry.payload)) continue;
@@ -2382,12 +2379,11 @@ function unverifiedRecoveryStoreHoldCandidate(
     const attempt = recoveryStoreRestoreAttemptFromHistory(entry.payload.recovery_store_restore_attempt);
     const completed = recoveryStoreRestoreEvidenceFromHistory(entry.payload.recovery_store_restore);
     const commandArguments = isRecoveryObservationRecord(command.payload.arguments) ? command.payload.arguments : null;
-    const commandStoreKey = typeof commandArguments?.store_key === "string" &&
-      CANONICAL_STATE_STORE_PATHS.some((store) => store.key === commandArguments.store_key)
-      ? commandArguments.store_key as CanonicalStateStoreKey
+    const commandStoreKey = isRestorableCanonicalStateStore(commandArguments?.store_key)
+      ? commandArguments.store_key
       : null;
     const candidateStoreKeys = [attempt?.store_key, completed?.store_key, commandStoreKey]
-      .filter((value): value is CanonicalStateStoreKey => value !== undefined && value !== null);
+      .filter((value): value is RestorableCanonicalStateStoreKey => value !== undefined && value !== null);
     const distinctStoreKeys = [...new Set(candidateStoreKeys)];
     const storeKey = distinctStoreKeys.length === 1 ? distinctStoreKeys[0]! : null;
     if (storeKeyFilter && storeKey !== storeKeyFilter) continue;
@@ -2815,6 +2811,7 @@ export async function createRecoveryBackup(
 }
 
 async function readSelectedRecoveryArchive(env: NodeJS.ProcessEnv, backupId: string, storeKey: CanonicalStateStoreKey) {
+  if (!isRestorableCanonicalStateStore(storeKey)) throw new Error("goal_purpose_restore_requires_offline_reconciliation");
   const manifest = await readManifest(env, backupId);
   const packDir = path.dirname(manifest.manifest_path);
   const snapshot = manifest.canonical_state_snapshot;
@@ -2823,7 +2820,7 @@ async function readSelectedRecoveryArchive(env: NodeJS.ProcessEnv, backupId: str
   const entry = snapshot.entries.find(item => item.store_key === storeKey);
   if (!entry || entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256 || entry.bytes === null ||
       ((storeKey !== "broker" && storeKey !== "operation_plans") &&
-       snapshot.expected_store_count !== CANONICAL_STATE_STORE_PATHS.length)) {
+       snapshot.expected_store_count < RESTORABLE_CANONICAL_STATE_STORES.length)) {
     throw new Error("canonical_state_store_unverified");
   }
   return { packDir, snapshot, selected: { ...entry, archive_rel_path: entry.archive_rel_path, sha256: entry.sha256 } };
@@ -2840,6 +2837,9 @@ export async function restoreRecoveryBackup(
   options: RestoreRecoveryOptions = {},
 ): Promise<RecoveryActionResult> {
   assertConfirmation(options.confirm, "RESTORE");
+  if (options.store_key !== undefined && !isRestorableCanonicalStateStore(options.store_key)) {
+    throw new Error("goal_purpose_restore_requires_offline_reconciliation");
+  }
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
   if (options.expected_archive_sha256 !== undefined &&

@@ -38,15 +38,22 @@ export function isSecretLikeRelativePath(rel: string): boolean {
   });
 }
 
+export function recoveryRootPath(env: Env): string {
+  return path.resolve(env.BLUE_TANUKI_RECOVERY_DIR ?? path.join(env.BLUE_TANUKI_FILE_ROOT ?? ".blue-tanuki", "recovery"));
+}
+
 export async function sandboxRootFromEnv(env: Env): Promise<string> {
   const raw = env.BLUE_TANUKI_FILE_ROOT;
   if (!raw || raw.trim().length === 0) {
     throw new Error("BLUE_TANUKI_FILE_ROOT is required for file.search");
   }
   const resolved = path.resolve(raw);
+  const recoveryRoots = await canonicalPathCandidates(recoveryRootPath(env));
   assertNotPrivateState(resolved);
+  assertNotRecoveryStorage(resolved, recoveryRoots);
   const real = await fs.realpath(resolved);
   assertNotPrivateState(real);
+  assertNotRecoveryStorage(real, recoveryRoots);
   const stat = await fs.stat(real);
   if (!stat.isDirectory()) {
     throw new Error("BLUE_TANUKI_FILE_ROOT must be a directory");
@@ -57,6 +64,7 @@ export async function sandboxRootFromEnv(env: Env): Promise<string> {
 export async function resolveFileSearchRoot(
   rootArg: string,
   sandboxRoot: string,
+  env: Env,
 ): Promise<string> {
   const lexical = path.isAbsolute(rootArg)
     ? path.resolve(rootArg)
@@ -66,6 +74,8 @@ export async function resolveFileSearchRoot(
   }
   const lexicalRel = path.relative(sandboxRoot, lexical);
   assertNotSecretLike(lexicalRel, displayPath(lexicalRel || "."));
+  const recoveryRoots = await canonicalPathCandidates(recoveryRootPath(env));
+  assertNotRecoveryStorage(lexical, recoveryRoots);
 
   const real = await fs.realpath(lexical);
   if (!pathInside(sandboxRoot, real)) {
@@ -73,6 +83,7 @@ export async function resolveFileSearchRoot(
   }
   const realRel = path.relative(sandboxRoot, real);
   assertNotSecretLike(realRel, displayPath(realRel || "."));
+  assertNotRecoveryStorage(real, recoveryRoots);
   return real;
 }
 
@@ -89,11 +100,14 @@ export async function resolveSandboxFilePath(
   }
   const rel = path.relative(sandboxRoot, lexical);
   assertNotSecretLike(rel, displayPath(rel || "."));
+  const recoveryRoots = await canonicalPathCandidates(recoveryRootPath(env));
+  assertNotRecoveryStorage(lexical, recoveryRoots);
   await assertNotHdsMemoryArtifact(lexical, env);
 
   const parent = path.dirname(lexical);
   const realParent = await fs.realpath(parent);
   assertNotPrivateState(realParent);
+  assertNotRecoveryStorage(path.join(realParent, path.basename(lexical)), recoveryRoots);
   assertNotSecretLike(path.relative(sandboxRoot, realParent), displayPath(rel || "."));
   if (!pathInside(sandboxRoot, realParent)) {
     throw new Error("file path escapes BLUE_TANUKI_FILE_ROOT via symlink");
@@ -113,6 +127,7 @@ export async function resolveSandboxFilePath(
   if (existing) {
     const real = await fs.realpath(lexical);
     assertNotPrivateState(real);
+    assertNotRecoveryStorage(real, recoveryRoots);
     assertNotSecretLike(path.relative(sandboxRoot, real), displayPath(rel || "."));
     if (!pathInside(sandboxRoot, real)) {
       throw new Error("file path escapes BLUE_TANUKI_FILE_ROOT via symlink");
@@ -169,31 +184,37 @@ export async function* walkFiles(
   sandboxRoot: string,
   env: Env = process.env,
 ): AsyncGenerator<string> {
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name === "node_modules" || entry.name === "dist") {
-      continue;
-    }
-    const full = path.join(root, entry.name);
-    if (await isHdsMemoryArtifact(full, env)) continue;
-    const rel = path.relative(sandboxRoot, full);
-    if (isSecretLikeRelativePath(rel)) {
-      continue;
-    }
-    const real = await fs.realpath(full);
-    if (await isHdsMemoryArtifact(real, env)) continue;
-    if (isPrivateStatePath(real) || isSecretLikeRelativePath(path.relative(sandboxRoot, real))) continue;
-    if (!pathInside(sandboxRoot, real)) {
-      throw new Error(
-        `file.search path escapes BLUE_TANUKI_FILE_ROOT via symlink: ${displayPath(rel)}`,
-      );
-    }
-    if (entry.isDirectory()) {
-      yield* walkFiles(real, sandboxRoot, env);
-    } else if (entry.isFile()) {
-      yield real;
+  const recoveryRoots = await canonicalPathCandidates(recoveryRootPath(env));
+  async function* walk(directory: string): AsyncGenerator<string> {
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name === "dist") {
+        continue;
+      }
+      const full = path.join(directory, entry.name);
+      if (isRecoveryStoragePath(full, recoveryRoots)) continue;
+      if (await isHdsMemoryArtifact(full, env)) continue;
+      const rel = path.relative(sandboxRoot, full);
+      if (isSecretLikeRelativePath(rel)) {
+        continue;
+      }
+      const real = await fs.realpath(full);
+      if (isRecoveryStoragePath(real, recoveryRoots)) continue;
+      if (await isHdsMemoryArtifact(real, env)) continue;
+      if (isPrivateStatePath(real) || isSecretLikeRelativePath(path.relative(sandboxRoot, real))) continue;
+      if (!pathInside(sandboxRoot, real)) {
+        throw new Error(
+          `file.search path escapes BLUE_TANUKI_FILE_ROOT via symlink: ${displayPath(rel)}`,
+        );
+      }
+      if (entry.isDirectory()) {
+        yield* walk(real);
+      } else if (entry.isFile()) {
+        yield real;
+      }
     }
   }
+  yield* walk(root);
 }
 
 async function canonicalPathCandidates(filepath: string): Promise<Set<string>> {
@@ -230,6 +251,20 @@ function pathKey(filepath: string): string {
 function pathInside(parent: string, child: string): boolean {
   const rel = path.relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function isRecoveryStoragePath(filepath: string, roots: ReadonlySet<string>): boolean {
+  for (const root of roots) {
+    const relative = path.relative(root, filepath);
+    if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return true;
+  }
+  return false;
+}
+
+function assertNotRecoveryStorage(filepath: string, roots: ReadonlySet<string>): void {
+  if (isRecoveryStoragePath(filepath, roots)) {
+    throw new Error("file operation denied recovery storage");
+  }
 }
 
 function assertNotSecretLike(rel: string, label: string): void {

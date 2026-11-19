@@ -2708,7 +2708,7 @@ describe("WebChatChannel — Control Center shell", () => {
       .toMatchObject({ status: "未確認" });
   });
 
-  it("projects only the five ordered canonical store statuses and rejects malformed rows", () => {
+  it("projects the ordered canonical backup inventories and rejects malformed rows", () => {
     const functionSource = (name: string): string => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(`function ${name}(`);
       const next = CONTROL_CENTER_SCRIPT.indexOf("\n      function ", start + 1);
@@ -2721,6 +2721,7 @@ describe("WebChatChannel — Control Center shell", () => {
       functionSource("recoveryInspectionEnum"),
       functionSource("recoveryInspectionCount"),
       functionSource("recoveryInspectionDigest"),
+      functionSource("recoveryBackupStoreKeys"),
       functionSource("recoveryBackupStoreStatuses"),
       functionSource("recoveryBackupOperationPlanInventory"),
       functionSource("recoveryBackupOperationPlanDependencyInventory"),
@@ -2742,6 +2743,8 @@ describe("WebChatChannel — Control Center shell", () => {
         backupPlanText: output["recovery-backup-plan-scopes"],
         backupPlanDependencyText: output["recovery-backup-plan-dependencies"],
         storeStatus: Object.fromEntries(["j_control", "m_state", "broker", "operation_plans", "cron_events"].map((key) =>
+          [key, output["recovery-backup-store-" + key]])),
+        goalStoreStatus: Object.fromEntries(["goal_purpose_j_control", "goal_purpose_m_state"].map((key) =>
           [key, output["recovery-backup-store-" + key]])),
       });
     `).runInNewContext({ report: {
@@ -2789,7 +2792,7 @@ describe("WebChatChannel — Control Center shell", () => {
       { store_key: "operation_plans", status: "not_present" },
       { store_key: "cron_events", status: "verified" },
     ];
-    const validate = new Script(`(${functionSource("recoveryBackupStoreStatuses")})`).runInNewContext() as
+    const validate = new Script(`${functionSource("recoveryBackupStoreKeys")}\n(${functionSource("recoveryBackupStoreStatuses")})`).runInNewContext() as
       (value: unknown) => unknown;
     expect(validate(rows)).toEqual(rows);
     expect(validate([])).toEqual([]);
@@ -2827,6 +2830,42 @@ describe("WebChatChannel — Control Center shell", () => {
       operation_plans: "アーカイブ検査済み",
       cron_events: "アーカイブ検査済み",
     });
+    const completeSeven = [
+      ...completeRows,
+      { store_key: "meaning_update_j_control", status: "verified" },
+      { store_key: "meaning_update_m_state", status: "verified" },
+    ];
+    const completeNine = [
+      ...completeSeven,
+      { store_key: "goal_purpose_j_control", status: "verified" },
+      { store_key: "goal_purpose_m_state", status: "verified" },
+    ];
+    expect(validate(completeSeven)).toEqual(completeSeven);
+    expect(validate(completeNine)).toEqual(completeNine);
+    expect(validate(completeNine.slice(0, 8))).toBeNull();
+    expect(validate([...completeSeven, completeNine[8], completeNine[7]])).toBeNull();
+    const currentReport = (inventory: typeof completeRows, expected: number, unverified = expected - inventory.length) =>
+      JSON.parse(evaluate(inventory, {
+        canonical_state_coverage: inventory.length === expected ? "complete" : "partial",
+        canonical_state_expected_store_count: expected,
+        canonical_state_snapshot_count: inventory.length,
+        canonical_state_verified_store_count: inventory.length,
+        canonical_state_unverified_store_count: unverified,
+      })) as { projection: { status: string; canonical_state_stores: unknown }; goalStoreStatus: Record<string, string> };
+    expect(currentReport(completeSeven, 7).projection).toMatchObject({ status: "verified", canonical_state_stores: completeSeven });
+    expect(currentReport(completeNine, 9)).toMatchObject({
+      projection: { status: "verified", canonical_state_stores: completeNine },
+      goalStoreStatus: { goal_purpose_j_control: "アーカイブ検査済み", goal_purpose_m_state: "アーカイブ検査済み" },
+    });
+    for (const legacy of [completeRows, completeSeven]) {
+      expect(currentReport(legacy, 9)).toMatchObject({
+        projection: { status: "verified", canonical_state_stores: legacy },
+        goalStoreStatus: { goal_purpose_j_control: "このbackupに未収録", goal_purpose_m_state: "このbackupに未収録" },
+      });
+    }
+    expect(currentReport(completeRows, 7).projection.status).toBe("verified");
+    expect(currentReport(completeSeven, 9, 0).projection.status).toBe("invalid_report");
+    expect(currentReport(completeNine, 7).projection.status).toBe("invalid_report");
     const planInventory = JSON.parse(evaluate(completeRows)) as { projection: { operation_plan_archive_inventory: { plan_scopes: Array<Record<string, unknown>> } }; backupPlanText: string };
     expect(planInventory.projection.operation_plan_archive_inventory.plan_scopes).toMatchObject([
       { plan_id_digest: "b".repeat(64), request_scope_digest: "c".repeat(64), integrity: "verified" },
@@ -3452,6 +3491,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(await run("operation_plans")).toEqual(refused);
     expect(await run("operation_plans", "operation_plan", { scopeDigest: "invalid" })).toEqual(refused);
     expect(await run("unknown_store")).toEqual(refused);
+    expect(await run("goal_purpose_j_control")).toEqual(refused);
+    expect(await run("goal_purpose_m_state")).toEqual(refused);
     expect(await run("meaning_update_m_state", "task_identity")).toEqual(refused);
     expect(await run("meaning_update_j_control", "")).toEqual(refused);
     expect(await run("meaning_update_j_control", "whole_store", { backupId: "../other" })).toEqual(refused);
@@ -3477,7 +3518,11 @@ describe("WebChatChannel — Control Center shell", () => {
       manifest_sha256: "a".repeat(64), plan_sha256: "b".repeat(64),
       items: [{ role: "env_file", disposition: "preserve_current", path: "raw-path-sentinel" },
         { role: "raw-role-sentinel", disposition: "__proto__" }],
-      canonical_stores: [{ store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" }],
+      canonical_stores: [
+        { store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
+        { store_key: "goal_purpose_j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
+        { store_key: "goal_purpose_m_state", archive_status: "not_included", disposition: "preserve_current" },
+      ],
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
     };
     const context = {
@@ -3501,6 +3546,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(details.text).toContain("計画 SHA-256 " + report.plan_sha256);
     expect(details.text).toContain("環境設定　現行を保持");
     expect(details.text).toContain("J制御台帳　収録済み・整合確認済み／台帳の照合が必要");
+    expect(details.text).toContain("委任目的J制御台帳　収録済み・整合確認済み／台帳の照合が必要");
+    expect(details.text).toContain("委任目的M状態台帳　未収録／現行を保持");
     expect(details.text).not.toMatch(/raw-.*-sentinel|__proto__|backup-review/);
     await execute("const pending = inspectRecoveryRestorePlan(); clearRecoveryRestorePlan(); pending");
     expect(details.hidden).toBe(true);
@@ -3519,7 +3566,11 @@ describe("WebChatChannel — Control Center shell", () => {
       surface: "offline_recovery_restore_plan", schema_version: 1, status: "planned",
       manifest_sha256: "a".repeat(64), plan_sha256: "b".repeat(64),
       items: [{ role: "env_file", disposition: "preserve_current", path: "private-file-sentinel" }],
-      canonical_stores: [{ store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" }],
+      canonical_stores: [
+        { store_key: "j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
+        { store_key: "goal_purpose_j_control", archive_status: "verified", disposition: "requires_store_reconciliation" },
+        { store_key: "goal_purpose_m_state", archive_status: "verified", disposition: "requires_store_reconciliation" },
+      ],
       offline_lease_verified: false, cross_store_atomic: false, used_for_authority: false, may_execute: false,
       secret: "private-sentinel",
     } as const;
@@ -3539,6 +3590,12 @@ describe("WebChatChannel — Control Center shell", () => {
       await ctx.ch.start(async () => {});
       const route = "/recovery/restore-plan";
       const auth = { authorization: `Bearer ${MAINTENANCE_TOKEN}` };
+      const app = await getRaw(ctx.port, "/app");
+      expect(app.status).toBe(200);
+      expect(app.text.includes('id="recovery-backup-store-goal_purpose_j_control"')).toBe(true);
+      expect(app.text.includes('id="recovery-backup-store-goal_purpose_m_state"')).toBe(true);
+      expect(app.text.includes('value="goal_purpose_j_control"')).toBe(false);
+      expect(app.text.includes('value="goal_purpose_m_state"')).toBe(false);
       expect((await postJson(ctx.port, route, { backup_id: "backup-review" })).status).toBe(401);
       expect((await postJson(ctx.port, route, { backup_id: "backup-review" }, { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
       expect((await getRaw(ctx.port, route, auth)).status).toBe(405);

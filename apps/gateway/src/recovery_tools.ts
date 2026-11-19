@@ -8,7 +8,8 @@ import {
   type FactoryResetRecoveryFence,
   type RecoveryActionResult,
 } from "./recovery_surface.js";
-import { CANONICAL_STATE_STORE_PATHS, type CanonicalStateStoreKey } from "./canonical_state_backup.js";
+import { isRestorableCanonicalStateStore, type CanonicalStateStoreKey,
+  type RestorableCanonicalStateStoreKey } from "./canonical_state_backup.js";
 import type { GatewayExecutionIntentStore } from "./execution_intent_store.js";
 
 export const RECOVERY_TOOL_NAMES = [
@@ -20,7 +21,7 @@ export const RECOVERY_TOOL_NAMES = [
 
 export type RecoveryToolName = (typeof RECOVERY_TOOL_NAMES)[number];
 
-const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly string[]> = {
+const CANONICAL_STORE_RESTORE_CONSUMERS: Record<RestorableCanonicalStateStoreKey, readonly string[]> = {
   j_control: [],
   m_state: [],
   broker: [],
@@ -35,8 +36,7 @@ const CANONICAL_STORE_RESTORE_CONSUMERS: Record<CanonicalStateStoreKey, readonly
  * readiness is checked separately at the recovery tool boundary.
  */
 export function canonicalStoreRestoreConsumersNotQuiesced(storeKey: unknown): readonly string[] {
-  if (typeof storeKey !== "string" || !Object.hasOwn(CANONICAL_STORE_RESTORE_CONSUMERS, storeKey)) return [];
-  return CANONICAL_STORE_RESTORE_CONSUMERS[storeKey as CanonicalStateStoreKey];
+  return isRestorableCanonicalStateStore(storeKey) ? CANONICAL_STORE_RESTORE_CONSUMERS[storeKey] : [];
 }
 
 const CONFIRMATION: Record<RecoveryToolName, string> = {
@@ -63,8 +63,7 @@ export function normalizeRecoveryMutationArguments(
   if (toolName !== "recovery.restore") return { confirm: CONFIRMATION[toolName] };
 
   const storeKey = raw.store_key;
-  if (storeKey !== undefined &&
-      (typeof storeKey !== "string" || !CANONICAL_STATE_STORE_PATHS.some((store) => store.key === storeKey))) {
+  if (storeKey !== undefined && !isRestorableCanonicalStateStore(storeKey)) {
     throw new Error("invalid_store_key");
   }
   const scopeKind = raw.scope_kind;

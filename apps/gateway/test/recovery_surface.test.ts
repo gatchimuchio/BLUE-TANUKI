@@ -2,14 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
-import { operationPlanDigest } from "@blue-tanuki/hds-brain";
+import { AuditLog, HDSUpperController, evaluateApproval, goalPurposeAdoptionReviewDigest, operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
+  canonicalExecutorCommandBytes,
+  createGatewayInternalInboundRequest,
   OperationPlanCheckpointSchema,
   type ExecutionAdmission,
   type OperationPlan,
@@ -20,7 +22,9 @@ import {
   inspectCanonicalStateSnapshots,
   inspectCanonicalStateStoreTarget,
   restoreCanonicalStateSnapshotStore,
+  type CanonicalStateSnapshotManifest,
 } from "../src/canonical_state_backup.js";
+import { goalPurposeMemoryStorage } from "../src/operation_result_memory_config.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import {
@@ -34,6 +38,7 @@ import {
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
+  planOfflineRecoveryRestore,
   resetRecoveryConnector,
   resetRecoveryProvider,
   restoreRecoveryBackup,
@@ -75,6 +80,8 @@ const CANONICAL_DATABASES = [
   ["cron_events", path.join("cron-events", "cron-events.sqlite")],
   ["meaning_update_j_control", path.join("meaning-update-memory", "j-control.sqlite")],
   ["meaning_update_m_state", path.join("meaning-update-memory", "m-state.sqlite")],
+  ["goal_purpose_j_control", path.join("goal-purpose-memory", "j-control.sqlite")],
+  ["goal_purpose_m_state", path.join("goal-purpose-memory", "m-state.sqlite")],
 ] as const;
 
 describe("task-scoped M restore-point correlation", () => {
@@ -306,31 +313,52 @@ describe("canonical state target inspection", () => {
 });
 
 describe("legacy canonical snapshot inspection", () => {
-  it("keeps five-store archives inspectable as partial and blocks restoration", async () => {
+  it("keeps five- and seven-store archives inspectable as partial with their prior selected-store eligibility", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-legacy-canonical-snapshot-"));
     const pack = path.join(root, "pack");
     const target = path.join(root, "target");
     try {
       await mkdir(pack);
-      await mkdir(path.join(target, "private-state"), { recursive: true });
+      await mkdir(path.join(target, "private-state", "result-memory"), { recursive: true });
       await createCanonicalDatabase(root, CANONICAL_DATABASES[0]![1], "legacy-j-control");
       const captured = await captureCanonicalStateSnapshots(root, pack);
-      const legacy = {
+      const legacyFive = {
         ...captured,
         expected_store_count: 5 as const,
         entries: captured.entries.slice(0, 5),
       };
+      const legacySeven = {
+        ...captured,
+        expected_store_count: 7 as const,
+        entries: captured.entries.slice(0, 7),
+      };
 
-      await expect(inspectCanonicalStateSnapshots(pack, legacy)).resolves.toMatchObject({
+      await expect(inspectCanonicalStateSnapshots(pack, legacyFive)).resolves.toMatchObject({
         coverage: "partial",
-        expected_store_count: 7,
+        expected_store_count: 9,
         captured_store_count: 1,
         verified_store_count: 1,
         missing_store_count: 4,
+        unverified_store_count: 4,
+      });
+      await expect(restoreCanonicalStateSnapshotStore(target, pack, legacyFive, "j_control"))
+        .rejects.toThrow("canonical_state_restore_store_unverified");
+      await expect(inspectCanonicalStateSnapshots(pack, legacySeven)).resolves.toMatchObject({
+        coverage: "partial",
+        expected_store_count: 9,
+        captured_store_count: 1,
+        verified_store_count: 1,
+        missing_store_count: 6,
         unverified_store_count: 2,
       });
-      await expect(restoreCanonicalStateSnapshotStore(target, pack, legacy, "j_control"))
-        .rejects.toThrow("canonical_state_restore_store_unverified");
+      await expect(inspectCanonicalStateSnapshots(pack, {
+        ...legacySeven,
+        entries: [...legacySeven.entries.slice(0, 6), captured.entries[7]!],
+      })).rejects.toThrow("invalid_canonical_state_snapshot_manifest");
+      await expect(restoreCanonicalStateSnapshotStore(target, pack, legacySeven, "j_control"))
+        .resolves.toMatchObject({ bytes: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      expect(readCanonicalDatabase(path.join(target, "private-state", CANONICAL_DATABASES[0]![1])))
+        .toEqual(["legacy-j-control"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -563,10 +591,10 @@ describe("buildRecoverySnapshot", () => {
         backup_id_digest: createHash("sha256").update(backup.backup_id!).digest("hex"),
         coverage: "complete_for_configured_targets",
         canonical_state_coverage: "none_present",
-        canonical_state_expected_store_count: 7,
+        canonical_state_expected_store_count: 9,
         canonical_state_snapshot_count: 0,
         canonical_state_verified_store_count: 0,
-        canonical_state_missing_store_count: 7,
+        canonical_state_missing_store_count: 9,
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
         canonical_state_cross_store_atomic: false,
@@ -578,6 +606,8 @@ describe("buildRecoverySnapshot", () => {
           { store_key: "cron_events", status: "not_present" },
           { store_key: "meaning_update_j_control", status: "not_present" },
           { store_key: "meaning_update_m_state", status: "not_present" },
+          { store_key: "goal_purpose_j_control", status: "not_present" },
+          { store_key: "goal_purpose_m_state", status: "not_present" },
         ],
         used_for_authority: false,
         may_execute: false,
@@ -1094,6 +1124,8 @@ describe("buildRecoverySnapshot", () => {
         ["cron_events", "not_present"],
         ["meaning_update_j_control", "not_present"],
         ["meaning_update_m_state", "not_present"],
+        ["goal_purpose_j_control", "not_present"],
+        ["goal_purpose_m_state", "not_present"],
       ]);
       expect(await readFile(manifestPath, "utf8")).toBe(manifestBefore);
       expect(await readFile(archive!.archive_path!, "utf8")).toBe(originalArchive);
@@ -1176,7 +1208,7 @@ describe("buildRecoverySnapshot", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("plans a pinned whole-pack restore through the built diagnostic without applying it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-offline-restore-plan-"));
@@ -1242,8 +1274,11 @@ describe("buildRecoverySnapshot", () => {
         ]),
         canonical_stores: expect.arrayContaining([
           { store_key: CANONICAL_DATABASES[0]![0], archive_status: "verified", disposition: "requires_store_reconciliation" },
+          { store_key: "goal_purpose_j_control", archive_status: "not_present", disposition: "preserve_current" },
+          { store_key: "goal_purpose_m_state", archive_status: "not_present", disposition: "preserve_current" },
         ]),
       });
+      expect(plan.canonical_stores).toHaveLength(9);
       expect(result.stdout).not.toContain("synthetic-private-plan-sentinel");
       expect(result.stdout).not.toContain("before-backup");
       expect(result.stdout).not.toContain("product.env");
@@ -1305,6 +1340,96 @@ describe("buildRecoverySnapshot", () => {
     }
   }, 45_000);
 
+  it("captures HDS-authored purpose records and reserves the archived J/M pair for offline reconciliation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-goal-purpose-snapshot-"));
+    const env = {
+      BLUE_TANUKI_AUDIT_DIR: path.join(root, "audit"),
+      BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
+      BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
+    };
+    let controller: HDSUpperController | undefined;
+    let archiveReader: HDSUpperController | undefined;
+    try {
+      await mkdir(env.BLUE_TANUKI_AUDIT_DIR);
+      const auditPath = path.join(env.BLUE_TANUKI_AUDIT_DIR, "audit.jsonl");
+      const sourceMemory = goalPurposeMemoryStorage(env);
+      controller = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }), goal_purpose_memory: sourceMemory });
+      const purpose = "合成資料の出典を確認し、未確認事項を区別する。";
+      const args = { goal_ref: `goal_${"a".repeat(32)}`, purpose_digest: createHash("sha256").update(purpose).digest("hex") };
+      const requestId = randomUUID();
+      const proposalActor = "webchat-owner-token-holder";
+      const reviewerActor = "webchat-resume-token-holder";
+      const { command } = controller.decide(createGatewayInternalInboundRequest({
+        id: requestId, user: proposalActor, channel: "webchat", timestamp: Date.now(),
+        content: "Owner submitted an initial delegated purpose for L3 review.",
+        metadata: {
+          "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "approval",
+          "blue_tanuki.goal_purpose_adoption.version": "v1",
+          "blue_tanuki.tool_call": { tool_name: "goal.governance.adopt", arguments: args },
+        },
+      }));
+      if (!command) throw new Error("HDS did not issue a purpose adoption command");
+      expect(command).toMatchObject({ type: "tool_call", payload: { tool_name: "goal.governance.adopt", arguments: args } });
+      const binding = {
+        ...args, request_id: requestId, command_id: command.id, proposal_actor: proposalActor,
+        command_digest: createHash("sha256").update(canonicalExecutorCommandBytes(command)).digest("hex"),
+      };
+      const reviewDigest = goalPurposeAdoptionReviewDigest(binding);
+      const evaluation = evaluateApproval(command, [], { actor: proposalActor, default_mode: "full_access" });
+      controller.onApprovalEvaluation(evaluation, { request_id: requestId });
+      expect(controller.recordGoalPurposeAdoptionContentReview({ ...binding, review_digest: reviewDigest })).toBe(true);
+      controller.onCommandLifecycle(command.id, "approval_approved", {
+        actor: reviewerActor, request_id: requestId, reason: "human_approval:approve",
+      });
+      expect(controller.commitGoalPurposeAdoptionAfterL3({ ...binding, content_review_digest: reviewDigest,
+        purpose_text: purpose, actor: reviewerActor, evaluation })).toMatchObject({ ok: true, ...args, version: 1 });
+      controller.close();
+      controller = undefined;
+
+      const backup = await createRecoveryBackup(env);
+      const pack = path.dirname(backup.backup_manifest_path!);
+      const manifestBytes = await readFile(backup.backup_manifest_path!);
+      const manifest = JSON.parse(manifestBytes.toString("utf8")) as {
+        canonical_state_snapshot: CanonicalStateSnapshotManifest;
+        items: { key: string; archive_rel_path: string | null }[];
+      };
+      const inspection = await inspectLatestRecoveryBackup(env);
+      expect(inspection).toMatchObject({ status: "verified", canonical_state_expected_store_count: 9,
+        canonical_state_verified_store_count: 2, canonical_state_cross_store_atomic: false, may_execute: false });
+      expect(JSON.stringify(inspection)).not.toContain(purpose);
+      const plan = await planOfflineRecoveryRestore(env, backup.backup_id!, createHash("sha256").update(manifestBytes).digest("hex"));
+      expect(plan).toMatchObject({ status: "planned", may_execute: false, used_for_authority: false, cross_store_atomic: false });
+
+      const stagedMemory = goalPurposeMemoryStorage({ BLUE_TANUKI_STATE_ROOT: path.join(root, "archive-reader") });
+      for (const [key, stagedPath] of [
+        ["goal_purpose_j_control", stagedMemory.database_path], ["goal_purpose_m_state", stagedMemory.memory_database_path],
+      ] as const) {
+        expect(plan.canonical_stores).toContainEqual({ store_key: key, archive_status: "verified", disposition: "requires_store_reconciliation" });
+        const entry = manifest.canonical_state_snapshot.entries.find(({ store_key }) => store_key === key);
+        expect(entry).toMatchObject({ status: "verified", archive_rel_path: expect.any(String) });
+        await expect(restoreCanonicalStateSnapshotStore(env.BLUE_TANUKI_STATE_ROOT, pack, manifest.canonical_state_snapshot, key))
+          .rejects.toThrow("goal_purpose_restore_requires_offline_reconciliation");
+        await expect(restoreRecoveryBackup(env, { backup_id: backup.backup_id, store_key: key, confirm: "RESTORE" }))
+          .rejects.toThrow("goal_purpose_restore_requires_offline_reconciliation");
+        await copyFile(path.join(pack, entry!.archive_rel_path!), stagedPath);
+      }
+      expect(await readdir(env.BLUE_TANUKI_RECOVERY_DIR)).toEqual([backup.backup_id]);
+      const archivedAudit = manifest.items.find(({ key }) => key === "audit_dir")!.archive_rel_path!;
+      const stagedAudit = path.join(root, "archive-reader", "audit.jsonl");
+      await copyFile(path.join(pack, archivedAudit, "audit.jsonl"), stagedAudit);
+      // The archive is only replayed in a separate test state with the matching audit.
+      archiveReader = new HDSUpperController({ audit: new AuditLog({ filepath: stagedAudit }), goal_purpose_memory: stagedMemory });
+      expect(archiveReader.getAudit().verify()).toBe(true);
+      expect(archiveReader.readGoalPurposeContent(args.goal_ref, 1)).toMatchObject({ ...args, version: 1,
+        purpose_text: purpose, used_for_authority: false });
+    } finally {
+      archiveReader?.close();
+      controller?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("captures and verifies per-store SQLite snapshots without mutating sources or applying them through generic restore", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-canonical-snapshot-"));
     try {
@@ -1338,7 +1463,7 @@ describe("buildRecoverySnapshot", () => {
         store_consistency: "independent_sqlite_online_snapshots",
         cross_store_atomic: false,
       });
-      expect(manifest.canonical_state_snapshot.entries).toHaveLength(7);
+      expect(manifest.canonical_state_snapshot.entries).toHaveLength(9);
       expect(manifest.canonical_state_snapshot.entries.every((entry) => entry.status === "verified")).toBe(true);
       const snapshotPaths = manifest.canonical_state_snapshot.entries.map((entry) => path.join(packDir, entry.archive_rel_path!));
       const snapshotBytesBefore = await Promise.all(snapshotPaths.map((filepath) => readFile(filepath)));
@@ -1347,9 +1472,9 @@ describe("buildRecoverySnapshot", () => {
       expect(inspection).toMatchObject({
         status: "verified",
         canonical_state_coverage: "complete",
-        canonical_state_expected_store_count: 7,
-        canonical_state_snapshot_count: 7,
-        canonical_state_verified_store_count: 7,
+        canonical_state_expected_store_count: 9,
+        canonical_state_snapshot_count: 9,
+        canonical_state_verified_store_count: 9,
         canonical_state_missing_store_count: 0,
         canonical_state_unverified_store_count: 0,
         canonical_state_store_consistency: "independent_sqlite_online_snapshots",
@@ -1363,6 +1488,8 @@ describe("buildRecoverySnapshot", () => {
         ["cron_events", "verified"],
         ["meaning_update_j_control", "verified"],
         ["meaning_update_m_state", "verified"],
+        ["goal_purpose_j_control", "verified"],
+        ["goal_purpose_m_state", "verified"],
       ]);
       for (let index = 0; index < snapshotPaths.length; index += 1) {
         expect(await readFile(snapshotPaths[index]!)).toEqual(snapshotBytesBefore[index]);
@@ -1417,7 +1544,7 @@ describe("buildRecoverySnapshot", () => {
 
       const manifest = await capture;
       expect(manifest.cross_store_atomic).toBe(false);
-      expect(manifest.entries).toHaveLength(7);
+      expect(manifest.entries).toHaveLength(9);
       expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
       expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
       expect(readCanonicalDatabase(memoryPath)).toEqual(["before-m_state", "changed-during-capture"]);
@@ -1429,7 +1556,7 @@ describe("buildRecoverySnapshot", () => {
         captured_store_count: 0,
         verified_store_count: 0,
         missing_store_count: 0,
-        unverified_store_count: 7,
+        unverified_store_count: 9,
         store_consistency: "independent_sqlite_online_snapshots",
         cross_store_atomic: false,
       });
@@ -1464,7 +1591,7 @@ describe("buildRecoverySnapshot", () => {
       const newStorePath = await createCanonicalDatabase(stateRoot, newlyCreatedStore[1], "created-during-capture");
       const manifest = await capture;
 
-      expect(manifest.entries).toHaveLength(7);
+      expect(manifest.entries).toHaveLength(9);
       expect(manifest.entries.every((entry) => entry.status === "snapshot_failed")).toBe(true);
       expect(await readdir(path.join(packDirectory, "canonical-state"))).toEqual([]);
       expect(readCanonicalDatabase(newStorePath)).toEqual(["created-during-capture"]);
@@ -1475,7 +1602,7 @@ describe("buildRecoverySnapshot", () => {
         captured_store_count: 0,
         verified_store_count: 0,
         missing_store_count: 0,
-        unverified_store_count: 7,
+        unverified_store_count: 9,
         cross_store_atomic: false,
       });
     } finally {
@@ -1506,10 +1633,10 @@ describe("buildRecoverySnapshot", () => {
       expect(inspection).toMatchObject({
         status: "verified",
         canonical_state_coverage: "partial",
-        canonical_state_expected_store_count: 7,
+        canonical_state_expected_store_count: 9,
         canonical_state_snapshot_count: 2,
         canonical_state_verified_store_count: 2,
-        canonical_state_missing_store_count: 4,
+        canonical_state_missing_store_count: 6,
         canonical_state_unverified_store_count: 1,
         canonical_state_cross_store_atomic: false,
       });
@@ -1521,6 +1648,8 @@ describe("buildRecoverySnapshot", () => {
         ["cron_events", "not_present"],
         ["meaning_update_j_control", "not_present"],
         ["meaning_update_m_state", "not_present"],
+        ["goal_purpose_j_control", "not_present"],
+        ["goal_purpose_m_state", "not_present"],
       ]);
       expect(JSON.stringify(inspection)).not.toContain(corruptPath);
       expect(JSON.stringify(inspection)).not.toContain("not a SQLite database");

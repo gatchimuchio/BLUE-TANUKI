@@ -512,6 +512,58 @@ describe("built-in tools", () => {
     }
   });
 
+  it.each([
+    { configuration: "既定", directory: "recovery", configuredDirectory: undefined },
+    { configuration: "設定済み", directory: "backup-packs", configuredDirectory: "backup-packs" },
+    { configuration: "親に別名がある設定済み", directory: "storage/site/team/backup-packs",
+      configuredDirectory: "storage-alias/site/team/backup-packs" },
+  ])("通常file経路は$configurationの復旧パックを検索・書込み・編集・削除できない", async ({ directory, configuredDirectory }) => {
+    const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-recovery-file-boundary-"));
+    const recoveryDirectory = path.join(sandbox, directory);
+    const ordinaryDirectory = `${directory}-notes`;
+    const protectedFile = `${directory}/pack/review.txt`;
+    const ordinaryFile = `${ordinaryDirectory}/review.txt`;
+    const newPackFile = `${directory}/..new.txt`;
+    const env = {
+      BLUE_TANUKI_FILE_ROOT: sandbox,
+      ...(configuredDirectory ? { BLUE_TANUKI_RECOVERY_DIR: path.join(sandbox, configuredDirectory) } : {}),
+    };
+    const planned = { env, operation_plan_binding_digest: "a".repeat(64), command_digest: "b".repeat(64) };
+    const denied = /file operation denied recovery storage/;
+    try {
+      await fs.mkdir(path.join(recoveryDirectory, "pack"), { recursive: true });
+      await fs.mkdir(path.join(sandbox, ordinaryDirectory), { recursive: true });
+      await fs.writeFile(path.join(sandbox, protectedFile), "needle private fixture\n", "utf8");
+      await fs.writeFile(path.join(sandbox, ordinaryFile), "needle ordinary fixture\n", "utf8");
+      if (configuredDirectory && configuredDirectory !== directory) {
+        await fs.symlink(path.join(sandbox, "storage"), path.join(sandbox, "storage-alias"),
+          process.platform === "win32" ? "junction" : "dir");
+      }
+
+      const results = await invokeFileSearch({ root: ".", query: "needle" }, { env }) as {
+        matches: Array<{ path: string }>;
+      };
+      expect(results.matches.map(({ path }) => path)).toEqual([ordinaryFile]);
+      for (const requestedDirectory of new Set([directory, configuredDirectory ?? directory])) {
+        await expect(invokeFileSearch({ root: requestedDirectory, query: "needle" }, { env })).rejects.toThrow(denied);
+        await expect(invokeFileSearch({ root: ".", file_path: `${requestedDirectory}/pack/review.txt`, query: "",
+          max_results: 5 }, { env })).rejects.toThrow(denied);
+      }
+      await expect(invokeFileWrite({ path: protectedFile, content: "changed", mode: "overwrite" }, { env })).rejects.toThrow(denied);
+      await expect(invokeFileWrite({ path: newPackFile, content: "changed", mode: "create" }, { env })).rejects.toThrow(denied);
+      await expect(inspectFileEditTargetVersion({ path: protectedFile, search: "private", replace: "changed",
+        expected_replacements: 1 }, planned)).rejects.toThrow(denied);
+      await expect(inspectFileDeleteTargetVersion({ path: protectedFile, max_bytes: 128 }, planned)).rejects.toThrow(denied);
+
+      expect(await fs.readFile(path.join(sandbox, protectedFile), "utf8")).toBe("needle private fixture\n");
+      await expect(fs.stat(path.join(sandbox, newPackFile))).rejects.toMatchObject({ code: "ENOENT" });
+      await invokeFileWrite({ path: ordinaryFile, content: "updated ordinary fixture\n", mode: "overwrite" }, { env });
+      expect(await fs.readFile(path.join(sandbox, ordinaryFile), "utf8")).toBe("updated ordinary fixture\n");
+    } finally {
+      await fs.rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("file.write fails closed for accidental overwrite, sandbox escape, and secret-like paths", async () => {
     const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
     const sandbox = path.join(parent, "sandbox");
