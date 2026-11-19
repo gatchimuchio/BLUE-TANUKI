@@ -744,7 +744,7 @@ function trimTrailingSeparators(value: string): string {
 
 function isSameOrInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
 }
 
 function broadRuntimePathReason(resolved: string): string | null {
@@ -2971,55 +2971,164 @@ export async function resetRecoveryConnector(
   });
 }
 
+type FactoryResetTarget = {
+  path: string;
+  kind: "file" | "directory" | null;
+};
+
+async function factoryResetPathKind(filepath: string): Promise<FactoryResetTarget["kind"]> {
+  let current = filepath;
+  for (;;) {
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()) ||
+          path.relative(current, await fs.realpath(current)) !== "") {
+        throw new Error("factory_reset_target_unverified");
+      }
+      if (current !== filepath) return null;
+      return stat.isDirectory() ? "directory" : "file";
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+async function preflightFactoryReset(env: NodeJS.ProcessEnv): Promise<FactoryResetTarget[]> {
+  if (!env.BLUE_TANUKI_ENV_FILE) throw new Error("env_file_required");
+  const stateRoot = trimTrailingSeparators(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
+  const privateRoot = path.join(stateRoot, "private-state");
+  const resettablePrivateRoots = [
+    path.join(privateRoot, "long-term-memory"),
+    path.join(privateRoot, "failure-memory"),
+  ];
+  const installDataRoot = env.BLUE_TANUKI_DATA_ROOT?.trim();
+  const protectedPaths = [
+    env.BLUE_TANUKI_ENV_FILE,
+    env.BLUE_TANUKI_AUDIT_DIR,
+    env.BLUE_TANUKI_COMPLETE_HISTORY_FILE?.trim(),
+    env.BLUE_TANUKI_APPROVALS_FILE,
+    env.BLUE_TANUKI_FILE_ROOT,
+    env.BLUE_TANUKI_INSTALL_ROOT?.trim(),
+    recoveryRoot(env),
+    ...(installDataRoot ? [
+      path.join(installDataRoot, "blue-tanuki.env"),
+      path.join(installDataRoot, "blue-tanuki-product-data.json"),
+      path.join(installDataRoot, "blue-tanuki.pid"),
+      path.join(installDataRoot, "blue-tanuki-watchdog.pid"),
+      path.join(installDataRoot, "blue-tanuki.stop"),
+    ] : []),
+  ].filter((value): value is string => Boolean(value)).map(trimTrailingSeparators);
+  const configuredTargets: ReadonlyArray<readonly [string | undefined, "file" | "directory"]> = [
+    [env.BLUE_TANUKI_SESSION_DIR, "directory"],
+    [env.BLUE_TANUKI_MEMORY_FILE, "file"],
+    [env.BLUE_TANUKI_MEMORY_DIR, "directory"],
+    [env.BLUE_TANUKI_FAILURE_MEMORY_FILE, "file"],
+    [env.BLUE_TANUKI_FAILURE_MEMORY_DIR, "directory"],
+    [resolveRuntimeSchedulesDirectory(env), "directory"],
+    [env.BLUE_TANUKI_LOG_DIR, "directory"],
+  ];
+  const resetTargets = configuredTargets.flatMap(([value, kind]) =>
+    value ? [{ path: trimTrailingSeparators(value), kind }] : []);
+
+  for (const { path: target } of resetTargets) {
+    await runtimeSafeTarget(env, target, "factory_reset_remove", { allow_exact: [target] });
+    if (protectedPaths.some(protectedPath => isSameOrInside(target, protectedPath) || isSameOrInside(protectedPath, target)) ||
+        isSameOrInside(stateRoot, target) || (installDataRoot && isSameOrInside(path.resolve(installDataRoot), target)) ||
+        (isSameOrInside(target, privateRoot) && !resettablePrivateRoots.some(root => isSameOrInside(target, root)))) {
+      throw new Error("factory_reset_target_protected");
+    }
+  }
+  for (const spec of sourceSpecs(env)) {
+    if (spec.source_path && isSameOrInside(recoveryRoot(env), path.resolve(spec.source_path))) {
+      throw new Error("factory_reset_backup_target_overlap");
+    }
+  }
+  for (const protectedPath of protectedPaths) await factoryResetPathKind(protectedPath);
+
+  const targets: FactoryResetTarget[] = [];
+  for (const { path: target, kind: expected } of resetTargets.sort((a, b) => a.path.length - b.path.length)) {
+    const kind = await factoryResetPathKind(target);
+    if (kind && kind !== expected) throw new Error("factory_reset_target_unverified");
+    if (targets.some(existing => isSameOrInside(target, existing.path))) continue;
+    if (kind) await assertArchiveTreeHasNoSymlinks(target, kind);
+    targets.push({ path: target, kind });
+  }
+  return targets;
+}
+
+async function verifyFactoryResetTarget(
+  target: FactoryResetTarget,
+  snapshot: RecoveryBackupManifest,
+): Promise<void> {
+  if (await factoryResetPathKind(target.path) !== target.kind) throw new Error("factory_reset_target_changed");
+  if (!target.kind) return;
+  const entry = snapshot.items.find(item => item.source_path && path.relative(item.source_path, target.path) === "");
+  if (!entry?.copied || entry.kind !== target.kind || !entry.sha256 || !entry.archive_rel_path) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  const pack = path.dirname(snapshot.manifest_path);
+  const archive = await assertArchivePath(pack, path.resolve(pack, entry.archive_rel_path), "factory_reset_backup");
+  if (await factoryResetPathKind(archive) !== target.kind) throw new Error("factory_reset_backup_unverified");
+  await assertArchiveTreeHasNoSymlinks(archive, target.kind);
+  const backedUp = await sha256Path(archive, target.kind);
+  if (backedUp.sha256 !== entry.sha256 || backedUp.bytes !== entry.bytes) throw new Error("factory_reset_backup_unverified");
+  await assertArchiveTreeHasNoSymlinks(target.path, target.kind);
+  const current = await sha256Path(target.path, target.kind);
+  if (current.sha256 !== entry.sha256 || current.bytes !== entry.bytes) throw new Error("factory_reset_target_changed");
+}
+
 export async function factoryResetRecovery(
   env: NodeJS.ProcessEnv = process.env,
   options: RecoveryResetOptions = {},
 ): Promise<RecoveryActionResult> {
   assertConfirmation(options.confirm, "FACTORY_RESET");
-  const preFactory = await createBackupManifest(env, "pre_factory_reset");
-  const values = await readEnvValues(env);
+  const config = { ...env };
+  const targets = await preflightFactoryReset(config);
+  const values = await readEnvValues(config);
+  const preFactory = await createBackupManifest(config, "pre_factory_reset");
+  const manifestDigest = createHash("sha256").update(`${JSON.stringify(preFactory, null, 2)}\n`).digest("hex");
+  if ((await readManifest(config, preFactory.backup_id)).manifest_sha256 !== manifestDigest) {
+    throw new Error("factory_reset_backup_unverified");
+  }
+  await preflightRestoreManifest(config, preFactory);
+  for (const target of targets) await verifyFactoryResetTarget(target, preFactory);
+
   for (const key of [...PROVIDER_RESET_KEYS, ...CONNECTOR_RESET_KEYS]) {
     delete values[key];
   }
   values.LLM_BACKEND = "stub";
   values.COMPOSIO_DRY_RUN = "true";
   values.COMPOSIO_LIVE_EXECUTION = "false";
-  await writeEnvValues(env, values, "factory-reset");
-  deleteEnvKeys(env, [...PROVIDER_RESET_KEYS, ...CONNECTOR_RESET_KEYS]);
-  env.LLM_BACKEND = "stub";
-  env.COMPOSIO_DRY_RUN = "true";
-  env.COMPOSIO_LIVE_EXECUTION = "false";
-
-  const removedPaths: string[] = [];
-  const resetTargets = [
-    env.BLUE_TANUKI_SESSION_DIR,
-    env.BLUE_TANUKI_MEMORY_FILE,
-    env.BLUE_TANUKI_MEMORY_DIR,
-    env.BLUE_TANUKI_FAILURE_MEMORY_FILE,
-    env.BLUE_TANUKI_FAILURE_MEMORY_DIR,
-    resolveRuntimeSchedulesDirectory(env),
-    env.BLUE_TANUKI_LOG_DIR,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => path.resolve(value));
-  for (const value of resetTargets) {
-    if (!value) continue;
-    const resolved = (await runtimeSafeTarget(env, path.resolve(value), "factory_reset_remove", {
-      allow_exact: resetTargets,
-    })).path;
-    await fs.rm(resolved, { recursive: true, force: true }).catch(() => undefined);
-    removedPaths.push(resolved);
+  let removed = 0;
+  try {
+    await writeEnvValues({ ...config }, values, "factory-reset");
+    Object.assign(env, values);
+    deleteEnvKeys(env, [...PROVIDER_RESET_KEYS, ...CONNECTOR_RESET_KEYS]);
+    for (const target of targets) {
+      await verifyFactoryResetTarget(target, preFactory);
+      if (!target.kind) continue;
+      await fs.rm(target.path, { recursive: target.kind === "directory" });
+      if (await factoryResetPathKind(target.path) !== null) throw new Error("factory_reset_target_remains");
+      removed += 1;
+    }
+  } catch {
+    // Earlier effects may have committed. Leave the pre-action backup and let the
+    // Executor record this failed invocation as an unknown outcome.
+    throw new Error("factory_reset_outcome_unknown");
   }
 
   const preserved = [
-    env.BLUE_TANUKI_AUDIT_DIR ? path.resolve(env.BLUE_TANUKI_AUDIT_DIR) : null,
-    recoveryRoot(env),
+    config.BLUE_TANUKI_AUDIT_DIR ? path.resolve(config.BLUE_TANUKI_AUDIT_DIR) : null,
+    recoveryRoot(config),
   ].filter((value): value is string => Boolean(value));
 
   return actionResult("factory_reset", {
     backup_id: preFactory.backup_id,
     backup_manifest_path: preFactory.manifest_path,
-    removed_paths_count: removedPaths.length,
+    removed_paths_count: removed,
     reset_keys: [
       ...PROVIDER_RESET_KEYS,
       ...CONNECTOR_RESET_KEYS,

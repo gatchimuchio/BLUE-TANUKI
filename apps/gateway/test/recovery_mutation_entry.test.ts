@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -33,6 +33,65 @@ afterEach(async () => {
 });
 
 describe("Recovery mutation HDS L3 entry", () => {
+  it("requires L3 and refuses a factory-reset target overlapping the active audit store", async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-factory-reset-l3-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const auditDir = join(root, "audit");
+    const marker = join(auditDir, "preserve.txt");
+    const configuredEnv = "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n";
+    mkdirSync(auditDir);
+    writeFileSync(marker, "retained audit fixture\n");
+    writeFileSync(envFile, configuredEnv);
+    const port = await reserveLoopbackPort();
+    const runtimeEnv = {
+      ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+      BLUE_TANUKI_LOG_DIR: auditDir,
+    };
+    const gateway = spawnGateway(runtimeEnv);
+    await waitForHealth(port, gateway, 40_000);
+    const queued = await requestJson(port, "/recovery/factory-reset", {
+      method: "POST",
+      token: maintenanceToken,
+      body: { confirm: "FACTORY_RESET" },
+    });
+    expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+    expect(queued.body).toMatchObject({ result: {
+      status: "approval_required", executed: false, operation: "recovery.factory_reset",
+      approval_level: "L3_final_review", final_review_required: true,
+    } });
+    expect(readFileSync(envFile, "utf8")).toBe(configuredEnv);
+    const queue = await requestJson(port, "/approval", { token: resumeToken });
+    const pending = (queue.body.pending_approvals as Array<Record<string, string>>)
+      .find(item => item.operation === "recovery.factory_reset")!;
+    const commandId = pending.command_id!;
+    const approved = await requestJson(port, `/approval/${encodeURIComponent(commandId)}`, {
+      method: "POST",
+      token: resumeToken,
+      body: { verdict: "approve", approval_token: pending.approval_token },
+    });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(approved.body).toMatchObject({ result: { approval: "approve", status: "failed" } });
+    expect(readFileSync(envFile, "utf8")).toBe(configuredEnv);
+    expect(readFileSync(marker, "utf8")).toBe("retained audit fixture\n");
+    expect(existsSync(join(root, "recovery"))).toBe(false);
+    expect(readdirSync(root).filter(name => name.startsWith("product.env."))).toEqual([]);
+
+    const brokerPath = join(root, "state", "private-state", "execution-intents", "executor.sqlite");
+    const broker = new DatabaseSync(brokerPath, { readOnly: true });
+    try {
+      const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", commandId])).digest("hex");
+      const row = broker.prepare("SELECT receipt_json FROM execution_intents WHERE command_key=?").get(commandKey);
+      expect(JSON.parse(String(row?.receipt_json))).toMatchObject({
+        state: "outcome_unknown",
+        feedback_status: "failed",
+        error_digest: createHash("sha256").update("factory_reset_target_protected").digest("hex"),
+      });
+    } finally {
+      broker.close();
+    }
+  }, 60_000);
+
   it("reconstructs a persisted operation-plan restore hold during Gateway startup and restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-startup-plan-hold-"));
     temporaryRoots.push(root);

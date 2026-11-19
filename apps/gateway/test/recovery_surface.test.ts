@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { promises as fs } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -469,23 +470,23 @@ describe("buildRecoverySnapshot", () => {
   });
 
   it("backs up, restores, resets providers/connectors, and preserves audit on factory reset", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-actions-"));
+    const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-recovery-actions-"));
     try {
       const envFile = path.join(root, "product.env");
       const auditDir = path.join(root, "audit");
       const sessionDir = path.join(root, "sessions");
       const sessionFile = path.join(sessionDir, "session.jsonl");
-      const memoryDir = path.join(root, "memory");
+      const stateRoot = path.join(root, "state");
+      const memoryDir = path.join(stateRoot, "private-state", "long-term-memory");
       const memoryFile = path.join(memoryDir, "memory.jsonl");
       const failureMemoryDir = path.join(root, "failure-memory");
       const schedulesDir = path.join(root, "schedules");
       const logsDir = path.join(root, "logs");
       const fileRoot = path.join(root, "files");
       const recoveryDir = path.join(root, "recovery");
-      const stateRoot = path.join(root, "state");
       await mkdir(auditDir);
       await mkdir(sessionDir);
-      await mkdir(memoryDir);
+      await mkdir(memoryDir, { recursive: true });
       await mkdir(failureMemoryDir);
       await mkdir(schedulesDir);
       await mkdir(logsDir);
@@ -539,7 +540,9 @@ describe("buildRecoverySnapshot", () => {
       expect(JSON.stringify(backup)).not.toContain("connector-secret-value");
       expect((await buildRecoverySnapshot(env)).restore).toMatchObject({
         execution_available: false,
-        restore_review_request_available: true,
+        restore_review_request_available: false,
+        full_restore_review_request_available: false,
+        store_restore_review_request_available: true,
         factory_reset_review_request_available: true,
         provider_reset_review_request_available: true,
         connector_reset_review_request_available: true,
@@ -619,6 +622,7 @@ describe("buildRecoverySnapshot", () => {
 
       const factory = await factoryResetRecovery(env, { confirm: "FACTORY_RESET" });
       expect(factory.action).toBe("factory_reset");
+      expect(factory.removed_paths_count).toBe(5);
       expect(await exists(sessionDir)).toBe(false);
       expect(await exists(memoryDir)).toBe(false);
       expect(await exists(schedulesDir)).toBe(false);
@@ -1447,7 +1451,121 @@ describe("buildRecoverySnapshot", () => {
           BLUE_TANUKI_MEMORY_DIR: path.join(os.homedir(), ".config"),
         }, { confirm: "FACTORY_RESET" }),
       ).rejects.toThrow(/unsafe_runtime_target/);
+      expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=stub\n");
+      expect(await exists(recoveryDir)).toBe(false);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects factory-reset overlaps with protected data before backup and writes", async () => {
+    const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-factory-reset-protected-"));
+    try {
+      const stateRoot = path.join(root, "state");
+      const ownerDir = path.join(stateRoot, "private-state", "gateway-runtime");
+      const sessions = path.join(root, "sessions");
+      const auditDir = path.join(sessions, "..audit");
+      const historyDir = path.join(root, "history");
+      const historyFile = path.join(historyDir, "complete-history.jsonl");
+      const installDataRoot = path.join(root, "install-data");
+      const installMarker = path.join(installDataRoot, "blue-tanuki-product-data.json");
+      const recoveryDir = path.join(root, "recovery");
+      const envFile = path.join(root, "product.env");
+      const configuredEnv = "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n";
+      const protectedFile = path.join(ownerDir, "owner-state.sqlite");
+      await mkdir(auditDir, { recursive: true });
+      await mkdir(ownerDir, { recursive: true });
+      await mkdir(historyDir);
+      await mkdir(installDataRoot);
+      await writeFile(envFile, configuredEnv);
+      await writeFile(protectedFile, "owner state fixture\n");
+      await writeFile(path.join(auditDir, "audit.jsonl"), "audit fixture\n");
+      await writeFile(historyFile, "history fixture\n");
+      await writeFile(installMarker, "install data fixture\n");
+      const env = {
+        BLUE_TANUKI_STATE_ROOT: stateRoot,
+        BLUE_TANUKI_RECOVERY_DIR: recoveryDir,
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_AUDIT_DIR: auditDir,
+        BLUE_TANUKI_COMPLETE_HISTORY_FILE: ` ${historyFile} `,
+        BLUE_TANUKI_DATA_ROOT: installDataRoot,
+      };
+      for (const resetPath of [sessions, auditDir, historyDir, installDataRoot, recoveryDir, stateRoot, ownerDir]) {
+        await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_LOG_DIR: resetPath }, {
+          confirm: "FACTORY_RESET",
+        })).rejects.toThrow("factory_reset_target_protected");
+      }
+      await expect(factoryResetRecovery({ ...env, BLUE_TANUKI_MEMORY_FILE: installMarker }, {
+        confirm: "FACTORY_RESET",
+      })).rejects.toThrow("factory_reset_target_protected");
+      expect(await readFile(envFile, "utf8")).toBe(configuredEnv);
+      expect(await readFile(path.join(auditDir, "audit.jsonl"), "utf8")).toBe("audit fixture\n");
+      expect(await readFile(historyFile, "utf8")).toBe("history fixture\n");
+      expect(await readFile(installMarker, "utf8")).toBe("install data fixture\n");
+      expect(await readFile(protectedFile, "utf8")).toBe("owner state fixture\n");
+      expect(await exists(recoveryDir)).toBe(false);
+      expect((await readdir(root)).sort()).toEqual(["history", "install-data", "product.env", "sessions", "state"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a factory-reset target reached through a deeper directory link", async () => {
+    const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-factory-reset-link-"));
+    try {
+      const actual = path.join(root, "actual");
+      const alias = path.join(root, "alias");
+      const sessionFile = path.join(actual, "nested", "sessions", "session.jsonl");
+      const envFile = path.join(root, "product.env");
+      const backup = path.join(root, "recovery");
+      await mkdir(path.dirname(sessionFile), { recursive: true });
+      await writeFile(sessionFile, "session fixture\n");
+      await writeFile(envFile, "LLM_BACKEND=stub\n");
+      await symlink(actual, alias, process.platform === "win32" ? "junction" : "dir");
+      await expect(factoryResetRecovery({
+        BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: backup,
+        BLUE_TANUKI_SESSION_DIR: path.join(alias, "nested", "sessions"),
+      }, { confirm: "FACTORY_RESET" })).rejects.toThrow("factory_reset_target_unverified");
+      expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
+      expect(await readFile(envFile, "utf8")).toBe("LLM_BACKEND=stub\n");
+      expect(await exists(backup)).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the verified pre-reset backup and reports an unknown outcome on deletion failure", async () => {
+    const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "blue-tanuki-factory-reset-partial-"));
+    const sessionDir = path.join(root, "sessions");
+    const sessionFile = path.join(sessionDir, "session.jsonl");
+    const envFile = path.join(root, "product.env");
+    const fsRm = fs.rm;
+    const denyRemoval = vi.spyOn(fs, "rm").mockImplementation(async (filepath, options) => {
+      if (filepath === sessionDir) throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+      return fsRm(filepath, options);
+    });
+    try {
+      await mkdir(sessionDir);
+      await writeFile(sessionFile, "session fixture\n");
+      await writeFile(envFile, "LLM_BACKEND=stub\nCOMPOSIO_DRY_RUN=false\n");
+      const env = {
+        BLUE_TANUKI_STATE_ROOT: path.join(root, "state"),
+        BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_RECOVERY_DIR: path.join(root, "recovery"),
+        BLUE_TANUKI_SESSION_DIR: sessionDir,
+      };
+      await expect(factoryResetRecovery(env, { confirm: "FACTORY_RESET" }))
+        .rejects.toThrow("factory_reset_outcome_unknown");
+      expect(await readFile(envFile, "utf8")).toContain("COMPOSIO_DRY_RUN=true");
+      expect(await readFile(sessionFile, "utf8")).toBe("session fixture\n");
+      expect(await inspectLatestRecoveryBackup(env)).toMatchObject({
+        status: "verified",
+        backup_action: "pre_factory_reset",
+      });
+    } finally {
+      denyRemoval.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
