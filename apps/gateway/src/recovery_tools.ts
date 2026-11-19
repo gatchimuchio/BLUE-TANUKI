@@ -48,11 +48,12 @@ const CONFIRMATION: Record<RecoveryToolName, string> = {
 export function normalizeRecoveryMutationArguments(
   toolName: RecoveryToolName,
   raw: unknown,
-  options: { readonly latestBackupId?: string | null } = {},
+  options: { readonly latestBackupId?: string | null; readonly acceptArchiveBinding?: boolean } = {},
 ): Record<string, string> {
   if (!isRecord(raw)) throw new Error("invalid_recovery_request");
   const allowedKeys = toolName === "recovery.restore"
-    ? ["backup_id", "store_key", "scope_kind", "scope_digest", "confirm"]
+    ? ["backup_id", "store_key", "scope_kind", "scope_digest", "confirm",
+      ...(options.acceptArchiveBinding ? ["expected_archive_sha256"] : [])]
     : ["confirm"];
   if (Object.keys(raw).some((key) => !allowedKeys.includes(key))) {
     throw new Error("invalid_recovery_request");
@@ -82,6 +83,11 @@ export function normalizeRecoveryMutationArguments(
   } else if (scopeKind !== undefined || scopeDigest !== undefined) {
     throw new Error("invalid_recovery_request");
   }
+  const archiveSha256 = raw.expected_archive_sha256;
+  if (archiveSha256 !== undefined &&
+      (storeKey === undefined || typeof archiveSha256 !== "string" || !/^[a-f0-9]{64}$/.test(archiveSha256))) {
+    throw new Error("canonical_state_restore_archive_binding_invalid");
+  }
 
   const requestedId = raw.backup_id;
   if (requestedId !== undefined && typeof requestedId !== "string") {
@@ -96,6 +102,7 @@ export function normalizeRecoveryMutationArguments(
   return {
     backup_id: backupId,
     ...(typeof storeKey === "string" ? { store_key: storeKey } : {}),
+    ...(typeof archiveSha256 === "string" ? { expected_archive_sha256: archiveSha256 } : {}),
     ...((scopeKind === "operation_plan" || scopeKind === "task_identity") && typeof scopeDigest === "string"
       ? { scope_kind: scopeKind, scope_digest: scopeDigest.toLowerCase() }
       : {}),
@@ -123,7 +130,7 @@ export function createRecoveryMutationTools(
     description: "Restore one explicitly selected canonical state store from a local recovery backup after HDS L3 owner final review.",
     required_capabilities: requireToolOperationDescriptor("recovery.restore").required_capabilities,
     async invoke(raw, ctx?: ToolContext) {
-      const args = normalizeRecoveryMutationArguments("recovery.restore", raw);
+      const args = normalizeRecoveryMutationArguments("recovery.restore", raw, { acceptArchiveBinding: true });
       // A package restore rewrites persistent audit and runtime files whose
       // consumers remain loaded in this Gateway process. Keep it unavailable
       // until an offline, whole-runtime restore boundary is connected.
@@ -146,8 +153,10 @@ export function createRecoveryMutationTools(
       if (args.store_key === "broker" && !brokerStore) {
         throw new Error("broker_restore_execution_store_unavailable");
       }
+      if (!args.expected_archive_sha256) throw new Error("canonical_state_restore_archive_binding_required");
       const result = await invokeRecoverySafely(() => restoreRecoveryBackup(env, {
         backup_id: args.backup_id,
+        expected_archive_sha256: args.expected_archive_sha256,
         ...(args.store_key ? { store_key: args.store_key as CanonicalStateStoreKey } : {}),
         ...((args.scope_kind === "operation_plan" || args.scope_kind === "task_identity") && args.scope_digest
           ? { scope_kind: args.scope_kind as "operation_plan" | "task_identity", scope_digest: args.scope_digest }

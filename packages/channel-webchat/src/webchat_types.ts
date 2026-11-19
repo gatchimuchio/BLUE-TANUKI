@@ -154,6 +154,8 @@ export interface WebChatApprovalQueueItem {
   request_id: string;
   operation: string;
   target?: string;
+  /** SHA-256 of the selected recovery archive pinned in the approved command. */
+  recovery_archive_sha256?: string;
   risk: string;
   approval_level?: string;
   final_review_required: boolean;

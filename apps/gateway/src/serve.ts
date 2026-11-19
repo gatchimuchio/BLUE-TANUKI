@@ -181,6 +181,7 @@ import {
   buildRecoveryPostActionObservation,
   buildRecoverySnapshot,
   createRecoveryBackup,
+  inspectSelectedRecoveryArchiveDigest,
   inspectLatestRecoveryBackup,
   inspectRecoveryPlanRestoreScopeApplicability,
   inspectRecoveryTaskRestoreScopeApplicability,
@@ -317,6 +318,7 @@ interface PendingApproval {
   failure_memory_gate_requires_approval: boolean;
   approval_token?: string;
   approval_token_expires_at_ms?: number;
+  recovery_archive_sha256?: string;
   content_review_digest?: string;
   content_review_operation_plan_binding_digest?: string;
   content_review_provider_state_digest?: string;
@@ -2101,6 +2103,7 @@ async function serveWithOwnerLease(
     failure_memory_gate_actor?: string;
     approval_evaluation?: ApprovalEvaluation;
     command_digest?: string;
+    recovery_archive_sha256?: string;
     expected_gmail_draft_provider_state_digest?: string;
     expected_gmail_message_send_provider_state_digest?: string;
     expected_gmail_message_trash_provider_state_digest?: string;
@@ -2226,6 +2229,12 @@ async function serveWithOwnerLease(
     const restoreStoreKey = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore"
       ? cmd.payload.arguments.store_key
       : undefined;
+    if (cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
+        (!opts.recovery_archive_sha256 || cmd.payload.arguments.expected_archive_sha256 !== opts.recovery_archive_sha256)) {
+      const reason = "canonical_state_restore_archive_binding_required";
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+      return { status: reason };
+    }
     const restoreConsumersNotQuiesced = canonicalStoreRestoreConsumersNotQuiesced(restoreStoreKey);
     const operationPlanRestore = cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore" &&
       cmd.payload.arguments.store_key === "operation_plans" && cmd.payload.arguments.confirm === "RESTORE";
@@ -2520,6 +2529,7 @@ async function serveWithOwnerLease(
           failure_memory_gate_requires_approval: failureMemoryRequiresApproval,
           approval_token: issued?.token,
           approval_token_expires_at_ms: issued?.expires_at_ms,
+          ...(opts.recovery_archive_sha256 ? { recovery_archive_sha256: opts.recovery_archive_sha256 } : {}),
           ...(cronEvent ? { cron_event: cronEvent } : {}),
           ...(opts.goal_purpose_proposal ? { goal_purpose_proposal: opts.goal_purpose_proposal } : {}),
           ...(opts.goal_purpose_relation_review_proposal
@@ -2660,6 +2670,20 @@ async function serveWithOwnerLease(
     }
     const observedGmailDraftStateDigest = targetVersionObservation?.schema_version ===
       "blue-tanuki.gmail-write-target-version.v1" ? targetVersionObservation.provider_state_digest : undefined;
+    if (cmd.type === "tool_call" && cmd.payload.tool_name === "recovery.restore") {
+      const backupId = cmd.payload.arguments.backup_id as string;
+      const archiveSha = await inspectSelectedRecoveryArchiveDigest(process.env, backupId, restoreStoreKey as CanonicalStateStoreKey)
+        .catch(() => null);
+      if (executionController.signal.aborted) return cancelledBeforeExecutor("task_cancelled_during_target_version_preflight");
+      if (archiveSha !== opts.recovery_archive_sha256) {
+        const reason = "canonical_state_restore_archive_changed";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          executor_started: false, used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
     const preflightRecoveryMaintenanceBlockReason = recoveryMaintenanceBlockReason(cmd.id);
     if (preflightRecoveryMaintenanceBlockReason) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", {
@@ -4393,6 +4417,7 @@ async function serveWithOwnerLease(
         failure_memory_gate_actor: pending.failure_memory_gate_actor,
         approval_evaluation: pending.evaluation,
         command_digest: pending.command_digest,
+        recovery_archive_sha256: pending.recovery_archive_sha256,
         ...(isBrowserFormInputReviewCommand(pending.command) && pending.content_review_digest
           ? { browser_form_input_review_digest: pending.content_review_digest } : {}),
         ...(isBrowserFormInputReviewCommand(pending.command) && pending.content_review_operation_plan_binding_digest
@@ -4424,7 +4449,8 @@ async function serveWithOwnerLease(
         ...(pending.content_review_composio_target_version_digest
           ? { expected_composio_action_target_version_digest: pending.content_review_composio_target_version_digest } : {}),
       });
-      if (r.status === "failure_memory_gate_changed") {
+      if (r.status === "failure_memory_gate_changed" || r.status === "canonical_state_restore_archive_changed" ||
+          r.status === "canonical_state_restore_archive_binding_required") {
         completeApprovalResolution(command_id);
         return { approval: "approve", executed: false, status: r.status, fresh_request_required: true };
       }
@@ -4549,6 +4575,18 @@ async function serveWithOwnerLease(
         next_action: "指定backup・store・scope digestの読み取り照合を確認してください。復元要求は作成されていません。",
       };
     }
+    if (toolName === "recovery.restore") {
+      const archiveSha = await inspectSelectedRecoveryArchiveDigest(
+        process.env, arguments_.backup_id!, arguments_.store_key as CanonicalStateStoreKey,
+      ).catch(() => null);
+      if (!archiveSha) {
+        return { status: "blocked_unverified_archive", executed: false, operation: toolName,
+          store_key: arguments_.store_key, l3_request_created: false, used_for_authority: false, may_execute: false,
+          next_action: "台帳アーカイブの整合を確認できません。復元に使うバックアップを確認してから再申請してください。" };
+      }
+      // Client input cannot supply this value. HDS and the approval receipt bind it with the normalized command arguments.
+      arguments_.expected_archive_sha256 = archiveSha;
+    }
     const origin: InboundRequest = {
       id: randomUUID(),
       channel: "webchat",
@@ -4614,6 +4652,7 @@ async function serveWithOwnerLease(
     const result = await executeAndEcho(command, log, authorityOrigin, {
       actor: authorityOrigin.user,
       approval_evaluation: evaluation,
+      recovery_archive_sha256: arguments_.expected_archive_sha256,
     });
     if (result.status !== "approval_required") {
       return {
@@ -4654,6 +4693,7 @@ async function serveWithOwnerLease(
       risk: evaluation.risk,
       approval_level: evaluation.approval_level,
       final_review_required: true,
+      ...(arguments_.expected_archive_sha256 ? { recovery_archive_sha256: arguments_.expected_archive_sha256 } : {}),
       ...(planScopeInspection ? {
         restore_effect_scope: restoreEffectScope,
         scope_applicability: planScopeInspection,
@@ -6551,6 +6591,8 @@ async function serveWithOwnerLease(
       approval_level: p.evaluation.approval_level,
       final_review_required: p.evaluation.final_review_required,
       reason: p.evaluation.reason,
+      ...(p.evaluation.context.operation === "recovery.restore" && p.recovery_archive_sha256 &&
+          /^[a-f0-9]{64}$/.test(p.recovery_archive_sha256) ? { recovery_archive_sha256: p.recovery_archive_sha256 } : {}),
       content_review_required: pendingApprovalNeedsContentReview(p.command) ||
         Boolean(p.goal_purpose_proposal) ||
         Boolean(p.goal_purpose_relation_review_proposal) || Boolean(p.meaning_update_proposal) ||

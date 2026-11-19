@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
@@ -426,6 +426,7 @@ export interface RecoveryBackupOperationPlanInventory {
 export interface RestoreRecoveryOptions {
   backup_id?: string;
   store_key?: CanonicalStateStoreKey;
+  expected_archive_sha256?: string;
   scope_kind?: "operation_plan" | "task_identity";
   scope_digest?: string;
   /** Private Executor context; never accepted from recovery tool arguments. */
@@ -2646,6 +2647,27 @@ export async function createRecoveryBackup(
   });
 }
 
+async function readSelectedRecoveryArchive(env: NodeJS.ProcessEnv, backupId: string, storeKey: CanonicalStateStoreKey) {
+  const manifest = await readManifest(env, backupId);
+  const packDir = path.dirname(manifest.manifest_path);
+  const snapshot = manifest.canonical_state_snapshot;
+  if (!snapshot) throw new Error("canonical_state_snapshot_missing");
+  await inspectCanonicalStateSnapshots(packDir, snapshot);
+  const entry = snapshot.entries.find(item => item.store_key === storeKey);
+  if (!entry || entry.status !== "verified" || !entry.archive_rel_path || !entry.sha256 || entry.bytes === null ||
+      ((storeKey !== "broker" && storeKey !== "operation_plans") &&
+       snapshot.expected_store_count !== CANONICAL_STATE_STORE_PATHS.length)) {
+    throw new Error("canonical_state_store_unverified");
+  }
+  return { packDir, snapshot, selected: { ...entry, archive_rel_path: entry.archive_rel_path, sha256: entry.sha256 } };
+}
+
+export async function inspectSelectedRecoveryArchiveDigest(
+  env: NodeJS.ProcessEnv, backupId: string, storeKey: CanonicalStateStoreKey,
+): Promise<string> {
+  return (await readSelectedRecoveryArchive(env, backupId, storeKey)).selected.sha256;
+}
+
 export async function restoreRecoveryBackup(
   env: NodeJS.ProcessEnv = process.env,
   options: RestoreRecoveryOptions = {},
@@ -2653,6 +2675,10 @@ export async function restoreRecoveryBackup(
   assertConfirmation(options.confirm, "RESTORE");
   const id = options.backup_id ?? (await latestBackupId(env));
   if (!id) throw new Error("backup_not_found");
+  if (options.expected_archive_sha256 !== undefined &&
+      (!options.store_key || !/^[a-f0-9]{64}$/.test(options.expected_archive_sha256))) {
+    throw new Error("canonical_state_restore_archive_binding_invalid");
+  }
   if (options.store_key === "broker" &&
       (options.scope_kind !== undefined || options.scope_digest !== undefined) && options.scope_kind !== "task_identity") {
     throw new Error("broker_restore_task_scope_required");
@@ -2664,15 +2690,10 @@ export async function restoreRecoveryBackup(
       env, id, options.scope_kind, options.scope_digest, options.store_key,
     );
   }
-  const manifest = await readManifest(env, id);
   if (options.store_key) {
-    const packDir = path.dirname(manifest.manifest_path);
-    const snapshot = manifest.canonical_state_snapshot;
-    if (!snapshot) throw new Error("canonical_state_snapshot_missing");
-    await inspectCanonicalStateSnapshots(packDir, snapshot);
-    const selected = snapshot.entries.find((entry) => entry.store_key === options.store_key);
-    if (!selected || selected.status !== "verified" || !selected.archive_rel_path || !selected.sha256) {
-      throw new Error("canonical_state_store_unverified");
+    const { packDir, snapshot, selected } = await readSelectedRecoveryArchive(env, id, options.store_key);
+    if (options.expected_archive_sha256 !== undefined && selected.sha256 !== options.expected_archive_sha256) {
+      throw new Error("canonical_state_restore_archive_changed");
     }
     if (options.store_key === "broker" && !/^[a-f0-9]{64}$/.test(options.executor_command_key ?? "")) {
       throw new Error("broker_restore_execution_context_missing");
@@ -2740,116 +2761,140 @@ export async function restoreRecoveryBackup(
         env, id, options.scope_kind, options.scope_digest, options.store_key,
       );
     }
-    let restored: { readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string };
-    let restoredItemsCount: number | undefined;
-    if (options.store_key === "broker") {
-      const archivePath = path.resolve(packDir, selected.archive_rel_path);
-      const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
-      if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
+    const sourcePath = await assertArchivePath(packDir, path.resolve(packDir, selected.archive_rel_path), "restore_selected_archive");
+    const stagedDirectory = await fs.mkdtemp(path.join(await fs.realpath(preRestorePackDir), ".restore-source-"));
+    const archivePath = path.join(stagedDirectory, selected.archive_rel_path);
+    try {
+      // SQLite and the merge readers must consume the exact bytes checked against the reviewed digest.
+      await fs.mkdir(path.dirname(archivePath), { mode: 0o700 });
+      await fs.copyFile(sourcePath, archivePath, fsConstants.COPYFILE_EXCL);
+      if (process.platform !== "win32") await fs.chmod(archivePath, 0o600);
+      const copy = await sha256Path(archivePath, "file");
+      if (copy.bytes !== selected.bytes || copy.sha256 !== selected.sha256) {
         throw new Error("canonical_state_restore_archive_changed");
       }
-      if (scopeApplicabilityInspection?.scope_kind === "task_identity") {
-        restoredItemsCount = options.broker_execution_store!.restoreTaskScopeFromCanonicalSnapshot(
-          archivePath, options.executor_command_key!, scopeApplicabilityInspection.scope_digest!,
-        );
-      } else {
-        options.broker_execution_store!.restoreFromCanonicalSnapshot(archivePath, options.executor_command_key!);
-      }
-      const archiveAfter = await sha256Path(archivePath, "file").catch(() => null);
-      if (!archiveAfter || archiveAfter.bytes !== selected.bytes || archiveAfter.sha256 !== selected.sha256) {
-        throw new Error("canonical_state_restore_archive_changed");
-      }
-      const target = await inspectCanonicalStateStoreTarget(
-        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
-        options.store_key,
-      );
-      if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
-        throw new Error("canonical_state_restore_target_unverified");
-      }
-      restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
-    } else if (options.store_key === "operation_plans") {
-      const archivePath = path.resolve(packDir, selected.archive_rel_path);
-      const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
-      if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
-        throw new Error("canonical_state_restore_archive_changed");
-      }
-      const archivedCheckpoint = readOperationPlanRecoveryCheckpointSnapshot({
-        private_state_root: packDir,
-        database_path: archivePath,
-      });
-      const archiveAfterRead = await sha256Path(archivePath, "file").catch(() => null);
-      if (!archiveAfterRead || archiveAfterRead.bytes !== selected.bytes || archiveAfterRead.sha256 !== selected.sha256) {
-        throw new Error("canonical_state_restore_archive_changed");
-      }
-      const targetExistsNow = await fs.lstat(targetPath).then((stat) => {
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
-        return true;
-      }).catch((error: unknown) => {
-        const code = error instanceof Error && "code" in error ? String(error.code) : "";
-        if (code === "ENOENT") return false;
-        throw error;
-      });
-      if (targetExistsNow !== targetExists) throw new Error("canonical_state_restore_target_changed");
-      if (targetExists) {
-        const latestTargetDigest = await sha256Path(targetPath, "file").catch(() => null);
-        if (!preEntry?.sha256 || !latestTargetDigest || latestTargetDigest.bytes !== preEntry.bytes ||
-            latestTargetDigest.sha256 !== preEntry.sha256) {
-          throw new Error("canonical_state_restore_target_changed");
+      let restored: { readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string };
+      let restoredItemsCount: number | undefined;
+      if (options.store_key === "broker") {
+        const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
+        if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
+          throw new Error("canonical_state_restore_archive_changed");
         }
-      }
-      const operationPlanStore = new OperationPlanStateStore(targetPath);
-      try {
-        if (scopeApplicabilityInspection!.scope_kind === "task_identity") {
-          operationPlanStore.restoreTaskScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
+        if (scopeApplicabilityInspection?.scope_kind === "task_identity") {
+          restoredItemsCount = options.broker_execution_store!.restoreTaskScopeFromCanonicalSnapshot(
+            archivePath, options.executor_command_key!, scopeApplicabilityInspection.scope_digest!,
+          );
         } else {
-          operationPlanStore.restorePlanScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
+          options.broker_execution_store!.restoreFromCanonicalSnapshot(archivePath, options.executor_command_key!);
         }
-      } finally {
-        operationPlanStore.close();
+        const archiveAfter = await sha256Path(archivePath, "file").catch(() => null);
+        if (!archiveAfter || archiveAfter.bytes !== selected.bytes || archiveAfter.sha256 !== selected.sha256) {
+          throw new Error("canonical_state_restore_archive_changed");
+        }
+        const target = await inspectCanonicalStateStoreTarget(
+          env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+          options.store_key,
+        );
+        if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
+          throw new Error("canonical_state_restore_target_unverified");
+        }
+        restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
+      } else if (options.store_key === "operation_plans") {
+        const archiveBefore = await sha256Path(archivePath, "file").catch(() => null);
+        if (!archiveBefore || archiveBefore.bytes !== selected.bytes || archiveBefore.sha256 !== selected.sha256) {
+          throw new Error("canonical_state_restore_archive_changed");
+        }
+        const archivedCheckpoint = readOperationPlanRecoveryCheckpointSnapshot({
+          private_state_root: stagedDirectory,
+          database_path: archivePath,
+        });
+        const archiveAfterRead = await sha256Path(archivePath, "file").catch(() => null);
+        if (!archiveAfterRead || archiveAfterRead.bytes !== selected.bytes || archiveAfterRead.sha256 !== selected.sha256) {
+          throw new Error("canonical_state_restore_archive_changed");
+        }
+        const targetExistsNow = await fs.lstat(targetPath).then((stat) => {
+          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("canonical_state_restore_target_unavailable");
+          return true;
+        }).catch((error: unknown) => {
+          const code = error instanceof Error && "code" in error ? String(error.code) : "";
+          if (code === "ENOENT") return false;
+          throw error;
+        });
+        if (targetExistsNow !== targetExists) throw new Error("canonical_state_restore_target_changed");
+        if (targetExists) {
+          const latestTargetDigest = await sha256Path(targetPath, "file").catch(() => null);
+          if (!preEntry?.sha256 || !latestTargetDigest || latestTargetDigest.bytes !== preEntry.bytes ||
+              latestTargetDigest.sha256 !== preEntry.sha256) {
+            throw new Error("canonical_state_restore_target_changed");
+          }
+        }
+        const operationPlanStore = new OperationPlanStateStore(targetPath);
+        try {
+          if (scopeApplicabilityInspection!.scope_kind === "task_identity") {
+            operationPlanStore.restoreTaskScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
+          } else {
+            operationPlanStore.restorePlanScope(archivedCheckpoint, scopeApplicabilityInspection!.scope_digest!, preRestorePlanCheckpoint);
+          }
+        } finally {
+          operationPlanStore.close();
+        }
+        const archiveAfterWrite = await sha256Path(archivePath, "file").catch(() => null);
+        if (!archiveAfterWrite || archiveAfterWrite.bytes !== selected.bytes || archiveAfterWrite.sha256 !== selected.sha256) {
+          throw new Error("canonical_state_restore_archive_changed");
+        }
+        const target = await inspectCanonicalStateStoreTarget(
+          env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+          options.store_key,
+        );
+        if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
+          throw new Error("canonical_state_restore_target_unverified");
+        }
+        restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
+      } else {
+        restored = await restoreCanonicalStateSnapshotStore(
+          env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
+          packDir,
+          snapshot,
+          options.store_key,
+          archivePath,
+        );
       }
-      const archiveAfterWrite = await sha256Path(archivePath, "file").catch(() => null);
-      if (!archiveAfterWrite || archiveAfterWrite.bytes !== selected.bytes || archiveAfterWrite.sha256 !== selected.sha256) {
-        throw new Error("canonical_state_restore_archive_changed");
+      return actionResult("restore", {
+        restored_backup_id: id,
+        restored_store_key: options.store_key,
+        restored_store_archive_digest: restored.sha256,
+        restored_store_state_digest: restored.restoredStateSha256,
+        ...(restoredItemsCount === undefined ? {} : { restored_items_count: restoredItemsCount }),
+        ...(scopeApplicabilityInspection ? {
+          restore_scope_kind: scopeApplicabilityInspection.scope_kind === "task_identity" ? "task_identity" as const : "operation_plan" as const,
+          restore_scope_digest: scopeApplicabilityInspection.scope_digest!,
+          restore_scope_mode: scopeApplicabilityInspection.scope_kind === "task_identity"
+            ? "task_scoped_merge_v1" as const : "plan_scoped_merge_v1" as const,
+        } : {}),
+        canonical_state_cross_store_atomic: false,
+        pre_action_backup_id: preRestore.backup_id,
+        pre_action_backup_manifest_path: preRestore.manifest_path,
+        next_safe_action: options.store_key === "broker"
+          ? scopeApplicabilityInspection?.scope_kind === "task_identity"
+            ? "This task-scoped Broker merge appended only missing receipts for the selected task to the current ledger; current Broker history and unrelated tasks were preserved. The restored-state digest marks the import boundary while Executor finalizes this restore receipt. Re-observe J/M/Broker dependencies and require a fresh J review before any continuation; cross-store atomicity and automatic resume are false."
+            : "The restored-state digest marks the atomic import boundary while this restore's Executor receipt is still in progress; Executor then finalizes that receipt in Broker. Inspect cross-store residuals before resuming affected work. Only this selected SQLite store was restored; cross-store atomicity is false, and job recovery or automatic resume is not implied."
+          : "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
+      });
+    } finally {
+      try {
+        await fs.rm(archivePath, { force: true });
+        await fs.rmdir(path.dirname(archivePath)).catch(error => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
+        await fs.rmdir(stagedDirectory);
+      } catch {
+        // The recovery pack remains private. Do not convert a recorded restore into a retry on cleanup failure.
+        console.warn("Recovery restore temporary archive cleanup incomplete in the private recovery pack");
       }
-      const target = await inspectCanonicalStateStoreTarget(
-        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
-        options.store_key,
-      );
-      if (target.status !== "verified" || target.sha256 === null || target.bytes === null) {
-        throw new Error("canonical_state_restore_target_unverified");
-      }
-      restored = { bytes: selected.bytes, sha256: selected.sha256, restoredStateSha256: target.sha256 };
-    } else {
-      restored = await restoreCanonicalStateSnapshotStore(
-        env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki",
-        packDir,
-        snapshot,
-        options.store_key,
-      );
     }
-    return actionResult("restore", {
-      restored_backup_id: id,
-      restored_store_key: options.store_key,
-      restored_store_archive_digest: restored.sha256,
-      restored_store_state_digest: restored.restoredStateSha256,
-      ...(restoredItemsCount === undefined ? {} : { restored_items_count: restoredItemsCount }),
-      ...(scopeApplicabilityInspection ? {
-        restore_scope_kind: scopeApplicabilityInspection.scope_kind === "task_identity" ? "task_identity" as const : "operation_plan" as const,
-        restore_scope_digest: scopeApplicabilityInspection.scope_digest!,
-        restore_scope_mode: scopeApplicabilityInspection.scope_kind === "task_identity"
-          ? "task_scoped_merge_v1" as const : "plan_scoped_merge_v1" as const,
-      } : {}),
-      canonical_state_cross_store_atomic: false,
-      pre_action_backup_id: preRestore.backup_id,
-      pre_action_backup_manifest_path: preRestore.manifest_path,
-      next_safe_action: options.store_key === "broker"
-        ? scopeApplicabilityInspection?.scope_kind === "task_identity"
-          ? "This task-scoped Broker merge appended only missing receipts for the selected task to the current ledger; current Broker history and unrelated tasks were preserved. The restored-state digest marks the import boundary while Executor finalizes this restore receipt. Re-observe J/M/Broker dependencies and require a fresh J review before any continuation; cross-store atomicity and automatic resume are false."
-          : "The restored-state digest marks the atomic import boundary while this restore's Executor receipt is still in progress; Executor then finalizes that receipt in Broker. Inspect cross-store residuals before resuming affected work. Only this selected SQLite store was restored; cross-store atomicity is false, and job recovery or automatic resume is not implied."
-        : "Restart BLUE-TANUKI, then inspect the restored store and all cross-store residuals. Only this selected SQLite store was restored; snapshots are independent, cross-store atomicity is false, and job recovery or automatic resume is not implied.",
-    });
   }
 
+  const manifest = await readManifest(env, id);
   await preflightRestoreManifest(env, manifest);
   const preRestore = await createBackupManifest(env, "pre_restore");
   const result = await restoreManifest(env, manifest);

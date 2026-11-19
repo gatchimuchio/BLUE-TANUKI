@@ -1778,6 +1778,39 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(result.unverified).toContain("未確認");
   });
 
+  it("shows the pinned recovery archive SHA-256 and disables approval for an unbound restoration", () => {
+    const html = renderControlCenterHtml();
+    const inline = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+    new Script(inline);
+    const start = inline.indexOf("function renderApprovals(body)");
+    const end = inline.indexOf("function renderActiveExecutions(", start);
+    const renderer = new Script(`${inline.slice(start, end)}\nrenderApprovals(queueBody)`);
+    const render = (digest?: string) => {
+      let list = "";
+      renderer.runInNewContext({
+        queueBody: { pending_approvals: [{ command_id: "restore-id", operation: "recovery.restore",
+          approval_level: "L3_final_review", final_review_required: true, recovery_archive_sha256: digest }] },
+        state: { approvalTokens: {}, approvalContentDigests: {} },
+        byId: () => ({}),
+        setText() {},
+        setHtml(id: string, value: string) { if (id === "approval-list") list = value; },
+        escapeHtml: (value: unknown) => String(value),
+        badge: (value: unknown) => String(value),
+        formatDate: () => "fixed fixture",
+        isObject: (value: unknown) => value !== null && typeof value === "object",
+        renderApprovalHistory() {}, renderApprovalGrants() {}, renderActiveExecutions() {},
+      });
+      return list;
+    };
+    const valid = "a".repeat(64);
+    expect(render(valid)).toContain(`復元元のSHA-256</dt><dd class="mono">${valid}</dd>`);
+    expect(render(valid)).toContain('data-verdict="approve" data-command="restore-id">Approve');
+    expect(render()).toContain('data-verdict="approve" data-command="restore-id" disabled>Approve');
+    const invalid = '<em>偽の指紋</em>\n';
+    expect(render(invalid)).not.toContain(invalid);
+    expect(render(invalid)).toContain('data-verdict="approve" data-command="restore-id" disabled>Approve');
+  });
+
   it("shows digest-only goal change metadata and reveals the exact reviewed purpose as text", async () => {
     const renderStart = CONTROL_CENTER_SCRIPT.indexOf("function renderApprovals(body)");
     const renderEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderApprovalGrants(", renderStart + 1);

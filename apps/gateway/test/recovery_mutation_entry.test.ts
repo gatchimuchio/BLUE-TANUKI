@@ -638,6 +638,84 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
+  it("rejects a different valid recovery archive under the same backup ID until a fresh L3 review", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-recovery-pin-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const port = await reserveLoopbackPort();
+    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const gateway = spawnGateway(isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port));
+    const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+    try {
+      await waitForHealth(port, gateway, 40_000);
+      const backup = await requestJson(port, "/recovery/backup", { method: "POST", token: maintenanceToken, body: {} });
+      const backupId = (backup.body.result as { backup_id: string }).backup_id;
+      const recoveryRoot = join(root, "recovery");
+      const backupPath = join(recoveryRoot, backupId);
+      const manifestPath = join(backupPath, "manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        canonical_state_snapshot: { entries: Array<{ store_key: string; archive_rel_path: string; sha256: string; bytes: number }> };
+      };
+      const storeKey = "meaning_update_j_control";
+      const selected = manifest.canonical_state_snapshot.entries.find(entry => entry.store_key === storeKey)!;
+      const archivePath = join(backupPath, selected.archive_rel_path);
+      const originalDigest = sha256(readFileSync(archivePath));
+      const restoreArguments = { backup_id: backupId, store_key: storeKey, confirm: "RESTORE" };
+      const queueRestore = async (body: Record<string, unknown>) => requestJson(port, "/recovery/restore", {
+        method: "POST", token: maintenanceToken, body,
+      });
+      expect((await queueRestore({ ...restoreArguments, expected_archive_sha256: originalDigest })).status).toBe(400);
+      const queued = await queueRestore(restoreArguments);
+      expect(queued.status, JSON.stringify(queued.body)).toBe(202);
+      expect(queued.body).toMatchObject({ result: { executed: false, recovery_archive_sha256: originalDigest } });
+      const approve = async (expectedDigest: string) => {
+        const queue = await requestJson(port, "/approval", { token: resumeToken });
+        const [pending] = queue.body.pending_approvals as Array<{ command_id: string; approval_token: string }>;
+        expect(pending).toMatchObject({ operation: "recovery.restore", approval_level: "L3_final_review",
+          recovery_archive_sha256: expectedDigest });
+        return requestJson(port, `/approval/${encodeURIComponent(pending!.command_id)}`, {
+          method: "POST", token: resumeToken, signal: AbortSignal.timeout(12_000),
+          body: { verdict: "approve", approval_token: pending!.approval_token },
+        });
+      };
+
+      // Keep SQLite and the pack internally valid while changing the bytes selected by the old approval.
+      const db = new DatabaseSync(archivePath);
+      try { db.exec("PRAGMA application_id = 20261119"); } finally { db.close(); }
+      const replacement = readFileSync(archivePath);
+      selected.sha256 = sha256(replacement);
+      selected.bytes = replacement.length;
+      expect(selected.sha256).not.toBe(originalDigest);
+      const manifestRaw = JSON.stringify(manifest, null, 2) + "\n";
+      writeFileSync(manifestPath, manifestRaw, "utf8");
+      writeFileSync(`${manifestPath}.sha256`, `${sha256(manifestRaw)}  manifest.json\n`, "utf8");
+
+      const statePath = join(root, "state", "private-state", "meaning-update-memory", "j-control.sqlite");
+      const stateBefore = sha256(readFileSync(statePath));
+      const packsBefore = readdirSync(recoveryRoot).sort();
+      const rejected = await approve(originalDigest);
+      expect(rejected.status).toBe(200);
+      expect(rejected.body).toMatchObject({ result: { executed: false,
+        status: "canonical_state_restore_archive_changed", fresh_request_required: true } });
+      expect(sha256(readFileSync(statePath))).toBe(stateBefore);
+      expect(readdirSync(recoveryRoot).sort()).toEqual(packsBefore);
+
+      const fresh = await queueRestore(restoreArguments);
+      expect(fresh.status, JSON.stringify(fresh.body)).toBe(202);
+      expect(fresh.body).toMatchObject({ result: { recovery_archive_sha256: selected.sha256 } });
+      const accepted = await approve(selected.sha256);
+      expect(accepted.body, gateway.output.join("")).toMatchObject({ result: { executed: true, status: "success" } });
+      const restored = new DatabaseSync(statePath, { readOnly: true });
+      try { expect(restored.prepare("PRAGMA application_id").get()).toMatchObject({ application_id: 20261119 }); }
+      finally { restored.close(); }
+      for (const pack of readdirSync(recoveryRoot)) {
+        expect(readdirSync(join(recoveryRoot, pack)).some(name => name.startsWith(".restore-source-"))).toBe(false);
+      }
+    } finally {
+      await stopChild(gateway.child);
+    }
+  }, 65_000);
+
   it("drains another running command before an approved meaning-update restore without waiting on itself", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-meaning-restore-drain-"));
     temporaryRoots.push(root);
@@ -1251,7 +1329,7 @@ describe("Recovery mutation HDS L3 entry", () => {
       expect(rejectedPlanRestore.status).toBe(200);
       expect(rejectedPlanRestore.body).toMatchObject({
         ok: true,
-        result: { approval: "approve", executed: true, status: "failed" },
+        result: { approval: "approve", executed: false, status: "canonical_state_restore_archive_changed", fresh_request_required: true },
       });
       expect(readFileSync(planStatePath)).toEqual(planStoreBeforeReview);
       expect(readdirSync(join(root, "recovery")).sort()).toEqual(backupPacksBeforeRejectedApply);

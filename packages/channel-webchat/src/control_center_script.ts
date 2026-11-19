@@ -3598,9 +3598,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 item.goal_purpose_relation_review.kind === "task_purpose_relation" ? item.goal_purpose_relation_review : null;
               const meaningUpdateReview = isObject(item.meaning_update_review) &&
                 item.meaning_update_review.kind === "meaning_update_adoption" ? item.meaning_update_review : null;
+              const isRecoveryRestore = item.operation === "recovery.restore";
+              const recoveryArchiveSha = isRecoveryRestore && typeof item.recovery_archive_sha256 === "string" &&
+                /^[a-f0-9]{64}$/.test(item.recovery_archive_sha256) ? item.recovery_archive_sha256 : null;
               const requiresContentReview = item.content_review_required === true;
               const approveBlocked = requiresContentReview || Boolean(cronReview && cronReview.eligible !== true) ||
-                Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale");
+                Boolean(meaningUpdateReview && meaningUpdateReview.review_status === "stale") ||
+                (isRecoveryRestore && recoveryArchiveSha === null);
               if (item.command_id && item.approval_token) {
                 state.approvalTokens[item.command_id] = item.approval_token;
               }
@@ -3621,6 +3625,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 '<dt>command</dt><dd class="mono">' + escapeHtml(item.command_id || "unknown") + '</dd>' +
                 '<dt>request</dt><dd class="mono">' + escapeHtml(item.request_id || "unknown") + '</dd>' +
                 (item.target ? '<dt>target</dt><dd>' + escapeHtml(item.target) + '</dd>' : '') +
+                (isRecoveryRestore ? '<dt>復元元のSHA-256</dt><dd class="mono">' +
+                  (recoveryArchiveSha ? escapeHtml(recoveryArchiveSha) : '未確認。復元を再申請してください。') + '</dd>' : '') +
                 '<dt>risk</dt><dd>' + badge(item.risk || "unknown", riskTone) + '</dd>' +
               '<dt>ApprovalLevel</dt><dd>' + badge(level, level === "L3_final_review" ? "review" : "good") + '</dd>' +
                 '<dt>adapter</dt><dd>' + badge(trace.adapter || "not recorded", trace.adapter_is_authority === false ? "good" : "warn") + '</dd>' +

@@ -615,6 +615,7 @@ export async function restoreCanonicalStateSnapshotStore(
   packDirectory: string,
   snapshot: CanonicalStateSnapshotManifest,
   storeKey: CanonicalStateStoreKey,
+  verifiedCopyPath?: string,
 ): Promise<{ readonly bytes: number; readonly sha256: string; readonly restoredStateSha256: string }> {
   await inspectCanonicalStateSnapshots(packDirectory, snapshot);
   if (snapshot.expected_store_count !== CANONICAL_STATE_STORE_PATHS.length ||
@@ -637,7 +638,7 @@ export async function restoreCanonicalStateSnapshotStore(
     }
   }
 
-  const archivePath = join(packDirectory, entry.archive_rel_path);
+  const archivePath = verifiedCopyPath ?? join(packDirectory, entry.archive_rel_path);
   const before = await digestFile(archivePath);
   if (before.bytes !== entry.bytes || before.sha256 !== entry.sha256) {
     throw new Error("canonical_state_restore_archive_changed");
