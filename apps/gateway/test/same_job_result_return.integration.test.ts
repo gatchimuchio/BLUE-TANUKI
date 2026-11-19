@@ -722,6 +722,216 @@ describe("Webhookの永続受付", () => {
   }, 120_000);
 });
 
+describe("served owner Work approval withdrawal", () => {
+  it("withdraws the same Work while its approval token is being issued and restores the withdrawal after restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-owner-work-approval-issuance-"));
+    const resumeToken = "synthetic-owner-work-resume-token";
+    const submission = { submission_id: "810edbf0-0569-484f-8447-3226631a9ade" };
+    const task = "合成試験用の青い花を探すための読取計画を作成してください。";
+    const markers = { reached: join(root, "issuance-held"), release: join(root, "release"),
+      discarded: join(root, "token-discarded"), executed: join(root, "executor-entered") };
+    let providerRequests = 0;
+    const provider = createServer((request, response) => {
+      providerRequests += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const fileRoot = join(root, "files");
+      const envFile = join(root, "fixture.env");
+      const historyFile = join(root, "history.jsonl");
+      const preload = join(root, "hold-owner-work-approval-issuance.mjs");
+      mkdirSync(fileRoot);
+      writeFileSync(envFile, "# isolated test configuration\n");
+      const webchatModule = pathToFileURL(join(ROOT, "packages/channel-webchat/dist/index.js")).href;
+      const coreModule = pathToFileURL(join(ROOT, "packages/blue-tanuki/dist/index.js")).href;
+      const hdsModule = pathToFileURL(join(ROOT, "packages/hds-brain/dist/index.js")).href;
+      writeFileSync(preload, `
+import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+import { MemoryResumeApprovalTokenStore, WebChatChannel } from ${JSON.stringify(webchatModule)};
+import { Executor } from ${JSON.stringify(coreModule)};
+import { candidateFromCommand, FailureMemoryStore } from ${JSON.stringify(hdsModule)};
+const task = ${JSON.stringify(task)};
+const markers = ${JSON.stringify(markers)};
+const scope = new AsyncLocalStorage();
+let heldCommandId;
+let heldToken;
+const start = WebChatChannel.prototype.start;
+WebChatChannel.prototype.start = function (handler) {
+  return start.call(this, (request, context) =>
+    request.user === "webchat-owner-token-holder" && request.content.includes(task)
+      ? scope.run(request.id, () => handler(request, context))
+      : handler(request, context));
+};
+const evaluate = FailureMemoryStore.prototype.evaluateCommandGate;
+FailureMemoryStore.prototype.evaluateCommandGate = function (command, context) {
+  if (scope.getStore() === context.request_id && command.type === "llm_call") {
+    const candidate = candidateFromCommand(command, context);
+    this.addSignature({ scope: candidate.scope, failure_type: "logic_drift", input_pattern: candidate.input_pattern,
+      action_pattern: candidate.action_pattern, context_pattern: candidate.context_pattern,
+      state: "active", suppression_policy: "require_approval", match_level: 1 });
+  }
+  return evaluate.call(this, command, context);
+};
+const issue = WebChatChannel.prototype.issueResumeApprovalToken;
+WebChatChannel.prototype.issueResumeApprovalToken = async function (commandId, ttl) {
+  const issued = await issue.call(this, commandId, ttl);
+  const requestId = scope.getStore();
+  if (!requestId) return issued;
+  if (!issued?.token) throw new Error("synthetic owner Work approval issuance did not return a token");
+  heldCommandId = commandId;
+  heldToken = issued.token;
+  writeFileSync(markers.reached, JSON.stringify({ requestId, commandId }) + "\\n", { flag: "wx" });
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(markers.release) && Date.now() < deadline) await setTimeout(20);
+  if (!existsSync(markers.release)) throw new Error("synthetic owner Work approval issuance hold expired");
+  return issued;
+};
+const consume = MemoryResumeApprovalTokenStore.prototype.consume;
+MemoryResumeApprovalTokenStore.prototype.consume = async function (requestId, token) {
+  const consumed = await consume.call(this, requestId, token);
+  if (consumed && requestId === heldCommandId && token === heldToken) {
+    writeFileSync(markers.discarded, requestId, { flag: "wx" });
+  }
+  return consumed;
+};
+const execute = Executor.prototype.execute;
+Executor.prototype.execute = function (command, context) {
+  if (command.id === heldCommandId) writeFileSync(markers.executed, command.id);
+  return execute.call(this, command, context);
+};
+`, "utf8");
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: resumeToken, BLUE_TANUKI_OWNER_TOKEN: OWNER_TOKEN,
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-owner-work-maintenance",
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"),
+        BLUE_TANUKI_ENV_FILE: envFile, BLUE_TANUKI_FILE_ROOT: fileRoot, BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"), BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile,
+        BLUE_TANUKI_APPROVAL_MODE: "full_access",
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_BACKEND_HINT: "owner-work-approval-fixture",
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ "owner-work-approval-fixture": {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: "owner-work-approval-fixture", LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: "owner-work-approval-fixture", type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: "owner-work-approval-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      const request = (route: string, authorization: string, body?: object) =>
+        fetch(`http://127.0.0.1:${gatewayPort}${route}`, { method: body ? "POST" : "GET",
+          headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(8_000) });
+      const listApprovals = async () => {
+        const response = await request("/approval", resumeToken);
+        expect(response.status).toBe(200);
+        return (await response.json() as { pending_approvals: { command_id: string; approval_token?: string }[] }).pending_approvals;
+      };
+      const cancelRoute = "/owner/task-submission-cancel";
+      const statusRoute = "/owner/task-submission-status";
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const proposed = await request("/owner/goal-purpose-adoption", OWNER_TOKEN, {
+        purpose_text: "合成試験として花の情報を読取専用で整理する。",
+      });
+      expect(proposed.status).toBe(202);
+      const adoption = await proposed.json() as { command_id: string };
+      const adoptionApproval = (await listApprovals()).find(item => item.command_id === adoption.command_id);
+      expect(adoptionApproval?.approval_token).toEqual(expect.any(String));
+      const adoptionRoute = `/approval/${encodeURIComponent(adoption.command_id)}`;
+      const review = await request(`${adoptionRoute}/content`, resumeToken, {});
+      expect(review.status).toBe(200);
+      const reviewed = await review.json() as { review_digest?: string; command_digest: string };
+      const adopted = await request(adoptionRoute, resumeToken, { verdict: "approve",
+        approval_token: adoptionApproval?.approval_token, content_review_digest: reviewed.review_digest ?? reviewed.command_digest });
+      expect(adopted.status).toBe(200);
+      const goals = await request("/owner/task-goals", OWNER_TOKEN);
+      expect(goals.status).toBe(200);
+      const { goals: [goal] } = await goals.json() as { goals: { goal_ref: string; purpose_version: number }[] };
+      expect(goal).toMatchObject({ goal_ref: expect.any(String), purpose_version: 1 });
+
+      const frames: WebSocketFrame[] = [];
+      const user = "synthetic-owner-work-reply";
+      socket = await connectWebChat(gatewayPort, frames, user);
+      const accepted = await request("/owner/task-compute", OWNER_TOKEN, {
+        ...submission, user, task, goal_ref: goal!.goal_ref, purpose_version: goal!.purpose_version,
+      });
+      expect(accepted.status).toBe(202);
+      const receipt = await accepted.json() as { request_id: string };
+      const held = await waitFor(() => {
+        const raw = readCaptureText(markers.reached);
+        return raw?.endsWith("\n") ? JSON.parse(raw) as { requestId: string; commandId: string } : null;
+      }, gateway, "the exact owner Work did not reach approval token issuance");
+      expect(held.requestId).toBe(receipt.request_id);
+      expect(await listApprovals()).not.toContainEqual(expect.objectContaining({ command_id: held.commandId }));
+      expect((await request(cancelRoute, WEBCHAT_TOKEN, submission)).status).toBe(401);
+      expect((await request(cancelRoute, OWNER_TOKEN, { submission_id: "5aae1129-a49f-4bff-8e56-0a73ba18a593" })).status).toBe(404);
+      const cancelled = await request(cancelRoute, OWNER_TOKEN, submission);
+      expect(cancelled.status, await cancelled.clone().text()).toBe(202);
+      expect(cancelled.headers.get("cache-control")).toBe("no-store");
+      const withdrawal = await cancelled.json() as { cancellation: Record<string, unknown> };
+      expect(withdrawal).toEqual({ found: true, accepted: true, cancellation: {
+        status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+        external_processing_stop: "unknown", cancel_requested_at_ms: expect.any(Number),
+        used_for_authority: false, may_execute: false,
+      } });
+      writeFileSync(markers.release, "", { flag: "wx" });
+      const status = () => request(statusRoute, OWNER_TOKEN, submission);
+      await waitFor(async () => {
+        const response = await status();
+        expect(response.status).toBe(200);
+        const payload = await response.json() as { state?: string };
+        return payload.state === "handler_returned" ? payload : null;
+      }, gateway, "the withdrawn owner Work handler did not finish");
+      expect(readCaptureText(markers.discarded)).toBe(held.commandId);
+      expect(readCaptureText(markers.executed)).toBeUndefined();
+      expect(await listApprovals()).not.toContainEqual(expect.objectContaining({ command_id: held.commandId }));
+      const stale = await request(`/approval/${encodeURIComponent(held.commandId)}`, resumeToken, {
+        verdict: "approve", approval_token: "synthetic-stale-approval-input",
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toEqual({ error: "approval_content_review_stale" });
+      expect(JSON.stringify(frames)).not.toContain(held.commandId);
+      expect(providerRequests).toBe(0);
+      const history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(history.verify()).toBe(true);
+      const workHistory = history.replay({ kind: "approval_history", request_id: receipt.request_id });
+      expect(workHistory).toContainEqual(expect.objectContaining({ command_id: held.commandId,
+        payload: expect.objectContaining({ event: "policy_evaluation" }) }));
+      expect(workHistory).not.toContainEqual(expect.objectContaining({ payload: expect.objectContaining({ event: "approval_pending" }) }));
+
+      socket.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const restored = await status();
+      expect(restored.status).toBe(200);
+      expect(await restored.json()).toMatchObject({ found: true, request_id: receipt.request_id, cancellation: withdrawal.cancellation });
+      const repeated = await request(cancelRoute, OWNER_TOKEN, submission);
+      expect(repeated.status).toBe(202);
+      expect(await repeated.json()).toEqual(withdrawal);
+      expect(providerRequests).toBe(0);
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 90_000);
+});
+
 describe("served D4 Runtime work observation", () => {
   it("returns a scoped execution observation after restart without replay or retained reply content", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-observation-"));
