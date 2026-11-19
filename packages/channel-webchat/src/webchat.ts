@@ -21,6 +21,7 @@ import {
   GoalCompletionRulesSchema,
   D4RuntimeNotificationsProjectionSchema,
   D4RuntimeStatusProjectionSchema,
+  InboundRequestSchema,
   OperationPlanControlSchema,
   RuntimeIntentInputSchema,
   RuntimeIntentStatusInputSchema,
@@ -118,6 +119,7 @@ import type {
   WebChatOperatorSurface,
   WebChatOperatorSurfaces,
   WebChatOwnerTaskSubmissionStore,
+  WebChatWebhookEventClaim,
   WebChatOptions,
   WebChatRateLimits,
   WebChatGoalPurposeRepairRequest,
@@ -137,6 +139,9 @@ const DEFAULT_RATE_LIMITS: Required<WebChatRateLimits> = {
 };
 const INBOUND_TOKEN_ACTOR = "webchat-inbound-token-holder";
 const WEBHOOK_TOKEN_ACTOR = "webchat-webhook-token-holder";
+const WEBHOOK_EVENT_SOURCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u;
+const WEBHOOK_EVENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/u;
+const WEBHOOK_EVENT_MAX_FUTURE_MS = 24 * 60 * 60 * 1000;
 const RESUME_TOKEN_ACTOR = "webchat-resume-token-holder";
 
 const D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND: Record<
@@ -1616,7 +1621,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       body = await readJson(req, url.pathname === "/owner/task-compute" || url.pathname === "/runtime/intent"
         ? MAX_MULTIMODAL_TASK_JSON_BYTES :
         url.pathname === "/owner/audio-transcribe" ? MAX_OWNER_AUDIO_TRANSCRIPTION_JSON_BYTES :
-        isGoalPurposeAdoption ? 128 * 1024 : undefined, isGoalPurposeAdoption);
+        isGoalPurposeAdoption ? 128 * 1024 : undefined, isGoalPurposeAdoption || tokenKind === "webhook");
     } catch (error) {
       if (error instanceof Error && error.message === "body_too_large") {
         res.writeHead(413, { "content-type": "application/json", "cache-control": "no-store" });
@@ -2731,12 +2736,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
 
     if (url.pathname === "/webhook") {
+      const eventEnvelope = body && (Object.hasOwn(body, "event_id") || Object.hasOwn(body, "sequence") ||
+        Object.hasOwn(body, "expires_at_ms")) ? body : null;
+      if (eventEnvelope || body === null) res.setHeader("cache-control", "no-store");
       const content = readWebhookContent(body);
       if (!content) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
-            error: "content, text, or event is required",
+            error: eventEnvelope ? "invalid_webhook_event" : "content, text, or event is required",
           }),
         );
         return;
@@ -2745,6 +2753,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const source = nonEmptyString(body?.source) ?? "generic";
       const reply_to = nonEmptyString(body?.reply_to) ?? replyUser;
       if (rejectReservedWebChatAudience(res, reply_to)) return;
+      if (eventEnvelope) {
+        this.acceptDurableWebhookEvent(eventEnvelope, content, reply_to, res);
+        return;
+      }
       if (
         !this.rateLimitOr429(
           this.buckets.inbound,
@@ -3026,6 +3038,85 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ...(handoff.tokens.maintenance ? { maintenance: handoff.tokens.maintenance } : {}),
       },
     });
+  }
+
+  private acceptDurableWebhookEvent(body: Record<string, unknown>, content: string, replyTo: string, res: ServerResponse): void {
+    const respond = (status: number, payload: Record<string, unknown>): void => {
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(payload));
+    };
+    const { source, event_id, sequence, expires_at_ms } = body;
+    const now = Date.now();
+    if (typeof source !== "string" || !WEBHOOK_EVENT_SOURCE.test(source) ||
+        typeof event_id !== "string" || !WEBHOOK_EVENT_ID.test(event_id) ||
+        typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0 ||
+        typeof expires_at_ms !== "number" || !Number.isSafeInteger(expires_at_ms) || expires_at_ms <= 0 ||
+        expires_at_ms - now > WEBHOOK_EVENT_MAX_FUTURE_MS || !isWellFormedUnicode(content) || !isWellFormedUnicode(replyTo)) {
+      respond(400, { error: "invalid_webhook_event" });
+      return;
+    }
+    const request = createGatewayInternalInboundRequest({
+      id: randomUUID(), channel: "webchat", user: WEBHOOK_TOKEN_ACTOR, content, timestamp: now,
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.webhook_ingress.version": "webhook-event.v1",
+        reply_to: replyTo,
+        webhook_source: source,
+      },
+    });
+    if (!InboundRequestSchema.safeParse(request).success) {
+      respond(400, { error: "invalid_webhook_event" });
+      return;
+    }
+    const handler = this.handler;
+    const store = this.opts.webhook_event_store;
+    if (!handler || !store) {
+      respond(503, { error: "webhook_event_store_unavailable" });
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "webhook-durable", res)) return;
+
+    const digest = (domain: string, fields: readonly unknown[]): string =>
+      createHash("sha256").update(JSON.stringify([domain, ...fields]), "utf8").digest("hex");
+    const source_digest = digest("blue-tanuki.webhook-event.source.v1", [source]);
+    const event_digest = digest("blue-tanuki.webhook-event.identity.v1", [event_id]);
+    const payload_digest = digest("blue-tanuki.webhook-event.payload.v1", [
+      request.content, request.metadata?.reply_to, sequence, expires_at_ms,
+    ]);
+    let claim: WebChatWebhookEventClaim;
+    try {
+      claim = store.claimWebhookEvent({ source_digest, event_digest, payload_digest, sequence, expires_at_ms, request_id: request.id });
+    } catch {
+      respond(503, { error: "webhook_event_store_unavailable" });
+      return;
+    }
+    const observation = { accepted: true, used_for_authority: false, may_execute: false };
+    switch (claim.status) {
+      case "expired":
+        respond(410, { error: claim.status });
+        return;
+      case "identity_conflict":
+      case "out_of_order":
+        respond(409, { error: claim.status });
+        return;
+      case "duplicate":
+        respond(202, { ...observation, duplicate: true, request_id: claim.request_id, state: claim.state });
+        return;
+      case "accepted":
+        if (claim.request_id !== request.id) {
+          respond(503, { error: "webhook_event_store_unavailable" });
+          return;
+        }
+        break;
+    }
+    const settle = (state: "handler_returned" | "outcome_unknown"): void => {
+      store.settleWebhookEvent({ source_digest, event_digest, request_id: request.id, state });
+    };
+    void Promise.resolve().then(() => handler(request)).then(
+      () => settle("handler_returned"),
+      () => settle("outcome_unknown"),
+    ).catch(() => { /* 永続確保を残し、処理本体を再送しない。 */ });
+    respond(202, { ...observation, duplicate: false, request_id: request.id, state: "dispatching" });
   }
 
   private checkAuth(

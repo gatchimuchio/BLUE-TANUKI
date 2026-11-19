@@ -24,6 +24,8 @@ export {
   type WebChatOwnerTaskSubmissionResult,
   type WebChatD4RuntimeIntentResult,
   type WebChatOwnerTaskSubmissionStore,
+  type WebChatWebhookEventClaim,
+  type WebChatWebhookEventStore,
   type WebChatTaskOutcome,
   type WebChatTaskExecutionObservation,
   type WebChatOwnerTaskPlanStep,

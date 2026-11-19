@@ -2044,6 +2044,8 @@ export interface WebChatOptions {
    * disabled; webhook-origin metadata is never allowed to carry authority.
    */
   webhook_token?: string;
+  /** 永続イベントを処理前に確保し、本文を含まない受領状態を保存する。 */
+  webhook_event_store?: WebChatWebhookEventStore;
   /** Optional dedicated credential for owner-originated inbound requests. */
   owner_token?: string;
   /** Optional authenticated, input-only D4 Runtime ingress. */
@@ -2264,6 +2266,29 @@ export type WebChatD4RuntimeIntentResult =
       readonly used_for_authority: false;
       readonly may_execute: false;
     };
+
+export type WebChatWebhookEventClaim =
+  | { readonly status: "accepted"; readonly request_id: string }
+  | { readonly status: "duplicate"; readonly request_id: string;
+      readonly state: "dispatching" | "handler_returned" | "outcome_unknown" }
+  | { readonly status: "identity_conflict" | "out_of_order" | "expired" };
+
+export interface WebChatWebhookEventStore {
+  claimWebhookEvent(input: {
+    readonly source_digest: string;
+    readonly event_digest: string;
+    readonly payload_digest: string;
+    readonly sequence: number;
+    readonly expires_at_ms: number;
+    readonly request_id: string;
+  }): WebChatWebhookEventClaim;
+  settleWebhookEvent(input: {
+    readonly source_digest: string;
+    readonly event_digest: string;
+    readonly request_id: string;
+    readonly state: "handler_returned" | "outcome_unknown";
+  }): void;
+}
 
 export interface WebChatOwnerTaskSubmissionStore {
   claim(input: { readonly submission_id: string; readonly payload_digest: string; readonly request_id: string }):

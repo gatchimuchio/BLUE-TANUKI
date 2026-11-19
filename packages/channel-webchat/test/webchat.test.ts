@@ -210,6 +210,7 @@ async function setup(
       resume_token?: string;
       owner_token?: string;
       webhook_token?: string;
+      webhook_event_store?: WebChatOptions["webhook_event_store"];
       d4_runtime_intent?: { token: string; runtime_id: string };
       onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
       onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) =>
@@ -251,6 +252,7 @@ async function setup(
     resume_token: opts.resume_token ?? RESUME_TOKEN,
     owner_token: opts.owner_token,
     webhook_token: opts.webhook_token,
+    webhook_event_store: opts.webhook_event_store,
     d4_runtime_intent: opts.d4_runtime_intent,
     onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
     onD4RuntimeIntentCancellationStatus: opts.onD4RuntimeIntentCancellationStatus,
@@ -7220,6 +7222,95 @@ describe("WebChatChannel — HTTP inbound", () => {
 });
 
 describe("WebChatChannel - HTTP webhook inbound", () => {
+  it("claims only canonicalized typed events and settles the exact receipt without dispatching duplicates", async () => {
+    type Store = NonNullable<WebChatOptions["webhook_event_store"]>;
+    let claim: Parameters<Store["claimWebhookEvent"]>[0] | undefined;
+    const settlements: Parameters<Store["settleWebhookEvent"]>[0][] = [];
+    let releaseHandler!: () => void;
+    const fixture = new Promise<void>(resolve => { releaseHandler = resolve; });
+    const ctx = await setup({ webhook_token: WEBHOOK_TOKEN, webhook_event_store: {
+      claimWebhookEvent: input => {
+        if (!claim) {
+          claim = input;
+          return { status: "accepted", request_id: input.request_id };
+        }
+        if (input.payload_digest !== claim.payload_digest) return { status: "identity_conflict" };
+        return { status: "duplicate", request_id: claim.request_id, state: settlements[0]?.state ?? "dispatching" };
+      },
+      settleWebhookEvent: settlement => { settlements.push(settlement); },
+    } });
+    try {
+      await ctx.ch.start(async request => {
+        ctx.received.push(request);
+        await fixture;
+        throw new Error("private fixture exception");
+      });
+      const event = { source: "pipeline-1", event_id: "event-001", sequence: 1, expires_at_ms: Date.now() + 60_000 };
+      const post = (body: Record<string, unknown>) => postJson(ctx.port, "/webhook", body,
+        { authorization: `Bearer ${WEBHOOK_TOKEN}` });
+      const accepted = await post({ ...event, content: " ＡＢ ", reply_to: "ｏｐｓ",
+        metadata: { "blue_tanuki.actor_kind": "owner" } });
+      expect(accepted.status).toBe(202);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      expect(accepted.body).toEqual({ accepted: true, duplicate: false, request_id: claim?.request_id,
+        state: "dispatching", used_for_authority: false, may_execute: false });
+      expect(claim).toEqual({ source_digest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        event_digest: expect.stringMatching(/^[0-9a-f]{64}$/u), payload_digest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        sequence: event.sequence, expires_at_ms: event.expires_at_ms, request_id: expect.any(String) });
+      const duplicate = await post({ ...event, text: "AB", user: "ignored", reply_to: "ops" });
+      expect(duplicate.status).toBe(202);
+      expect(duplicate.body).toEqual({ accepted: true, duplicate: true, request_id: claim?.request_id,
+        state: "dispatching", used_for_authority: false, may_execute: false });
+      expect((await post({ ...event, content: "AB", reply_to: "different" })).body).toEqual({ error: "identity_conflict" });
+      expect((await post({ ...event, sequence: 2, content: "AB", reply_to: "ops" })).status).toBe(409);
+      expect((await post({ ...event, expires_at_ms: event.expires_at_ms + 1, content: "AB", reply_to: "ops" })).status).toBe(409);
+      expect(ctx.received).toHaveLength(1);
+      expect(ctx.received[0]).toMatchObject({ id: claim?.request_id, user: "webchat-webhook-token-holder", content: "AB",
+        metadata: { "blue_tanuki.webhook_ingress.version": "webhook-event.v1", reply_to: "ops", webhook_source: "pipeline-1" } });
+      expect(ctx.received[0]?.metadata).not.toHaveProperty("blue_tanuki.actor_kind");
+      releaseHandler();
+      const settled = await post({ ...event, text: "AB", reply_to: "ops" });
+      expect(settlements).toEqual([{ source_digest: claim?.source_digest, event_digest: claim?.event_digest,
+        request_id: claim?.request_id, state: "outcome_unknown" }]);
+      expect(settled.body).toMatchObject({ duplicate: true, state: "outcome_unknown", request_id: claim?.request_id });
+      expect(ctx.received).toHaveLength(1);
+    } finally {
+      releaseHandler();
+      await ctx.teardown();
+    }
+  });
+
+  it("rejects malformed typed input before the store and leaves ordinary webhook callers usable", async () => {
+    const ctx = await setup({ webhook_token: WEBHOOK_TOKEN });
+    try {
+      await ctx.ch.start(async request => { ctx.received.push(request); });
+      const event = { source: "pipeline-1", event_id: "event-001", sequence: 1,
+        expires_at_ms: Date.now() + 60_000, content: "fixture" };
+      const headers = { authorization: `Bearer ${WEBHOOK_TOKEN}` };
+      const post = (body: Record<string, unknown>) => postJson(ctx.port, "/webhook", body, headers);
+      for (const body of [{ event_id: "p", content: "fixture" }, { ...event, source: "ends-with-space " },
+        { ...event, expires_at_ms: Date.now() + 25 * 60 * 60_000 }, { ...event, sequence: 0 },
+        { ...event, content: "bad\ud800" }, { ...event, reply_to: "bad\ud800" },
+        { ...event, content: "a".repeat(200_001) }]) {
+        const invalid = await post(body);
+        expect(invalid.status).toBe(400);
+        expect(invalid.headers.get("cache-control")).toBe("no-store");
+      }
+      const malformed = Buffer.concat([Buffer.from('{"event_id":"part","content":"'), Buffer.from([0xff]), Buffer.from('"}')]);
+      const malformedResponse = await fetch(`http://127.0.0.1:${ctx.port}/webhook`, { method: "POST", headers, body: malformed });
+      expect(malformedResponse.status).toBe(400);
+      expect((await post({ ...event, reply_to: "ｄ４-runtime:reserved" })).status).toBe(403);
+      expect((await post(event)).status).toBe(503);
+      expect(ctx.received).toHaveLength(0);
+      const legacy = await post({ content: "legacy fixture" });
+      expect(legacy.status).toBe(202);
+      expect(legacy.body).toEqual({ accepted: true, request_id: expect.any(String) });
+      expect(ctx.received).toHaveLength(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("keeps /webhook disabled unless a dedicated token is configured", async () => {
     const ctx = await setup();
     try {

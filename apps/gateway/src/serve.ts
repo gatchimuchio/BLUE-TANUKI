@@ -1609,7 +1609,11 @@ async function serveWithOwnerLease(
   const router = new InboundRouter({
     propagateHandlerErrorsForChannels: ["cron", "telegram", "slack", "teams", "line"],
     redactHandlerErrorsForChannels: ["telegram", "slack", "teams", "line"],
-    propagateRedactedHandlerErrorsForRequest: isGatewayInternalD4RuntimeIntentRequest,
+    propagateRedactedHandlerErrorsForRequest: request =>
+      (isGatewayInternalInboundRequest(request) && request.channel === "webchat" &&
+        request.user === "webchat-webhook-token-holder" &&
+        request.metadata?.["blue_tanuki.webhook_ingress.version"] === "webhook-event.v1") ||
+      isGatewayInternalD4RuntimeIntentRequest(request),
   });
   const dispatcher = new OutboundDispatcher();
 
@@ -5057,6 +5061,7 @@ async function serveWithOwnerLease(
       resume_token: resumeToken,
       owner_token: process.env.BLUE_TANUKI_OWNER_TOKEN,
       owner_task_submission_store: ownerTaskSubmissionStore,
+      webhook_event_store: ownerTaskSubmissionStore,
       onOwnerTaskSubmissionOutcome: async ({ request_id }: { request_id: string }) => {
         try {
           return projectOwnerTaskOutcome(hds.getRuntimeSnapshot().operation_plans, request_id);

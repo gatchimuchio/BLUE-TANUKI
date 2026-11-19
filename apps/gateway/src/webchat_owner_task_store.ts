@@ -12,6 +12,8 @@ import type {
   WebChatOwnerTaskSubmissionState,
   WebChatOwnerTaskSubmissionStatus,
   WebChatOwnerTaskSubmissionStore,
+  WebChatWebhookEventClaim,
+  WebChatWebhookEventStore,
 } from "@blue-tanuki/channel-webchat";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -37,6 +39,14 @@ interface SubmissionRow {
   readonly payload_digest: string;
   readonly request_id: string;
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
+}
+
+interface WebhookEventRow {
+  readonly payload_digest: string;
+  readonly sequence: number;
+  readonly expires_at_ms: number;
+  readonly request_id: string;
+  readonly delivery_state: "dispatching" | "handler_returned" | "outcome_unknown";
 }
 
 interface D4RuntimeResultEntry {
@@ -66,7 +76,7 @@ interface RuntimeSubmissionRow {
 type D4RuntimeDecisionScope = Pick<WebChatD4RuntimeCancellationScope, "request_id" | "scope_digest">;
 
 /** Durable, content-free inbox for deduplicating authenticated WebChat submissions. */
-export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore {
+export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore, WebChatWebhookEventStore {
   private readonly db: DatabaseType;
   private readonly ownerTaskResults = new Map<string, OwnerTaskResultEntry>();
   private ownerTaskResultBytes = 0;
@@ -108,6 +118,20 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
         binding_digest TEXT NOT NULL CHECK(length(binding_digest) = 64),
         PRIMARY KEY(request_id,command_id)
       ) STRICT;`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS webchat_webhook_events (
+        source_digest TEXT NOT NULL CHECK(length(source_digest) = 64 AND source_digest NOT GLOB '*[^0-9a-f]*'),
+        event_digest TEXT NOT NULL CHECK(length(event_digest) = 64 AND event_digest NOT GLOB '*[^0-9a-f]*'),
+        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64 AND payload_digest NOT GLOB '*[^0-9a-f]*'),
+        sequence INTEGER NOT NULL CHECK(sequence BETWEEN 1 AND 9007199254740991),
+        expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms BETWEEN 1 AND 9007199254740991),
+        request_id TEXT NOT NULL UNIQUE CHECK(length(request_id) = 36),
+        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+        created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+        PRIMARY KEY(source_digest,event_digest)
+      ) STRICT;
+      CREATE UNIQUE INDEX IF NOT EXISTS webchat_webhook_events_by_source_sequence
+        ON webchat_webhook_events(source_digest,sequence);`);
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") {
         throw new Error("webchat_owner_task_store_integrity_check_failed");
@@ -120,8 +144,11 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
           this.db.exec(`ALTER TABLE webchat_owner_task_inbox ADD COLUMN d4_decision_state TEXT
             CHECK(d4_decision_state IN ('queued','started','cancelled'))`);
         }
+        const now = Date.now();
         this.db.prepare(`UPDATE webchat_owner_task_inbox SET delivery_state='outcome_unknown',updated_at_ms=?
-          WHERE delivery_state='dispatching'`).run(Date.now());
+          WHERE delivery_state='dispatching'`).run(now);
+        this.db.prepare(`UPDATE webchat_webhook_events SET delivery_state='outcome_unknown',updated_at_ms=?
+          WHERE delivery_state='dispatching'`).run(now);
       });
     } catch (error) {
       this.db.close();
@@ -149,6 +176,57 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       if (process.platform !== "win32") chmodSync(dir, 0o700);
     }
     return new GatewayWebChatOwnerTaskStore(join(directory, "owner-task-inbox.sqlite"));
+  }
+
+  /** イベントの照合値だけを、仕事の開始前に同じ送信元の順序とともに確定する。 */
+  claimWebhookEvent(input: Parameters<WebChatWebhookEventStore["claimWebhookEvent"]>[0]): WebChatWebhookEventClaim {
+    validateWebhookEventIdentity(input);
+    if (!DIGEST.test(input.payload_digest) || !Number.isSafeInteger(input.sequence) || input.sequence <= 0 ||
+        !Number.isSafeInteger(input.expires_at_ms) || input.expires_at_ms <= 0) {
+      throw new Error("webchat_webhook_event_claim_invalid");
+    }
+    return this.transaction(() => {
+      const current = this.db.prepare(`SELECT payload_digest,sequence,expires_at_ms,request_id,delivery_state
+        FROM webchat_webhook_events WHERE source_digest=? AND event_digest=?`)
+        .get(input.source_digest, input.event_digest) as WebhookEventRow | undefined;
+      if (current) {
+        validateWebhookEventRow(current);
+        return current.payload_digest === input.payload_digest && current.sequence === input.sequence &&
+          current.expires_at_ms === input.expires_at_ms
+          ? { status: "duplicate", request_id: current.request_id, state: current.delivery_state }
+          : { status: "identity_conflict" };
+      }
+      const sameSequence = this.db.prepare(`SELECT 1 FROM webchat_webhook_events WHERE source_digest=? AND sequence=?`)
+        .get(input.source_digest, input.sequence);
+      if (sameSequence) return { status: "identity_conflict" };
+      const laterSequence = this.db.prepare(`SELECT 1 FROM webchat_webhook_events WHERE source_digest=? AND sequence>? LIMIT 1`)
+        .get(input.source_digest, input.sequence);
+      if (laterSequence) return { status: "out_of_order" };
+      const now = Date.now();
+      if (input.expires_at_ms <= now) return { status: "expired" };
+      this.db.prepare(`INSERT INTO webchat_webhook_events
+        (source_digest,event_digest,payload_digest,sequence,expires_at_ms,request_id,delivery_state,created_at_ms,updated_at_ms)
+        VALUES (?,?,?,?,?,?,'dispatching',?,?)`).run(input.source_digest, input.event_digest, input.payload_digest,
+          input.sequence, input.expires_at_ms, input.request_id, now, now);
+      return { status: "accepted", request_id: input.request_id };
+    });
+  }
+
+  settleWebhookEvent(input: Parameters<WebChatWebhookEventStore["settleWebhookEvent"]>[0]): void {
+    validateWebhookEventIdentity(input);
+    if (input.state !== "handler_returned" && input.state !== "outcome_unknown") {
+      throw new Error("webchat_webhook_event_settlement_invalid");
+    }
+    this.transaction(() => {
+      const result = this.db.prepare(`UPDATE webchat_webhook_events SET delivery_state=?,updated_at_ms=?
+        WHERE source_digest=? AND event_digest=? AND request_id=? AND delivery_state='dispatching'`)
+        .run(input.state, Date.now(), input.source_digest, input.event_digest, input.request_id);
+      if (result.changes === 1) return;
+      const settled = this.db.prepare(`SELECT 1 FROM webchat_webhook_events
+        WHERE source_digest=? AND event_digest=? AND request_id=? AND delivery_state=?`)
+        .get(input.source_digest, input.event_digest, input.request_id, input.state);
+      if (!settled) throw new Error("webchat_webhook_event_settlement_rejected");
+    });
   }
 
   claim(input: { readonly submission_id: string; readonly payload_digest: string; readonly request_id: string }):
@@ -592,6 +670,20 @@ function validateSubmissionRow(row: SubmissionRow): void {
   if (!DIGEST.test(row.payload_digest) || !REQUEST_ID.test(row.request_id) ||
       !["dispatching", "handler_returned", "outcome_unknown", "rejected"].includes(row.delivery_state)) {
     throw new Error("webchat_owner_task_store_row_invalid");
+  }
+}
+
+function validateWebhookEventIdentity(input: { source_digest: string; event_digest: string; request_id: string }): void {
+  if (!DIGEST.test(input.source_digest) || !DIGEST.test(input.event_digest) || !REQUEST_ID.test(input.request_id)) {
+    throw new Error("webchat_webhook_event_identity_invalid");
+  }
+}
+
+function validateWebhookEventRow(row: WebhookEventRow): void {
+  if (!DIGEST.test(row.payload_digest) || !REQUEST_ID.test(row.request_id) ||
+      !Number.isSafeInteger(row.sequence) || row.sequence <= 0 || !Number.isSafeInteger(row.expires_at_ms) || row.expires_at_ms <= 0 ||
+      !["dispatching", "handler_returned", "outcome_unknown"].includes(row.delivery_state)) {
+    throw new Error("webchat_webhook_event_row_invalid");
   }
 }
 

@@ -497,6 +497,156 @@ describe("served Telegram result return and request-bound media ingress", () => 
   }, 45_000);
 });
 
+describe("Webhookの永続受付", () => {
+  it("Webhookの重複と順序逆転を拒み、中断した仕事を再起動後に再実行しない", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-webhook-durable-"));
+    const webhookToken = "synthetic-durable-webhook-token";
+    const backend = "durable-webhook-fixture";
+    const source = "fixture-stream";
+    const replyTarget = "ordinary-target";
+    const expiresAt = Date.now() + 300_000;
+    const first = { source, event_id: "fixture-event", sequence: 1, expires_at_ms: expiresAt,
+      content: "合成試験で青を使う短い題名を提案してください。", reply_to: replyTarget };
+    const interrupted = { ...first, event_id: "fixture-interrupted", sequence: 3,
+      content: "合成試験で緑を使う短い題名を提案してください。" };
+    const flags = { used_for_authority: false, may_execute: false };
+    const answer = "青と緑の合成タイトル";
+    const citationSchema = "blue-tanuki.memory-citation-response.v1";
+    let providerRequests = 0;
+    const provider = createServer((request, response) => {
+      if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+        response.writeHead(404).end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.once("end", () => {
+        providerRequests += 1;
+        if (providerRequests === 2) {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.write('{"choices":');
+          return;
+        }
+        let prompt: { messages?: { role: string; content?: unknown }[] };
+        try {
+          prompt = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof prompt;
+        } catch {
+          response.writeHead(400).end();
+          return;
+        }
+        const requestsCitationEnvelope = prompt.messages?.some(message => message.role === "system" &&
+          typeof message.content === "string" && message.content.includes(citationSchema));
+        const content = requestsCitationEnvelope ? JSON.stringify({ schema_version: citationSchema, answer, citations: [] }) : answer;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: backend, object: "chat.completion", created: 1, model: backend,
+          choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+      });
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    const frames: WebSocketFrame[] = [];
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const envFile = join(root, "fixture.env");
+      const fileRoot = join(root, "files");
+      const historyFile = join(root, "history.jsonl");
+      writeFileSync(envFile, "# 隔離した試験設定\n", "utf8");
+      mkdirSync(fileRoot);
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN, WEBHOOK_TOKEN: webhookToken,
+        WEBCHAT_RESUME_TOKEN: "synthetic-durable-webhook-resume",
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-durable-webhook-maintenance",
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: fileRoot, BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_SESSION_DIR: join(root, "sessions"),
+        BLUE_TANUKI_FAILURE_MEMORY_FILE: join(root, "failure-memory.json"), BLUE_TANUKI_COMPLETE_HISTORY_FILE: historyFile,
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_BACKEND_HINT: backend,
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ [backend]: {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: backend, LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: backend, type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: backend, aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      const submit = async (body: typeof first, status: number, bearer = webhookToken) => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/webhook`, {
+          method: "POST", headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+        });
+        const result = await response.json() as { request_id: string; state?: string };
+        expect(response.status, JSON.stringify(result)).toBe(status);
+        if (status === 202) expect(response.headers.get("cache-control")).toBe("no-store");
+        return result;
+      };
+      const waitForResult = (requestId: string, activeGateway: CapturedProcess) => waitFor(() =>
+        frames.find(frame => frame.kind === "channel_send" && frame.request_id === requestId && frame.content?.includes(answer))
+          ?? null, activeGateway, () =>
+        `受付に対応する計算結果が届かなかった。providerRequests=${providerRequests} frames=${JSON.stringify(frames)}`);
+
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      socket = await connectWebChat(gatewayPort, frames, replyTarget);
+      await submit(first, 401, WEBCHAT_TOKEN);
+      const accepted = await submit(first, 202);
+      expect(accepted).toEqual({ accepted: true, duplicate: false, request_id: expect.any(String), state: "dispatching", ...flags });
+      await waitForResult(accepted.request_id, gateway);
+      const complete = await waitFor(async () => {
+        const repeated = await submit(first, 202);
+        expect(repeated).toMatchObject({ accepted: true, duplicate: true, request_id: accepted.request_id, ...flags });
+        return repeated.state === "handler_returned" ? repeated : null;
+      }, gateway, "Webhookの処理終了が受付に保存されなかった");
+      expect(providerRequests).toBe(1);
+      await submit({ ...first, content: "同じイベントIDに異なる合成内容" }, 409);
+
+      const started = await submit(interrupted, 202);
+      expect(started).toMatchObject({ accepted: true, duplicate: false, state: "dispatching", ...flags });
+      expect(started.request_id).not.toBe(accepted.request_id);
+      await waitFor(() => providerRequests === 2 ? true : null, gateway, "中断対象の受付が計算先に届かなかった");
+      await submit({ ...first, event_id: "fixture-older", sequence: 2 }, 409);
+      await submit({ ...first, event_id: "fixture-expired", sequence: 4, expires_at_ms: Date.now() - 1000 }, 410);
+
+      socket.terminate();
+      socket = undefined;
+      const stopped = once(gateway.child, "close");
+      expect(gateway.child.kill("SIGKILL")).toBe(true);
+      await stopped;
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      socket = await connectWebChat(gatewayPort, frames, replyTarget);
+      expect(await submit(first, 202)).toEqual(complete);
+      expect(await submit(interrupted, 202)).toMatchObject({ accepted: true, duplicate: true,
+        request_id: started.request_id, state: "outcome_unknown", ...flags });
+      await submit({ ...first, event_id: "fixture-restarted-older", sequence: 2 }, 409);
+      expect(providerRequests).toBe(2);
+
+      const other = await submit({ ...first, source: "fixture-other-stream" }, 202);
+      expect(other).toMatchObject({ accepted: true, duplicate: false, state: "dispatching", ...flags });
+      expect(other.request_id).not.toBe(accepted.request_id);
+      await waitForResult(other.request_id, gateway);
+      expect(providerRequests).toBe(3);
+      expect(frames.filter(frame => frame.kind === "channel_send").map(frame => frame.request_id))
+        .toEqual([accepted.request_id, other.request_id]);
+      const history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(history.verify()).toBe(true);
+      const webhookEntries = history.all().filter(entry => entry.kind === "user_input" && entry.source === "webchat");
+      expect(webhookEntries.map(entry => entry.request_id)).toEqual([accepted.request_id, started.request_id, other.request_id]);
+      expect(webhookEntries.map(entry => entry.actor)).toEqual(Array(3).fill("webchat-webhook-token-holder"));
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 120_000);
+});
+
 describe("served D4 Runtime work observation", () => {
   it("returns a scoped execution observation after restart without replay or retained reply content", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-observation-"));
@@ -1616,10 +1766,10 @@ function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string): CapturedPro
   return { child, stdout, stderr };
 }
 
-async function connectWebChat(port: number, frames: WebSocketFrame[]): Promise<WebSocket> {
+async function connectWebChat(port: number, frames: WebSocketFrame[], user = "served-f1003-owner-session"): Promise<WebSocket> {
   const ticket = await fetch(`http://127.0.0.1:${port}/ws-ticket`, { method: "POST",
     headers: { authorization: `Bearer ${WEBCHAT_TOKEN}`, "content-type": "application/json" },
-    body: JSON.stringify({ user: "served-f1003-owner-session" }) });
+    body: JSON.stringify({ user }) });
   if (!ticket.ok) throw new Error(`WebChat ticket request failed: ${ticket.status} ${await ticket.text()}`);
   const ticketValue = (await ticket.json() as { ticket?: string }).ticket;
   if (!ticketValue) throw new Error("WebChat ticket response did not include a ticket");
