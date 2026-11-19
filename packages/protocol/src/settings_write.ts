@@ -15,11 +15,15 @@ export const SETTINGS_WRITE_ACTIVATION_DESTINATIONS = Object.freeze({
 
 export const SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS = 120_000;
 export const SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS = 150_000;
+export const SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE = Object.freeze({
+  key: "llm.credential_reference", before: "protected", after: "replace_on_restart",
+} as const);
 
 const ActivationCostMicrosSchema = z.number().int().min(1).max(1_000_000_000);
+export const SettingsWriteNativeLlmProviderSchema = z.enum(["anthropic", "openai", "openrouter"]);
 
 export const SettingsWriteActivationSchema = z.object({
-  provider: z.enum(["anthropic", "openai", "openrouter"]),
+  provider: SettingsWriteNativeLlmProviderSchema,
   currency: z.literal("USD"),
   max_cost_per_attempt_micros: ActivationCostMicrosSchema,
   max_cost_per_24h_micros: ActivationCostMicrosSchema,
@@ -34,10 +38,13 @@ export const SettingsWritePatchSchema = z.object({
     max_tokens: z.number().int().min(1).max(1_048_576).optional(),
     timeout_ms: z.number().int().min(100).max(600_000).optional(),
     activation: SettingsWriteActivationSchema.optional(),
+    rotate_credential: z.literal(true).optional(),
   }).strict().refine((llm) => Object.keys(llm).length > 0, "at least one supported LLM setting is required")
     .refine((llm) => llm.activation === undefined ||
       (llm.model !== undefined && llm.max_tokens !== undefined && llm.timeout_ms !== undefined),
-    "provider activation requires a model, token limit, and timeout").optional(),
+    "provider activation requires a model, token limit, and timeout")
+    .refine((llm) => llm.rotate_credential !== true || Object.keys(llm).length === 1,
+      "credential rotation must be the only change in the patch").optional(),
   composio: z.object({
     user_id: z.string().trim().min(1).max(512).nullable().optional(),
     allowed_toolkits: z.string().trim().max(4_096).nullable().optional(),
@@ -70,7 +77,10 @@ export const SettingsWriteArgumentsSchema = z.object({
   "a provider expectation applies only to the LLM domain")
   .refine(({ patch, expected_llm_provider }) => patch.llm?.activation === undefined ||
     (expected_llm_provider !== undefined && expected_llm_provider !== patch.llm.activation.provider),
-  "provider activation requires the current provider to differ from the selected provider");
+  "provider activation requires the current provider to differ from the selected provider")
+  .refine(({ patch, expected_llm_provider }) => patch.llm?.rotate_credential !== true ||
+    SettingsWriteNativeLlmProviderSchema.safeParse(expected_llm_provider).success,
+  "credential rotation requires the expected native provider");
 
 /** Non-authority target evidence for one explicitly selected Gateway settings patch. */
 export const SettingsWriteTargetVersionObservationSchema = z.object({
@@ -88,8 +98,18 @@ export type SettingsWritePatch = z.infer<typeof SettingsWritePatchSchema>;
 export type SettingsWriteArguments = z.infer<typeof SettingsWriteArgumentsSchema>;
 export type SettingsWriteActivation = z.infer<typeof SettingsWriteActivationSchema>;
 export type SettingsWriteLlmProvider = z.infer<typeof SettingsWriteLlmProviderSchema>;
+export type SettingsWriteNativeLlmProvider = z.infer<typeof SettingsWriteNativeLlmProviderSchema>;
+export type SettingsWriteCredentialRotationReview = ReturnType<typeof settingsWriteCredentialRotationReview>;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
+
+export function settingsWriteRequiresNativeCredentialEntry(patch: SettingsWritePatch): boolean {
+  return patch.llm?.activation?.register_credential === true || patch.llm?.rotate_credential === true;
+}
+
+export function settingsWriteCredentialRotationReview(provider: SettingsWriteNativeLlmProvider) {
+  return { provider, destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS[provider], protected_reference_configured: true as const };
+}
 
 export function settingsWriteTargetIdentityDigest(): string {
   return createHash("sha256").update("blue-tanuki.gateway-settings-target.v1", "utf8").digest("hex");
@@ -124,6 +144,7 @@ export function llmSettingsWriteEnvPatch(patch: NonNullable<SettingsWritePatch["
 
 export function llmSettingsWriteEnvKeys(patch: NonNullable<SettingsWritePatch["llm"]>,
   currentProvider: SettingsWriteLlmProvider): string[] {
+  if (patch.rotate_credential) return [`${SettingsWriteNativeLlmProviderSchema.parse(currentProvider).toUpperCase()}_API_KEY_REF`];
   const keys = Object.keys(llmSettingsWriteEnvPatch(patch, patch.activation?.provider ?? currentProvider));
   if (patch.activation) {
     keys.push("LLM_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON", "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON");

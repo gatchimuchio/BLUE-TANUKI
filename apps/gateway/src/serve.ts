@@ -131,6 +131,7 @@ import {
   OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   SettingsWriteArgumentsSchema,
+  settingsWriteRequiresNativeCredentialEntry,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
   createGatewayInternalInboundRequest,
   createGatewayInternalTransientAudioRequest,
@@ -3981,7 +3982,7 @@ async function serveWithOwnerLease(
   function requiresNativeCredentialApproval(command: ExecuteCommand | undefined): boolean {
     if (command?.type !== "tool_call" || command.payload.tool_name !== "settings.write") return false;
     const args = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
-    return args.success && args.data.patch.llm?.activation?.register_credential === true;
+    return args.success && settingsWriteRequiresNativeCredentialEntry(args.data.patch);
   }
 
   async function resumePendingApproval(
@@ -5134,6 +5135,10 @@ async function serveWithOwnerLease(
         plugins,
         mcpRuntimeObservations,
         nativeCredentialPromptAvailable,
+        inspectCredentialRotation: async (provider) => {
+          try { return (await settingsWritePort.inspect(provider, { rotate_credential: true })).credential_rotation_ready === true; }
+          catch { return false; }
+        },
       }),
       runtime: {
         getSnapshot: async () => {
@@ -5639,8 +5644,9 @@ async function serveWithOwnerLease(
     try {
       ownerLease.assertActive();
       const patch = arguments_.data.patch.llm;
-      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider, patch.activation ? patch : undefined);
+      const target = await settingsWritePort.inspect(arguments_.data.expected_llm_provider, patch.activation || patch.rotate_credential ? patch : undefined);
       const hasChange = patch.activation ? target.provider_activation_ready === true :
+        patch.rotate_credential ? target.credential_rotation_ready === true :
         (patch.model !== undefined && patch.model !== target.values.model) ||
         (patch.temperature !== undefined && patch.temperature !== target.values.temperature) ||
         (patch.max_tokens !== undefined && patch.max_tokens !== target.values.max_tokens) ||
@@ -5658,7 +5664,8 @@ async function serveWithOwnerLease(
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.source_interface": "gui" } as const;
       const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
-        content: patch.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
+        content: patch.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
+          : patch.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
           : "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
       const plan = hds.prepareSettingsWritePlan(origin, arguments_.data, binding);
       if (binding) return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
@@ -6489,6 +6496,7 @@ async function serveWithOwnerLease(
           operation: "settings.write",
           ...(snapshot.expected_llm_provider ? { expected_llm_provider: snapshot.expected_llm_provider } : {}),
           ...(snapshot.activation ? { activation: snapshot.activation } : {}),
+          ...(snapshot.credential_rotation ? { credential_rotation: snapshot.credential_rotation } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,

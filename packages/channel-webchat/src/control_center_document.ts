@@ -407,6 +407,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="action-row">
             <button id="load-settings-goals" type="button">委任目的を読み込む</button>
             <button id="prepare-llm-settings-plan" class="primary" type="button">LLM運転設定の変更を申請</button>
+            <button id="prepare-llm-credential-rotation" type="button" hidden>現行プロバイダーの資格情報の更新を申請</button>
             <button id="open-llm-settings-review" type="button" hidden>審査を開く</button>
           </div>
           <p class="muted">差分を審査して承認すると設定に反映されます。反映後はGatewayを再起動してください。</p>

@@ -45,6 +45,7 @@ import {
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
+  settingsWriteRequiresNativeCredentialEntry,
   SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   llmSettingsWriteEnvKeys,
   settingsWriteRequestBinding,
@@ -1508,7 +1509,7 @@ export class HDSUpperController {
     }
     let req = boundary.request;
     let planControl: OperationPlanControl | undefined;
-    let selectedNativeCredentialRegistration = false;
+    let selectedNativeCredentialEntry = false;
     let planControlFailure: string | undefined;
     let failureReviewControlFailure: string | undefined;
     let failureReviewProjection: FailureReviewProjection | undefined;
@@ -1679,8 +1680,7 @@ ${planControl.question}`,
           const descriptor = getOperationDescriptor(selection.step.operation)!;
           if (descriptor.tool_name === "settings.write") {
             const settings = SettingsWriteArgumentsSchema.safeParse(selection.step.parameters);
-            selectedNativeCredentialRegistration = settings.success &&
-              settings.data.patch.llm?.activation?.register_credential === true;
+            selectedNativeCredentialEntry = settings.success && settingsWriteRequiresNativeCredentialEntry(settings.data.patch);
           }
           const resourceUseReview = selection.resource_use_review?.resource_use;
           const resourceUseNote = resourceUseReview
@@ -1971,14 +1971,14 @@ ${planControl.question}`,
         }
       : input;
     const goalGovernanceProjection = this.goal_governance?.project(this.nowMs());
-    const registrationProcess = selectedNativeCredentialRegistration ? resolveProcess(frameRequest, resolveActor(frameRequest)) : undefined;
-    if (registrationProcess?.process_kind === "tool" && registrationProcess.execution_policy.allowed_tools.includes("settings.write")) {
-      registrationProcess.execution_policy = { ...registrationProcess.execution_policy, allowed_tools: ["settings.write"],
+    const credentialEntryProcess = selectedNativeCredentialEntry ? resolveProcess(frameRequest, resolveActor(frameRequest)) : undefined;
+    if (credentialEntryProcess?.process_kind === "tool" && credentialEntryProcess.execution_policy.allowed_tools.includes("settings.write")) {
+      credentialEntryProcess.execution_policy = { ...credentialEntryProcess.execution_policy, allowed_tools: ["settings.write"],
         timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS };
     }
     const initialFrame = frame(frameRequest, {
       default_policy: this.policy,
-      ...(registrationProcess ? { process: registrationProcess } : {}),
+      ...(credentialEntryProcess ? { process: credentialEntryProcess } : {}),
       ...(isolatedContextReason || transientAudioTranscript ? {} : { memory_reader: this.memory }),
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
@@ -2080,7 +2080,7 @@ ${planControl.question}`,
           source_citation_request_id: planComputeCitationRequestId,
           ...(planComputeParentContext ? { parent_context: planComputeParentContext } : {}),
           ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined);
-      if (selectedNativeCredentialRegistration && candidate.type === "tool_call" && candidate.payload.tool_name === "settings.write") {
+      if (selectedNativeCredentialEntry && candidate.type === "tool_call" && candidate.payload.tool_name === "settings.write") {
         candidate.constraints = { ...candidate.constraints, timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS };
       }
       const commandViolation = commandExecutionPolicyViolation(candidate, f.process);
@@ -5112,7 +5112,7 @@ ${planControl.question}`,
         ...(binding ? { "blue_tanuki.operation_core.goal_purpose_binding": binding } : {}) },
     });
     const plan_id_digest = this.operationPlans.retainCandidate(plan, origin, undefined, undefined, undefined,
-      undefined, args.data.patch.llm.activation !== undefined);
+      undefined, args.data.patch.llm.activation !== undefined || args.data.patch.llm.rotate_credential === true);
     return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
       used_for_authority: false, may_execute: false };
   }

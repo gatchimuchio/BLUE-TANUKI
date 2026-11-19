@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { AsyncEntry, Entry } from "@napi-rs/keyring";
-import { windowsSystemChildEnvironment } from "./child_process_environment.js";
+import { windowsSystemChildEnvironment, windowsSystemPowerShellCommand } from "./child_process_environment.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -196,8 +196,25 @@ function isWellFormedDpapiSecretRef(ref: string): boolean {
   }
 }
 
+/** Observe that a protected reference belongs to this install and provider without resolving its value. */
+export function isManagedLlmCredentialReference(key: LlmSecretKey, ref: string, envFilePath: string): boolean {
+  if (process.platform !== "win32") return isMatchingOsKeyringRef(ref, process.platform, key);
+  try {
+    const target = pathFromRef(ref);
+    const directory = secretDirForEnvFile(envFilePath, {});
+    const basename = path.basename(target).toLowerCase();
+    const keyName = key.toLowerCase();
+    const allowedName = new RegExp(`^${keyName}(?:\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?\\.dpapi$`, "u");
+    if (path.dirname(target).toLowerCase() !== directory.toLowerCase() || !allowedName.test(basename)) return false;
+    const entry = lstatSync(target);
+    return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1;
+  } catch { return false; }
+}
+
 function powershellCommand(): string {
-  return process.env.BLUE_TANUKI_POWERSHELL ?? "powershell.exe";
+  const command = process.env.BLUE_TANUKI_POWERSHELL ?? windowsSystemPowerShellCommand();
+  if (!command) throw new Error("Windows system PowerShell is unavailable");
+  return command;
 }
 
 function dpapiScript(commands: readonly string[]): string {
@@ -208,14 +225,14 @@ function dpapiScript(commands: readonly string[]): string {
   ].join("; ");
 }
 
-function protectWithDpapi(plaintext: string): string {
+function protectWithDpapi(plaintext: string, command = powershellCommand()): string {
   const script = dpapiScript([
     "$plain = [Console]::In.ReadToEnd()",
     "$secure = ConvertTo-SecureString -String $plain -AsPlainText -Force",
     "ConvertFrom-SecureString -SecureString $secure",
   ]);
   const result = spawnSync(
-    powershellCommand(),
+    command,
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
       env: windowsSystemChildEnvironment(),
@@ -234,7 +251,7 @@ function protectWithDpapi(plaintext: string): string {
   return protectedValue;
 }
 
-function unprotectWithDpapi(protectedValue: string): string {
+function unprotectWithDpapi(protectedValue: string, command = powershellCommand()): string {
   const script = dpapiScript([
     "$cipher = [Console]::In.ReadToEnd()",
     "$secure = ConvertTo-SecureString -String $cipher",
@@ -242,7 +259,7 @@ function unprotectWithDpapi(protectedValue: string): string {
     "$credential.GetNetworkCredential().Password",
   ]);
   const result = spawnSync(
-    powershellCommand(),
+    command,
     ["-NoProfile", "-NonInteractive", "-Command", script],
     {
       env: windowsSystemChildEnvironment(),
@@ -261,10 +278,10 @@ function unprotectWithDpapi(protectedValue: string): string {
   return plaintext;
 }
 
-function defaultProtector(): SecretProtector {
+function defaultProtector(command?: string): SecretProtector {
   return {
-    protect: protectWithDpapi,
-    unprotect: unprotectWithDpapi,
+    protect: (plaintext) => protectWithDpapi(plaintext, command),
+    unprotect: (protectedValue) => unprotectWithDpapi(protectedValue, command),
   };
 }
 
@@ -364,7 +381,11 @@ export async function stageRuntimeLlmApiKeySecret(
   envFilePath: string,
 ): Promise<LlmSecretStoreResult<boolean | Promise<boolean>>> {
   const platform = process.platform;
-  if (platform === "win32") return storeLlmApiKeySecret(key, plaintext, { envFilePath });
+  if (platform === "win32") {
+    const command = windowsSystemPowerShellCommand();
+    if (!command) throw new Error("Windows system PowerShell is unavailable");
+    return storeLlmApiKeySecret(key, plaintext, { envFilePath, protector: defaultProtector(command) });
+  }
   if (platform !== "linux" && platform !== "darwin") throw new Error("runtime_llm_keyring_unsupported");
   if (!plaintext) throw new Error("refusing to store an empty secret");
 

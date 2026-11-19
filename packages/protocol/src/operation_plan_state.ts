@@ -842,6 +842,8 @@ export const OperationPlanCheckpointPlanSchema = z.object({
     request_goal_criteria: GoalCriteriaProjectionSchema.optional(),
     /** Records that J received an activation from the authenticated structured owner input. */
     owner_settings_activation: z.literal(true).optional(),
+    /** Records that J received a credential rotation from the authenticated structured owner input. */
+    owner_settings_credential_rotation: z.literal(true).optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),
     receipt_observations: z.array(OperationPlanExternalReceiptObservationSchema).max(100).default([]),
     receipt_memory: z.array(OperationPlanReceiptMemoryDeliverySchema).max(100).optional(),

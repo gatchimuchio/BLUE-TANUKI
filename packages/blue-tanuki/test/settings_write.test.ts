@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SettingsWriteArgumentsSchema, llmSettingsWriteEnvKeys } from "@blue-tanuki/protocol";
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE, SettingsWriteArgumentsSchema,
+  llmSettingsWriteEnvKeys } from "@blue-tanuki/protocol";
 import { createSettingsWriteTool } from "../src/tools/settings_write.js";
 
 const secret = "composio-secret-fixture-never-display";
@@ -210,5 +211,58 @@ describe("settings.write provider activation", () => {
     await tool.invoke(args, context);
     expect(gateway.apply).toHaveBeenCalledTimes(1);
     expect(gateway.apply).toHaveBeenCalledWith(args.patch, gateway.target.target_state_digest, "stub");
+  });
+});
+
+describe("settings.write credential rotation", () => {
+  const llm = { rotate_credential: true } as const;
+  const args = { expected_llm_provider: "openai", patch: { llm } } as const;
+  const observe = { command_digest: "e".repeat(64), operation_plan_binding_digest: "f".repeat(64) };
+
+  it("accepts only a sole credential rotation for a named native provider", () => {
+    expect(SettingsWriteArgumentsSchema.safeParse(args).success).toBe(true);
+    expect(llmSettingsWriteEnvKeys(llm, "openai")).toEqual(["OPENAI_API_KEY_REF"]);
+    for (const provider of [undefined, "stub", "openai-compatible"]) {
+      expect(SettingsWriteArgumentsSchema.safeParse({ ...args, expected_llm_provider: provider }).success).toBe(false);
+    }
+    for (const override of [
+      { model: "fixture-model" }, { temperature: 0.3 }, { max_tokens: 512 }, { timeout_ms: 999 },
+      { activation: { provider: "anthropic", currency: "USD", max_cost_per_attempt_micros: 1,
+        max_cost_per_24h_micros: 1 }, model: "fixture-model", max_tokens: 512, timeout_ms: 999 },
+      { rotate_credential: false }, { api_key: secret }, { credential_reference: "sample-reference" },
+    ]) {
+      expect(SettingsWriteArgumentsSchema.safeParse({ ...args, patch: { llm: { ...llm, ...override } } }).success).toBe(false);
+    }
+  });
+
+  it("binds the fixed review and authority callback to the protected target before dispatch", async () => {
+    const baseline = port();
+    const target: SettingsWriteTarget = { ...await baseline.inspect(), llm_provider: "openai", managed_llm_settings: true };
+    const inspect = vi.fn(async () => target);
+    const receipt = { changed_keys: ["OPENAI_API_KEY_REF"], restart_required: true as const };
+    const apply = vi.fn(async () => receipt);
+    const tool = createSettingsWriteTool({ inspect, apply });
+    await expect(tool.inspect_content_review!(args, observe)).rejects.toThrow("settings_write_credential_rotation_unavailable");
+    inspect.mockResolvedValue({ ...target, credential_rotation_ready: true });
+    const review = await tool.inspect_content_review!(args, observe);
+    expect(inspect.mock.calls).toEqual(Array.from({ length: 3 }, () => ["openai", llm]));
+    expect(review).toMatchObject({ credential_rotation: {
+      provider: "openai", destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai, protected_reference_configured: true,
+    }, changes: [SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE], no_store: true, used_for_authority: false, may_execute: false });
+    expect(review).not.toHaveProperty("activation");
+    const observation = await tool.inspect_target_version!(args, observe);
+    const signal = new AbortController().signal;
+    const context = { command_id: "rotation-fixture", operation_plan_command_digest: observe.command_digest,
+      upstream_commit_hash: "a".repeat(64), target_version_observation: observation, signal };
+    await expect(tool.invoke({ ...args, expected_llm_provider: "openrouter" }, context))
+      .rejects.toThrow("settings_write_approved_target_mismatch");
+    await expect(tool.invoke(args, context)).rejects.toThrow("llm_credential_rotation_not_authorized");
+    expect(apply).not.toHaveBeenCalled();
+    const assertCurrent = vi.fn();
+    await expect(tool.invoke(args, { ...context, assert_current_settings_write: assertCurrent })).resolves.toEqual(receipt);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledWith(args.patch, target.target_state_digest, "openai", {
+      command_digest: observe.command_digest, signal, assert_current: assertCurrent,
+    });
   });
 });

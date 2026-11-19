@@ -226,6 +226,50 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("binds credential rotation to a structured owner and allows only a protected-reference change", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-settings-rotation-"));
+    let saved: OperationPlanCheckpoint | undefined;
+    let recoveryHolds: unknown;
+    const planState: OperationPlanStatePort = { load: () => saved,
+      compareAndSet: (_expected, checkpoint) => { saved = checkpoint; },
+      loadRecoveryHoldState: () => recoveryHolds,
+      compareAndSetRecoveryHoldState: (_expected, state) => { recoveryHolds = state; } };
+    const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+      operation_plan_state: planState });
+    const origin = ownerOrigin("settings-rotation", "prepare owner settings rotation");
+    const rotationArgs = { expected_llm_provider: "openai", patch: { llm: { rotate_credential: true } } };
+    try {
+      expect(() => controller.prepareSettingsWritePlan({ ...origin }, rotationArgs)).toThrow("settings_plan_owner_origin_required");
+      const candidate = controller.prepareSettingsWritePlan(origin, rotationArgs);
+      expect(saved?.plans[0]?.owner_settings_credential_rotation).toBe(true);
+      expect(saved?.plans[0]?.owner_settings_activation).toBeUndefined();
+      const plan = saved!.plans[0]!.revisions[0]!.plan;
+      expect(plan.steps[0]?.preparation?.validation[0]?.expected).toEqual({
+        changed_keys: ["OPENAI_API_KEY_REF"], restart_required: true,
+      });
+
+      const genericLedger = new OperationPlanLedger();
+      expect(() => genericLedger.retainCandidate(plan, origin)).toThrow("plan_settings_credential_rotation_requires_owner_input");
+      const ordinaryPlan = { ...plan, steps: [{ ...plan.steps[0]!, parameters: args }] };
+      const ordinaryId = genericLedger.retainCandidate(ordinaryPlan, origin);
+      expect(() => genericLedger.revise({ action: "revise", plan_id: ordinaryId,
+        expected_revision_digest: operationPlanDigest(ordinaryPlan), plan }, origin))
+        .toThrow("plan_settings_credential_rotation_requires_owner_input");
+
+      const review = ownerOrigin("settings-rotation-review", `plan:review ${JSON.stringify({
+        plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, step_id: candidate.step_id_digest,
+      })}`);
+      const selected = controller.decide(review).command;
+      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: rotationArgs },
+        constraints: { timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS } });
+      expect(evaluateApproval(selected!, [], { actor: origin.user, default_mode: "full_access" }))
+        .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write" } });
+    } finally {
+      controller.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("HDSUpperController.decide()", () => {

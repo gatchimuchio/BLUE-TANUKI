@@ -10,7 +10,8 @@ import { getToolOperationDescriptor, requireToolOperationDescriptor, type FileSe
 import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { McpCallTargetVersionObservation, McpRequestKind } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
-import type { SettingsWriteActivation, SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+import type { SettingsWriteActivation, SettingsWriteCredentialRotationReview, SettingsWriteLlmProvider,
+  SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { ComposioActionTargetVersionObservation, ComposioActionContentReview } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
@@ -705,8 +706,9 @@ export interface SettingsWriteContentReview {
     | { protected_reference_configured: true; credential_registration_required?: never }
     | { protected_reference_configured: false; credential_registration_required: true }
   );
+  credential_rotation?: SettingsWriteCredentialRotationReview;
   changes: readonly {
-    key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
+    key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";

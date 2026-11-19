@@ -25,8 +25,11 @@ import {
   GitHubPullRequestUpdateTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   memoryPersonalizationTargetIdentityDigest,
+  SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SettingsWriteArgumentsSchema,
+  SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
+  settingsWriteCredentialRotationReview,
   settingsWriteRequestBinding,
   settingsWriteTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
@@ -1751,10 +1754,14 @@ export class Executor {
       const parsedArgs = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
       const llm = parsedArgs.success ? parsedArgs.data.patch.llm : undefined;
       const activation = llm?.activation;
+      const rotation = llm?.rotate_credential && parsedArgs.success
+        ? settingsWriteCredentialRotationReview(SettingsWriteNativeLlmProviderSchema.parse(parsedArgs.data.expected_llm_provider))
+        : null;
       if (!parsedArgs.success || review.operation !== "settings.write" ||
           review.expected_llm_provider !== parsedArgs.data.expected_llm_provider ||
           operationPlanDigest(review.activation ?? null) !==
             operationPlanDigest(activation ? settingsWriteActivationReview(activation) : null) ||
+          operationPlanDigest(review.credential_rotation ?? null) !== operationPlanDigest(rotation) ||
           review.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
           review.target_version_digest !== operationPlanDigest(observation) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
@@ -1763,6 +1770,9 @@ export class Executor {
           !Array.isArray(review.changes) || review.changes.length < 1 || review.changes.length > 10 ||
           !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("settings.write content review returned evidence for another command or target");
+      }
+      if (rotation && operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE])) {
+        throw new Error("settings.write content review returned unexpected credential rotation changes");
       }
       if (activation) {
         const exactChanges = new Map(review.changes.map((change) => [change.key, change]));

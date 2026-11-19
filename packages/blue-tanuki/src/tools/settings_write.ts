@@ -1,9 +1,13 @@
 import {
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SettingsWriteArgumentsSchema,
+  SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
+  settingsWriteCredentialRotationReview,
   settingsWriteRequestBinding,
+  settingsWriteRequiresNativeCredentialEntry,
   settingsWriteTargetIdentityDigest,
   type SettingsWriteActivation,
   type SettingsWriteArguments,
@@ -16,11 +20,12 @@ import { assertToolExecutionNotCancelled, type SettingsWriteContentReview, type 
 
 export interface SettingsWritePort {
   inspect(expectedLlmProvider?: SettingsWriteLlmProvider,
-    activationPatch?: NonNullable<SettingsWritePatch["llm"]>): Promise<{
+    llmPatch?: NonNullable<SettingsWritePatch["llm"]>): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
     provider_activation_ready?: true;
+    credential_rotation_ready?: true;
     values: {
       model: string | null;
       temperature: number | null;
@@ -39,7 +44,7 @@ export interface SettingsWritePort {
     };
   }>;
   apply(patch: SettingsWritePatch, expected_target_state_digest: string, expectedLlmProvider?: SettingsWriteLlmProvider,
-    credentialRegistration?: { command_digest: string; signal?: AbortSignal; assert_current: () => void }): Promise<{
+    credentialEntry?: { command_digest: string; signal?: AbortSignal; assert_current: () => void }): Promise<{
     changed_keys: readonly string[];
     restart_required: true;
   }>;
@@ -106,6 +111,8 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         operation: "settings.write" as const,
         ...(expected_llm_provider !== undefined ? { expected_llm_provider } : {}),
         ...(patch.llm?.activation ? { activation: settingsWriteActivationReview(patch.llm.activation) } : {}),
+        ...(patch.llm?.rotate_credential ? { credential_rotation: settingsWriteCredentialRotationReview(
+          SettingsWriteNativeLlmProviderSchema.parse(expected_llm_provider)) } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -127,8 +134,9 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         throw new Error("settings_write_approved_target_mismatch");
       }
       assertToolExecutionNotCancelled(context.signal, "settings.write");
-      if (args.patch.llm?.activation?.register_credential) {
-        if (!context.assert_current_settings_write) throw new Error("llm_credential_registration_not_authorized");
+      if (settingsWriteRequiresNativeCredentialEntry(args.patch)) {
+        if (!context.assert_current_settings_write) throw new Error(args.patch.llm?.rotate_credential
+          ? "llm_credential_rotation_not_authorized" : "llm_credential_registration_not_authorized");
         return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider, {
           command_digest: context.operation_plan_command_digest,
           assert_current: context.assert_current_settings_write,
@@ -165,20 +173,24 @@ export function settingsWriteActivationReview(activation: SettingsWriteActivatio
 
 async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteArguments) {
   const expectedProvider = args.expected_llm_provider;
-  const activationPatch = args.patch.llm?.activation ? args.patch.llm : undefined;
-  const target = await port.inspect(expectedProvider, activationPatch);
+  const llm = args.patch.llm;
+  const target = await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
   if (expectedProvider !== undefined &&
       (target.llm_provider !== expectedProvider || target.managed_llm_settings !== true)) {
     throw new Error("settings_write_bound_llm_target_unavailable");
   }
-  if (activationPatch && target.provider_activation_ready !== true) {
+  if (llm?.activation && target.provider_activation_ready !== true) {
     throw new Error("settings_write_provider_activation_unavailable");
+  }
+  if (llm?.rotate_credential && target.credential_rotation_ready !== true) {
+    throw new Error("settings_write_credential_rotation_unavailable");
   }
   return target;
 }
 
 function buildLlmChanges(patch: NonNullable<SettingsWritePatch["llm"]>,
   target: Awaited<ReturnType<SettingsWritePort["inspect"]>>): SettingsWriteContentReview["changes"] {
+  if (patch.rotate_credential) return [SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE];
   const changes: SettingsWriteContentReview["changes"][number][] = [];
   if (patch.activation) {
     changes.push({ key: "llm.provider", before: target.llm_provider ?? null, after: patch.activation.provider });

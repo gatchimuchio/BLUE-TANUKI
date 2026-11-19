@@ -1,3 +1,5 @@
+import { win32 } from "node:path";
+
 /**
  * Explicit environment allowlists for Gateway-owned OS helper processes.
  * Resolved provider credentials must never be inherited from process.env.
@@ -19,6 +21,12 @@ export function windowsSystemChildEnvironment(
   if (temp) environment.TEMP = temp;
   if (tmp) environment.TMP = tmp;
   return environment;
+}
+
+export function windowsSystemPowerShellCommand(source: NodeJS.ProcessEnv = process.env): string | undefined {
+  const root = envValue(source, "SystemRoot", "SYSTEMROOT", "WINDIR") ?? "C:\\Windows";
+  if (!/^[a-z]:\\/iu.test(root) || win32.normalize(root) !== root) return undefined;
+  return win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
 /** ioreg is invoked by absolute path and needs no inherited owner environment. */

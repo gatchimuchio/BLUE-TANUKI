@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { macOsHostIdentityChildEnvironment, windowsSystemChildEnvironment } from "../src/child_process_environment.js";
+import { macOsHostIdentityChildEnvironment, windowsSystemChildEnvironment, windowsSystemPowerShellCommand } from "../src/child_process_environment.js";
 
 describe("Gateway child-process environments", () => {
   it("keeps Windows OS helpers on a fixed allowlist", () => {
@@ -26,5 +26,12 @@ describe("Gateway child-process environments", () => {
 
   it("gives macOS identity queries a fixed non-owner environment", () => {
     expect(macOsHostIdentityChildEnvironment()).toEqual({ PATH: "/usr/bin:/bin", LANG: "C" });
+  });
+
+  it("uses the absolute Windows system PowerShell for managed credentials", () => {
+    expect(windowsSystemPowerShellCommand({ SystemRoot: "D:\\Windows", BLUE_TANUKI_POWERSHELL: "untrusted.exe" }))
+      .toBe("D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(windowsSystemPowerShellCommand({ SystemRoot: "D:\\trusted\\..\\other" })).toBeUndefined();
+    expect(windowsSystemPowerShellCommand({ SystemRoot: "\\\\remote\\Windows" })).toBeUndefined();
   });
 });

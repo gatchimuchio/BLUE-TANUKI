@@ -2314,10 +2314,13 @@ function candidatePlan(value: unknown): OperationPlan {
   return plan;
 }
 
-function stepRequestsSettingsActivation(step: OperationStep): boolean {
-  if (step.operation !== "settings.write") return false;
+function stepOwnerSettingsInput(step: OperationStep): "activation" | "credential_rotation" | undefined {
+  if (step.operation !== "settings.write") return undefined;
   const llm = (step.parameters?.patch as { llm?: unknown } | null | undefined)?.llm;
-  return typeof llm === "object" && llm !== null && "activation" in llm;
+  if (typeof llm !== "object" || llm === null) return undefined;
+  if ("rotate_credential" in llm) return "credential_rotation";
+  if ("activation" in llm) return "activation";
+  return undefined;
 }
 
 function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolean): OperationPlanCheckpoint {
@@ -4168,9 +4171,9 @@ export class OperationPlanLedger {
     parentPlanReference?: OperationPlanComputeParent, fromOwnerSettingsInput = false): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     let plan = candidatePlan(value);
-    const settingsActivation = plan.steps.some(stepRequestsSettingsActivation);
-    if (settingsActivation && (!fromOwnerSettingsInput || plan.steps.length !== 1 || !hasConnectedPlanTarget(plan.steps[0]!))) {
-      throw new Error("plan_settings_activation_requires_owner_input");
+    const ownerSettingsInput = plan.steps.map(stepOwnerSettingsInput).find(Boolean);
+    if (ownerSettingsInput && (!fromOwnerSettingsInput || plan.steps.length !== 1 || !hasConnectedPlanTarget(plan.steps[0]!))) {
+      throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
@@ -4382,7 +4385,8 @@ export class OperationPlanLedger {
         .map(durableComputeSourceObservation) } : {}),
       ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
       request_goal_criteria: requestGoalCriteria,
-      ...(settingsActivation ? { owner_settings_activation: true } : {}),
+      ...(ownerSettingsInput === "activation" ? { owner_settings_activation: true } : {}),
+      ...(ownerSettingsInput === "credential_rotation" ? { owner_settings_credential_rotation: true } : {}),
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
     return operationPlanDigest(plan.plan_id);
   }
@@ -4538,8 +4542,10 @@ export class OperationPlanLedger {
     if (inspected.kind === "rejected") throw new Error(`plan_${inspected.code}`);
     const step = inspected.plan.steps.find((s) => s.step_id === stepId);
     if (!step || inspected.summary.steps.find((s) => s.step_id === stepId)?.status !== "ready") throw new Error("plan_step_not_ready");
-    if (stepRequestsSettingsActivation(step) && !p.owner_settings_activation) {
-      throw new Error("plan_settings_activation_requires_owner_input");
+    const ownerSettingsInput = stepOwnerSettingsInput(step);
+    if ((ownerSettingsInput === "activation" && !p.owner_settings_activation) ||
+        (ownerSettingsInput === "credential_rotation" && !p.owner_settings_credential_rotation)) {
+      throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
@@ -8384,8 +8390,10 @@ export class OperationPlanLedger {
     const next = candidatePlan(input);
     const old = p.revisions.at(-1)!.plan;
     if (next.plan_id !== old.plan_id || next.request_id !== old.request_id) throw new Error("plan_revision_identity_changed");
-    if (p.owner_settings_activation || next.steps.some(stepRequestsSettingsActivation)) {
-      throw new Error("plan_settings_activation_requires_owner_input");
+    const ownerSettingsInput = p.owner_settings_activation ? "activation" : p.owner_settings_credential_rotation
+      ? "credential_rotation" : next.steps.map(stepOwnerSettingsInput).find(Boolean);
+    if (ownerSettingsInput) {
+      throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }
     if (operationPlanDigest(next) === operationPlanDigest(old)) throw new Error("plan_revision_unchanged");
     const affected = new Set<string>();

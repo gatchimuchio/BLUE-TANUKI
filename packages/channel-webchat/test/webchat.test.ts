@@ -7,6 +7,7 @@ import {
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
@@ -14,6 +15,7 @@ import { CONTROL_CENTER_SCRIPT } from "../src/control_center_script.js";
 import {
   WebChatChannel,
   MemoryTicketStore,
+  MemoryResumeApprovalTokenStore,
   type TicketStore,
   type WebChatRateLimits,
   type WebChatApprovalSurface,
@@ -214,7 +216,7 @@ async function setup(
         Promise<WebChatD4RuntimeIntentCancellation | null>;
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       maintenance_token?: string;
-      resume_approval_tokens?: false;
+      resume_approval_tokens?: WebChatOptions["resume_approval_tokens"];
       resume_approval_token_ttl_ms?: number;
       ws_ticket_ttl_ms?: number;
       ticket_store?: TicketStore;
@@ -997,6 +999,7 @@ describe("WebChatChannel — Control Center shell", () => {
       },
     });
     const preparePlan = node("prepare-llm-settings-plan").events.get("click")!;
+    const prepareRotation = node("prepare-llm-credential-rotation").events.get("click")!;
     const openReview = node("open-llm-settings-review").events.get("click")!;
     const planStatus = node("settings-plan-status");
     await preparePlan();
@@ -1110,6 +1113,27 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(node("settings-native-credential-option").hidden).toBe(true);
     expect(node("settings-native-credential-unavailable").hidden).toBe(false);
     expect(node("settings-register-credential").checked).toBe(false);
+
+    const rotationSnapshot = { ...nativeSnapshot, llm: { ...nativeSnapshot.llm, provider: "openai", native_credential_rotation_available: true } };
+    api.renderSettingsSnapshot(rotationSnapshot);
+    expect(node("prepare-llm-credential-rotation").hidden).toBe(true);
+    const beforeRotation = calls.length;
+    await prepareRotation();
+    expect(calls).toHaveLength(beforeRotation);
+    browser.location.hostname = "127.0.0.1";
+    api.renderSettingsSnapshot(rotationSnapshot);
+    expect(node("prepare-llm-credential-rotation").hidden).toBe(false);
+    node("settings-model").value = "only-for-ordinary-settings";
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareRotation();
+    expect(calls[beforeRotation]).toEqual({ path: "/owner/llm-settings-proposal", token: OWNER_TOKEN, body: {
+      expected_provider: "openai", patch: { llm: { rotate_credential: true } }, goal_ref: goal.value, purpose_version: 2,
+    } });
+    provider.value = "openrouter";
+    provider.events.get("change")!();
+    expect(node("prepare-llm-credential-rotation").hidden).toBe(true);
+    await prepareRotation();
+    expect(calls).toHaveLength(beforeRotation + 1);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2201,8 +2225,9 @@ describe("WebChatChannel — Control Center shell", () => {
     const evaluate = (reviewData: unknown, cacheControl = "no-store", hostname = "127.0.0.1", submit = false) => {
       const windowIdentity = {};
       return render.runInNewContext({
-        state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub"],
+        state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub", "openai"],
         SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS, posts, submit,
+        SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE: SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
         window: { top: windowIdentity, self: windowIdentity, location: { protocol: "http:", hostname } },
         setText: (id: string, value: string) => { outputs[id] = value; }, loadApprovals: async () => {},
       });
@@ -2257,7 +2282,32 @@ describe("WebChatChannel — Control Center shell", () => {
       approval_token: "fixture-single-use-token", content_review_digest: nativeReview.review_digest });
     expect(outputs["native-credential-approval-status"]).toContain("製品を通常再起動");
     await evaluate(activationReview);
-    expect(attributes.has("data-native-credential-registration")).toBe(false);
+    expect(attributes.has("data-native-credential-entry")).toBe(false);
+
+    const rotationReview = { ...review, expected_llm_provider: "openai", credential_rotation: {
+      provider: "openai", destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai, protected_reference_configured: true,
+    }, changes: [SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE] };
+    for (const invalid of [
+      { ...rotationReview, credential_rotation: undefined },
+      { ...rotationReview, credential_rotation: { ...rotationReview.credential_rotation, provider: "anthropic" } },
+      { ...rotationReview, credential_rotation: { ...rotationReview.credential_rotation, protected_reference: "fixture-sensitive-reference" } },
+      { ...rotationReview, changes: [{ ...SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE, before: "fixture-sensitive-reference" }] },
+    ]) {
+      await expect(evaluate(invalid)).rejects.toThrow();
+      expect(approve.disabled).toBe(true);
+      expect(state.approvalContentDigests[commandId]).toBeUndefined();
+      expect(JSON.stringify(view.children)).not.toContain("fixture-sensitive-reference");
+    }
+    await evaluate(rotationReview, "no-store", "external.example.test");
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    await evaluate(rotationReview, "no-store", "127.0.0.1", true);
+    expect(posts[1]?.path).toBe(`/approval/${commandId}/native-credential`);
+    expect(JSON.parse(String(posts[1]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: rotationReview.review_digest });
+    expect(JSON.stringify(view.children)).toContain(rotationReview.credential_rotation.destination);
+    expect(JSON.stringify(view.children)).toContain("現行プロバイダーの資格情報の更新");
+    expect(outputs["native-credential-approval-status"]).toContain("更新した資格情報");
   });
 
   it("shows the held Google Daily Brief beside independently running schedules", () => {
@@ -5878,6 +5928,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     const proposal = { expected_provider: "stub", patch: { llm: { model: "fixture-model", max_tokens: 128 } } };
     const activationLlm = { ...proposal.patch.llm, timeout_ms: 5000, activation: LLM_ACTIVATION };
     const activationProposal = { ...proposal, patch: { llm: activationLlm } };
+    const rotationProposal = { expected_provider: "openai", patch: { llm: { rotate_credential: true } } };
     const goal = { goal_ref: "goal_0000000000000001", purpose_version: 2 };
     const proposals: unknown[] = [];
     const receipt = { accepted: true, request_id: "settings-fixture-request", used_for_authority: false, may_execute: false };
@@ -5911,6 +5962,11 @@ describe("WebChatChannel — HTTP inbound", () => {
           protected_reference: "invalid-input-fixture" } } } },
         { ...activationProposal, patch: { llm: { ...activationLlm, activation: { ...LLM_ACTIVATION,
           destination: "https://invalid-input.example.test" } } } },
+        { ...rotationProposal, expected_provider: "stub" },
+        { ...rotationProposal, patch: { llm: { rotate_credential: false } } },
+        { ...rotationProposal, patch: { llm: { rotate_credential: true, api_key: "synthetic-invalid" } } },
+        { ...rotationProposal, patch: { llm: { rotate_credential: true, model: "fixture-model" } } },
+        { ...activationProposal, patch: { llm: { ...activationLlm, rotate_credential: true } } },
       ]) expect((await postJson(context.port, route, invalid, owner)).status).toBe(400);
       expect((await postJson(context.port, route, { ...proposal, oversized: "x".repeat(4_097) }, owner)).status).toBe(413);
       expect(proposals).toHaveLength(0);
@@ -5932,10 +5988,17 @@ describe("WebChatChannel — HTTP inbound", () => {
       const fresh = await postJson(context.port, route, freshActivation, local);
       expect(fresh.status).toBe(202);
       expect(fresh.body).toEqual({ ...receipt, status: "approval_required", command_id: "settings-fixture-command" });
+      expect((await postJson(context.port, route, rotationProposal, owner)).status).toBe(403);
+      expect((await postJson(context.port, route, rotationProposal, { ...local, "sec-fetch-site": "cross-site" })).status).toBe(403);
+      const rotation = await postJson(context.port, route, rotationProposal, local);
+      expect(rotation.status).toBe(202);
+      expect(rotation.headers.get("cache-control")).toBe("no-store");
+      expect(rotation.body).toEqual({ ...receipt, status: "approval_required", command_id: "settings-fixture-command" });
       expect(proposals).toEqual([{ ...proposal, actor: "webchat-owner-token-holder" },
         { ...proposal, ...goal, actor: "webchat-owner-token-holder" },
         { ...activationProposal, actor: "webchat-owner-token-holder" },
-        { ...freshActivation, actor: "webchat-owner-token-holder" }]);
+        { ...freshActivation, actor: "webchat-owner-token-holder" },
+        { ...rotationProposal, actor: "webchat-owner-token-holder" }]);
       expect(context.received).toHaveLength(0);
     } finally {
       await context.teardown();
@@ -7332,6 +7395,85 @@ describe("WebChatChannel — approval API", () => {
       expect(resumes).toEqual([[commandId, "approve", { actor: "webchat-resume-token-holder", token_kind: "resume",
         content_review_digest: nativeReview.review_digest, native_credential_prompt: true }]]);
       expect((await postJson(ctx.port, nativePath, decision, local)).status).toBe(403);
+      expect(resumes).toHaveLength(1);
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
+  it("binds protected credential rotation to its exact no-store review and local one-shot approval", async () => {
+    const commandId = "credential-rotation-fixture";
+    const approvalPath = `/approval/${commandId}`;
+    const nativePath = approvalPath + "/native-credential";
+    const contentPath = approvalPath + "/content";
+    const safeReview = {
+      kind: "settings_write", operation: "settings.write", command_id: commandId, expected_llm_provider: "openai",
+      credential_rotation: { provider: "openai", destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+        protected_reference_configured: true },
+      changes: [SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE],
+      command_digest: "a".repeat(64), review_digest: "b".repeat(64), request_payload_digest: "c".repeat(64),
+      target_version_digest: "d".repeat(64), operation_plan_binding_digest: "e".repeat(64),
+      no_store: true, used_for_authority: false, may_execute: false,
+    } satisfies WebChatSettingsWriteContentReview;
+    let review: WebChatSettingsWriteContentReview = safeReview;
+    let now = 0;
+    const resumes: unknown[] = [];
+    const ctx = await setup({
+      resume_approval_tokens: new MemoryResumeApprovalTokenStore({ now: () => now }),
+      approval: {
+        list: async () => [], reviewContent: async () => review,
+        requiresNativeCredentialApproval: id => id === commandId,
+        validateContentReview: async (id, digest) => id === commandId && digest === safeReview.review_digest ? "valid" : "stale",
+      }, onResume: async (id, verdict, context) => {
+        resumes.push([id, verdict, context]);
+        return { approval: "approve", status: "success", executed: true, forbidden_fixture_reference: "do-not-emit" };
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const authorized = { authorization: "Bearer " + RESUME_TOKEN };
+      const local = { ...authorized, origin: `http://127.0.0.1:${ctx.port}`, "sec-fetch-site": "same-origin" };
+      const projected = await postJson(ctx.port, contentPath, {}, authorized);
+      expect(projected.status).toBe(200);
+      expect(projected.headers.get("cache-control")).toBe("no-store");
+      expect(projected.body).toEqual(safeReview);
+      const issued = await ctx.ch.issueResumeApprovalToken(commandId);
+      expect(issued?.token).toBeTruthy();
+      const decision = { verdict: "approve", approval_token: issued!.token, content_review_digest: safeReview.review_digest };
+      for (const invalid of [
+        { ...safeReview, credential_rotation: undefined },
+        { ...safeReview, credential_rotation: { ...safeReview.credential_rotation, destination: "https://invalid-input.example.test" } },
+        { ...safeReview, credential_rotation: { ...safeReview.credential_rotation, previous_reference: "forbidden-review-fixture" } },
+        { ...safeReview, previous_reference: "forbidden-review-fixture" },
+        { ...safeReview, request_payload_digest: "forbidden-review-fixture" },
+        { ...safeReview, command_id: "another-command" },
+        { ...safeReview, changes: [{ ...SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE, before: "forbidden-review-fixture" }] },
+      ]) {
+        review = invalid;
+        const denied = await postJson(ctx.port, contentPath, {}, authorized);
+        expect(denied.status).toBe(409);
+        expect(denied.headers.get("cache-control")).toBe("no-store");
+        expect(denied.body).toEqual({ error: "approval_content_review_unavailable" });
+        expect((await postJson(ctx.port, nativePath, decision, local)).status).toBe(409);
+      }
+      review = safeReview;
+      expect((await postJson(ctx.port, nativePath, decision, authorized)).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, { ...decision, content_review_digest: "f".repeat(64) }, local)).status).toBe(409);
+      expect((await postJson(ctx.port, approvalPath, decision, local)).status).toBe(409);
+      expect((await postJson(ctx.port, "/resume", { request_id: commandId, ...decision }, local)).status).toBe(409);
+      now = issued!.expires_at_ms + 1;
+      expect((await postJson(ctx.port, nativePath, decision, local)).status).toBe(403);
+      expect(resumes).toEqual([]);
+      const current = await ctx.ch.issueResumeApprovalToken(commandId);
+      expect(current?.token).toBeTruthy();
+      const currentDecision = { ...decision, approval_token: current!.token };
+      const approved = await postJson(ctx.port, nativePath, currentDecision, local);
+      expect(approved.status).toBe(200);
+      expect(approved.headers.get("cache-control")).toBe("no-store");
+      expect(approved.body).toEqual({ ok: true, result: { approval: "approve", status: "success", executed: true } });
+      expect(resumes).toEqual([[commandId, "approve", { actor: "webchat-resume-token-holder", token_kind: "resume",
+        content_review_digest: safeReview.review_digest, native_credential_prompt: true }]]);
+      expect((await postJson(ctx.port, nativePath, currentDecision, local)).status).toBe(403);
       expect(resumes).toHaveLength(1);
     } finally {
       await ctx.teardown();

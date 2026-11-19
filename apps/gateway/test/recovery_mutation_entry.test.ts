@@ -192,6 +192,198 @@ globalThis.fetch = async (url, init) => {
     ]);
   }, 150_000);
 
+  it.runIf(process.platform === "win32").each(["successful replacement", "failed atomic replacement"] as const)(
+    "rotates an active provider credential through L3 and preserves the previous DPAPI entry on %s", async (mode) => {
+    const failReplacement = mode === "failed atomic replacement";
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-native-rotation-"));
+    temporaryRoots.push(root);
+    const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
+    const secretDir = join(root, "secrets");
+    const preload = join(root, "rotation-fixture.cjs");
+    const attemptsFile = join(root, "rotation-attempts.jsonl");
+    const promptFile = join(root, "native-prompt.log");
+    const faultFile = join(root, "rotation-fault.log");
+    const oldKey = "synthetic-previous-credential-for-rotation-fixture";
+    const newKey = "synthetic-replacement-credential-for-rotation-fixture";
+    const model = "fixture-rotation-model";
+    const endpoint = "https://api.anthropic.com/v1/messages";
+    const ownerToken = "rotation-fixture-owner-token";
+    const settingsToken = "rotation-fixture-settings-token";
+    const stored = storeLlmApiKeySecret("ANTHROPIC_API_KEY", oldKey, { envFilePath: envFile, env: {} });
+    const [oldEntry] = readdirSync(secretDir);
+    const oldProtectedValue = readFileSync(join(secretDir, oldEntry!));
+    const costLimit = { amount: 0.05, currency: "USD" };
+    const budget = { ...DEFAULT_COMPUTE_BUDGET_POLICY,
+      system: { ...DEFAULT_COMPUTE_BUDGET_POLICY.system, max_cost: costLimit },
+      parent: { ...DEFAULT_COMPUTE_BUDGET_POLICY.parent, max_cost: costLimit },
+      task: { ...DEFAULT_COMPUTE_BUDGET_POLICY.task, max_cost: costLimit } };
+    const configured = Object.entries({ LLM_BACKEND: "anthropic", ANTHROPIC_MODEL: model, BLUE_TANUKI_LLM_MODEL: model,
+      BLUE_TANUKI_LLM_MAX_TOKENS: "384", BLUE_TANUKI_LLM_TIMEOUT_MS: "4000", UNRELATED_SETTING: "kept",
+      [stored.ref_key]: stored.ref, BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(budget),
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ anthropic: { capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.012, currency: "USD" } } }),
+    }).map(([key, value], index) => `${key}=${JSON.stringify(value)}${index % 2 === 0 ? "\r\n" : "\n"}`).join("");
+    writeFileSync(envFile, configured);
+    writeFileSync(preload, `const fs = require("node:fs");
+const cp = require("node:child_process");
+const originalSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  const script = args?.at(-2) === "-EncodedCommand" ? Buffer.from(args.at(-1), "base64").toString("utf16le") : "";
+  if (!script.includes("UseSystemPasswordChar")) return originalSpawn(command, args, options);
+  fs.appendFileSync(${JSON.stringify(promptFile)}, "native-prompt\\n");
+  const child = new (require("node:events").EventEmitter)();
+  child.stdout = new (require("node:stream").PassThrough)();
+  child.kill = () => true;
+  setImmediate(() => {
+    child.stdout.end(Buffer.from(${JSON.stringify(newKey)}));
+    child.emit("close", 0);
+  });
+  return child;
+};
+require("node:module").syncBuiltinESMExports();
+const target = ${JSON.stringify(envFile)};
+const originalRename = fs.promises.rename;
+fs.promises.rename = async (source, destination) => {
+  if (process.env.BT_ROTATION_FIXTURE_RENAME_FAIL === "1" && destination === target && source.startsWith(target + ".tmp-")) {
+    fs.writeFileSync(${JSON.stringify(faultFile)}, String(fs.readdirSync(${JSON.stringify(secretDir)}).length));
+    throw Object.assign(new Error("fixture denied atomic replacement"), { code: "EPERM" });
+  }
+  return originalRename(source, destination);
+};
+globalThis.fetch = async (url, init) => {
+  const attempts = ${JSON.stringify(attemptsFile)};
+  if (url !== ${JSON.stringify(endpoint)} || init?.method !== "POST") {
+    fs.appendFileSync(attempts, JSON.stringify({unexpected:true}) + "\\n");
+    throw new Error("unexpected network attempt in rotation fixture");
+  }
+  const key = new Headers(init.headers).get("x-api-key");
+  const body = JSON.parse(init.body);
+  fs.appendFileSync(attempts, JSON.stringify({endpoint:url, model:body.model, max_tokens:body.max_tokens, redirect:init.redirect,
+    old_key_matched:key === ${JSON.stringify(oldKey)}, new_key_matched:key === ${JSON.stringify(newKey)}}) + "\\n");
+  return new Response(JSON.stringify({model:body.model,content:[{type:"text",text:"青"}],usage:{input_tokens:9,output_tokens:2},stop_reason:"end_turn"}),
+    {status:200,headers:{"content-type":"application/json"}});
+};`);
+    const port = await reserveLoopbackPort();
+    const origin = `http://127.0.0.1:${port}`;
+    const env: NodeJS.ProcessEnv = { ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
+      BLUE_TANUKI_OWNER_TOKEN: ownerToken, BLUE_TANUKI_SETTINGS_TOKEN: settingsToken,
+      ...(failReplacement ? { BT_ROTATION_FIXTURE_RENAME_FAIL: "1" } : {}) };
+    delete env.LLM_BACKEND;
+    let gateway = spawnGateway(env, preload);
+    await waitForHealth(port, gateway, 60_000);
+    const settings = await requestJson(port, "/settings/config", { token: settingsToken, signal: AbortSignal.timeout(10_000) });
+    expect(settings.status, gateway.output.join("")).toBe(200);
+    expect(settings.body).toMatchObject({ llm: { provider: "anthropic", native_credential_rotation_available: true } });
+    const submit = (requestOrigin = origin) => requestJson(port, "/owner/llm-settings-proposal", {
+      method: "POST", token: ownerToken, origin: requestOrigin, signal: AbortSignal.timeout(10_000),
+      body: { expected_provider: "anthropic", patch: { llm: { rotate_credential: true } } },
+    });
+    if (!failReplacement) {
+      expect((await submit("https://example.invalid")).status).toBe(403);
+      for (const override of ['ANTHROPIC_ENDPOINT="https://example.invalid/v1/messages"\n',
+        `ANTHROPIC_API_KEY=${JSON.stringify(oldKey)}\n`, 'BLUE_TANUKI_POWERSHELL="fixture-untrusted-helper.exe"\n']) {
+        writeFileSync(envFile, configured + override);
+        expect((await submit()).status).toBe(409);
+        expect(readFileSync(envFile, "utf8")).toBe(configured + override);
+      }
+      writeFileSync(envFile, configured);
+    }
+    const proposal = await submit();
+    expect(proposal.status, JSON.stringify(proposal.body)).toBe(202);
+    expect(proposal.body).toMatchObject({ status: "approval_required", command_id: expect.any(String) });
+    const commandId = String(proposal.body.command_id);
+    const approvalRoute = `/approval/${encodeURIComponent(commandId)}`;
+    const queue = await requestJson(port, "/approval", { token: resumeToken, signal: AbortSignal.timeout(10_000) });
+    const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((item) => item.command_id === commandId);
+    expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
+    const review = async (): Promise<string> => {
+      const response = await fetch(`${origin}${approvalRoute}/content`, { method: "POST",
+        headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(10_000) });
+      const body = await response.text();
+      expect(response.status, body).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      const evidence = JSON.parse(body) as Record<string, unknown>;
+      expect(evidence).toMatchObject({ expected_llm_provider: "anthropic", no_store: true,
+        review_digest: expect.any(String), credential_rotation: { provider: "anthropic", destination: endpoint,
+          protected_reference_configured: true }, changes: [{ key: "llm.credential_reference", before: "protected", after: "replace_on_restart" }] });
+      for (const privateValue of [oldKey, newKey, stored.ref]) expect(body).not.toContain(privateValue);
+      return String(evidence.review_digest);
+    };
+    const approve = (digest: string, native = true, requestOrigin = origin) => requestJson(port,
+      native ? `${approvalRoute}/native-credential` : approvalRoute, { method: "POST", token: resumeToken, origin: requestOrigin,
+        body: { verdict: "approve", approval_token: pending!.approval_token, content_review_digest: digest },
+        signal: AbortSignal.timeout(45_000) });
+    let approvedEnv = configured;
+    let digest = await review();
+    if (!failReplacement) {
+      expect((await approve(digest, false)).status).toBe(409);
+      expect((await approve(digest, true, "https://example.invalid")).status).toBe(403);
+      approvedEnv = configured + "# target version changed after review\n";
+      writeFileSync(envFile, approvedEnv);
+      expect((await approve(digest)).status).toBe(409);
+      const freshDigest = await review();
+      expect(freshDigest).not.toBe(digest);
+      digest = freshDigest;
+    }
+    expect(existsSync(promptFile)).toBe(false);
+    expect(existsSync(attemptsFile)).toBe(false);
+    expect(readFileSync(envFile, "utf8")).toBe(approvedEnv);
+    expect(readdirSync(secretDir)).toEqual([oldEntry]);
+
+    const result = await approve(digest);
+    const saved = readFileSync(envFile, "utf8");
+    const savedRef = parseEnvFile(saved).values[stored.ref_key];
+    expect(readFileSync(promptFile, "utf8")).toBe("native-prompt\n");
+    expect(readFileSync(join(secretDir, oldEntry!))).toEqual(oldProtectedValue);
+    expect(existsSync(attemptsFile)).toBe(false);
+    if (failReplacement) {
+      expect(result.status, JSON.stringify(result.body)).toBe(409);
+      expect(readFileSync(faultFile, "utf8")).toBe("2");
+      expect(saved).toBe(approvedEnv);
+      expect(readdirSync(secretDir)).toEqual([oldEntry]);
+    } else {
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(result.body).toMatchObject({ result: { approval: "approve", status: "success" } });
+      expect(savedRef).toMatch(/^win32-dpapi-current-user:file:/u);
+      expect(savedRef).not.toBe(stored.ref);
+      expect(saved).toBe(approvedEnv.replace(JSON.stringify(stored.ref), JSON.stringify(savedRef)));
+      expect(readdirSync(secretDir)).toHaveLength(2);
+      const backup = readdirSync(root).find((name) => name.startsWith("product.env.") && name.endsWith(".settings-write.bak"));
+      expect(backup).toEqual(expect.any(String));
+      expect(readFileSync(join(root, backup!), "utf8")).toBe(approvedEnv);
+      expect((await approve(digest)).status).toBe(409);
+      expect((await submit()).status).toBe(409);
+    }
+    for (const privateValue of [oldKey, newKey, stored.ref, savedRef!]) {
+      expect(JSON.stringify(result.body)).not.toContain(privateValue);
+      expect(readFileSync(historyFile, "utf8")).not.toContain(privateValue);
+      expect(gateway.output.join("")).not.toContain(privateValue);
+    }
+    for (const privateValue of [oldKey, newKey]) expect(saved).not.toContain(privateValue);
+
+    const invoke = async (user: string, old: boolean, attemptCount: number) => {
+      const inbound = await requestJson(port, "/inbound", { method: "POST", token: inboundToken,
+        body: { user, content: "次の文字だけを返してください。青" }, signal: AbortSignal.timeout(10_000) });
+      expect(inbound.status, JSON.stringify(inbound.body)).toBe(202);
+      await expect.poll(() => existsSync(attemptsFile) ? readFileSync(attemptsFile, "utf8").split("\n").length - 1 : 0,
+        { timeout: 10_000 }).toBe(attemptCount);
+      expect(JSON.parse(readFileSync(attemptsFile, "utf8").trim().split("\n").at(-1)!)).toEqual({
+        endpoint, model, max_tokens: 384, redirect: "error", old_key_matched: old, new_key_matched: !old,
+      });
+      const ledger = new DatabaseSync(join(root, "state", "private-state", "compute-budget", "ledger.sqlite"), { readOnly: true });
+      try {
+        await expect.poll(() => ledger.prepare("SELECT state FROM compute_budget_reservations").all(), { timeout: 10_000 })
+          .toEqual(Array.from({ length: attemptCount }, () => ({ state: "settled" })));
+      } finally { ledger.close(); }
+    };
+    await invoke("rotation-fixture-before-restart", true, 1);
+    await stopChild(gateway.child);
+    gateway = spawnGateway(env, preload);
+    await waitForHealth(port, gateway, 60_000);
+    await invoke("rotation-fixture-after-restart", failReplacement, 2);
+  }, 180_000);
+
   it("applies exact owner-selected settings through L3 without a planning provider and uses them after restart", async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-first-use-settings-"));
     temporaryRoots.push(root);

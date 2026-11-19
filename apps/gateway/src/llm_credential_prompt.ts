@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { lstatSync, statSync } from "node:fs";
-import { posix, win32 } from "node:path";
+import { posix } from "node:path";
 import type { Readable } from "node:stream";
 import { SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS, type SettingsWriteActivation } from "@blue-tanuki/protocol";
-import { windowsSystemChildEnvironment } from "./child_process_environment.js";
+import { windowsSystemChildEnvironment, windowsSystemPowerShellCommand } from "./child_process_environment.js";
 
 const PROVIDER_LABELS: Record<SettingsWriteActivation["provider"], string> = {
   anthropic: "Anthropic",
@@ -189,9 +189,8 @@ function linuxPrompt(label: string, uid: number, source: NodeJS.ProcessEnv): Nat
 function resolveNativePrompt(label: string, source: NodeJS.ProcessEnv): NativePrompt | undefined {
   if (process.platform === "win32") {
     const env = windowsSystemChildEnvironment(source);
-    const windowsDirectory = env.SystemRoot;
-    if (!windowsDirectory || !/^[a-z]:\\/iu.test(windowsDirectory)) return undefined;
-    const command = win32.join(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const command = windowsSystemPowerShellCommand(env);
+    if (!command) return undefined;
     const script = Buffer.from(promptScript(label), "utf16le").toString("base64");
     return { kind: "windows", command, env, args: ["-NoProfile", "-NoLogo", "-NonInteractive", "-STA", "-EncodedCommand", script] };
   }

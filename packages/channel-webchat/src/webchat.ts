@@ -24,9 +24,13 @@ import {
   RuntimeIntentStatusInputSchema,
   RuntimeSessionInputSchema,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SettingsWriteActivationSchema,
   SettingsWriteArgumentsSchema,
   SettingsWriteLlmProviderSchema,
+  SettingsWriteNativeLlmProviderSchema,
+  settingsWriteCredentialRotationReview,
+  settingsWriteRequiresNativeCredentialEntry,
   detectTransientAudioFormat,
   detectTransientImageMediaType,
   isCanonicalBase64,
@@ -276,14 +280,34 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   return keys.length === expected.length && keys.every((key) => expected.includes(key));
 }
 
-function validSettingsActivationReview(review: WebChatSettingsWriteContentReview): boolean {
+function validSettingsProviderReview(review: WebChatSettingsWriteContentReview, commandId: string): boolean {
   if (!Array.isArray(review.changes)) return false;
-  if (review.activation === undefined) return !review.changes.some(change => change?.key === "llm.provider");
-  if (!review.activation || !hasExactKeys({ ...review }, [
+  if (review.activation === undefined && review.credential_rotation === undefined) {
+    return !review.changes.some(change => change?.key === "llm.provider" || change?.key === "llm.credential_reference");
+  }
+  if (!hasExactKeys({ ...review }, [
     "kind", "command_id", "command_digest", "review_digest", "operation", "expected_llm_provider",
-    "activation", "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
+    review.credential_rotation === undefined ? "activation" : "credential_rotation",
+    "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
     "no_store", "used_for_authority", "may_execute",
   ])) return false;
+  if (review.credential_rotation !== undefined) {
+    const rotation = review.credential_rotation;
+    const provider = SettingsWriteNativeLlmProviderSchema.safeParse(review.expected_llm_provider);
+    const change = review.changes[0];
+    if (review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
+        review.used_for_authority !== false || review.may_execute !== false ||
+        ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
+          review.operation_plan_binding_digest].every(digest => typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) ||
+        !rotation || !provider.success || !hasExactKeys({ ...rotation }, ["provider", "destination", "protected_reference_configured"]) ||
+        review.changes.length !== 1 || !change || !hasExactKeys({ ...change }, ["key", "before", "after"])) return false;
+    const expected = settingsWriteCredentialRotationReview(provider.data);
+    return rotation.provider === expected.provider && rotation.destination === expected.destination &&
+      rotation.protected_reference_configured === expected.protected_reference_configured &&
+      change.key === SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE.key && change.before === SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE.before &&
+      change.after === SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE.after;
+  }
+  if (!review.activation) return false;
   const { destination, protected_reference_configured, credential_registration_required, ...selection } = review.activation;
   const registersCredential = protected_reference_configured === false && credential_registration_required === true;
   const usesProtectedReference = protected_reference_configured === true &&
@@ -2950,7 +2974,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (content.kind === "settings_write" && (!validSettingsActivationReview(content) ||
+      if (content.kind === "settings_write" && (!validSettingsProviderReview(content, command_id) ||
           (content.expected_llm_provider !== undefined &&
             (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
               content.changes.length === 0 ||
@@ -3272,8 +3296,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const requiresApprovalEndpoint = this.opts.approval?.requiresApprovalEndpoint?.(approval_id) === true;
     if (nativeCredentialMatch) {
       const reviewed = await this.opts.approval?.reviewContent?.(approval_id).catch(() => null);
-      if (reviewed?.kind !== "settings_write" || !validSettingsActivationReview(reviewed) ||
-          reviewed.activation?.credential_registration_required !== true || reviewed.command_id !== approval_id ||
+      if (reviewed?.kind !== "settings_write" || !validSettingsProviderReview(reviewed, approval_id) ||
+          (reviewed.activation?.credential_registration_required !== true && reviewed.credential_rotation === undefined) ||
+          reviewed.command_id !== approval_id ||
           reviewed.review_digest !== content_review_digest || reviewed.no_store !== true ||
           reviewed.used_for_authority !== false || reviewed.may_execute !== false) {
         res.writeHead(409, { "content-type": "application/json" });
@@ -4177,7 +4202,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "invalid_owner_llm_settings_proposal" }));
       return;
     }
-    if (parsed.data.patch.llm.activation?.register_credential === true && !isLocalControlCenterBrowserRequest(req)) {
+    if (settingsWriteRequiresNativeCredentialEntry(parsed.data.patch) && !isLocalControlCenterBrowserRequest(req)) {
       res.writeHead(403);
       res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
       return;

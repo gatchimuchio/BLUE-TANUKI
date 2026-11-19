@@ -133,6 +133,48 @@ it("rejects ambiguous LLM provider routing for a structured settings write", asy
   }
 });
 
+it.runIf(process.platform === "win32")("offers rotation only for a single managed protected reference active in the running Gateway", async () => {
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "bt-settings-rotate-target-"));
+  const file = path.join(root, "product.env");
+  const ownDirectory = path.join(root, "secrets");
+  const otherDirectory = path.join(root, "other-install");
+  const refKey = "ANTHROPIC_API_KEY_REF";
+  const patch = { rotate_credential: true } as const;
+  try {
+    await fs.mkdir(ownDirectory);
+    await fs.mkdir(otherDirectory);
+    const makeReference = async (directory: string, filename: string) => {
+      const entry = path.join(directory, filename);
+      // The preflight observes the protected entry's identity without decrypting its payload.
+      await fs.writeFile(entry, "fixture metadata only");
+      return `win32-dpapi-current-user:file:${Buffer.from(entry, "utf8").toString("base64url")}`;
+    };
+    const managed = await makeReference(ownDirectory, "anthropic_api_key.dpapi");
+    const other = await makeReference(otherDirectory, "anthropic_api_key.dpapi");
+    const wrongProvider = await makeReference(ownDirectory, "openai_api_key.dpapi");
+    const settingsLine = (reference: string) => `${refKey}=${JSON.stringify(reference)}\n`;
+    const save = (reference: string, extra = "") => fs.writeFile(file,
+      `LLM_BACKEND=anthropic\nANTHROPIC_MODEL=fixture-native-text\n${settingsLine(reference)}${extra}`);
+    const port = (reference: string) => createGatewaySettingsWritePort({ BLUE_TANUKI_ENV_FILE: file,
+      LLM_BACKEND: "anthropic", ANTHROPIC_MODEL: "fixture-native-text", [refKey]: reference }, [], {
+      available: () => true, assertCurrent: () => undefined,
+      request: async () => { throw new Error("preflight must not prompt"); },
+    });
+
+    await save(managed);
+    expect(await port(managed).inspect("anthropic", patch)).toHaveProperty("credential_rotation_ready", true);
+    await expect(port(other).inspect("anthropic", patch)).rejects.toThrow("llm_credential_rotation_target_unavailable");
+    for (const reference of [other, wrongProvider]) {
+      await save(reference);
+      await expect(port(reference).inspect("anthropic", patch)).rejects.toThrow("llm_credential_rotation_target_unavailable");
+    }
+    await save(managed, settingsLine(managed));
+    await expect(port(managed).inspect("anthropic", patch)).rejects.toThrow("settings_write_target_key_duplicated");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 function fakeSecretKeyringFactory(): SecretKeyringFactory {
   const secrets = new Map<string, string>();
   return (platform, key) => {

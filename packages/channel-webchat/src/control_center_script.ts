@@ -2,6 +2,7 @@ import { AOTANU_SPRITE_SPECS } from "./aotanu_mascot.js";
 import {
   OPERATION_ADAPTER_REGISTRY,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
+  SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SettingsWriteLlmProviderSchema,
 } from "@blue-tanuki/protocol";
 
@@ -13,6 +14,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const OPERATION_ADAPTER_REGISTRY = ${OPERATION_ADAPTER_REGISTRY_JSON};
       const SETTINGS_LLM_PROVIDERS = ${SETTINGS_LLM_PROVIDERS_JSON};
       const SETTINGS_LLM_ACTIVATION_DESTINATIONS = ${JSON.stringify(SETTINGS_WRITE_ACTIVATION_DESTINATIONS)};
+      const SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE = ${JSON.stringify(SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE)};
       const controlCenterLaunchTicket = (() => {
         try {
           const fragment = new URLSearchParams(window.location.hash.slice(1));
@@ -4142,7 +4144,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           temperature: String(llm.temperature ?? ""),
           max_tokens: String(llm.max_tokens ?? ""),
           timeout_ms: String(llm.timeout_ms ?? ""),
-          nativeCredentialPromptAvailable: llm.native_credential_prompt_available === true && isLocalCredentialControlCenter()
+          nativeCredentialPromptAvailable: llm.native_credential_prompt_available === true && isLocalCredentialControlCenter(),
+          nativeCredentialRotationAvailable: llm.native_credential_prompt_available === true &&
+            llm.native_credential_rotation_available === true && Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, llm.provider) &&
+            isLocalCredentialControlCenter()
         } : null;
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
@@ -4154,6 +4159,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("settings-native-credential-option").hidden = true;
         byId("settings-native-credential-unavailable").hidden = true;
         byId("settings-register-credential").checked = false;
+        byId("prepare-llm-credential-rotation").hidden = state.settingsRuntimeSnapshot?.nativeCredentialRotationAvailable !== true;
         byId("settings-cost-per-attempt").value = "";
         byId("settings-cost-per-24h").value = "";
         byId("settings-model").value = model;
@@ -5834,9 +5840,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return micros;
       }
 
-      function llmSettingsProposal() {
-        const current = state.settingsRuntimeSnapshot;
-        if (!current) throw new Error("先に現行の設定を読み込んでください。");
+      function llmSettingsPatch(current) {
         const llm = {};
         const provider = byId("settings-provider-choice").value;
         if (provider) {
@@ -5878,6 +5882,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (requiredByActivation || String(value) !== current[key]) llm[key] = value;
         }
         if (Object.keys(llm).length === 0) throw new Error("変更できる項目に差分がありません。");
+        return llm;
+      }
+
+      function llmSettingsProposal(rotateCredential) {
+        const current = state.settingsRuntimeSnapshot;
+        if (!current) throw new Error("先に現行の設定を読み込んでください。");
+        if (rotateCredential && (!current.nativeCredentialRotationAvailable || !isLocalCredentialControlCenter() ||
+            byId("settings-provider-choice").value)) {
+          throw new Error("現行プロバイダーの保護済み資格情報を、この端末のControl Centerで確認してください。");
+        }
+        const llm = rotateCredential ? { rotate_credential: true } : llmSettingsPatch(current);
         const goal = byId("settings-goal-ref");
         const goal_ref = goal.value;
         const purpose_version = Number(goal.selectedOptions[0]?.dataset.purposeVersion);
@@ -5888,9 +5903,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return { expected_provider: current.provider, patch: { llm }, ...(goal_ref ? { goal_ref, purpose_version } : {}) };
       }
 
-      async function prepareLlmSettingsPlan() {
-        const button = byId("prepare-llm-settings-plan");
-        if (button.disabled) return;
+      async function prepareLlmSettingsPlan(rotateCredential = false) {
+        const settingsButton = byId("prepare-llm-settings-plan");
+        const rotationButton = byId("prepare-llm-credential-rotation");
+        if (settingsButton.disabled || rotationButton.disabled) return;
         const next = byId("open-llm-settings-review");
         next.hidden = true;
         state.settingsProposalNextScreen = null;
@@ -5898,13 +5914,13 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const token = tokenInput.value.trim();
         let proposal;
         try {
-          proposal = llmSettingsProposal();
+          proposal = llmSettingsProposal(rotateCredential);
           if (!token) throw new Error("変更申請用のowner tokenを入力してください。");
         } catch (error) {
           setText("settings-plan-status", error.message);
           return;
         }
-        button.disabled = true;
+        settingsButton.disabled = rotationButton.disabled = true;
         try {
           const response = await fetch("/owner/llm-settings-proposal", {
             method: "POST", cache: "no-store",
@@ -5918,7 +5934,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             throw new Error("invalid_settings_proposal_receipt");
           }
           if (!proposal.goal_ref && result.status === "approval_required" && isId(result.command_id)) {
-            setText("settings-plan-status", "設定変更は承認待ちです。承認画面で対象と差分を確認してください。");
+            setText("settings-plan-status", rotateCredential ? "資格情報の更新は承認待ちです。承認画面で対象を確認してください。"
+              : "設定変更は承認待ちです。承認画面で対象と差分を確認してください。");
             state.settingsProposalNextScreen = "approvals";
             next.textContent = "承認を開く";
           } else if (proposal.goal_ref && result.status === "candidate_ready" &&
@@ -5935,7 +5952,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("settings-plan-status", "変更申請の受付を確認できませんでした。再申請する前に計画と承認の状態を確認してください。");
         } finally {
           if (tokenInput.value.trim() === token) tokenInput.value = "";
-          button.disabled = false;
+          settingsButton.disabled = rotationButton.disabled = false;
         }
       }
 
@@ -5972,6 +5989,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const token = byId("settings-token").value.trim();
         state.settingsToken = token;
         state.settingsRuntimeSnapshot = null;
+        byId("prepare-llm-credential-rotation").hidden = true;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
           const body = await fetchJson("/settings/config", token);
@@ -6737,10 +6755,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const adoptionCard = card?.getAttribute("data-goal-purpose-adoption") != null;
         const repairCard = card?.getAttribute("data-goal-purpose-repair") != null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
-        const nativeCredential = verdict === "approve" && approve?.getAttribute?.("data-native-credential-registration") === "true";
+        const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
+        const nativeCredential = verdict === "approve" && (nativeCredentialMode === "register" || nativeCredentialMode === "rotate");
         if (nativeCredential) {
           if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
-            throw new Error("この端末のControl Centerで登録先を確認してから承認してください。");
+            throw new Error("この端末のControl Centerで対象を確認してから承認してください。");
           }
           approve.disabled = true;
           setText("native-credential-approval-status", "この端末の専用入力画面で資格情報を入力するか、キャンセルしてください。");
@@ -6773,10 +6792,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (nativeCredential) {
           const responseBody = response?.ok && hasNoStore(response) ? await response.json().catch(function () { return null; }) : null;
           const result = responseBody?.result;
-          setText("native-credential-approval-status",
-            responseBody?.ok === true && result?.approval === "approve" && result.executed === true && result.status === "success"
-              ? "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。"
-              : "資格情報の登録と設定保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
+          const confirmed = responseBody?.ok === true && result?.approval === "approve" && result.executed === true && result.status === "success";
+          const saved = nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
+            : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
+          setText("native-credential-approval-status", confirmed ? saved
+            : "資格情報の保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
           await loadApprovals();
           return;
         }
@@ -6836,8 +6856,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!view || !approve) throw new Error("content review panel is unavailable");
         view.textContent = "Refreshing exact content…";
         approve.disabled = true;
-        if (approve.hasAttribute?.("data-native-credential-registration")) {
-          approve.removeAttribute("data-native-credential-registration");
+        if (approve.hasAttribute?.("data-native-credential-entry")) {
+          approve.removeAttribute("data-native-credential-entry");
           approve.textContent = "Approve";
         }
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
@@ -7181,6 +7201,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (review.kind === "settings_write") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
           const allowedKeys = ["llm.provider", "llm.model", "llm.temperature", "llm.max_tokens", "llm.timeout_ms",
+            SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE.key,
             "composio.user_id", "composio.allowed_toolkits", "composio.allowed_actions", "composio.revoked_actions",
             "composio.api_base_url", "composio.dry_run", "composio.live_execution", "composio.api_key"];
           const changesValid = Array.isArray(review.changes) && review.changes.length > 0 && review.changes.length <= 10 &&
@@ -7195,11 +7216,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const provider = review.expected_llm_provider;
           const providerValid = provider === undefined || (llmChange && SETTINGS_LLM_PROVIDERS.includes(provider));
           const activation = review.activation;
+          const rotation = review.credential_rotation;
           const registersCredential = activation?.protected_reference_configured === false &&
             activation.credential_registration_required === true;
           const usesProtectedReference = activation?.protected_reference_configured === true &&
             !Object.hasOwn(activation, "credential_registration_required");
           const transition = llmChange ? review.changes.filter(function (change) { return change.key === "llm.provider"; }) : [];
+          const credentialChanges = llmChange ? review.changes.filter(function (change) { return change.key === SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE.key; }) : [];
+          const rotationValid = rotation === undefined ? credentialChanges.length === 0
+            : rotation && activation === undefined && llmChange && review.changes.length === 1 && credentialChanges.length === 1 &&
+              provider !== undefined && Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, provider) &&
+              Object.keys(rotation).length === 3 && rotation.provider === provider &&
+              rotation.destination === SETTINGS_LLM_ACTIVATION_DESTINATIONS[provider] && rotation.protected_reference_configured === true &&
+              Object.keys(credentialChanges[0]).length === 3 && credentialChanges[0].before === SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE.before &&
+              credentialChanges[0].after === SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE.after;
           const validCost = function (value) { return Number.isSafeInteger(value) && value >= 1 && value <= 1000000000; };
           const activationValid = activation === undefined ? transition.length === 0
             : activation && llmChange && provider !== undefined && transition.length === 1 &&
@@ -7216,7 +7246,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!hasNoStore(response) || !card.isConnected || token !== byId("approval-token").value.trim() ||
               review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
               review.used_for_authority !== false || review.may_execute !== false || !(llmChange || composioChange) || !providerValid ||
-              !activationValid ||
+              !activationValid || !rotationValid ||
               !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
               !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
               !isDigest(review.operation_plan_binding_digest)) {
@@ -7224,7 +7254,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }
           view.replaceChildren();
           const heading = document.createElement("strong");
-          heading.textContent = activation ? "GatewayのLLM運転プロバイダー切り替え"
+          heading.textContent = rotation ? "現行プロバイダーの資格情報の更新"
+            : activation ? "GatewayのLLM運転プロバイダー切り替え"
             : llmChange ? "GatewayのLLM運転設定変更" : "GatewayのComposio設定変更";
           view.appendChild(heading);
           if (provider !== undefined) {
@@ -7232,7 +7263,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             target.textContent = activation ? "現在のプロバイダー " + provider : "対象Provider " + provider;
             view.appendChild(target);
           }
-          review.changes.forEach(function (change) {
+          if (rotation) {
+            const detail = document.createElement("p");
+            detail.textContent = "送信先 " + rotation.destination + "。再起動後に更新した資格情報を使用します。";
+            view.appendChild(detail);
+          }
+          (rotation ? [] : review.changes).forEach(function (change) {
             const row = document.createElement("p");
             const label = document.createElement("strong");
             label.textContent = change.key + ": ";
@@ -7262,19 +7298,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           note.className = "muted";
           note.textContent = "承認後に対象版を再照合して設定へ反映します。反映後はGatewayを再起動してください。" +
             (activation ? " 費用上限はシステム全体、親成果、個別タスクの各範囲に適用し、既存のトークン数と時間の予算を維持します。" : "") +
-            (registersCredential ? " 承認後に専用入力画面が開きます。" : "") +
+            (registersCredential || rotation ? " 承認後に専用入力画面が開きます。" : "") +
             (composioChange ? " API keyの切断はdry-run=true／live=falseへ戻します。" : "");
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
           view.appendChild(digests);
           button.textContent = "設定差分を再確認";
-          if (registersCredential) {
+          if (registersCredential || rotation) {
             if (!isLocalCredentialControlCenter()) {
-              note.textContent += " この登録の承認は設置先のControl Centerを開いて行ってください。";
+              note.textContent += " この承認は設置先のControl Centerを開いて行ってください。";
               return;
             }
-            approve.setAttribute("data-native-credential-registration", "true");
+            approve.setAttribute("data-native-credential-entry", rotation ? "rotate" : "register");
             approve.textContent = "承認して入力画面を開く";
           }
           state.approvalContentDigests[commandId] = review.review_digest;
@@ -10694,7 +10730,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
-      byId("settings-token").addEventListener("input", function () { state.settingsRuntimeSnapshot = null; });
+      byId("settings-token").addEventListener("input", function () {
+        state.settingsRuntimeSnapshot = null;
+        byId("prepare-llm-credential-rotation").hidden = true;
+      });
       byId("settings-provider-choice").addEventListener("change", function () {
         const provider = byId("settings-provider-choice").value;
         const current = state.settingsRuntimeSnapshot;
@@ -10704,13 +10743,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("settings-native-credential-option").hidden = !activating || !canRegister;
         byId("settings-native-credential-unavailable").hidden = !activating || canRegister;
         byId("settings-register-credential").checked = false;
+        byId("prepare-llm-credential-rotation").hidden = Boolean(provider) || current?.nativeCredentialRotationAvailable !== true;
         byId("settings-model").value = activating ? "" : (current?.model || "");
         byId("settings-cost-per-attempt").value = "";
         byId("settings-cost-per-24h").value = "";
       });
       byId("settings-owner-token").addEventListener("input", resetSettingsProposalGoals);
       byId("load-settings-goals").addEventListener("click", loadSettingsProposalGoals);
-      byId("prepare-llm-settings-plan").addEventListener("click", prepareLlmSettingsPlan);
+      byId("prepare-llm-settings-plan").addEventListener("click", function () { return prepareLlmSettingsPlan(); });
+      byId("prepare-llm-credential-rotation").addEventListener("click", function () { return prepareLlmSettingsPlan(true); });
       byId("open-llm-settings-review").addEventListener("click", function () {
         const screen = state.settingsProposalNextScreen;
         if (screen !== "approvals" && screen !== "tasks") return;
