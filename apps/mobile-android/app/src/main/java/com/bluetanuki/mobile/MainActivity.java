@@ -1119,7 +1119,7 @@ public final class MainActivity extends Activity {
                     taskSubmissionNeedsReconciliation = requests.pendingSessionID != null;
                     String statusSuffix = requests.allStatusesObserved ? ""
                             : " Task状態は" + requests.statuses.size() + "/" + requests.entries.size() +
-                                    "件を照会できました。残りは未照会で、不明のままです。";
+                                    "件を確認できました。残りの状態は不明です。";
                     taskMessage = requests.didReconcilePendingRequest
                             ? "保留中の申請をDesktop一覧で照合しました。新規申請ができます。" + statusSuffix
                             : taskSubmissionNeedsReconciliation
@@ -1420,7 +1420,7 @@ public final class MainActivity extends Activity {
     }
 
     private String taskStatusLabel(MobileTaskContract.TaskStatus status) {
-        if (status == null) return "状態未照会";
+        if (status == null) return "状態未確認";
         if (MobileTaskContract.TaskStatus.OWNER_REVIEW_PENDING.equals(status.kind)) return "Desktop owner確認待ち";
         if (MobileTaskContract.TaskStatus.START_CANDIDATE.equals(status.kind)) return "開始候補。Brokerが開始時に現在条件を再検査します。";
         return "Task状態: " + status.task.state;

@@ -348,7 +348,7 @@ struct ContentView: View {
   }
 
   private func taskStatusLabel(_ status: MobileTaskStatus?) -> String {
-    guard let status else { return "状態未照会" }
+    guard let status else { return "状態未確認" }
     switch status {
     case .ownerReviewPending:
       return "Desktop owner確認待ち"

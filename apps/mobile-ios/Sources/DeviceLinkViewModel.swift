@@ -263,24 +263,20 @@ final class DeviceLinkViewModel: ObservableObject {
         if didReconcile, let pendingSessionID {
           _ = try self.store.clearTaskSubmissionPending(sessionID: pendingSessionID)
         }
-        var statuses: [String: MobileTaskStatus] = [:]
-        var allStatusesObserved = true
-        for draft in entries {
-          do {
-            statuses[draft.id] = try self.readTaskStatus(
-              draft, credential: credential, pending: state.pendingTaskMutation, epoch: epoch, evidence: evidence
-            )
-          } catch {
-            allStatusesObserved = false
-            break
-          }
+        let statuses = MobileTaskContract.observeOwnedStatuses(
+          entries, credential: credential, pending: state.pendingTaskMutation,
+          canRead: { self.lifecycle.isCurrent(epoch) }
+        ) { draft in
+          try self.readTaskStatus(
+            draft, credential: credential, pending: state.pendingTaskMutation, epoch: epoch, evidence: evidence
+          )
         }
         return MobileTaskListResult(
           entries: entries,
           pendingSessionID: didReconcile ? nil : pendingSessionID,
           didReconcilePendingRequest: didReconcile,
           statuses: statuses,
-          allStatusesObserved: allStatusesObserved
+          allStatusesObserved: statuses.count == entries.count
         )
       },
       onSuccess: { result in
@@ -290,7 +286,7 @@ final class DeviceLinkViewModel: ObservableObject {
         self.pendingTaskSessionID = result.pendingSessionID
         self.taskSubmissionNeedsReconciliation = result.pendingSessionID != nil
         let statusSuffix = result.allStatusesObserved ? ""
-          : " Task状態は\(result.statuses.count)/\(result.entries.count)件を照会できました。残りは未照会で、不明のままです。"
+          : " Task状態は\(result.statuses.count)/\(result.entries.count)件を確認できました。残りの状態は不明です。"
         if result.didReconcilePendingRequest {
           self.taskMessage = "保留中の申請をDesktop一覧で照合しました。新規申請ができます。" + statusSuffix
         } else if result.pendingSessionID != nil {

@@ -89,11 +89,19 @@ struct PendingMobileTaskMutation: Equatable {
     ["kind": kind.rawValue, "scope_digest": scopeDigest]
   }
 
+  func matchesListedRequest(credential: DeviceLinkCredential, draft: MobileTaskDraft) -> Bool {
+    matchesRequest(credential: credential, draft: draft, taskID: draft.taskID)
+  }
+
+  private func matchesRequest(credential: DeviceLinkCredential, draft: MobileTaskDraft, taskID: String?) -> Bool {
+    guard let observed = try? Self(kind: kind, credential: credential, draft: draft, taskID: taskID) else { return false }
+    return observed == self
+  }
+
   func isResolved(credential: DeviceLinkCredential, draft: MobileTaskDraft,
                   status: MobileTaskStatus, liveRuntime: Bool) -> Bool {
     guard liveRuntime, case .task(let record) = status, MobileTaskContract.matches(record, draft: draft),
-          let observed = try? Self(kind: kind, credential: credential, draft: draft, taskID: record.taskID),
-          observed == self else {
+          matchesRequest(credential: credential, draft: draft, taskID: record.taskID) else {
       return false
     }
     return kind == .start || ["cancelled", "completed", "failed"].contains(record.state)
@@ -219,6 +227,29 @@ enum MobileTaskContract {
     let drafts = try rows.map(parseOwnRequest)
     guard Set(drafts.map(\.id)).count == drafts.count else { throw DeviceLinkFailure.invalid }
     return drafts
+  }
+
+  static func observeOwnedStatuses(
+    _ drafts: [MobileTaskDraft], credential: DeviceLinkCredential, pending: PendingMobileTaskMutation?,
+    canRead: () -> Bool, read: (MobileTaskDraft) throws -> MobileTaskStatus
+  ) -> [String: MobileTaskStatus] {
+    var readOrder = drafts
+    if let pending, let index = drafts.firstIndex(where: { pending.matchesListedRequest(credential: credential, draft: $0) }) {
+      let checkpointDraft = readOrder.remove(at: index)
+      readOrder.insert(checkpointDraft, at: 0)
+    }
+    var statuses: [String: MobileTaskStatus] = [:]
+    for draft in readOrder {
+      guard canRead() else { break }
+      do {
+        statuses[draft.id] = try read(draft)
+      } catch DeviceLinkFailure.rejected, DeviceLinkFailure.suspended, DeviceLinkFailure.invalid {
+        // 個別の応答を確認できない場合、その申請を不明のまま残す。
+      } catch {
+        break
+      }
+    }
+    return statuses
   }
 
   static func status(_ body: [String: Any], draft: MobileTaskDraft) throws -> MobileTaskStatus {

@@ -52,7 +52,46 @@ struct PendingTaskMutationTests {
       _ = try PendingMobileTaskMutation(kind: .cancel, credential: desktop, draft: request, taskID: nil)
       throw SmokeFailure(label: "cancellation accepted missing task ID")
     } catch DeviceLinkFailure.invalid {}
+    try listRefresh(credential: desktop, pending: cancellation)
     print("PendingTaskMutationTests PASS")
+  }
+
+  private static func listRefresh(credential: DeviceLinkCredential, pending: PendingMobileTaskMutation) throws {
+    let laterID = String(repeating: "f", count: 32)
+    let entries = [draft(id: otherID), draft(selectedTaskID: taskID), draft(id: laterID)]
+    var queried: [String] = []
+    var resolved: [String] = []
+    let observations = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: pending,
+                                                               canRead: { true }) { entry in
+      queried.append(entry.id)
+      if entry.id == otherID { throw DeviceLinkFailure.rejected }
+      let observation = entry.id == requestID ? status("cancelled") : .startCandidate
+      if pending.isResolved(credential: credential, draft: entry, status: observation, liveRuntime: true) {
+        resolved.append(entry.id)
+      }
+      return observation
+    }
+    try check(queried == [requestID, otherID, laterID], "prioritize exact pending request")
+    try check(resolved == [requestID], "reconcile only the matched live task")
+    try check(Set(observations.keys) == Set([requestID, laterID]), "other tasks survive a row rejection")
+    try check(!pending.matchesListedRequest(credential: credential, draft: draft(selectedTaskID: otherID)),
+              "different task is not prioritized")
+    try check(!pending.matchesListedRequest(credential: credential, draft: draft()), "missing task is not prioritized")
+
+    queried.removeAll()
+    let stopped = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: nil,
+                                                           canRead: { true }) { entry in
+      queried.append(entry.id)
+      throw DeviceLinkFailure.transport(mayHaveReachedDesktop: false)
+    }
+    try check(stopped.isEmpty && queried == [otherID], "transport failure stops other reads")
+    queried.removeAll()
+    let background = MobileTaskContract.observeOwnedStatuses(entries, credential: credential, pending: nil,
+                                                              canRead: { false }) { entry in
+      queried.append(entry.id)
+      return .startCandidate
+    }
+    try check(background.isEmpty && queried.isEmpty, "background cannot read task status")
   }
 
   private static func check(_ value: Bool, _ label: String) throws {

@@ -1,5 +1,6 @@
 package com.bluetanuki.mobile;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -51,22 +52,50 @@ final class MobileTaskClient {
             }
         }
         if (reconciled) store.clearTaskSubmissionPending(pendingSessionID);
+        PendingTaskMutation pending = null;
+        try {
+            pending = store.pendingTaskMutation();
+        } catch (AndroidCredentialStore.CredentialStoreException ignored) {
+            // 状態照会は継続し、端末の記録に基づく照合は保留する。
+        }
+        Map<String, MobileTaskContract.TaskStatus> statuses = observeOwnedStatuses(entries, credential, pending,
+                canSend, entry -> refreshStatus(entry, canSend));
+        return new OwnedRequests(entries, reconciled ? null : pendingSessionID, reconciled,
+                statuses, statuses.size() == entries.size());
+    }
+
+    static Map<String, MobileTaskContract.TaskStatus> observeOwnedStatuses(List<MobileTaskContract.Draft> entries,
+            DeviceCredential credential, PendingTaskMutation pending, DeviceLinkTransport.SendGuard canSend,
+            TaskStatusReader reader) {
+        List<MobileTaskContract.Draft> readOrder = new ArrayList<>(entries);
+        if (pending != null) {
+            for (int index = 0; index < readOrder.size(); index++) {
+                if (pending.matchesListedRequest(credential, readOrder.get(index))) {
+                    readOrder.add(0, readOrder.remove(index));
+                    break;
+                }
+            }
+        }
         Map<String, MobileTaskContract.TaskStatus> statuses = new LinkedHashMap<>();
-        boolean allStatusesObserved = true;
-        for (MobileTaskContract.Draft entry : entries) {
+        for (MobileTaskContract.Draft entry : readOrder) {
+            if (!canSend.canSend() || Thread.currentThread().isInterrupted()) break;
             try {
-                statuses.put(entry.id, refreshStatus(entry, canSend));
+                statuses.put(entry.id, reader.read(entry));
+            } catch (PairingResponseParser.PairingRejectedException | PairingResponseParser.PairingUnknownException |
+                     StrictJson.JsonException ignored) {
+                // 個別の応答を確認できない場合、その申請を不明のまま残す。
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
-                allStatusesObserved = false;
                 break;
             } catch (Exception exception) {
-                allStatusesObserved = false;
                 break;
             }
         }
-        return new OwnedRequests(entries, reconciled ? null : pendingSessionID, reconciled,
-                statuses, allStatusesObserved);
+        return statuses;
+    }
+
+    interface TaskStatusReader {
+        MobileTaskContract.TaskStatus read(MobileTaskContract.Draft entry) throws Exception;
     }
 
     MobileTaskContract.McpSnapshot refreshMcpSnapshot(DeviceLinkTransport.SendGuard canSend)

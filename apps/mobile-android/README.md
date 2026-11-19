@@ -29,7 +29,7 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 - Task一覧は申請ID・指示hash・状態・結果hash・結果本文の有無だけを扱い、結果本文・監査識別子をMobileへ返さない。
 - アプリがforegroundを離れると未送信の依頼本文を入力欄から消去し、次回起動・再表示で復元しない。申請中の本文は新しいTaskとして自動再送しない。
 
-Task一覧のforeground再取得は申請checkpointの照合だけに使い、自動再申請・開始・取消は行わない。既存Taskの個別状態は使用者が明示して照会する。通知を明示有効化した場合は、同一プロセス内で前回確認済みTaskの状態変化を再照会で観測したときだけ、Task本文・IDを含まない端末内通知を出す。初回観測・未照会状態では通知せず、background通信やpush受信はしない。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。更新、installed package削除は未成立。Android emulator・実機、Keystore実動は未確認。
+Task一覧の再取得では既存Taskの状態を読み取り、開始・取消の保留記録と一致する申請を先に照会する。個別応答を確認できない行は不明と表示し、他の行の状態は引き続き照会できる。通信断やbackground移行で照会を止め、自動再申請・開始・取消は行わない。通知を明示有効化した場合は、同一プロセス内で前回確認済みTaskの状態変化を再照会で観測したときだけ、Task本文・IDを含まない端末内通知を出す。初回観測・未照会状態では通知せず、background通信やpush受信はしない。Task操作はDevice Link APIに接続するsourceまでであり、実Desktop BrokerからBLUE Runtime Adapter／Gateway／C/J/Mを通る一仕事の実動は未確認。更新、installed package削除は未成立。Android emulator・実機、Keystore実動は未確認。
 
 未照合のTask申請checkpointが残る間は、資格がローカル削除された後も端末IDの再生成を停止する。Desktop一覧で同じsessionを照合してcheckpointが消えるまで、旧端末との対応を維持する。
 

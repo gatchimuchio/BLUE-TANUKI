@@ -56,10 +56,19 @@ final class PendingTaskMutation {
         return action.name() + ":" + scopeDigest;
     }
 
+    boolean matchesListedRequest(DeviceCredential credential, MobileTaskContract.Draft draft) {
+        return matchesRequest(credential, draft, draft.taskID);
+    }
+
+    private boolean matchesRequest(DeviceCredential credential, MobileTaskContract.Draft draft, String taskID) {
+        return (action != Action.CANCEL || taskID != null) &&
+                scopeDigest.equals(forRequest(action, credential, draft, taskID).scopeDigest);
+    }
+
     boolean resolvedBy(DeviceCredential credential, MobileTaskContract.Draft draft,
                        MobileTaskContract.TaskStatus status, boolean liveRuntime) {
         if (!liveRuntime || status.task == null ||
-                !scopeDigest.equals(forRequest(action, credential, draft, status.task.taskID).scopeDigest)) {
+                !matchesRequest(credential, draft, status.task.taskID)) {
             return false;
         }
         return action == Action.START || "cancelled".equals(status.task.state) ||

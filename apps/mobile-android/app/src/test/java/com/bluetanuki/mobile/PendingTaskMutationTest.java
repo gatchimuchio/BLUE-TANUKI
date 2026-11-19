@@ -5,6 +5,9 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import org.junit.Test;
 
 public final class PendingTaskMutationTest {
@@ -47,6 +50,45 @@ public final class PendingTaskMutationTest {
     public void malformedStoredRecordNeverBecomesAnAction() {
         assertThrows(StrictJson.JsonException.class, () -> PendingTaskMutation.decode("CANCEL:invalid"));
         assertThrows(StrictJson.JsonException.class, () -> PendingTaskMutation.decode("RESEND:" + "a".repeat(64)));
+    }
+
+    @Test
+    public void listRefreshReconcilesTheMatchingRequestAndKeepsIndependentFailuresUnknown() throws Exception {
+        String laterID = "f".repeat(32);
+        MobileTaskContract.Draft held = draft(ID, ID);
+        List<MobileTaskContract.Draft> entries = List.of(draft(OTHER, null), held, draft(laterID, null));
+        PendingTaskMutation pending = PendingTaskMutation.decode(PendingTaskMutation.forRequest(
+                PendingTaskMutation.Action.CANCEL, DESKTOP, held, ID).encode());
+        List<String> queried = new ArrayList<>();
+        List<String> resolved = new ArrayList<>();
+        Map<String, MobileTaskContract.TaskStatus> statuses = MobileTaskClient.observeOwnedStatuses(
+                entries, DESKTOP, pending, () -> true, entry -> {
+                    queried.add(entry.id);
+                    if (OTHER.equals(entry.id)) throw new PairingResponseParser.PairingRejectedException();
+                    MobileTaskContract.TaskStatus status = ID.equals(entry.id)
+                            ? task("cancelled", ID) : MobileTaskContract.TaskStatus.startCandidate();
+                    if (pending.resolvedBy(DESKTOP, entry, status, true)) resolved.add(entry.id);
+                    return status;
+                });
+        assertEquals(List.of(ID, OTHER, laterID), queried);
+        assertEquals(List.of(ID), resolved);
+        assertEquals(List.of(ID, laterID), new ArrayList<>(statuses.keySet()));
+        assertFalse(pending.matchesListedRequest(DESKTOP, draft(ID, OTHER)));
+        assertFalse(pending.matchesListedRequest(DESKTOP, draft(ID, null)));
+    }
+
+    @Test
+    public void listRefreshStopsReadingWhenTheTransportOrForegroundIsLost() {
+        List<MobileTaskContract.Draft> entries = List.of(draft(OTHER, null), draft(ID, ID));
+        List<String> queried = new ArrayList<>();
+        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, null, () -> true, entry -> {
+            queried.add(entry.id);
+            throw new DeviceLinkTransport.TransportException(false);
+        }).isEmpty());
+        assertEquals(List.of(OTHER), queried);
+        assertTrue(MobileTaskClient.observeOwnedStatuses(entries, DESKTOP, null, () -> false, entry -> {
+            throw new AssertionError("background read");
+        }).isEmpty());
     }
 
     private static DeviceCredential credential(String hostID, String deviceID, String fingerprint) {
