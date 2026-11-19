@@ -48,6 +48,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         historyKind: sessionStorage.getItem("bt.historyKind") || "",
         evidenceToken: sessionStorage.getItem("bt.evidenceToken") || "",
         settingsToken: sessionStorage.getItem("bt.settingsToken") || "",
+        settingsRuntimeSnapshot: null,
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         connectorsSnapshot: null,
         connectorsCandidateTask: null,
@@ -1391,11 +1392,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           content: value.content };
       }
 
+      function ownerTaskApprovalWithdrawn(value) {
+        const keys = ["status", "cancel_request_accepted", "executor_started", "external_processing_stop",
+          "cancel_requested_at_ms", "used_for_authority", "may_execute"];
+        return isObject(value) && Object.keys(value).length === keys.length &&
+          Object.keys(value).every(function (key) { return keys.indexOf(key) >= 0; }) &&
+          value.status === "approval_withdrawn" && value.cancel_request_accepted === true && value.executor_started === false &&
+          value.external_processing_stop === "unknown" && Number.isSafeInteger(value.cancel_requested_at_ms) &&
+          value.cancel_requested_at_ms > 0 && value.used_for_authority === false && value.may_execute === false;
+      }
+
       function ownerTaskCancellationSummary(value) {
         if (value === undefined) return null;
         if (!isObject(value) || value.used_for_authority !== false || value.may_execute !== false) {
           return "取消状態projectionが不正なため未確認です。";
         }
+        if (ownerTaskApprovalWithdrawn(value)) return "承認待ちを取り消しました。この承認での実行は開始していません。";
         if (value.status === "unknown") {
           const allowed = ["status", "reason_code", "used_for_authority", "may_execute"];
           if (Object.keys(value).length !== allowed.length || Object.keys(value).some(function (key) {
@@ -1501,7 +1513,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (cancellationSummary ? " " + cancellationSummary : "");
             if (taskOutcomeSummary?.achieved && result.state !== "rejected") status.className = "badge good";
             if (isCurrentSubmission && result.state !== "dispatching" && (result.state === "rejected" ||
-                (result.state !== "rejected" && taskOutcomeSummary?.achieved))) {
+                taskOutcomeSummary?.achieved || ownerTaskApprovalWithdrawn(result.cancellation))) {
               byId("owner-task-new-submission").hidden = false;
             }
           } else {
@@ -1554,9 +1566,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             throw new Error("Gateway受付記録がありません。未送信の証明ではないため、新しい依頼IDへ切り替えないでください。");
           }
           if (response.status === 409 && result && result.found === true && result.accepted === false) {
-            throw new Error("この依頼に結び付く中止可能な実行が一意に確認できず、中止要求は受理されていません。状態を再照会してください。");
+            throw new Error("この依頼から中止できる承認または実行を一意に確認できません。状態を再照会してください。");
           }
           const cancellation = result && result.cancellation;
+          if (response.ok && result?.found === true && result.accepted === true && ownerTaskApprovalWithdrawn(cancellation)) {
+            status.textContent = "依頼ID末尾: " + submissionId.slice(-12) + "。承認待ちを取り消しました。この承認での実行は開始していません。";
+            status.className = "badge warn";
+            return;
+          }
           const allowedKeys = ["status", "cancel_request_accepted", "executor_settled", "execution_signal_aborted",
             "executor_state", "local_worker_stop", "external_processing_stop", "used_for_authority", "may_execute"];
           if (!response.ok || !result || result.found !== true || result.accepted !== true || !isObject(cancellation) ||
@@ -4046,6 +4063,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
+        state.settingsRuntimeSnapshot = llm.provider ? {
+          provider: llm.provider,
+          model: String(llm.model ?? ""),
+          max_tokens: String(llm.max_tokens ?? ""),
+          timeout_ms: String(llm.timeout_ms ?? "")
+        } : null;
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
         const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
@@ -5702,6 +5725,56 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return { llm, approval: { mode: byId("settings-approval-mode").value } };
       }
 
+      function prepareLlmSettingsPlan() {
+        try {
+          const current = state.settingsRuntimeSnapshot;
+          if (!current) throw new Error("先に現行の設定を読み込んでください。");
+          if (byId("settings-provider").value !== current.provider) {
+            throw new Error("現行Providerの運転設定のみ変更できます。現行の設定を読み込み直してください。");
+          }
+          const llm = {};
+          const model = byId("settings-model").value.trim();
+          if (model !== current.model) {
+            if (!/^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/.test(model) ||
+                /^(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[A-Za-z0-9_-]{30,}|AKIA[A-Z0-9]{16})$/iu.test(model)) {
+              throw new Error("モデル名を確認してください。資格情報は入力しないでください。");
+            }
+            llm.model = model;
+          }
+          for (const [key, id, min, max] of [
+            ["max_tokens", "settings-max-tokens", 1, 1048576],
+            ["timeout_ms", "settings-timeout-ms", 100, 600000]
+          ]) {
+            const text = String(byId(id).value).trim();
+            if (text === current[key]) continue;
+            const value = Number(text);
+            if (!/^[0-9]+$/.test(text) || !Number.isSafeInteger(value) || value < min || value > max) {
+              throw new Error("最大トークン数は1〜1048576、制限時間は100〜600000ミリ秒で指定してください。");
+            }
+            if (String(value) !== current[key]) llm[key] = value;
+          }
+          if (Object.keys(llm).length === 0) throw new Error("変更できる項目に差分がありません。");
+          const ownerTaskInput = byId("owner-task-intent");
+          if (ownerTaskInput.value.trim() || byId("owner-task-audio").files?.length || byId("owner-task-image").files?.length ||
+              byId("owner-task-completion-rules").value.trim() || byId("owner-task-include-mcp-catalog").checked) {
+            throw new Error("Tasksに別の入力があります。既存の入力を確認してください。");
+          }
+          ownerTaskInput.value = [
+            "現行Providerの運転設定について、未実行のOperation Plan候補を1件用意してください。",
+            "組み込みのsettings.writeを1回だけ候補化し、下記の値を変更や補完せず、他のtoolや外部作用を含めないでください。保存前には使用者が対象と差分を確認し、L3承認します。",
+            "settings.writeの引数JSON " + JSON.stringify({ patch: { llm } })
+          ].join("\\n");
+          const message = "LLM運転設定の変更案を準備しました。内容と現在の委任目的を確認してから送信してください。";
+          setText("settings-plan-status", message);
+          setText("owner-task-status", message);
+          byId("owner-task-status").className = "badge warn";
+          setActiveScreen("tasks");
+          ownerTaskInput.focus();
+        } catch (error) {
+          setText("settings-plan-status", error.message);
+        }
+      }
+
       function connectorsPayload() {
         const current = state.connectorsSnapshot;
         if (!isObject(current)) throw new Error("先にLoad Connectorsで現行設定を読み込んでください");
@@ -5734,9 +5807,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       async function loadSettings() {
         const token = byId("settings-token").value.trim();
         state.settingsToken = token;
+        state.settingsRuntimeSnapshot = null;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
           const body = await fetchJson("/settings/config", token);
+          if (byId("settings-token").value.trim() !== token) return;
           renderSettingsSnapshot(body);
           setText("settings-verify-status", "not run");
         } catch (error) {
@@ -6153,23 +6228,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           setText("settings-verify-status", "error");
           byId("settings-verify-status").className = "badge bad";
           renderSettingsComputeReadiness(undefined);
-          setText("settings-json", error.message);
-        }
-      }
-
-      async function saveSettings() {
-        const token = byId("settings-token").value.trim();
-        state.settingsToken = token;
-        sessionStorage.setItem("bt.settingsToken", token);
-        try {
-          const body = await postJson("/settings/config", token, settingsPayload());
-          setText("settings-json", compactJson(redactRuntimeValue(body)));
-          await loadSettings();
-          setText("settings-verify-status", "保存しました。通常仕事へ反映するにはGatewayを再起動してください。");
-          byId("settings-verify-status").className = "badge warn";
-        } catch (error) {
-          setText("settings-verify-status", "error");
-          byId("settings-verify-status").className = "badge bad";
           setText("settings-json", error.message);
         }
       }
@@ -10175,7 +10233,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId(id).addEventListener("input", invalidateSettingsComputeReadiness);
         byId(id).addEventListener("change", invalidateSettingsComputeReadiness);
       }
-      byId("save-settings").addEventListener("click", saveSettings);
+      byId("settings-token").addEventListener("input", function () { state.settingsRuntimeSnapshot = null; });
+      byId("prepare-llm-settings-plan").addEventListener("click", prepareLlmSettingsPlan);
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {
           setChatStatus("WebChat error", "bad");

@@ -622,8 +622,8 @@ export async function verifyLlmProvisioning(
         detail: "stub backend verified without external network access",
         compute_readiness: computeReadiness,
         next_action: computeReadiness.status === "ready"
-          ? "Save settings and restart the Gateway. Runtime still checks current budget usage before each Compute reservation."
-          : "Save a cost profile and budget that admit one maximum normal Compute request, then verify again.",
+          ? "Verification leaves runtime settings unchanged. Restart the Gateway after an approved settings change."
+          : "Normal Compute requires a configured cost profile and budget that admit one maximum request.",
       };
     }
 
@@ -655,7 +655,7 @@ export async function verifyLlmProvisioning(
       detail: `provider responded; tokens=${response.tokens_used}`,
       compute_readiness: computeReadiness,
       next_action: computeReadiness.status === "ready"
-        ? "Save settings and restart the Gateway. Runtime still checks current budget usage before each Compute reservation."
+        ? "Verification leaves runtime settings unchanged. Restart the Gateway after an approved settings change."
         : "Provider connectivity passed, but normal Compute is blocked. Configure a cost profile and budget that admit one maximum request, then verify again.",
     };
   } catch (e) {
@@ -670,7 +670,7 @@ export async function verifyLlmProvisioning(
       duration_ms: Math.max(0, Math.ceil(performance.now() - started)),
       detail: redactKnownSecretValues(message, candidateEnv),
       compute_readiness: computeReadiness,
-      next_action: "Check provider, model, endpoint, and API key, then run this verification again before saving.",
+      next_action: "Check provider, model, endpoint, and API key, then run verification again.",
     };
   }
 }

@@ -437,23 +437,28 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_change_committed", version: 2,
       } });
 
-      const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ user: "c0802-owner" }),
-      });
-      expect(ticketResponse.status).toBe(200);
-      const { ticket } = await ticketResponse.json() as { ticket: string };
-      taskWebSocket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
-      await once(taskWebSocket, "open");
+      const connectTaskSocket = async () => {
+        const ticketResponse = await fetch(`${baseUrl}/ws-ticket`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ user: "c0802-owner" }),
+        });
+        expect(ticketResponse.status).toBe(200);
+        const { ticket } = await ticketResponse.json() as { ticket: string };
+        const socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+        await once(socket, "open");
+        return socket;
+      };
+      taskWebSocket = await connectTaskSocket();
 
       const task = `sandbox内の指定した相対パスの通常ファイルを一つだけ削除してください。\n相対パス: ${relativePath}`;
+      const submissionId = "01a119c0-5b35-4491-ae00-000000000805";
       const taskReply = waitForWebChatSend(taskWebSocket, "synthetic file.delete task");
       const submission = await fetch(`${baseUrl}/owner/task-compute`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", task, goal_ref: goalRef, purpose_version: 2,
-          submission_id: "01a119c0-5b35-4491-ae00-000000000805",
+          submission_id: submissionId,
           actor: "system", metadata: { "blue_tanuki.actor_kind": "system" } }),
       });
       const submissionBody = await submission.json() as Record<string, unknown>;
@@ -504,8 +509,7 @@ describe("delegated goal purpose owner review", () => {
         approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
       } });
 
-      const stepReviewReply = waitForWebChatSend(taskWebSocket, "file.delete plan review");
-      const stepReviewResponse = await fetch(`${baseUrl}/operators/developer/invoke`, {
+      const requestStepReview = () => fetch(`${baseUrl}/operators/developer/invoke`, {
         method: "POST",
         headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" },
         body: JSON.stringify({ user: "c0802-owner", content: `plan:review ${JSON.stringify({
@@ -513,14 +517,47 @@ describe("delegated goal purpose owner review", () => {
           goal_purpose_binding: goalPurposeBinding,
         })}` }),
       });
-      expect(stepReviewResponse.status).toBe(202);
+      const stepReviewReply = waitForWebChatSend(taskWebSocket, "file.delete plan review");
+      expect((await requestStepReview()).status).toBe(202);
       expect((await stepReviewReply).length).toBeGreaterThan(0);
 
-      const pending = await waitFor(async () => {
+      const loadDeleteApproval = async () => {
         const queue = await loadQueue();
         return queue.pending_approvals.find((item) => item.approval_level === "L3_final_review" &&
           item.final_review_required === true && item.content_review_required === true) ?? null;
-      }, gateway, "file.delete did not queue its L3 content review");
+      };
+      const withdrawing = await waitFor(loadDeleteApproval, gateway, "file.delete did not queue its L3 content review");
+      const ownerTask = (route: string, id: string, authorization = ownerToken) => fetch(`${baseUrl}/owner/task-submission-${route}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify({ submission_id: id }),
+      });
+      expect((await ownerTask("cancel", submissionId, token)).status).toBe(401);
+      expect((await ownerTask("cancel", "eccfb7aa-8b69-4e97-abde-fb902eb97aba")).status).toBe(404);
+      const withdrawalResponse = await ownerTask("cancel", submissionId);
+      const withdrawal = await withdrawalResponse.json() as { cancellation?: unknown };
+      expect(withdrawalResponse.status, JSON.stringify(withdrawal)).toBe(202);
+      expect(withdrawal).toMatchObject({ found: true, accepted: true, cancellation: {
+        status: "approval_withdrawn", executor_started: false, external_processing_stop: "unknown",
+        used_for_authority: false, may_execute: false,
+      } });
+      expect(JSON.stringify(withdrawal)).not.toContain(String(withdrawing.command_id));
+      expect(await loadDeleteApproval()).toBeNull();
+      expect((await postApproval(String(withdrawing.command_id), withdrawing.approval_token)).status).toBe(409);
+      expect(readFileSync(fixturePath, "utf8")).toBe(originalContent);
+      expect(await (await ownerTask("status", submissionId)).json()).toMatchObject({ cancellation: withdrawal.cancellation });
+
+      taskWebSocket.close();
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await (await ownerTask("status", submissionId)).json()).toMatchObject({ cancellation: withdrawal.cancellation });
+      taskWebSocket = await connectTaskSocket();
+      const renewedReviewReply = waitForWebChatSend(taskWebSocket, "renewed file.delete plan review");
+      expect((await requestStepReview()).status).toBe(202);
+      expect((await renewedReviewReply).length).toBeGreaterThan(0);
+      const pending = await waitFor(loadDeleteApproval, gateway, "file.delete did not queue a fresh L3 content review");
+      expect(pending.command_id).not.toBe(withdrawing.command_id);
       expect(pending.approval_token).toBeTruthy();
       expect(pending.operation).toContain("file.delete");
       expect(existsSync(fixturePath)).toBe(true);
@@ -569,13 +606,17 @@ describe("delegated goal purpose owner review", () => {
       await waitFor(() => existsSync(fixturePath) ? null : true, gateway,
         `approved file.delete did not remove ${relativePath}; result=${JSON.stringify(finalApprovalBody)}`);
 
+      let lastPlan: unknown;
       const verifiedPlan = await waitFor(async () => {
         const response = await fetch(`${baseUrl}/runtime/snapshot`, { headers: { authorization: `Bearer ${token}` } });
         if (!response.ok) return null;
         const snapshot = await response.json() as { operation_plan_status?: { plans?: Array<Record<string, unknown>> } };
         const current = snapshot.operation_plan_status?.plans?.find((candidate) => candidate.plan_id === planId);
+        lastPlan = current;
         return current?.status === "results_verified" ? current : null;
-      }, gateway, "approved file.delete did not produce a verified operation-plan receipt");
+      }, gateway, "approved file.delete did not produce a verified operation-plan receipt").catch((error) => {
+        throw new Error(`${String(error)}\nlast plan: ${JSON.stringify(lastPlan)}`);
+      });
       expect(verifiedPlan.steps).toMatchObject([expect.objectContaining({ operation: "file.delete", status: "verified",
         binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })]);
     } finally {

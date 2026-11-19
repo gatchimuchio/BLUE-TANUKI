@@ -393,9 +393,10 @@ ${CONTROL_CENTER_STYLE}    </style>
           <div class="action-row">
             <button id="load-settings" class="primary" type="button">Load Settings</button>
             <button id="verify-llm-settings" type="button">Verify LLM</button>
-            <button id="save-settings" class="primary" type="button" disabled>Save Settings</button>
+            <button id="prepare-llm-settings-plan" class="primary" type="button">LLM運転設定の変更案を用意</button>
           </div>
-          <p class="muted">No settings changes are saved from this page. Supported non-secret LLM runtime values can be changed from a Developer task through HDS Operation Plan and no-store L3 review. Provider, endpoint, credentials, approval mode, paths, and connector settings remain unavailable here.</p>
+          <p class="muted">現行Providerのモデル名、最大トークン数、計算の制限時間の差分をTasksの入力欄に用意します。Tasksで明示送信した後、承認画面で差分を確認してください。Provider、URL、APIキー、予算、承認モードはこの変更案の対象外です。</p>
+          <p id="settings-plan-status" class="muted" role="status"></p>
           <div class="status-grid">
             <div class="metric"><span>Provider</span><span id="settings-provider-status">not loaded</span></div>
             <div class="metric"><span>Model</span><span id="settings-model-status">not loaded</span></div>

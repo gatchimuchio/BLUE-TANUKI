@@ -59,6 +59,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function matchesWebChatTaskPlan(plan: unknown, requestId: string, ownerIdentityDigest: string): plan is Record<string, unknown> {
+  if (!isRecord(plan) || plan.owner_identity_digest !== ownerIdentityDigest ||
+      plan.channel_identity_digest !== WEBCHAT_CHANNEL_DIGEST) return false;
+  // Owner Task supplies a canonical OperationRequest ID while the receipt keeps the transport request UUID.
+  return plan.request_id === requestId ||
+    (ownerIdentityDigest === WEBCHAT_OWNER_TASK_DIGEST && plan.request_id === `operation-request:${requestId}`);
+}
+
 function unknownOutcome(
   reason_code: Extract<WebChatTaskOutcome["reason_code"], "projection_unavailable" | "projection_ambiguous" | "projection_invalid">,
 ): WebChatTaskOutcome {
@@ -96,8 +104,7 @@ function projectTaskOutcome(
 ): WebChatTaskOutcome {
   if (!REQUEST_ID.test(requestId)) return unknownOutcome("projection_invalid");
   if (!isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) return unknownOutcome("projection_unavailable");
-  const matches = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
-    plan.owner_identity_digest === ownerIdentityDigest && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+  const matches = operationPlans.plans.filter((plan) => matchesWebChatTaskPlan(plan, requestId, ownerIdentityDigest));
   if (matches.length === 0) return unknownOutcome("projection_unavailable");
   if (matches.length !== 1 || !isRecord(matches[0])) return unknownOutcome("projection_ambiguous");
 
@@ -154,8 +161,7 @@ function projectRequestCommandIds(
   if (!REQUEST_ID.test(requestId) || !isRecord(operationPlans) || !Array.isArray(operationPlans.plans)) {
     return { status: "invalid" };
   }
-  const plans = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === requestId &&
-    plan.owner_identity_digest === ownerIdentityDigest && plan.channel_identity_digest === WEBCHAT_CHANNEL_DIGEST);
+  const plans = operationPlans.plans.filter((plan) => matchesWebChatTaskPlan(plan, requestId, ownerIdentityDigest));
   if (plans.length === 0) return { status: "not_found" };
   if (plans.length !== 1 || !isRecord(plans[0])) return { status: "ambiguous" };
   const bindings = plans[0].bindings;
@@ -167,7 +173,10 @@ function projectRequestCommandIds(
         !COMMAND_ID.test(binding.command_id)) {
       return { status: "invalid" };
     }
-    if (binding.request_id === requestId) commandIds.add(binding.command_id);
+    // The authenticated owner can follow later review requests issued for the same J plan.
+    if (binding.request_id === requestId || ownerIdentityDigest === WEBCHAT_OWNER_TASK_DIGEST) {
+      commandIds.add(binding.command_id);
+    }
   }
   return { status: "matched", command_ids: [...commandIds] };
 }

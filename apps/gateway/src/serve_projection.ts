@@ -715,10 +715,13 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
           (fileStateObservation !== undefined && observationStatus !== "not_applicable")) {
         return invalidOperationPlanStatusProjection();
       }
-      const matching = step.binding_source_revision_digest === undefined
+      const candidates = step.binding_source_revision_digest === undefined
         ? []
         : bindings.filter((candidate) => candidate.step_id === step.step_id &&
           candidate.revision_digest === step.binding_source_revision_digest);
+      const matching = candidates.length > 1 ? candidates.filter((candidate) => candidate.status !== "invalidated" ||
+        candidate.execution_ticket_digest !== undefined || candidate.result_digest !== undefined ||
+        candidate.memory_status !== "not_recorded") : candidates;
       if ((step.binding_source_revision_digest === undefined && step.status !== "not_selected") ||
           (step.binding_source_revision_digest !== undefined && matching.length !== 1)) {
         return invalidOperationPlanStatusProjection();

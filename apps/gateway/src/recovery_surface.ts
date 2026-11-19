@@ -1648,7 +1648,8 @@ export async function planOfflineRecoveryRestore(
       else {
         try {
           observedTarget = await readRecoveryPathProof(target);
-          disposition = !observedTarget || observedTarget.kind === archiveProof.kind ? "candidate_only" : "unverified_target";
+          // File integrity cannot establish that memory, exclusion, or failure rules remain current.
+          disposition = !observedTarget || observedTarget.kind === archiveProof.kind ? "requires_domain_review" : "unverified_target";
         } catch {
           disposition = "unverified_target";
         }

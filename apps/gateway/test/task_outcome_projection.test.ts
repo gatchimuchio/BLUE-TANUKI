@@ -243,7 +243,7 @@ describe("D4 Runtime task outcome projection", () => {
       .toMatchObject({ status: "unknown", reason_code: "projection_unavailable" });
   });
 
-  it("binds owner-submission projection to the owner-token actor, not the D4 Runtime actor", () => {
+  it("binds the owner-submission UUID to the canonical plan of the same owner and channel", () => {
     const completed = outcome("achieved", "goal_completion_rules_satisfied", {
       status: "rules_satisfied",
       reason_code: "rules_satisfied",
@@ -253,13 +253,16 @@ describe("D4 Runtime task outcome projection", () => {
       evidence_digest: evidenceDigest,
     });
 
-    expect(projectOwnerTaskOutcome(plans(completed, requestId, "webchat-owner-token-holder"), requestId)).toMatchObject({
+    const canonicalId = `operation-request:${requestId}`;
+    expect(projectOwnerTaskOutcome(plans(completed, canonicalId, "webchat-owner-token-holder"), requestId)).toMatchObject({
       status: "achieved",
       reason_code: "goal_completion_rules_satisfied",
       completion_evidence: { rules_digest: rulesDigest, evidence_digest: evidenceDigest, rule_count: 1 },
       used_for_authority: false,
       may_execute: false,
     });
+    expect(projectOwnerTaskOutcome(plans(completed, `${canonicalId}-other`, "webchat-owner-token-holder"), requestId))
+      .toMatchObject({ status: "unknown", reason_code: "projection_unavailable" });
     expect(projectOwnerTaskOutcome(plans(completed), requestId)).toMatchObject({
       status: "unknown",
       reason_code: "projection_unavailable",

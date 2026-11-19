@@ -164,6 +164,7 @@ import type {
   WebChatD4RuntimeTaskOutcome,
   WebChatOwnerTaskCancellation,
   WebChatOwnerTaskCancellationStatus,
+  WebChatTaskApprovalWithdrawal,
   WebChatAuthorityTraceItem,
   WebChatEvidenceControlContext,
   WebChatHistoryReplayFilter,
@@ -944,6 +945,8 @@ function d4RuntimeExecutionBinding(
 }
 
 const D4_PENDING_WITHDRAWAL_REASON = "d4_runtime_approval_withdrawn";
+const OWNER_TASK_APPROVAL_ACTOR = "webchat-owner-token-holder";
+const OWNER_TASK_WITHDRAWAL_REASON = "owner_task_approval_withdrawn";
 
 export function selectGatewayInboundEphemeralContext(
   boundary: GatewayInboundBoundaryPlan,
@@ -4763,25 +4766,47 @@ async function serveWithOwnerLease(
           return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
         }
         const binding = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
-        if (binding.status !== "matched") return projectOwnerTaskCancellationStatus(operationPlans, request_id, []);
+        if (binding.status === "ambiguous" || binding.status === "invalid") {
+          return projectOwnerTaskCancellationStatus(operationPlans, request_id, []);
+        }
         try {
+          const commandIds = new Set(binding.status === "matched" ? binding.command_ids : []);
+          const withdrawal = readOwnerTaskApprovalWithdrawal(request_id, commandIds);
           const observations = executionStore.taskExecutionCancellationEvidenceForCommands(
-            binding.command_ids, undefined, ["owner_task", "resume"],
+            [...commandIds], undefined, ["owner_task", "resume"],
           );
-          return projectOwnerTaskCancellationStatus(operationPlans, request_id, observations);
+          const execution = projectOwnerTaskCancellationStatus(operationPlans, request_id, observations);
+          if (!withdrawal) return execution;
+          if (execution.status === "unknown") {
+            return execution.reason_code === "no_recorded_evidence" || binding.status === "not_found" ? withdrawal : execution;
+          }
+          return execution.cancel_requested_at_ms >= withdrawal.cancel_requested_at_ms ? execution : withdrawal;
         } catch {
           return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
         }
       },
-      onOwnerTaskSubmissionCancellation: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellation | null> => {
+      onOwnerTaskSubmissionCancellation: async ({ request_id }: { request_id: string }):
+        Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null> => {
+        ownerLease.assertActive();
         let operationPlans: unknown;
         try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
         catch { return null; }
+        const plan = projectOwnerTaskRequestCommandIds(operationPlans, request_id);
+        if (plan.status === "ambiguous" || plan.status === "invalid") return null;
+        const planCommands = new Set(plan.status === "matched" ? plan.command_ids : []);
+        const pending = ownerTaskPendingApprovals(request_id, planCommands);
         const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
         const binding = projectOwnerTaskActiveCommand(operationPlans, request_id, activeCommandIds);
+        if (binding.status === "ambiguous" || binding.status === "invalid" || pending.length > 1) return null;
+        if (pending.length === 1) {
+          const [approval] = pending;
+          if (binding.status === "matched" && binding.command_id !== approval!.command.id) return null;
+          return withdrawPendingTaskApproval(approval!, OWNER_TASK_APPROVAL_ACTOR, OWNER_TASK_WITHDRAWAL_REASON);
+        }
+        if (binding.status === "not_active") return readOwnerTaskApprovalWithdrawal(request_id, planCommands);
         if (binding.status !== "matched") return null;
         const cancellation = requestTaskExecutionCancellation(binding.command_id, {
-          actor: "webchat-owner-token-holder",
+          actor: OWNER_TASK_APPROVAL_ACTOR,
           token_kind: "owner_task",
         });
         return cancellation ? {
@@ -4967,7 +4992,13 @@ async function serveWithOwnerLease(
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
           requestTaskExecutionCancellation(command_id, ctx),
-        reviewContent: async (command_id: string) => pendingApprovalContentReview(command_id),
+        reviewContent: async (command_id: string) => {
+          const review = await pendingApprovalContentReview(command_id);
+          if (!review || approvalRecoveryStore.state(command_id) === "pending") return review;
+          // An asynchronous probe can finish after the owner has closed the approval.
+          pendingApprovals.delete(command_id);
+          return null;
+        },
         validateContentReview: async (command_id: string, content_review_digest: string | undefined) =>
           validatePendingApprovalContentReview(command_id, content_review_digest),
         grants: async () => approvalGrantsSnapshot(),
@@ -7127,20 +7158,47 @@ async function serveWithOwnerLease(
       binding.runtime_ref_digest === scope.runtime_ref_digest && binding.session_ref_digest === scope.session_ref_digest;
   }
 
-  function d4PendingWithdrawalEvidence(requestId: string, commandId: string): WebChatD4RuntimeApprovalWithdrawal | null {
+  function ownerTaskPendingApprovals(requestId: string, planCommands: ReadonlySet<string>): PendingApproval[] {
+    return [...pendingApprovals.values()].filter(({ command, log, origin }) =>
+      isGatewayInternalInboundRequest(origin) && origin.channel === "webchat" && origin.user === OWNER_TASK_APPROVAL_ACTOR &&
+      origin.metadata?.["blue_tanuki.actor_kind"] === "owner" && origin.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+      origin.id === log.request_id && command.upstream_decision.request_id === origin.id &&
+      ((origin.id === requestId && origin.metadata?.["blue_tanuki.operation_core.projection_id"] === "owner-task:operation-plan") ||
+        (planCommands.has(command.id) && Boolean(hds.getExecutionOperationPlanBindingDigest(command)))));
+  }
+
+  function readOwnerTaskApprovalWithdrawal(requestId: string, planCommands: ReadonlySet<string>): WebChatTaskApprovalWithdrawal | null {
+    if (ownerTaskPendingApprovals(requestId, planCommands).length > 0 ||
+        activeTaskExecutions.snapshot().some(item => planCommands.has(item.command_id))) return null;
     const audit = hds.getAudit();
-    if (!audit.isPersistent() || !audit.verify()) return null;
-    const entries = audit.list().filter(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
-      log.request_id === requestId && log.command_id === commandId && log.phase === "approval_cancelled" &&
-      log.actor === "d4-runtime-adapter-token-holder" && log.reason === D4_PENDING_WITHDRAWAL_REASON);
-    if (entries.length !== 1) return null;
-    const timestamp = entries[0]!.log.timestamp;
+    const matches = audit.list().flatMap(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      (log.request_id === requestId || planCommands.has(log.command_id)) && log.phase === "approval_cancelled" &&
+      log.actor === OWNER_TASK_APPROVAL_ACTOR && log.reason === OWNER_TASK_WITHDRAWAL_REASON ? [log] : []);
+    if (!matches.length || !audit.isPersistent() || !audit.verify()) return null;
+    const latest = Math.max(...matches.map(log => log.timestamp));
+    const matching = matches.filter(log => log.timestamp === latest);
+    if (matching.length !== 1 || approvalRecoveryStore.state(matching[0]!.command_id) !== null) return null;
+    return taskApprovalWithdrawal(latest);
+  }
+
+  function taskApprovalWithdrawal(timestamp: number): WebChatTaskApprovalWithdrawal | null {
     if (!Number.isSafeInteger(timestamp) || timestamp <= 0) return null;
     return {
       status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
       external_processing_stop: "unknown", cancel_requested_at_ms: timestamp,
       used_for_authority: false, may_execute: false,
     };
+  }
+
+  function pendingWithdrawalEvidence(requestId: string, commandId: string, actor: string, reason: string):
+    WebChatTaskApprovalWithdrawal | null {
+    const audit = hds.getAudit();
+    if (!audit.isPersistent() || !audit.verify()) return null;
+    const entries = audit.list().filter(({ log }) => "kind" in log && log.kind === "command_lifecycle" &&
+      log.request_id === requestId && log.command_id === commandId && log.phase === "approval_cancelled" &&
+      log.actor === actor && log.reason === reason);
+    if (entries.length !== 1) return null;
+    return taskApprovalWithdrawal(entries[0]!.log.timestamp);
   }
 
   function readD4PendingWithdrawal(
@@ -7151,14 +7209,25 @@ async function serveWithOwnerLease(
         activeTaskExecutions.d4RuntimeCommands(scope).length > 0) return null;
     const commandId = boundCommandIds[0]!;
     if (approvalRecoveryStore.state(commandId) !== null) return null;
-    return d4PendingWithdrawalEvidence(scope.request_id, commandId);
+    return pendingWithdrawalEvidence(scope.request_id, commandId, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON);
   }
 
   function withdrawD4PendingApproval(
     scope: WebChatD4RuntimeCancellationScope, pending: PendingApproval,
   ): WebChatD4RuntimeApprovalWithdrawal | null {
+    return withdrawPendingTaskApproval(pending, "d4-runtime-adapter-token-holder", D4_PENDING_WITHDRAWAL_REASON, () => {
+      ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, pending.command.id);
+      if (!ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope).matching.includes(pending.command.id)) {
+        throw new Error("d4_approval_withdrawal_binding_unavailable");
+      }
+    });
+  }
+
+  function withdrawPendingTaskApproval(
+    pending: PendingApproval, actor: string, reason: string, persistBinding?: () => void,
+  ): WebChatTaskApprovalWithdrawal | null {
     const commandId = pending.command.id;
-    const actor = "d4-runtime-adapter-token-holder";
+    const requestId = pending.log.request_id;
     if (pendingApprovals.get(commandId) !== pending || executorCommandDigest(pending.command) !== pending.command_digest ||
         !hds.operationPlanCommandIsCurrent(pending.command) || pending.cron_event ||
         pending.goal_purpose_proposal || pending.goal_purpose_relation_review_proposal ||
@@ -7167,20 +7236,16 @@ async function serveWithOwnerLease(
     if (!approvalRecoveryStore.beginResolution(commandId)) return null;
     try {
       discardPendingApproval(commandId);
-      runtimeSchedules.rejectPending(commandId, actor, D4_PENDING_WITHDRAWAL_REASON);
-      hds.onCommandLifecycle(commandId, "approval_cancelled", { actor, reason: D4_PENDING_WITHDRAWAL_REASON,
-        request_id: scope.request_id });
-      const evidence = d4PendingWithdrawalEvidence(scope.request_id, commandId);
-      if (!evidence) throw new Error("d4_approval_withdrawal_unverified");
-      ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, commandId);
-      if (!ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope).matching.includes(commandId)) {
-        throw new Error("d4_approval_withdrawal_binding_unavailable");
-      }
+      runtimeSchedules.rejectPending(commandId, actor, reason);
+      hds.onCommandLifecycle(commandId, "approval_cancelled", { actor, reason, request_id: requestId });
+      const evidence = pendingWithdrawalEvidence(requestId, commandId, actor, reason);
+      if (!evidence) throw new Error("approval_withdrawal_unverified");
+      persistBinding?.();
       approvalRecoveryStore.completeResolution(commandId);
       return evidence;
     } catch {
       try { approvalRecoveryStore.markOutcomeUnknown(commandId); } catch { /* Keep the resolving record closed. */ }
-      gatewayLog.error("D4 pending approval withdrawal evidence unavailable", { used_for_authority: false });
+      gatewayLog.error("pending task approval withdrawal evidence unavailable", { used_for_authority: false });
       return null;
     }
   }

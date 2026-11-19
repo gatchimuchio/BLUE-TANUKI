@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import {
   isGatewayInternalInboundRequest,
   parseInboundRequestAtBoundary,
+  SettingsWriteArgumentsSchema,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
 import type { InboundEphemeralContext, SendMeta } from "@blue-tanuki/channel-base";
@@ -854,6 +855,23 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(result.restoredStatusIds).toEqual([submittedId]);
   });
 
+  it("reports a withdrawn owner approval without claiming process or external stop", () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("function ownerTaskApprovalWithdrawn(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("async function checkOwnerTaskSubmissionStatus(", start);
+    expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
+    const source = CONTROL_CENTER_SCRIPT.slice(start, end);
+    const summary = new Script(source + "\nownerTaskCancellationSummary").runInNewContext({
+      isObject: (value: unknown) => typeof value === "object" && value !== null && !Array.isArray(value),
+    }) as (value: unknown) => string;
+    const withdrawal = {
+      status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+      external_processing_stop: "unknown", cancel_requested_at_ms: 1, used_for_authority: false, may_execute: false,
+    };
+    expect(summary(withdrawal)).toBe("承認待ちを取り消しました。この承認での実行は開始していません。");
+    expect(summary({ ...withdrawal, execution_token: "private-fixture" })).toContain("不正");
+    expect(summary({ ...withdrawal, executor_started: true })).toContain("不正");
+  });
+
   it("sends audio for owner-reviewed transcription separately from task planning", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function postOwnerAudioTranscription(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function checkOwnerTaskSubmissionStatus(", start + 1);
@@ -898,7 +916,9 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(messages[0]?.[1]).toContain("計画作成は行っていません");
   });
 
-  it("connects main-app LLM cost and budget settings and invalidates stale readiness", async () => {
+  it("checks LLM readiness and prepares an exact non-secret Owner Task settings draft", async () => {
+    expect(renderControlCenterHtml()).toContain('id="prepare-llm-settings-plan"');
+    expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
     const section = (startText: string, endText: string) => {
       const start = CONTROL_CENTER_SCRIPT.indexOf(startText);
       const end = CONTROL_CENTER_SCRIPT.indexOf(endText, start + 1);
@@ -907,12 +927,13 @@ describe("WebChatChannel — Control Center shell", () => {
       return CONTROL_CENTER_SCRIPT.slice(start, end);
     };
     const nodes = new Map<string, { value: string; checked: boolean; textContent: string; className: string;
-      placeholder: string; events: Map<string, () => void>; addEventListener: (name: string, handler: () => void) => void }>();
+      placeholder: string; events: Map<string, () => void>; addEventListener: (name: string, handler: () => void) => void;
+      focus: () => void }>();
     const node = (id: string) => {
       if (!nodes.has(id)) {
         const events = new Map<string, () => void>();
         nodes.set(id, { value: "", checked: false, textContent: "", className: "", placeholder: "", events,
-          addEventListener: (name, handler) => events.set(name, handler) });
+          addEventListener: (name, handler) => events.set(name, handler), focus: () => {} });
       }
       return nodes.get(id)!;
     };
@@ -930,26 +951,35 @@ describe("WebChatChannel — Control Center shell", () => {
       compute_readiness: { ...snapshot.llm.compute_readiness, status: "blocked", detail: "task cost limit is too small" },
       next_action: "Configure the task budget, then verify again." };
     const calls: Array<{ path: string; body: unknown }> = [];
+    const screens: string[] = [];
     let editDuringVerify = false;
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
       section("function settingsPayload(", "function connectorsPayload("),
       section("async function verifyLlmSettings(", "function setRuntimeSnapshotObservation("),
-      section('for (const id of ["settings-provider"', 'byId("save-settings").addEventListener'),
-      "({ settingsPayload, renderSettingsSnapshot, verifyLlmSettings, saveSettings })",
+      section('for (const id of ["settings-provider"', 'byId("settings-token").addEventListener'),
+      section('byId("settings-token").addEventListener', 'byId("connect-chat").addEventListener'),
+      "({ settingsPayload, renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
       byId: node, state: {}, sessionStorage: { setItem: () => {} },
       isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
       setText: (id: string, value: string) => { node(id).textContent = value; },
+      setActiveScreen: (screen: string) => screens.push(screen),
       compactJson: JSON.stringify, redactRuntimeValue: (value: unknown) => value,
-      loadSettings: async () => { node("settings-verify-status").textContent = "not run"; },
       postJson: async (path: string, _token: string, body: unknown) => {
         calls.push({ path, body });
         if (path.endsWith("/verify") && editDuringVerify) node("settings-timeout-ms").value = "6000";
         return { result };
       },
     });
+    const preparePlan = node("prepare-llm-settings-plan").events.get("click")!;
+    const task = node("owner-task-intent");
+    const planStatus = node("settings-plan-status");
+    preparePlan();
+    expect(planStatus.textContent).toContain("先に現行の設定");
     api.renderSettingsSnapshot(snapshot);
+    preparePlan();
+    expect(planStatus.textContent).toContain("差分がありません");
     expect(api.settingsPayload().llm).toMatchObject({ timeout_ms: "5000", provider_cost_profiles_json: profiles,
       compute_budget_policy_json: budget });
     expect(api.settingsPayload().llm).not.toHaveProperty("api_key");
@@ -974,10 +1004,41 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(node("settings-verify-status").className).toBe("badge warn");
     expect(node("settings-verify-status").textContent).toContain("再確認");
     editDuringVerify = false;
-    await api.saveSettings();
-    expect(calls.at(-1)).toMatchObject({ path: "/settings/config", body: { llm: { timeout_ms: "6000",
-      provider_cost_profiles_json: profiles, compute_budget_policy_json: budget } } });
-    expect(node("settings-verify-status").textContent).toContain("Gatewayを再起動");
+    const verifyCallCount = calls.length;
+    node("settings-api-key").value = "private-api-key-sentinel";
+    node("settings-endpoint").value = "https://private-endpoint.invalid";
+    node("settings-model").value = "sk-proj-0123456789abcdefghijkl";
+    preparePlan();
+    expect(planStatus.textContent).toContain("資格情報");
+    expect(task.value).toBe("");
+    node("settings-model").value = "fixture-new-model";
+    node("settings-provider").value = "stub";
+    preparePlan();
+    expect(planStatus.textContent).toContain("現行Provider");
+    expect(task.value).toBe("");
+    node("settings-provider").value = snapshot.llm.provider;
+    node("settings-timeout-ms").value = "600001";
+    preparePlan();
+    expect(planStatus.textContent).toContain("600000");
+    expect(task.value).toBe("");
+    node("settings-timeout-ms").value = "6000";
+    task.value = "unfinished owner task";
+    preparePlan();
+    expect(planStatus.textContent).toContain("既存の入力");
+    expect(task.value).toBe("unfinished owner task");
+    task.value = "";
+    node("owner-task-include-mcp-catalog").checked = true;
+    preparePlan();
+    expect(task.value).toBe("");
+    node("owner-task-include-mcp-catalog").checked = false;
+    preparePlan();
+    expect(screens).toEqual(["tasks"]);
+    expect(calls).toHaveLength(verifyCallCount);
+    const argsLine = task.value.split("\n").find((line) => line.startsWith("settings.writeの引数JSON "));
+    const args = SettingsWriteArgumentsSchema.parse(JSON.parse(argsLine!.slice("settings.writeの引数JSON ".length)));
+    expect(args).toEqual({ patch: { llm: { model: "fixture-new-model", timeout_ms: 6000 } } });
+    expect(task.value).not.toMatch(/private-|cost|budget|approval.mode/);
+    expect(planStatus.textContent).toContain("確認してから送信");
     node("settings-provider-cost-profiles").value = "";
     node("settings-compute-budget-policy").value = "";
     expect(api.settingsPayload().llm).toMatchObject({ provider_cost_profiles_json: "", compute_budget_policy_json: "" });
@@ -3018,7 +3079,8 @@ describe("WebChatChannel — Control Center shell", () => {
       expect(html).toContain("settings-compute-readiness");
       expect(html).toContain("load-settings");
       expect(html).toContain("verify-llm-settings");
-      expect(html).toContain("save-settings");
+      expect(html).toContain('id="prepare-llm-settings-plan"');
+      expect(html).not.toContain('id="save-settings"');
       expect(html).toContain("about-token");
       expect(html).toContain("load-about");
       expect(html).toContain("/app/about");

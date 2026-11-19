@@ -60,7 +60,7 @@ export interface WebChatD4RuntimeCancellationScope {
   readonly session_ref_digest: string;
 }
 
-export interface WebChatD4RuntimeApprovalWithdrawal {
+export interface WebChatTaskApprovalWithdrawal {
   readonly status: "approval_withdrawn";
   readonly cancel_request_accepted: true;
   readonly executor_started: false;
@@ -70,7 +70,10 @@ export interface WebChatD4RuntimeApprovalWithdrawal {
   readonly may_execute: false;
 }
 
+export type WebChatD4RuntimeApprovalWithdrawal = WebChatTaskApprovalWithdrawal;
+
 export type WebChatOwnerTaskCancellationStatus =
+  | WebChatTaskApprovalWithdrawal
   | {
       readonly status: "request_recorded";
       readonly cancel_request_accepted: true;
@@ -101,7 +104,7 @@ export type WebChatOwnerTaskCancellationStatus =
       readonly may_execute: false;
     };
 
-export type WebChatD4RuntimeCancellationStatus = WebChatOwnerTaskCancellationStatus | WebChatD4RuntimeApprovalWithdrawal;
+export type WebChatD4RuntimeCancellationStatus = WebChatOwnerTaskCancellationStatus;
 
 export interface WebChatResumeApprovalOptions {
   /** If true, the gateway may convert this approval into a reusable grant. */
@@ -1909,7 +1912,8 @@ export interface WebChatOptions {
   /** Read-only cancellation evidence for the exact authenticated owner task request. */
   onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
   /** Request abort for the single active command bound to an authenticated owner task request. */
-  onOwnerTaskSubmissionCancellation?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellation | null>;
+  onOwnerTaskSubmissionCancellation?: (input: { request_id: string }) =>
+    Promise<WebChatOwnerTaskCancellation | WebChatTaskApprovalWithdrawal | null>;
   /** Dedicated proposal route for owner-governed delegated goal purpose changes. */
   onGoalPurposeChangeProposal?: (input: {
     goal_ref: string;

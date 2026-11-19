@@ -1238,7 +1238,7 @@ describe("buildRecoverySnapshot", () => {
           { role: "schedules_dir", disposition: "not_captured" },
           { role: "failure_memory_file", disposition: "overlapping_targets" },
           { role: "failure_memory_dir", disposition: "overlapping_targets" },
-          { role: "memory_file", disposition: "candidate_only" },
+          { role: "memory_file", disposition: "requires_domain_review" },
         ]),
         canonical_stores: expect.arrayContaining([
           { store_key: CANONICAL_DATABASES[0]![0], archive_status: "verified", disposition: "requires_store_reconciliation" },

@@ -5455,7 +5455,13 @@ export class OperationPlanLedger {
   } {
     const current = plan.bindings.filter((binding) => binding.revision_digest === revision.digest &&
       binding.step_id === step.step_id);
-    if (current.length > 0) return { ...(current.length === 1 ? { binding: current[0]! } : {}), ambiguous: current.length !== 1 };
+    if (current.length === 1) return { binding: current[0]!, ambiguous: false };
+    if (current.length > 1) {
+      // Keep withdrawn selections in history without treating them as competing execution evidence.
+      const effective = current.filter((binding) => binding.status !== "invalidated" ||
+        binding.execution_admission !== undefined || binding.result_digest !== undefined || binding.memory_commit !== undefined);
+      return effective.length === 1 ? { binding: effective[0]!, ambiguous: false } : { ambiguous: true };
+    }
 
     const currentRevisionIndex = plan.revisions.findIndex((candidate) => candidate.digest === revision.digest);
     if (currentRevisionIndex < 0) return { ambiguous: true };
