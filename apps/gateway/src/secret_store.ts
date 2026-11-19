@@ -502,6 +502,22 @@ export function resolveSecretMaterial(
   return resolveSecretRefs(env, opts, [key])[key];
 }
 
+export function isTelegramBotToken(value: string): boolean {
+  return value === value.trim() && /^[1-9][0-9]{0,15}:[A-Za-z0-9_-]{1,256}$/u.test(value);
+}
+
+export function resolveTelegramBotToken(env: Env): string | undefined {
+  const ref = env.TELEGRAM_BOT_TOKEN_REF;
+  if (!ref) return env.TELEGRAM_BOT_TOKEN;
+  try {
+    const token = resolveSecretMaterial({ TELEGRAM_BOT_TOKEN_REF: ref }, "TELEGRAM_BOT_TOKEN", {
+      require_dpapi_key_match: true,
+    });
+    if (token && isTelegramBotToken(token)) return token;
+  } catch { /* The protected reference and storage errors can contain local paths. */ }
+  throw new Error("telegram_bot_token_reference_unavailable");
+}
+
 function resolveSecretRefs(
   env: Env,
   opts: ResolveOptions,

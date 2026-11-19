@@ -11,7 +11,8 @@ import type { MemoryPersonalizationTargetVersionObservation } from "@blue-tanuki
 import type { McpCallTargetVersionObservation, McpRequestKind } from "@blue-tanuki/protocol";
 import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { SettingsWriteActivation, SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
-  SettingsWriteGoogleReadCredentialReview, SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation } from "@blue-tanuki/protocol";
+  SettingsWriteGoogleReadCredentialReview, SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation,
+  SettingsWriteTelegramBotCredentialReview } from "@blue-tanuki/protocol";
 import type { ComposioActionTargetVersionObservation, ComposioActionContentReview } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
@@ -709,9 +710,10 @@ export interface SettingsWriteContentReview {
   credential_rotation?: SettingsWriteCredentialRotationReview;
   google_read_registration?: SettingsWriteGoogleReadCredentialReview;
   github_write_registration?: SettingsWriteGitHubWriteCredentialReview;
+  telegram_bot_registration?: SettingsWriteTelegramBotCredentialReview;
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
-      "google_read.credential_reference" | "github_write.credential_reference" |
+      "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";

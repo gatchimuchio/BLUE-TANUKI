@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash, createHmac } from "node:crypto";
 import WebSocket from "ws";
@@ -14,7 +14,10 @@ import { candidateFromCommand, CompleteHistoryStore, FailureMemoryStore, HDSUppe
   operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema,
   type OperationPlan, type OperationPlanCheckpointPlan } from "@blue-tanuki/protocol";
+import { parseEnvFile } from "../src/env_file.js";
 import { buildLLMCommandRouteFromEnv } from "../src/llm_config.js";
+import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
+import { storeBlueTanukiSecret } from "../src/secret_store.js";
 import { createDefaultSetupConfig, renderSetupEnvFile } from "../src/setup_config.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 const ROOT = process.cwd();
@@ -495,6 +498,235 @@ describe("served Telegram result return and request-bound media ingress", () => 
       rmSync(tempRoot, { recursive: true, force: true });
     }
   }, 45_000);
+
+  it.runIf(process.platform === "win32")("登録したTelegram保護参照で再起動後に受信と返信を行い、不正な参照では外部に送信しない", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-telegram-protected-registration-"));
+    const runtimeRoot = join(root, "runtime");
+    const envFile = join(runtimeRoot, "blue-tanuki.env");
+    const capture = join(runtimeRoot, "telegram.jsonl");
+    const promptLog = join(runtimeRoot, "prompt.txt");
+    const networkPreload = join(root, "telegram-fetch-fixture.cjs");
+    const nativePreload = join(root, "telegram-native-fixture.cjs");
+    const token = "123456:synthetic_telegram_token_for_protected_fixture";
+    const foreignToken = "987654:synthetic_foreign_secret_for_telegram_fixture";
+    const resumeToken = "synthetic-telegram-native-resume-token";
+    const settingsToken = "synthetic-telegram-native-settings-token";
+    const grant = { user_id: "804192715", chat_id: "-9984048831", message_thread_id: 20414197 };
+    const grants = JSON.stringify([grant]);
+    const baseConfig = `# Telegram隔離試験\r\nTELEGRAM_INBOUND_GRANTS_JSON=${JSON.stringify(grants)}\r\n`;
+    const requestText = "合成試験用の青い花について一行で説明してください。";
+    const wrongThreadText = "許可範囲外のスレッドの合成依頼";
+    const replyText = "合成試験の回答は青い花です。";
+    const message = { message_thread_id: grant.message_thread_id,
+      chat: { id: Number(grant.chat_id), type: "supergroup" },
+      from: { id: Number(grant.user_id), first_name: "Synthetic", is_bot: false } };
+    const updates = [
+      { update_id: 772, message: { ...message, message_id: 772, message_thread_id: grant.message_thread_id + 1, text: wrongThreadText } },
+      { update_id: 773, message: { ...message, message_id: 773, text: requestText } },
+    ];
+    const providerBodies: string[] = [];
+    const provider = createServer((request, response) => {
+      void readRequest(request).then(body => {
+        providerBodies.push(body);
+        if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+          response.writeHead(404).end();
+          return;
+        }
+        const content = body.includes("blue-tanuki.memory-citation-response.v1") ? JSON.stringify({
+          schema_version: "blue-tanuki.memory-citation-response.v1", answer: replyText, citations: [],
+        }) : replyText;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ id: "telegram-protected-fixture", object: "chat.completion", created: 1,
+          model: "f1003-local-fixture", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }));
+      }).catch(() => response.writeHead(500).end());
+    });
+    let gateway: CapturedProcess | undefined;
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const env = isolatedEnvironment(providerPort, gatewayPort, join(runtimeRoot, "audit"), join(runtimeRoot, "state"),
+        join(runtimeRoot, "memory.jsonl"), join(runtimeRoot, "history.jsonl"), join(runtimeRoot, "sessions"), capture, "[]");
+      delete env.TELEGRAM_BOT_TOKEN;
+      delete env.TELEGRAM_INBOUND_GRANTS_JSON;
+      env.BLUE_TANUKI_LOG_DIR = join(runtimeRoot, "logs");
+      env.BLUE_TANUKI_SETTINGS_TOKEN = settingsToken;
+      env.WEBCHAT_RESUME_TOKEN = resumeToken;
+      env.BT_F1003_TELEGRAM_TOKEN_SHA256 = createHash("sha256").update(token).digest("hex");
+      mkdirSync(runtimeRoot);
+      writeFileSync(envFile, baseConfig, "utf8");
+      writeFileSync(networkPreload, telegramFetchPreload(), "utf8");
+      writeFileSync(nativePreload, `
+require("./telegram-fetch-fixture.cjs");
+const childProcess = require("node:child_process");
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => {
+  const script = args?.at(-2) === "-EncodedCommand" ? Buffer.from(args.at(-1), "base64").toString("utf16le") : "";
+  if (!script.includes("UseSystemPasswordChar")) return spawn(command, args, options);
+  require("node:fs").appendFileSync(${JSON.stringify(promptLog)}, "native-prompt\\n");
+  const child = new (require("node:events").EventEmitter)();
+  child.stdout = new (require("node:stream").PassThrough)();
+  child.kill = () => true;
+  setImmediate(() => {
+    child.stdout.end(Buffer.from(${JSON.stringify(token)}));
+    child.emit("close", 0);
+  });
+  return child;
+};
+require("node:module").syncBuiltinESMExports();
+`, "utf8");
+
+      const origin = `http://127.0.0.1:${gatewayPort}`;
+      const protectedValues = [token, foreignToken];
+      const assertHidden = (text: string) => {
+        for (const value of protectedValues) expect(text.includes(value)).toBe(false);
+      };
+      const assertGrantHidden = (data: unknown) => {
+        const text = JSON.stringify(data) ?? "";
+        for (const id of [grant.user_id, grant.chat_id, String(grant.message_thread_id)]) expect(text.includes(id)).toBe(false);
+      };
+      const request = async (route: string, authorization: string, body?: object, requestOrigin = origin) => {
+        const response = await fetch(origin + route, { method: body ? "POST" : "GET",
+          headers: { authorization: `Bearer ${authorization}`, origin: requestOrigin,
+            ...(body ? { "content-type": "application/json" } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60_000) });
+        const text = await response.text();
+        assertHidden(text);
+        return { response, data: JSON.parse(text) as Record<string, unknown> };
+      };
+      gateway = spawnGateway(env, nativePreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const app = await fetch(origin + "/app", { signal: AbortSignal.timeout(8_000) });
+      expect(app.status).toBe(200);
+      expect(app.headers.get("cache-control")).toBe("no-store");
+      const html = await app.text();
+      expect(html).toContain('id="prepare-telegram-bot-credential"');
+      assertHidden(html);
+      assertGrantHidden(html);
+      expect((await request("/settings/config", WEBCHAT_TOKEN)).response.status).toBe(401);
+      const settings = await request("/settings/config", settingsToken);
+      expect(settings.response.status).toBe(200);
+      expect(settings.data.telegram_bot_credential_registration_available).toBe(true);
+      const proposalRoute = "/owner/telegram-bot-credential-proposal";
+      expect((await request(proposalRoute, resumeToken, {})).response.status).toBe(401);
+      expect((await request(proposalRoute, OWNER_TOKEN, {}, "http://untrusted.invalid")).response.status).toBe(403);
+      expect((await request(proposalRoute, OWNER_TOKEN, { token: "fixture-invalid-body-token" })).response.status).toBe(400);
+      writeFileSync(envFile, baseConfig.replace(JSON.stringify(grants), JSON.stringify("[]")), "utf8");
+      const unscoped = await request(proposalRoute, OWNER_TOKEN, {});
+      expect(unscoped.response.status).toBe(409);
+      expect(unscoped.data).toMatchObject({ accepted: false, status: "settings_proposal_unavailable" });
+      writeFileSync(envFile, baseConfig, "utf8");
+      const proposed = await request(proposalRoute, OWNER_TOKEN, {});
+      expect(proposed.response.status).toBe(202);
+      expect(proposed.data).toMatchObject({ accepted: true, status: "approval_required", command_id: expect.any(String) });
+      const queue = await request("/approval", resumeToken);
+      expect(queue.response.status).toBe(200);
+      const pending = (queue.data.pending_approvals as Record<string, unknown>[])
+        .find(item => item.command_id === proposed.data.command_id);
+      expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
+      const approval = `/approval/${encodeURIComponent(requiredString(proposed.data.command_id, "command_id"))}`;
+      const review = await request(`${approval}/content`, resumeToken, {});
+      expect(review.response.status).toBe(200);
+      expect(review.response.headers.get("cache-control")).toBe("no-store");
+      expect(review.data).toMatchObject({ kind: "settings_write", operation: "settings.write", no_store: true,
+        telegram_bot_registration: { api_host: "api.telegram.org", protected_reference_configured: false },
+        changes: [{ key: "telegram.credential_reference", before: "unconfigured", after: "register_on_restart" }],
+        review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      const verdict = { verdict: "approve", approval_token: pending?.approval_token, content_review_digest: review.data.review_digest };
+      const nativeApproval = `${approval}/native-credential`;
+      expect((await request(approval, resumeToken, verdict)).response.status).toBe(409);
+      expect((await request(nativeApproval, resumeToken, verdict, "http://untrusted.invalid")).response.status).toBe(403);
+      expect((await request(nativeApproval, resumeToken, { ...verdict, content_review_digest: "0".repeat(64) })).response.status).toBe(409);
+      expect(readCaptureText(promptLog)).toBeUndefined();
+      expect(readFileSync(envFile, "utf8")).toBe(baseConfig);
+      expect(readCaptureEvents(capture)).toEqual([]);
+
+      const saved = await request(nativeApproval, resumeToken, verdict);
+      expect(saved.response.status, JSON.stringify(saved.data)).toBe(200);
+      expect(saved.data).toMatchObject({ ok: true, result: { approval: "approve", executed: true, status: "success" } });
+      const config = readFileSync(envFile, "utf8");
+      const values = parseEnvFile(config).values;
+      const reference = requiredString(values.TELEGRAM_BOT_TOKEN_REF, "Telegram protected reference");
+      expect(values.TELEGRAM_BOT_TOKEN).toBeUndefined();
+      expect(values.TELEGRAM_INBOUND_GRANTS_JSON).toBe(grants);
+      expect(config).toBe(baseConfig + `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(reference)}\r\n`);
+      const secretPath = dpapiSecretPathFromReference(reference);
+      expect(dirname(secretPath)).toBe(join(runtimeRoot, "secrets"));
+      expect(readdirSync(dirname(secretPath))).toEqual([basename(secretPath)]);
+      const ciphertext = readFileSync(secretPath, "utf8").trim();
+      expect(ciphertext.length).toBeGreaterThan(0);
+      assertHidden(ciphertext);
+      protectedValues.push(reference, secretPath, ciphertext);
+      for (const item of [settings, proposed, queue, review, saved]) {
+        assertHidden(JSON.stringify(item.data));
+        assertGrantHidden(item.data);
+      }
+      expect((await request(nativeApproval, resumeToken, verdict)).response.status).toBe(409);
+      expect(readCaptureText(promptLog)).toBe("native-prompt\n");
+      expect(providerBodies).toEqual([]);
+      expect(readCaptureEvents(capture)).toEqual([]);
+
+      await stopChild(gateway);
+      assertHidden(gateway.stdout.concat(gateway.stderr).join(""));
+      env.BT_F1003_TELEGRAM_UPDATES = JSON.stringify(updates);
+      gateway = spawnGateway(env, networkPreload, envFile);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const snapshot = await request("/runtime/snapshot", WEBCHAT_TOKEN);
+      expect(snapshot.response.status).toBe(200);
+      expect(snapshot.data.telegram_configured).toBe(true);
+      assertGrantHidden(snapshot.data);
+      const sent = await waitFor(() => readCaptureEvents<{ method: string; text?: string }>(capture)
+        .find(event => event.method === "sendMessage") ?? null, gateway, "保護参照だけで起動したTelegramから返信されなかった");
+      expect(sent).toMatchObject({ method: "sendMessage", chat_id: grant.chat_id,
+        message_thread_id: grant.message_thread_id, text: expect.stringContaining(replyText) });
+      const events = readCaptureEvents(capture);
+      expect(events).toContainEqual(expect.objectContaining({ method: "getUpdates", update_ids: [772, 773] }));
+      expect(events.filter(event => event.method === "sendMessage")).toHaveLength(1);
+      expect(providerBodies).toHaveLength(1);
+      expect(providerBodies[0]).toContain(requestText);
+      expect(providerBodies[0]).not.toContain(wrongThreadText);
+      providerBodies.forEach(assertHidden);
+      await stopChild(gateway);
+      assertHidden(gateway.stdout.concat(gateway.stderr).join(""));
+      gateway = undefined;
+      expect(readCaptureText(promptLog)).toBe("native-prompt\n");
+      const persisted = readTreeBytes(runtimeRoot);
+      for (const plaintext of [token, foreignToken]) expect(persisted.includes(Buffer.from(plaintext))).toBe(false);
+
+      const rejectStartup = async (label: string, failure: string, extra: NodeJS.ProcessEnv = {}) => {
+        const rejectedCapture = join(runtimeRoot, `${label}-telegram.jsonl`);
+        const rejected = spawnGateway({ ...env, ...extra, BT_F1003_TELEGRAM_CAPTURE: rejectedCapture }, networkPreload, envFile);
+        gateway = rejected;
+        const [exitCode, signal] = await once(rejected.child, "close", { signal: AbortSignal.timeout(40_000) });
+        expect(exitCode).toBe(1);
+        expect(signal).toBeNull();
+        expect(readCaptureEvents(rejectedCapture)).toEqual([]);
+        expect(providerBodies).toHaveLength(1);
+        const diagnostic = rejected.stdout.concat(rejected.stderr).join("");
+        expect(diagnostic).toContain(failure);
+        assertHidden(diagnostic);
+        gateway = undefined;
+      };
+
+      const alternateEnvFile = join(runtimeRoot, "alternate.env");
+      protectedValues.push(alternateEnvFile);
+      await rejectStartup("configuration-mismatch", "gateway_env_file_target_mismatch", { BLUE_TANUKI_ENV_FILE: alternateEnvFile });
+
+      const foreign = storeBlueTanukiSecret("OPENAI_API_KEY", foreignToken, { envFilePath: envFile, env: {} });
+      protectedValues.push(foreign.ref, dpapiSecretPathFromReference(foreign.ref));
+      writeFileSync(envFile, baseConfig + `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(foreign.ref)}\r\n`, "utf8");
+      await rejectStartup("foreign", "telegram_bot_token_reference_unavailable");
+
+      renameSync(secretPath, `${secretPath}.held`);
+      writeFileSync(envFile, config, "utf8");
+      await rejectStartup("missing", "telegram_bot_token_reference_unavailable", { TELEGRAM_BOT_TOKEN: token });
+    } finally {
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 240_000);
 
   it("preserves Telegram admission as outcome unknown when Gateway stops during getFile", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "bt-telegram-shutdown-"));
@@ -1947,6 +2179,7 @@ function operationPlanCandidate(requestId: string, fileRoot: string): OperationP
 function telegramFetchPreload(): string {
   return `
 const fs = require("node:fs");
+const { createHash } = require("node:crypto");
 const originalFetch = globalThis.fetch.bind(globalThis);
 function append(event) { fs.appendFileSync(process.env.BT_F1003_TELEGRAM_CAPTURE, JSON.stringify(event) + "\\n", "utf8"); }
 const shutdownFile = process.env.BT_F1003_TELEGRAM_SHUTDOWN_FILE;
@@ -1964,6 +2197,16 @@ globalThis.fetch = async (input, init) => {
   if (url.hostname !== "api.telegram.org") append({ method: "fetch_attempt", hostname: url.hostname, port: url.port, path: url.pathname });
   if (url.hostname === "api.telegram.org") {
     const method = url.pathname.split("/").at(-1);
+    const expectedTokenDigest = process.env.BT_F1003_TELEGRAM_TOKEN_SHA256;
+    if (expectedTokenDigest) {
+      const segments = url.pathname.split("/");
+      if (segments.length !== 3 || !segments[1].startsWith("bot") || !["getUpdates", "sendMessage"].includes(method) ||
+          url.protocol !== "https:" || url.port || url.search ||
+          createHash("sha256").update(segments[1].slice(3)).digest("hex") !== expectedTokenDigest) {
+        append({ method: "telegram_credential_rejected" });
+        throw new Error("synthetic Telegram fixture rejected the configured credential");
+      }
+    }
     const body = init && typeof init.body === "string" ? JSON.parse(init.body) : {};
     const filePrefix = "/file/bot" + process.env.TELEGRAM_BOT_TOKEN + "/";
     if (url.pathname.startsWith(filePrefix)) {
@@ -2058,9 +2301,10 @@ function isolatedEnvironment(providerPort: number, gatewayPort: number, auditDir
     LINE_CHANNEL_SECRET: "" };
 }
 
-function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string): CapturedProcess {
-  const child = spawn(process.execPath, [...(preloadFile ? ["--import", pathToFileURL(preloadFile).href] : []),
-    "apps/gateway/dist/main.js", "--serve"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+function spawnGateway(env: NodeJS.ProcessEnv, preloadFile?: string, envFile?: string): CapturedProcess {
+  const args = [...(preloadFile ? ["--import", pathToFileURL(preloadFile).href] : []),
+    "apps/gateway/dist/main.js", "--serve", ...(envFile ? ["--env-file", envFile] : [])];
+  const child = spawn(process.execPath, args, { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   childProcesses.add(child);
   const stdout: string[] = [];
   const stderr: string[] = [];

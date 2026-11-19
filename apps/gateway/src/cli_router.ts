@@ -527,6 +527,13 @@ export async function runGatewayCliRouter(): Promise<void> {
   const serveMode =
     process.argv.includes("--serve") || process.env.BLUE_TANUKI_SERVE === "1";
   if (serveMode) {
+    if (envFile) {
+      const configuredPath = process.env.BLUE_TANUKI_ENV_FILE;
+      if (configuredPath && relative(envFile.path, configuredPath) !== "") {
+        throw new Error("gateway_env_file_target_mismatch");
+      }
+      process.env.BLUE_TANUKI_ENV_FILE = envFile.path;
+    }
     if (applyGatewaySafeMode(process.env)) {
       gatewayLog.warn("safe mode active", {
         llm_provider: "stub",

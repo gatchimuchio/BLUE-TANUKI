@@ -31,6 +31,8 @@ import {
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   SettingsWriteActivationSchema,
   SettingsWriteArgumentsSchema,
   SettingsWriteGoogleReadCredentialScopeSchema,
@@ -349,7 +351,8 @@ function dailyBriefReadResult(value: unknown): WebChatDailyBriefReadResult | nul
 function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, commandId: string): boolean {
   if (!Array.isArray(review.changes)) return false;
   const registrationKey = Object.hasOwn(review, "google_read_registration") ? "google_read_registration"
-    : Object.hasOwn(review, "github_write_registration") ? "github_write_registration" : undefined;
+    : Object.hasOwn(review, "github_write_registration") ? "github_write_registration"
+    : Object.hasOwn(review, "telegram_bot_registration") ? "telegram_bot_registration" : undefined;
   if (registrationKey) {
     const change = review.changes[0];
     if (!hasExactKeys({ ...review }, [
@@ -363,11 +366,13 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
         review.changes.length !== 1 || !change ||
         !hasExactKeys({ ...change }, ["key", "before", "after"])) return false;
     const expectedChange = registrationKey === "google_read_registration"
-      ? SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE : SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE;
+      ? SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE : registrationKey === "github_write_registration"
+        ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE : SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE;
     if (change.key !== expectedChange.key || change.before !== expectedChange.before || change.after !== expectedChange.after) return false;
-    if (registrationKey === "github_write_registration") {
-      const registration = review.github_write_registration;
-      const expected = SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW;
+    if (registrationKey !== "google_read_registration") {
+      const registration = review[registrationKey];
+      const expected = registrationKey === "github_write_registration" ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW
+        : SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW;
       return !!registration && hasExactKeys({ ...registration }, ["api_host", "protected_reference_configured"]) &&
         registration.api_host === expected.api_host &&
         registration.protected_reference_configured === expected.protected_reference_configured;
@@ -384,7 +389,8 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
   if (review.activation === undefined && review.credential_rotation === undefined) {
     return !review.changes.some(change => change?.key === "llm.provider" || change?.key === "llm.credential_reference" ||
       change?.key === SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE.key ||
-      change?.key === SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE.key);
+      change?.key === SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE.key ||
+      change?.key === SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE.key);
   }
   if (!hasExactKeys({ ...review }, [
     "kind", "command_id", "command_digest", "review_digest", "operation", "expected_llm_provider",
@@ -894,6 +900,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
  *   POST /owner/google-read-credential-proposal body:{scope,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/github-write-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
+ *   POST /owner/telegram-bot-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
@@ -1472,8 +1479,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       await this.handleOwnerLlmSettingsProposal(req, res);
       return;
     }
-    if (url.pathname === "/owner/google-read-credential-proposal" || url.pathname === "/owner/github-write-credential-proposal") {
-      await this.handleOwnerCredentialProposal(req, res, url, url.pathname === "/owner/google-read-credential-proposal");
+    if (url.pathname === "/owner/google-read-credential-proposal" || url.pathname === "/owner/github-write-credential-proposal" ||
+        url.pathname === "/owner/telegram-bot-credential-proposal") {
+      const kind = url.pathname === "/owner/google-read-credential-proposal" ? "google-read"
+        : url.pathname === "/owner/github-write-credential-proposal" ? "github-write" : "telegram-bot";
+      await this.handleOwnerCredentialProposal(req, res, url, kind);
       return;
     }
     if (url.pathname === "/owner/daily-brief-read") {
@@ -3331,7 +3341,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       if (content.kind === "settings_write" && (!validSettingsWriteReview(content, command_id) ||
-          ((content.google_read_registration !== undefined || content.github_write_registration !== undefined) &&
+          ((content.google_read_registration !== undefined || content.github_write_registration !== undefined ||
+              content.telegram_bot_registration !== undefined) &&
             (url.search || !isLocalControlCenterBrowserRequest(req))) ||
           (content.expected_llm_provider !== undefined &&
             (!SettingsWriteLlmProviderSchema.safeParse(content.expected_llm_provider).success ||
@@ -3687,7 +3698,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const reviewed = await this.opts.approval?.reviewContent?.(approval_id).catch(() => null);
       if (reviewed?.kind !== "settings_write" || !validSettingsWriteReview(reviewed, approval_id) ||
           (reviewed.activation?.credential_registration_required !== true && reviewed.credential_rotation === undefined &&
-            reviewed.google_read_registration === undefined && reviewed.github_write_registration === undefined) ||
+            reviewed.google_read_registration === undefined && reviewed.github_write_registration === undefined &&
+            reviewed.telegram_bot_registration === undefined) ||
           reviewed.command_id !== approval_id ||
           reviewed.review_digest !== content_review_digest || reviewed.no_store !== true ||
           reviewed.used_for_authority !== false || reviewed.may_execute !== false) {
@@ -4763,7 +4775,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       propose({ expected_provider: provider.data, patch: { llm }, ...goal, actor: OWNER_TOKEN_ACTOR }));
   }
 
-  private async handleOwnerCredentialProposal(req: IncomingMessage, res: ServerResponse, url: URL, googleRead: boolean): Promise<void> {
+  private async handleOwnerCredentialProposal(req: IncomingMessage, res: ServerResponse, url: URL,
+    kind: "google-read" | "github-write" | "telegram-bot"): Promise<void> {
     res.setHeader("content-type", "application/json");
     res.setHeader("cache-control", "no-store");
     res.setHeader("x-content-type-options", "nosniff");
@@ -4777,12 +4790,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
       return;
     }
+    const googleRead = kind === "google-read";
+    const proposalKey = kind.replace("-", "_");
     const proposeGoogle = googleRead ? this.opts.onOwnerGoogleReadCredentialProposal : undefined;
-    const proposeGitHub = googleRead ? undefined : this.opts.onOwnerGitHubWriteCredentialProposal;
-    if (!this.opts.owner_token || !(proposeGoogle || proposeGitHub)) {
+    const propose = kind === "github-write" ? this.opts.onOwnerGitHubWriteCredentialProposal
+      : kind === "telegram-bot" ? this.opts.onOwnerTelegramBotCredentialProposal : undefined;
+    if (!this.opts.owner_token || !(proposeGoogle || propose)) {
       res.writeHead(404);
-      res.end(JSON.stringify({ error: googleRead ? "owner_google_read_credential_proposal_not_configured"
-        : "owner_github_write_credential_proposal_not_configured" }));
+      res.end(JSON.stringify({ error: `owner_${proposalKey}_credential_proposal_not_configured` }));
       return;
     }
     if (!this.checkAuth(req, "owner")) {
@@ -4816,15 +4831,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       ? { goal_ref, purpose_version } : undefined;
     if (!body || Array.isArray(body) || !hasExactKeys(body, fields) || (scope && !scope.success) || (hasGoal && !goal)) {
       res.writeHead(400);
-      res.end(JSON.stringify({ error: googleRead ? "invalid_owner_google_read_credential_proposal"
-        : "invalid_owner_github_write_credential_proposal" }));
+      res.end(JSON.stringify({ error: `invalid_owner_${proposalKey}_credential_proposal` }));
       return;
     }
     const input = { ...goal, actor: OWNER_TOKEN_ACTOR };
     if (scope?.success && proposeGoogle) {
       await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGoogle({ scope: scope.data, ...input }));
-    } else if (proposeGitHub) {
-      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGitHub(input));
+    } else if (propose) {
+      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => propose(input));
     }
   }
 

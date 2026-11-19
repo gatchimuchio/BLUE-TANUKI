@@ -98,7 +98,7 @@ function nextRecommendedAction(input: {
     return "Review pending runtime schedule approvals";
   }
   if (!input.telegram_configured) {
-    return "Configure TELEGRAM_BOT_TOKEN to enable Telegram";
+    return "Save the Telegram inbound grants, register the bot token in local Control Center, and restart";
   }
   return null;
 }

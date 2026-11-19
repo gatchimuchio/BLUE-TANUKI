@@ -297,6 +297,17 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>Reserved Third-party</h3><p class="muted">WhatsApp remains outside first-party core.</p></div>
             <div class="screen-card"><h3>Metadata Boundary</h3><p class="muted">Channel metadata is normalized before review.</p></div>
           </div>
+          <section class="settings-subsection" aria-labelledby="telegram-bot-credential-title">
+            <h3 id="telegram-bot-credential-title">Telegram Botの資格情報</h3>
+            <p class="muted">設置先の <code>.env</code> に有効な <code>TELEGRAM_INBOUND_GRANTS_JSON</code> が必要です。承認後、この端末の専用入力画面でBotトークンを登録します。登録後はGatewayを再起動してください。</p>
+            <div class="action-row">
+              <button type="button" data-screen="settings">認証と委任目的を設定</button>
+              <button id="load-telegram-bot-credential-status" type="button">登録可否を確認</button>
+              <button id="prepare-telegram-bot-credential" type="button" disabled>Botトークンの登録を申請</button>
+              <button id="open-telegram-bot-credential-review" type="button" hidden>審査を開く</button>
+            </div>
+            <p id="telegram-bot-credential-status" class="muted" role="status">登録可否を確認してください。</p>
+          </section>
         </section>
 
         <section class="card" data-screen-group="connectors">

@@ -12,6 +12,8 @@ import {
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   settingsWriteGoogleReadCredentialReview,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
@@ -1229,6 +1231,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="settings-register-credential" type="checkbox"');
     expect(html).toContain('id="google-read-credential-scope" disabled');
     expect(html).toContain('id="prepare-github-write-credential" type="button" disabled');
+    expect(html).toContain('id="prepare-telegram-bot-credential" type="button" disabled');
     expect(html).toContain("専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください");
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
@@ -1261,6 +1264,7 @@ describe("WebChatChannel — Control Center shell", () => {
       current_window_usage_checked: false, evidence_source: ["CONFIG"] };
     const snapshot = { llm: { provider: "openai-compatible", model: "fixture-provider-model", max_tokens: 128, timeout_ms: 5000,
       temperature: 0, command_route: { model: "fixture-running-model" }, api_key_set: true, compute_readiness: computeReady } };
+    let currentSettings: Record<string, unknown> = snapshot;
     let result: Record<string, unknown> = { status: "pass", detail: "configuration only",
       evidence_source: ["CONFIG"], provider_connection_checked: false, credential_access_checked: false,
       used_for_authority: false, may_execute: false, compute_readiness: computeReady };
@@ -1274,6 +1278,7 @@ describe("WebChatChannel — Control Center shell", () => {
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
       section("function resetSettingsProposalGoals(", "function connectorsPayload("),
+      section("async function loadSettings()", "async function loadConnectors("),
       section("async function verifyLlmSettings(", "function setRuntimeSnapshotObservation("),
       section('byId("verify-llm-settings").addEventListener', 'byId("connect-chat").addEventListener'),
       "({ renderSettingsSnapshot, verifyLlmSettings })",
@@ -1288,6 +1293,10 @@ describe("WebChatChannel — Control Center shell", () => {
       compactJson: JSON.stringify, redactRuntimeValue: (value: unknown) => value,
       authHeaders: (token: string) => ({ authorization: token }),
       hasNoStore: () => noStore,
+      fetchJson: async (path: string, token: string) => {
+        calls.push({ path, token, body: undefined });
+        return currentSettings;
+      },
       postJson: async (path: string, token: string, body: unknown) => {
         calls.push({ path, token, body });
         return { result };
@@ -1486,6 +1495,24 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(node("settings-owner-token").value).toBe("");
     expect(node("github-write-credential-status").textContent).toContain("計画候補");
     expect(node("open-github-write-credential-review").hidden).toBe(false);
+
+    const prepareTelegram = node("prepare-telegram-bot-credential");
+    expect(prepareTelegram.disabled).toBe(true);
+    currentSettings = { ...githubSnapshot, telegram_bot_credential_registration_available: true };
+    const beforeTelegram = calls.length;
+    await node("load-telegram-bot-credential-status").events.get("click")!();
+    expect(calls[beforeTelegram]).toEqual({ path: "/settings/config", token: SETTINGS_TOKEN, body: undefined });
+    expect(prepareTelegram.disabled).toBe(false);
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareTelegram.events.get("click")!();
+    expect(calls[beforeTelegram + 1]).toEqual({ path: "/owner/telegram-bot-credential-proposal", token: OWNER_TOKEN,
+      body: { goal_ref: goal.value, purpose_version: 2 } });
+    expect(node("settings-owner-token").value).toBe("");
+    expect(node("telegram-bot-credential-status").textContent).toContain("計画候補");
+    const openTelegramReview = node("open-telegram-bot-credential-review");
+    expect(openTelegramReview.hidden).toBe(false);
+    openTelegramReview.events.get("click")!();
+    expect(screens.at(-1)).toBe("tasks");
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2639,6 +2666,8 @@ describe("WebChatChannel — Control Center shell", () => {
         SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
         SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
         SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+        SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
+        SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
         SETTINGS_GOOGLE_READ_API_HOSTS: Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
           .map(([scope, target]) => [scope, target.api_hosts])),
         GOOGLE_READ_CREDENTIAL_LABELS: { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" },
@@ -2758,6 +2787,25 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(JSON.parse(String(posts[3]!.options.body))).toEqual({ verdict: "approve",
       approval_token: "fixture-single-use-token", content_review_digest: githubReview.review_digest });
     expect(outputs["native-credential-approval-status"]).toContain("GitHubとの接続とトークンの権限は未確認");
+
+    const telegramReview = { ...baseReview, telegram_bot_registration: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
+      changes: [SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE] };
+    await expect(evaluate(telegramReview, "private, max-age=60")).rejects.toThrow();
+    for (const change of [{ api_host: "unlisted.example.test" }, { scope: "synthetic-never-project" }]) {
+      await expect(evaluate({ ...telegramReview, telegram_bot_registration: {
+        ...telegramReview.telegram_bot_registration, ...change,
+      } })).rejects.toThrow();
+    }
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    expect(posts).toHaveLength(4);
+    await evaluate(telegramReview, "no-store", "127.0.0.1", true);
+    expect(JSON.stringify(view.children)).toContain("api.telegram.org");
+    expect(attributes.get("data-native-credential-entry")).toBe("telegram-bot");
+    expect(posts[4]?.path).toBe(`/approval/${commandId}/native-credential`);
+    expect(JSON.parse(String(posts[4]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: telegramReview.review_digest });
+    expect(outputs["telegram-bot-credential-status"]).toContain("Gatewayを再起動");
   });
 
   it("shows only recorded Google Daily Brief occurrences beside independently running schedules", async () => {

@@ -617,6 +617,30 @@ describe("Telegram message splitting", () => {
     expect(result).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
   });
 
+  it("blocks redirects and keeps Bot API failure bodies and URLs out of diagnostics", async () => {
+    const token = "12345:synthetic-protected-bot-credential";
+    const responseDescription = "synthetic private reply context";
+    const requestOptions: Array<RequestRedirect | undefined> = [];
+    const fetch: TelegramFetch = async (input, init) => {
+      requestOptions.push(init?.redirect);
+      if (requestOptions.length === 1) {
+        return Response.json({ ok: false, description: `${responseDescription} ${token}` }, { status: 403 });
+      }
+      throw new Error(`request failed for ${String(input)}`);
+    };
+    const channel = new TelegramChannel({ bot_token: token, fetch });
+    const payload = { channel: "telegram", target: "12345", content: "synthetic message" };
+    const meta = { command_id: "fixture", upstream_commit_hash: "a".repeat(64) };
+    const rejected = await channel.send(payload, meta);
+    const unknown = await channel.send(payload, meta);
+    expect(requestOptions).toEqual(["error", "error"]);
+    expect(rejected).toMatchObject({ delivered: false, delivery_status: "not_delivered", error: "http_403" });
+    expect(unknown).toMatchObject({ delivered: false, delivery_status: "unknown", error_code: "delivery_outcome_unknown" });
+    const diagnostics = JSON.stringify([rejected, unknown, channel.getHistory()]);
+    expect(diagnostics).not.toContain(token);
+    expect(diagnostics).not.toContain(responseDescription);
+  });
+
   it("sends all chunks to the original Telegram forum topic", async () => {
     const sent: Array<Record<string, unknown>> = [];
     const fetch: TelegramFetch = async (_input, init) => {

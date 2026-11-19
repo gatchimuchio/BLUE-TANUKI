@@ -657,6 +657,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(stripUndefined(body)),
+        redirect: "error",
         signal,
       });
       // Keep the send deadline on the dispatch request and bound inbound body reads as well.
@@ -667,21 +668,18 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       }
       const text = await res.text();
       signal.throwIfAborted();
-      let parsed: unknown;
-      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { ok: false, description: text }; }
-      if (isRecord(parsed)) {
-        return {
-          ok: parsed.ok === true,
-          result: parsed.result,
-          description: typeof parsed.description === "string" ? parsed.description : res.ok ? undefined : `http_${res.status}`,
-        };
+      const parsed: unknown = JSON.parse(text);
+      if (res.ok && isRecord(parsed) && parsed.ok === true) return { ok: true, result: parsed.result };
+      if (isRecord(parsed) && parsed.ok === false && (res.ok || (res.status >= 400 && res.status < 500))) {
+        return { ok: false, description: res.ok ? "telegram_api_rejected" : `http_${res.status}` };
       }
-      return { ok: false, description: `http_${res.status}` };
+      throw new Error("telegram_response_unconfirmed");
     } catch (error) {
       if (isAbortError(error)) {
         return { ok: false, description: `telegram_${method}_timeout_${timeoutMs}ms` };
       }
-      throw error;
+      // Fetch and parser errors can contain the token-bearing URL or remote response.
+      throw new Error(`telegram_${method}_unconfirmed`);
     } finally {
       clearTimeout(timer);
     }

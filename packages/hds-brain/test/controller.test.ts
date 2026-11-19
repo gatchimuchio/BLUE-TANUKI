@@ -170,6 +170,8 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       marker: "owner_settings_google_read_registration" },
     { field: "github_write", registration: true, scope: "github.write", refKey: "GITHUB_TOKEN_REF",
       marker: "owner_settings_github_write_registration" },
+    { field: "telegram", registration: true, scope: "telegram.bot", refKey: "TELEGRAM_BOT_TOKEN_REF",
+      marker: "owner_settings_telegram_bot_registration" },
   ] as const)("requires structured owner input and a separate L3 approval for $scope credential registration",
     ({ field, registration, scope, refKey, marker }) => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-credential-settings-"));
@@ -183,7 +185,7 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       operation_plan_state: planState });
     const origin = ownerOrigin(`settings-${field}`, "prepare initial protected credential registration");
     const credentialArgs = { patch: { [field]: { register_credential: registration } } };
-    const ownerInputError = `plan_settings_${field}_registration_requires_owner_input`;
+    const ownerInputError = `plan_settings_${marker.slice("owner_settings_".length)}_requires_owner_input`;
     try {
       expect(() => controller.prepareSettingsWritePlan({ ...origin }, credentialArgs)).toThrow("settings_plan_owner_origin_required");
       expect(() => controller.prepareSettingsWritePlan(origin, {

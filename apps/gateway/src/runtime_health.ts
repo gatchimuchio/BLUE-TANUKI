@@ -37,7 +37,7 @@ export async function probeGatewaySelfHealth(
     storage_paths,
     audit_appendable,
     optional_dependencies: [
-      { name: "telegram", available: Boolean(env.TELEGRAM_BOT_TOKEN) },
+      { name: "telegram", available: Boolean(env.TELEGRAM_BOT_TOKEN_REF || env.TELEGRAM_BOT_TOKEN) },
       { name: "slack_preview", available: Boolean(env.SLACK_BOT_TOKEN && env.SLACK_APP_TOKEN) },
       { name: "discord_preview", available: Boolean(env.DISCORD_BOT_TOKEN) },
       { name: "teams_preview", available: Boolean(env.MICROSOFT_GRAPH_ACCESS_TOKEN) },

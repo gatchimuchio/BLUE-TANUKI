@@ -29,6 +29,8 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
@@ -1809,6 +1811,8 @@ export class Executor {
       const googleRegistration = googleScope ? settingsWriteGoogleReadCredentialReview(googleScope) : null;
       const githubRegistration = parsedArgs.success && parsedArgs.data.patch.github_write
         ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW : null;
+      const telegramRegistration = parsedArgs.success && parsedArgs.data.patch.telegram
+        ? SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW : null;
       const activation = llm?.activation;
       const rotation = llm?.rotate_credential && parsedArgs.success
         ? settingsWriteCredentialRotationReview(SettingsWriteNativeLlmProviderSchema.parse(parsedArgs.data.expected_llm_provider))
@@ -1820,6 +1824,7 @@ export class Executor {
           operationPlanDigest(review.credential_rotation ?? null) !== operationPlanDigest(rotation) ||
           operationPlanDigest(review.google_read_registration ?? null) !== operationPlanDigest(googleRegistration) ||
           operationPlanDigest(review.github_write_registration ?? null) !== operationPlanDigest(githubRegistration) ||
+          operationPlanDigest(review.telegram_bot_registration ?? null) !== operationPlanDigest(telegramRegistration) ||
           review.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
           review.target_version_digest !== operationPlanDigest(observation) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
@@ -1839,6 +1844,10 @@ export class Executor {
       if (githubRegistration &&
           operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE])) {
         throw new Error("settings.write content review returned unexpected GitHub write registration changes");
+      }
+      if (telegramRegistration &&
+          operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE])) {
+        throw new Error("settings.write content review returned unexpected Telegram bot registration changes");
       }
       if (activation) {
         const exactChanges = new Map(review.changes.map((change) => [change.key, change]));

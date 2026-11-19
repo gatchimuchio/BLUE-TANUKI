@@ -56,7 +56,7 @@ describe("buildRuntimeStatusSnapshot", () => {
       runtime_schedules_count: 0,
       pending_schedule_approvals_count: 0,
       audit_chain_valid: true,
-      next_recommended_action: "Configure TELEGRAM_BOT_TOKEN to enable Telegram",
+      next_recommended_action: "Save the Telegram inbound grants, register the bot token in local Control Center, and restart",
     });
     expect(JSON.stringify(status)).not.toContain("SECRET-WEBCHAT-TOKEN");
     expect(JSON.stringify(status)).not.toContain("SECRET-RESUME-TOKEN");

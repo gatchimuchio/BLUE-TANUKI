@@ -247,6 +247,13 @@ export function promptForGitHubWriteCredential(
   return promptForNativeCredential("GitHub 書き込み用アクセストークン", "github_write_credential_prompt", signal, source);
 }
 
+export function promptForTelegramBotCredential(
+  signal: AbortSignal,
+  source: NodeJS.ProcessEnv = process.env,
+): Promise<Buffer | null> {
+  return promptForNativeCredential("Telegram Bot トークン", "telegram_bot_credential_prompt", signal, source);
+}
+
 async function promptForNativeCredential(label: string, errorPrefix: string, signal: AbortSignal,
   source: NodeJS.ProcessEnv): Promise<Buffer | null> {
   if (signal.aborted) return null;

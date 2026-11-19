@@ -5105,6 +5105,12 @@ ${planControl.question}`,
       checkId: "github-write-credential-saved",
       content: "GitHub書込資格の保護参照を初回登録する",
       changedKeys: ["GITHUB_TOKEN_REF"],
+    } : patch.telegram ? {
+      scope: "telegram.bot",
+      stepId: "telegram-bot-credentials",
+      checkId: "telegram-bot-credential-saved",
+      content: "Telegram Bot資格の保護参照を初回登録する",
+      changedKeys: ["TELEGRAM_BOT_TOKEN_REF"],
     } : undefined;
     const changedKeys = credentialRegistration?.changedKeys ??
       (patch.llm && expected_llm_provider !== undefined ? llmSettingsWriteEnvKeys(patch.llm, expected_llm_provider) : null);
