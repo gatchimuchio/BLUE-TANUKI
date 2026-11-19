@@ -5681,9 +5681,12 @@ describe("WebChatChannel — HTTP inbound", () => {
         submission_id: D4_SUBMISSION_ID_1,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
       expect(status.status).toBe(200);
+      const unavailableResult = {
+        status: "unavailable", reason_code: "result_store_unavailable", used_for_authority: false, may_execute: false,
+      };
       expect(status.body).toEqual({ found: true, request_id: requestId, state: "dispatching", task_outcome: {
         status: "in_progress", reason_code: "completion_pending", used_for_authority: false, may_execute: false,
-      } });
+      }, result: unavailableResult });
       taskOutcome = {
         status: "achieved",
         reason_code: "goal_completion_rules_satisfied",
@@ -5738,7 +5741,8 @@ describe("WebChatChannel — HTTP inbound", () => {
         session_id: "session-1234-abcd",
         submission_id: D4_SUBMISSION_ID_1,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
-      expect(returned.body).toEqual({ found: true, request_id: requestId, state: "handler_returned", task_outcome: taskOutcome });
+      expect(returned.body).toEqual({ found: true, request_id: requestId, state: "handler_returned",
+        task_outcome: taskOutcome, result: unavailableResult });
 
       const received = runtimeCtx.received[0]!;
       const sessionDigest = createHmac("sha256", D4_RUNTIME_TOKEN)
@@ -5784,7 +5788,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
-  it("cancels only a same-session D4 Runtime submission and distinguishes an approval withdrawal", async () => {
+  it("cancels only a same-session D4 Runtime submission and distinguishes the cancellation stage", async () => {
     const cancellation: WebChatD4RuntimeIntentCancellation = {
       status: "cancel_requested",
       cancel_request_accepted: true,
@@ -5813,8 +5817,13 @@ describe("WebChatChannel — HTTP inbound", () => {
     let returnedCancellation: WebChatD4RuntimeIntentCancellation | null =
       { ...cancellation, command_id: "private-command-id" } as WebChatD4RuntimeIntentCancellation;
     let returnedStatus: WebChatD4RuntimeCancellationStatus = cancellationStatus;
+    const projectedRequestIds: string[] = [];
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
+      onD4RuntimeIntentTaskOutcome: async ({ request_id }) => {
+        projectedRequestIds.push(request_id);
+        return { status: "in_progress", reason_code: "completion_pending", used_for_authority: false, may_execute: false };
+      },
       onD4RuntimeIntentCancellationStatus: async (scope) => {
         statusCalls.push(scope);
         return returnedStatus;
@@ -5931,6 +5940,39 @@ describe("WebChatChannel — HTTP inbound", () => {
         status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
       } });
       expect(JSON.stringify(rejectedStatus.body)).not.toContain("private-command-id");
+
+      const beforeDispatch = { ...withdrawal, status: "cancelled_before_dispatch", cancel_requested_at_ms: 170 } as const;
+      returnedCancellation = beforeDispatch;
+      returnedStatus = beforeDispatch;
+      const cancelled = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(cancelled.status).toBe(202);
+      expect(cancelled.headers.get("cache-control")).toBe("no-store");
+      expect(cancelled.body).toEqual({ found: true, accepted: true, cancellation: beforeDispatch });
+      const projectedBeforeCancellation = projectedRequestIds.length;
+      const cancelledStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(cancelledStatus.status).toBe(200);
+      expect(cancelledStatus.headers.get("cache-control")).toBe("no-store");
+      expect(cancelledStatus.body).toEqual({
+        found: true, request_id: scope.request_id, state: "rejected", cancellation: beforeDispatch,
+        result: { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false },
+      });
+      expect(projectedRequestIds).toHaveLength(projectedBeforeCancellation);
+
+      const invalidBeforeDispatch = { ...beforeDispatch, command_id: "private-command-id" };
+      returnedCancellation = invalidBeforeDispatch;
+      returnedStatus = invalidBeforeDispatch;
+      const invalidCancel = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(invalidCancel.status).toBe(503);
+      expect(invalidCancel.body).toEqual({ error: "runtime_intent_cancellation_unavailable" });
+      const invalidStatus = await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      expect(invalidStatus.body).toMatchObject({ found: true, cancellation: {
+        status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
+      } });
+      expect(JSON.stringify(invalidStatus.body)).not.toContain("private-command-id");
     } finally {
       ws?.close();
       await runtimeCtx.teardown();
@@ -6169,7 +6211,8 @@ describe("WebChatChannel — HTTP inbound", () => {
       const status = await postJson(runtimeCtx.port, "/runtime/intent/status", {
         runtime_id: "blue_tanuki", session_id: sessionId, submission_id: D4_SUBMISSION_ID_4,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
-      expect(status.body).toEqual({ found: true, request_id: requestId, state: "outcome_unknown" });
+      expect(status.body).toEqual({ found: true, request_id: requestId, state: "outcome_unknown",
+        result: { status: "unavailable", reason_code: "result_store_unavailable", used_for_authority: false, may_execute: false } });
       const duplicate = await postJson(runtimeCtx.port, "/runtime/intent", {
         runtime_id: "blue_tanuki", session_id: sessionId, submission_id: D4_SUBMISSION_ID_4, intent,
       }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });

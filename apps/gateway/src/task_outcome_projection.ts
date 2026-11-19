@@ -9,6 +9,8 @@ import { ExecutionGoalVersionBindingSchema, getOperationDescriptor, OperationPla
 import type { ApprovalRecoveryState } from "./approval_recovery_store.js";
 import type { TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 
+type DispatchedTaskCancellationStatus = Exclude<WebChatD4RuntimeCancellationStatus, { status: "cancelled_before_dispatch" }>;
+
 const TASK_OUTCOME_REASON_CODES = new Set([
   "recovery_hold_active",
   "goal_purpose_binding_required",
@@ -571,7 +573,7 @@ export function projectOwnerTaskCancellationScope(
 
 function unknownCancellationStatus(
   reason_code: Extract<WebChatD4RuntimeCancellationStatus, { status: "unknown" }>["reason_code"],
-): WebChatD4RuntimeCancellationStatus {
+): DispatchedTaskCancellationStatus {
   return { status: "unknown", reason_code, used_for_authority: false, may_execute: false };
 }
 
@@ -592,7 +594,7 @@ export function projectOwnerTaskCancellationStatus(
   requestId: string,
   observations: readonly TaskExecutionCancellationEvidence[],
   scopedCommandIds: readonly string[] = [],
-): WebChatD4RuntimeCancellationStatus {
+): DispatchedTaskCancellationStatus {
   return projectTaskCancellationStatus(
     operationPlans, requestId, observations, WEBCHAT_OWNER_TASK_DIGEST, ["owner_task", "resume"], scopedCommandIds,
   );
@@ -605,7 +607,7 @@ function projectTaskCancellationStatus(
   ownerIdentityDigest: string,
   tokenKinds: readonly TaskExecutionCancellationEvidence["token_kind"][],
   scopedCommandIds: readonly string[] = [],
-): WebChatD4RuntimeCancellationStatus {
+): DispatchedTaskCancellationStatus {
   const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
   if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
   if (binding.status === "invalid" || scopedCommandIds.some((id) => typeof id !== "string" || !COMMAND_ID.test(id))) {

@@ -171,6 +171,7 @@ import type {
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
   WebChatD4RuntimeApprovalWithdrawal,
+  WebChatD4RuntimeBeforeDecisionCancellation,
   WebChatD4RuntimeCancellationScope,
   WebChatD4RuntimeCancellationStatus,
   WebChatD4RuntimeIntentCancellation,
@@ -1004,6 +1005,14 @@ function d4RuntimeExecutionBinding(
 const D4_PENDING_WITHDRAWAL_REASON = "d4_runtime_approval_withdrawn";
 const OWNER_TASK_APPROVAL_ACTOR = "webchat-owner-token-holder";
 const OWNER_TASK_WITHDRAWAL_REASON = "owner_task_approval_withdrawn";
+
+function d4BeforeDecisionCancellation(cancelledAt: number | null): WebChatD4RuntimeBeforeDecisionCancellation | null {
+  if (cancelledAt === null) return null;
+  return {
+    status: "cancelled_before_dispatch", cancel_request_accepted: true, executor_started: false,
+    external_processing_stop: "unknown", cancel_requested_at_ms: cancelledAt, used_for_authority: false, may_execute: false,
+  };
+}
 
 export function selectGatewayInboundEphemeralContext(
   boundary: GatewayInboundBoundaryPlan,
@@ -5200,6 +5209,10 @@ async function serveWithOwnerLease(
             },
             onD4RuntimeIntentCancellationStatus: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeCancellationStatus> => {
               try {
+                const queuedCancellation = d4BeforeDecisionCancellation(
+                  ownerTaskSubmissionStore.readD4RuntimeIntentBeforeDecisionCancellation(scope),
+                );
+                if (queuedCancellation) return queuedCancellation;
                 const operationPlans = hds.getRuntimeSnapshot().operation_plans;
                 const binding = projectD4RuntimeRequestCommandIds(operationPlans, scope.request_id);
                 if (binding.status === "ambiguous" || binding.status === "invalid") {
@@ -5224,6 +5237,12 @@ async function serveWithOwnerLease(
               const commands = new Set(activeTaskExecutions.d4RuntimeCommands(scope));
               for (const pending of pendingApprovals.values()) {
                 if (pendingD4ApprovalMatchesScope(pending, scope)) commands.add(pending.command.id);
+              }
+              if (commands.size === 0) {
+                const queuedCancellation = d4BeforeDecisionCancellation(
+                  ownerTaskSubmissionStore.cancelD4RuntimeIntentBeforeDecision(scope),
+                );
+                if (queuedCancellation) return queuedCancellation;
               }
               const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
               const binding = projectD4RuntimeActiveCommand(hds.getRuntimeSnapshot().operation_plans, scope.request_id, activeCommandIds);
@@ -8597,6 +8616,10 @@ async function serveWithOwnerLease(
     ephemeralContext?: InboundEphemeralContext,
     returnOwnerSavedResult?: { selectionStillCurrent: () => boolean; emit: (content: string) => void },
   ): Promise<void> => {
+    if (isGatewayInternalD4RuntimeIntentRequest(req)) {
+      ownerLease.assertActive();
+      if (!ownerTaskSubmissionStore.beginD4RuntimeIntentDecision(req.id)) return;
+    }
     const boundary = planGatewayInboundBoundary(req);
     const authorityReq = boundary.request;
     const ownerWaitReply = isGatewayInternalInboundRequest(authorityReq) &&

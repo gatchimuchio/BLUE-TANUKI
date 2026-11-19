@@ -99,8 +99,13 @@ export interface WebChatTaskApprovalWithdrawal {
 
 export type WebChatD4RuntimeApprovalWithdrawal = WebChatTaskApprovalWithdrawal;
 
+/** 同じD4受付を判断前に取り消したことを示す。 */
+export interface WebChatD4RuntimeBeforeDecisionCancellation extends Omit<WebChatTaskApprovalWithdrawal, "status"> {
+  readonly status: "cancelled_before_dispatch";
+}
+
 export type WebChatD4RuntimeCancellationStatus =
-  | WebChatTaskApprovalWithdrawal
+  | WebChatTaskApprovalWithdrawal | WebChatD4RuntimeBeforeDecisionCancellation
   | {
       readonly status: "request_recorded";
       readonly cancel_request_accepted: true;
@@ -145,7 +150,7 @@ export interface WebChatOwnerTaskWaitCancellation {
   readonly may_execute: false;
 }
 
-export type WebChatOwnerTaskCancellationStatus = WebChatD4RuntimeCancellationStatus |
+export type WebChatOwnerTaskCancellationStatus = Exclude<WebChatD4RuntimeCancellationStatus, WebChatD4RuntimeBeforeDecisionCancellation> |
   WebChatOwnerTaskWaitPending | WebChatOwnerTaskWaitCancellation;
 
 export interface WebChatResumeApprovalOptions {
@@ -1642,7 +1647,8 @@ export interface WebChatOwnerTaskCancellation {
   readonly may_execute: false;
 }
 
-export type WebChatD4RuntimeIntentCancellation = WebChatOwnerTaskCancellation | WebChatD4RuntimeApprovalWithdrawal;
+export type WebChatD4RuntimeIntentCancellation = WebChatOwnerTaskCancellation | WebChatD4RuntimeApprovalWithdrawal |
+  WebChatD4RuntimeBeforeDecisionCancellation;
 
 export interface WebChatActiveExecutionSnapshot {
   command_id: string;

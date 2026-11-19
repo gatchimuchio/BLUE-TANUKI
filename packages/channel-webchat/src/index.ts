@@ -32,6 +32,7 @@ export {
   type WebChatD4RuntimeCancellationScope,
   type WebChatTaskApprovalWithdrawal,
   type WebChatD4RuntimeApprovalWithdrawal,
+  type WebChatD4RuntimeBeforeDecisionCancellation,
   type WebChatD4RuntimeCancellationStatus,
   type WebChatD4RuntimeTaskOutcome,
   type WebChatD4RuntimeExecutionObservation,

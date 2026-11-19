@@ -687,6 +687,169 @@ HDSUpperController.prototype.decide = function (request, options) {
     }
   }, 120_000);
 
+  it("cancels an authenticated D4 submission before HDS dispatch and preserves its receipt after restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-before-dispatch-"));
+    const runtime = "blue_tanuki";
+    const token = "synthetic-d4-before-dispatch-token";
+    const resumeToken = "synthetic-d4-before-dispatch-resume";
+    const input = { runtime_id: runtime, session_id: "synthetic-held-runtime-session",
+      submission_id: "817ba185-1ffa-474c-868c-853976a20ebf" };
+    const intent = "SYNTHETIC_HELD_RUNTIME_INTENT: 色の名前をひとつ提案してください。";
+    const markers = { reached: join(root, "held"), release: join(root, "release"),
+      finished: join(root, "finished"), decided: join(root, "decided") };
+    let providerRequests = 0;
+    const provider = createServer((request, response) => {
+      providerRequests += 1;
+      request.resume();
+      response.writeHead(500).end();
+    });
+    let gateway: CapturedProcess | undefined;
+    let socket: WebSocket | undefined;
+    const frames: string[] = [];
+    try {
+      const providerPort = await listen(provider);
+      const gatewayPort = await reservePort();
+      const envFile = join(root, "fixture.env");
+      writeFileSync(envFile, "# isolated test configuration\n", "utf8");
+      mkdirSync(join(root, "files"));
+      const preload = join(root, "hold-d4-handler.mjs");
+      const webchatModule = pathToFileURL(join(ROOT, "packages/channel-webchat/dist/index.js")).href;
+      const hdsModule = pathToFileURL(join(ROOT, "packages/hds-brain/dist/index.js")).href;
+      writeFileSync(preload, `
+import { existsSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+import { WebChatChannel } from ${JSON.stringify(webchatModule)};
+import { HDSUpperController } from ${JSON.stringify(hdsModule)};
+const intent = ${JSON.stringify(intent)};
+const markers = ${JSON.stringify(markers)};
+const start = WebChatChannel.prototype.start;
+WebChatChannel.prototype.start = function (handler) {
+  return start.call(this, async (request, context) => {
+    if (request.content !== intent) return handler(request, context);
+    writeFileSync(markers.reached, request.id, { flag: "wx" });
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(markers.release) && Date.now() < deadline) await setTimeout(20);
+    if (!existsSync(markers.release)) throw new Error("synthetic handler gate expired");
+    await handler(request, context);
+    writeFileSync(markers.finished, request.id, { flag: "wx" });
+  });
+};
+const decide = HDSUpperController.prototype.decide;
+HDSUpperController.prototype.decide = function (request, options) {
+  if (request.content === intent) writeFileSync(markers.decided, request.id);
+  return decide.call(this, request, options);
+};
+`, "utf8");
+      const env = {
+        ...fixtureOsEnvironment(),
+        WEBCHAT_HOST: "127.0.0.1", WEBCHAT_PORT: String(gatewayPort), WEBCHAT_TOKEN,
+        WEBCHAT_RESUME_TOKEN: resumeToken,
+        BLUE_TANUKI_MAINTENANCE_TOKEN: "synthetic-d4-before-dispatch-maintenance",
+        BLUE_TANUKI_D4_RUNTIME_ID: runtime, BLUE_TANUKI_D4_RUNTIME_TOKEN: token,
+        BLUE_TANUKI_STATE_ROOT: join(root, "state"), BLUE_TANUKI_AUDIT_DIR: join(root, "audit"), BLUE_TANUKI_ENV_FILE: envFile,
+        BLUE_TANUKI_FILE_ROOT: join(root, "files"), BLUE_TANUKI_LOG_DIR: join(root, "logs"),
+        BLUE_TANUKI_RECOVERY_DIR: join(root, "recovery"), BLUE_TANUKI_APPROVALS_FILE: join(root, "approvals.json"),
+        BLUE_TANUKI_MEMORY_FILE: join(root, "memory.jsonl"), BLUE_TANUKI_COMPLETE_HISTORY_FILE: join(root, "history.jsonl"),
+        BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON: JSON.stringify(DEFAULT_COMPUTE_BUDGET_POLICY),
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({ "d4-held-fixture": {
+          capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0, currency: "USD" },
+        } }),
+        LLM_BACKEND: "d4-held-fixture", LLM_PROVIDERS_JSON: JSON.stringify([{
+          name: "d4-held-fixture", type: "openai-compatible", endpoint: `http://127.0.0.1:${providerPort}/v1`,
+          model: "d4-held-fixture", aliases: [], headers: {}, timeout_ms: 20_000,
+        }]),
+      };
+      const post = (route: string, body: object, authorization = token) => fetch(`http://127.0.0.1:${gatewayPort}${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(8_000),
+      });
+      gateway = spawnGateway(env, preload);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const ticketResponse = await post("/runtime/ws-ticket", { runtime_id: runtime, session_id: input.session_id });
+      expect(ticketResponse.status).toBe(200);
+      const { ticket } = await ticketResponse.json() as { ticket: string };
+      socket = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws?ticket=${encodeURIComponent(ticket)}`);
+      socket.on("message", data => frames.push(String(data)));
+      await once(socket, "open");
+
+      const submitted = await post("/runtime/intent", { ...input, intent });
+      expect(submitted.status).toBe(202);
+      const receipt = await submitted.json() as { request_id: string };
+      expect(receipt).toMatchObject({ accepted: true, duplicate: false, state: "dispatching" });
+      await waitFor(() => readCaptureText(markers.reached) === receipt.request_id ? true : null, gateway,
+        "the authenticated submission did not reach the held Gateway handler");
+      expect((await post("/runtime/intent/cancel", input, WEBCHAT_TOKEN)).status).toBe(401);
+      const foreign = await post("/runtime/intent/cancel", { ...input, session_id: "unrelated-d4-session" });
+      expect(foreign.status).toBe(404);
+      expect(await foreign.json()).toEqual({ found: false });
+      expect(await (await post("/runtime/intent/status", input)).json()).toMatchObject({
+        found: true, request_id: receipt.request_id, state: "dispatching", cancellation: { status: "unknown" },
+      });
+      const cancelled = await post("/runtime/intent/cancel", input);
+      expect(cancelled.status).toBe(202);
+      expect(cancelled.headers.get("cache-control")).toBe("no-store");
+      const acknowledgement = await cancelled.json() as { cancellation: Record<string, unknown> };
+      expect(acknowledgement).toEqual({ found: true, accepted: true, cancellation: {
+        status: "cancelled_before_dispatch", cancel_request_accepted: true, executor_started: false,
+        external_processing_stop: "unknown", cancel_requested_at_ms: expect.any(Number),
+        used_for_authority: false, may_execute: false,
+      } });
+      writeFileSync(markers.release, "release", { flag: "wx" });
+      await waitFor(() => readCaptureText(markers.finished) === receipt.request_id ? true : null, gateway,
+        "the held work did not return from the actual Gateway handler after release");
+      expect(readCaptureText(markers.decided)).toBeUndefined();
+      const approvals = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
+        headers: { authorization: `Bearer ${resumeToken}` }, signal: AbortSignal.timeout(8_000),
+      });
+      expect(approvals.status).toBe(200);
+      expect(await approvals.json()).toMatchObject({ pending_approvals: [] });
+
+      const expectCancelled = async () => {
+        const status = await post("/runtime/intent/status", input);
+        expect(status.status).toBe(200);
+        expect(status.headers.get("cache-control")).toBe("no-store");
+        const observed = await status.json();
+        expect(observed).toMatchObject({ found: true, request_id: receipt.request_id, state: "rejected",
+          cancellation: acknowledgement.cancellation,
+          result: { status: "unavailable", used_for_authority: false, may_execute: false } });
+        expect(JSON.stringify(observed)).not.toContain(intent);
+        expect(JSON.stringify(observed)).not.toContain(token);
+      };
+      const expectNoReplay = async () => {
+        const duplicate = await post("/runtime/intent", { ...input, intent });
+        expect(duplicate.status).toBe(409);
+        expect(await duplicate.json()).toMatchObject({ accepted: false, request_id: receipt.request_id, state: "rejected" });
+      };
+      await expectCancelled();
+      await expectNoReplay();
+      expect(providerRequests).toBe(0);
+      expect(frames.join("")).not.toContain(intent);
+      expect(frames.join("")).not.toContain(token);
+
+      socket.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      const capturedLogs = gateway.stdout.concat(gateway.stderr).join("");
+      expect(capturedLogs).not.toContain(intent);
+      expect(capturedLogs).not.toContain(token);
+      expect(capturedLogs).not.toContain("[webchat] D4 Runtime intent handler error");
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      await expectCancelled();
+      const repeated = await post("/runtime/intent/cancel", input);
+      expect(repeated.status).toBe(202);
+      expect(await repeated.json()).toEqual(acknowledgement);
+      await expectNoReplay();
+      expect(providerRequests).toBe(0);
+    } finally {
+      socket?.terminate();
+      if (gateway) await stopChild(gateway);
+      provider.closeAllConnections();
+      await closeServer(provider);
+      rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
+    }
+  }, 120_000);
+
   it("interrupts scoped compute and withdraws pending approval, retaining both observations after restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));
     const token = "synthetic-d4-runtime-cancellation-token-only";

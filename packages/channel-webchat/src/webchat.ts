@@ -12,6 +12,7 @@ import {
   type Server as HttpsServer,
 } from "node:https";
 import * as path from "node:path";
+import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { TLSSocket } from "node:tls";
 import { URL } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
@@ -90,6 +91,7 @@ import type {
   WebChatAboutSurface,
   WebChatTaskOutcome,
   WebChatTaskApprovalWithdrawal,
+  WebChatD4RuntimeBeforeDecisionCancellation,
   WebChatD4RuntimeCancellationStatus,
   WebChatOwnerTaskCancellation,
   WebChatOwnerTaskWaitCancellation,
@@ -697,19 +699,21 @@ function normalizeOwnerTaskPlanSteps(value: unknown): WebChatOwnerTaskPlanSteps 
   return { status: "available", steps, ...noAuthority };
 }
 
-function normalizeTaskApprovalWithdrawal(value: unknown): WebChatTaskApprovalWithdrawal | null {
+function normalizePreExecutorCancellation<Status extends WebChatTaskApprovalWithdrawal["status"] |
+    WebChatD4RuntimeBeforeDecisionCancellation["status"]>(value: unknown, expectedStatus: Status):
+    (Omit<WebChatTaskApprovalWithdrawal, "status"> & { readonly status: Status }) | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const withdrawal = value as Record<string, unknown>;
   const allowed = ["status", "cancel_request_accepted", "executor_started", "external_processing_stop",
     "cancel_requested_at_ms", "used_for_authority", "may_execute"];
-  if (Object.keys(withdrawal).length !== allowed.length || Object.keys(withdrawal).some((key) => !allowed.includes(key)) ||
-      withdrawal.status !== "approval_withdrawn" || withdrawal.cancel_request_accepted !== true ||
+  if (!hasExactKeys(withdrawal, allowed) ||
+      withdrawal.status !== expectedStatus || withdrawal.cancel_request_accepted !== true ||
       withdrawal.executor_started !== false || withdrawal.external_processing_stop !== "unknown" ||
       typeof withdrawal.cancel_requested_at_ms !== "number" || !Number.isSafeInteger(withdrawal.cancel_requested_at_ms) ||
       withdrawal.cancel_requested_at_ms < 0 || withdrawal.used_for_authority !== false ||
       withdrawal.may_execute !== false) return null;
   return {
-    status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+    status: expectedStatus, cancel_request_accepted: true, executor_started: false,
     external_processing_stop: "unknown", cancel_requested_at_ms: withdrawal.cancel_requested_at_ms,
     used_for_authority: false, may_execute: false,
   };
@@ -734,8 +738,9 @@ function normalizeOwnerTaskCancellationStatus(value: unknown) {
   return normalizeOwnerTaskWaitState(value) ?? normalizeTaskCancellationStatus(value);
 }
 
-function normalizeTaskCancellationStatus(value: unknown): WebChatD4RuntimeCancellationStatus {
-  const withdrawal = normalizeTaskApprovalWithdrawal(value);
+function normalizeTaskCancellationStatus(value: unknown): Exclude<WebChatD4RuntimeCancellationStatus,
+    WebChatD4RuntimeBeforeDecisionCancellation> {
+  const withdrawal = normalizePreExecutorCancellation(value, "approval_withdrawn");
   if (withdrawal) return withdrawal;
   const unknown: WebChatD4RuntimeCancellationStatus = {
     status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false,
@@ -1725,7 +1730,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         const outcome = await this.opts.onOwnerTaskSubmissionCancellation({ request_id: status.request_id });
         const wait = normalizeOwnerTaskWaitState(outcome);
         const cancellation = wait?.status === "wait_cancelled" ? wait
-          : normalizeTaskApprovalWithdrawal(outcome) ?? normalizeTaskCancellationAcknowledgement(outcome);
+          : normalizePreExecutorCancellation(outcome, "approval_withdrawn") ?? normalizeTaskCancellationAcknowledgement(outcome);
         if (!cancellation) {
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
@@ -2276,7 +2281,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           this.notifyD4RuntimeIntentProcessingFailure(sessionScope, claim.request_id);
         };
         transientTransferred = true;
-        void Promise.resolve().then(() => handler(inboundReq, ephemeralContext)).then(() => {
+        // 受付応答のあと一度制御を戻し、待機中の取消を処理できるようにする。
+        void waitForImmediate().then(() => handler(inboundReq, ephemeralContext)).then(() => {
           try {
             submissionStore.markD4RuntimeIntentHandlerReturned({
               request_id: claim.request_id,
@@ -2343,7 +2349,16 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         const scope = status ? { request_id: status.request_id, scope_digest: scopeDigest,
           runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
           session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id) } : null;
-        const taskOutcome = status && this.opts.onD4RuntimeIntentTaskOutcome
+        let cancellationStatus: WebChatD4RuntimeCancellationStatus | undefined;
+        if (scope && this.opts.onD4RuntimeIntentCancellationStatus) {
+          const cancellation = await this.opts.onD4RuntimeIntentCancellationStatus(scope)
+            .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
+              used_for_authority: false as const, may_execute: false as const }));
+          cancellationStatus = normalizePreExecutorCancellation(cancellation, "cancelled_before_dispatch") ??
+            normalizeTaskCancellationStatus(cancellation);
+        }
+        const state = cancellationStatus?.status === "cancelled_before_dispatch" ? "rejected" : status?.state;
+        const taskOutcome = status && state !== "rejected" && this.opts.onD4RuntimeIntentTaskOutcome
           ? normalizeTaskOutcome(await this.opts.onD4RuntimeIntentTaskOutcome({ request_id: status.request_id }).catch(() => ({
               status: "unknown" as const,
               reason_code: "projection_unavailable" as const,
@@ -2351,21 +2366,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
               may_execute: false as const,
             })))
           : undefined;
-        const cancellationStatus = scope && this.opts.onD4RuntimeIntentCancellationStatus
-          ? normalizeTaskCancellationStatus(await this.opts.onD4RuntimeIntentCancellationStatus(scope)
-              .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
-                used_for_authority: false as const, may_execute: false as const })))
-          : undefined;
-        const executionObservation = scope && this.opts.onD4RuntimeIntentExecutionObservation
+        const executionObservation = scope && state !== "rejected" && this.opts.onD4RuntimeIntentExecutionObservation
           ? normalizeTaskExecutionObservation(await this.opts.onD4RuntimeIntentExecutionObservation(scope).catch(() => undefined))
           : undefined;
         const result = status
-          ? submissionStore.getD4RuntimeIntentResult?.({ request_id: status.request_id, scope_digest: scopeDigest }) ?? {
-              status: "unavailable" as const,
-              reason_code: "result_store_unavailable" as const,
-              used_for_authority: false as const,
-              may_execute: false as const,
-            }
+          ? state === "rejected"
+            ? { status: "unavailable" as const, reason_code: "not_retained" as const,
+                used_for_authority: false as const, may_execute: false as const }
+            : submissionStore.getD4RuntimeIntentResult?.({ request_id: status.request_id, scope_digest: scopeDigest }) ?? {
+                status: "unavailable" as const,
+                reason_code: "result_store_unavailable" as const,
+                used_for_authority: false as const,
+                may_execute: false as const,
+              }
           : undefined;
         res.writeHead(200, {
           "content-type": "application/json",
@@ -2373,7 +2386,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           "x-content-type-options": "nosniff",
         });
         res.end(JSON.stringify(status
-          ? { found: true, request_id: status.request_id, state: status.state,
+          ? { found: true, request_id: status.request_id, state,
               ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
               ...(cancellationStatus ? { cancellation: cancellationStatus } : {}),
               ...(executionObservation ? { execution_observation: executionObservation } : {}),
@@ -2434,7 +2447,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           res.end(JSON.stringify({ found: true, accepted: false, error: "execution_not_cancellable" }));
           return;
         }
-        const acknowledgement = normalizeTaskApprovalWithdrawal(cancellation) ??
+        const acknowledgement = normalizePreExecutorCancellation(cancellation, "cancelled_before_dispatch") ??
+          normalizePreExecutorCancellation(cancellation, "approval_withdrawn") ??
           normalizeTaskCancellationAcknowledgement(cancellation, true);
         if (!acknowledgement) {
           res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });

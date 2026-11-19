@@ -62,6 +62,8 @@ interface RuntimeSubmissionRow {
   readonly delivery_state: WebChatOwnerTaskSubmissionState;
 }
 
+type D4RuntimeDecisionScope = Pick<WebChatD4RuntimeCancellationScope, "request_id" | "scope_digest">;
+
 /** Durable, content-free inbox for deduplicating authenticated WebChat submissions. */
 export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionStore {
   private readonly db: DatabaseType;
@@ -110,6 +112,11 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       // A previous process may have stopped after claiming an event but before completing its handler.
       // Preserve every identity and refuse replay; never infer that no work started.
       this.transaction(() => {
+        const columns = this.db.prepare("PRAGMA table_info(webchat_owner_task_inbox)").all();
+        if (!columns.some(column => column.name === "d4_decision_state")) {
+          this.db.exec(`ALTER TABLE webchat_owner_task_inbox ADD COLUMN d4_decision_state TEXT
+            CHECK(d4_decision_state IN ('queued','started','cancelled'))`);
+        }
         this.db.prepare(`UPDATE webchat_owner_task_inbox SET delivery_state='outcome_unknown',updated_at_ms=?
           WHERE delivery_state='dispatching'`).run(Date.now());
       });
@@ -163,7 +170,7 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
   }): WebChatD4RuntimeIntentClaim {
     this.assertOpen();
     if (!SUBMISSION_ID.test(input.submission_id) || !DIGEST.test(input.payload_digest) ||
-        !DIGEST.test(input.scope_digest) || !REQUEST_ID.test(input.request_id)) {
+        !DIGEST.test(input.scope_digest) || input.scope_digest === OWNER_TASK_SCOPE || !REQUEST_ID.test(input.request_id)) {
       throw new Error("webchat_d4_runtime_intent_claim_invalid");
     }
     if (input.response_target !== undefined && !D4_RUNTIME_TARGET.test(input.response_target)) {
@@ -188,6 +195,49 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
     return this.getStatusInScope(input.scope_digest, eventDigest);
+  }
+
+  /** Gatewayの認証済み入口が、同じ受付の処理開始と取消を排他的に記録する。 */
+  beginD4RuntimeIntentDecision(requestId: string): boolean {
+    this.assertOpen();
+    if (!REQUEST_ID.test(requestId)) throw new Error("webchat_d4_runtime_intent_decision_invalid");
+    const result = this.db.prepare(`UPDATE webchat_owner_task_inbox SET d4_decision_state='started',updated_at_ms=?
+      WHERE request_id=? AND scope_digest<>? AND delivery_state='dispatching' AND d4_decision_state='queued'`)
+      .run(Date.now(), requestId, OWNER_TASK_SCOPE);
+    if (result.changes === 1) return true;
+    const cancelled = this.db.prepare(`SELECT 1 FROM webchat_owner_task_inbox
+      WHERE request_id=? AND scope_digest<>? AND delivery_state='rejected' AND d4_decision_state='cancelled'`)
+      .get(requestId, OWNER_TASK_SCOPE);
+    if (cancelled) return false;
+    throw new Error("webchat_d4_runtime_intent_decision_unavailable");
+  }
+
+  cancelD4RuntimeIntentBeforeDecision(scope: D4RuntimeDecisionScope): number | null {
+    this.assertOpen();
+    validateD4RuntimeDecisionScope(scope);
+    const cancelledAt = Date.now();
+    const result = this.db.prepare(`UPDATE webchat_owner_task_inbox
+      SET delivery_state='rejected',d4_decision_state='cancelled',updated_at_ms=?
+      WHERE request_id=? AND scope_digest=? AND scope_digest<>? AND delivery_state='dispatching' AND d4_decision_state='queued'`)
+      .run(cancelledAt, scope.request_id, scope.scope_digest, OWNER_TASK_SCOPE);
+    if (result.changes !== 1) return this.readD4RuntimeIntentBeforeDecisionCancellation(scope);
+    const resultEntry = this.d4RuntimeResults.get(scope.request_id);
+    if (resultEntry?.content !== undefined) this.d4RuntimeResultBytes -= Buffer.byteLength(resultEntry.content, "utf8");
+    this.d4RuntimeResults.delete(scope.request_id);
+    return cancelledAt;
+  }
+
+  readD4RuntimeIntentBeforeDecisionCancellation(scope: D4RuntimeDecisionScope): number | null {
+    this.assertOpen();
+    validateD4RuntimeDecisionScope(scope);
+    const row = this.db.prepare(`SELECT updated_at_ms FROM webchat_owner_task_inbox
+      WHERE request_id=? AND scope_digest=? AND scope_digest<>? AND delivery_state='rejected' AND d4_decision_state='cancelled'`)
+      .get(scope.request_id, scope.scope_digest, OWNER_TASK_SCOPE);
+    if (!row) return null;
+    if (typeof row.updated_at_ms !== "number" || !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
+      throw new Error("webchat_d4_runtime_intent_cancellation_invalid");
+    }
+    return row.updated_at_ms;
   }
 
   /** Preserve which command received the authenticated submission's cancellation signal. */
@@ -239,7 +289,8 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     }
     const row = this.db.prepare(`SELECT scope_digest,delivery_state FROM webchat_owner_task_inbox
       WHERE request_id=?`).get(input.request_id) as RuntimeSubmissionRow | undefined;
-    if (!row || row.scope_digest !== input.scope_digest || row.scope_digest === OWNER_TASK_SCOPE) {
+    if (!row || row.scope_digest !== input.scope_digest || row.scope_digest === OWNER_TASK_SCOPE ||
+        row.delivery_state === "rejected") {
       return { status: "unavailable", reason_code: "not_retained", used_for_authority: false, may_execute: false };
     }
     const now = Date.now();
@@ -277,9 +328,10 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     this.pruneD4RuntimeResults(now);
     const entry = this.d4RuntimeResults.get(input.request_id);
     if (!entry || entry.response_target !== input.response_target || entry.expires_at_ms <= now) return;
-    const row = this.db.prepare(`SELECT scope_digest FROM webchat_owner_task_inbox WHERE request_id=?`)
-      .get(input.request_id) as { readonly scope_digest: string } | undefined;
-    if (!row || row.scope_digest !== entry.scope_digest || row.scope_digest === OWNER_TASK_SCOPE) return;
+    const row = this.db.prepare(`SELECT scope_digest,delivery_state FROM webchat_owner_task_inbox WHERE request_id=?`)
+      .get(input.request_id) as RuntimeSubmissionRow | undefined;
+    if (!row || row.scope_digest !== entry.scope_digest || row.scope_digest === OWNER_TASK_SCOPE ||
+        row.delivery_state === "rejected") return;
     if (entry.content !== undefined) this.d4RuntimeResultBytes -= Buffer.byteLength(entry.content, "utf8");
     delete entry.content;
     delete entry.content_sha256;
@@ -338,9 +390,9 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
       if (!dispatchAvailable) return { status: "not_dispatched" } as const;
       const now = Date.now();
       this.db.prepare(`INSERT INTO webchat_owner_task_inbox
-        (scope_digest,event_digest,payload_digest,request_id,delivery_state,created_at_ms,updated_at_ms)
-        VALUES (?,?,?,?,'dispatching',?,?)`)
-        .run(scopeDigest, eventDigest, payloadDigest, requestId, now, now);
+        (scope_digest,event_digest,payload_digest,request_id,delivery_state,created_at_ms,updated_at_ms,d4_decision_state)
+        VALUES (?,?,?,?,'dispatching',?,?,?)`)
+        .run(scopeDigest, eventDigest, payloadDigest, requestId, now, now, scopeDigest === OWNER_TASK_SCOPE ? null : "queued");
       return { status: "accepted", request_id: requestId } as const;
     });
   }
@@ -453,7 +505,11 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     const result = this.db.prepare(`UPDATE webchat_owner_task_inbox SET delivery_state=?,updated_at_ms=?
       WHERE scope_digest=? AND request_id=? AND delivery_state='dispatching'`)
       .run(state, Date.now(), scopeDigest, requestId);
-    if (result.changes !== 1) throw new Error("webchat_owner_task_state_transition_rejected");
+    if (result.changes === 1 || (scopeDigest !== OWNER_TASK_SCOPE && this.readD4RuntimeIntentBeforeDecisionCancellation({
+      request_id: requestId,
+      scope_digest: scopeDigest,
+    }) !== null)) return;
+    throw new Error("webchat_owner_task_state_transition_rejected");
   }
 
   private registerD4RuntimeResultTarget(requestId: string, scopeDigest: string, responseTarget: string): void {
@@ -524,6 +580,12 @@ function validateSubmissionRow(row: SubmissionRow): void {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function validateD4RuntimeDecisionScope(scope: D4RuntimeDecisionScope): void {
+  if (!REQUEST_ID.test(scope.request_id) || !DIGEST.test(scope.scope_digest)) {
+    throw new Error("webchat_d4_runtime_intent_decision_invalid");
+  }
 }
 
 function cancellationBindingDigest(scope: WebChatD4RuntimeCancellationScope): string {
