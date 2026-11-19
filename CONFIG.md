@@ -293,9 +293,12 @@ GITHUB_TOKEN=github-token-with-issue-pr-scope
 BLUE_TANUKI_GITHUB_REPOS=gatchimuchio/blue-tanuki
 ```
 
-`BLUE_TANUKI_GITHUB_REPOS` is a comma/space separated list of `owner/repo`
-entries. If either `GITHUB_TOKEN` or the allowlist is missing, `github.write`
-fails before sending a mutation.
+`BLUE_TANUKI_GITHUB_REPOS` はカンマまたは空白で区切った `owner/repo` の許可リスト。
+Gatewayの `github.write` は、許可リストの照合後にOS保護ストアの
+`GITHUB_TOKEN_REF` を解決する。保護参照を設定している場合はそちらを優先し、
+解決できないときはGitHubへの通信前に停止する。従来の `GITHUB_TOKEN` 単独設定も使える。
+資格は対象確認・L3内容審査・承認後の実行および結果照合のために
+`api.github.com` への要求で使う。WindowsのDPAPI参照はGitHub書き込み用のファイルを指定する。
 
 ```text
 tool:github.write operation=issue.create owner=gatchimuchio repo=blue-tanuki title="Bug report" body="details"

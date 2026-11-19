@@ -1313,6 +1313,58 @@ function assertGitHubRepoAllowed(env: Env, repo: string): void {
   }
 }
 
+function githubWriteAdapterConnection(
+  args: Record<string, unknown>,
+  env: Readonly<Env> | undefined,
+  resolveCredential: ((secretRef: string) => string | undefined) | undefined,
+  signal: AbortSignal | undefined,
+): Pick<GitHubWriteOptions, "env" | "read_request" | "request"> {
+  const source = env ?? process.env;
+  const secretRef = source.GITHUB_TOKEN_REF;
+  if (!secretRef) return env ? { env } : {};
+  const route = githubWriteRoute(args);
+  assertGitHubRepoAllowed(source, route.repo);
+  if (route.operation === "pr.create" && args.head_repository !== undefined) {
+    assertGitHubRepoAllowed(source, githubRepositoryFullNameArg(args.head_repository, "head_repository").fullName);
+  }
+  assertToolExecutionNotCancelled(signal, "github.write");
+  let token: string | undefined;
+  try {
+    token = resolveCredential?.(secretRef)?.trim();
+  } catch {
+    // 参照とOS資格ストアの詳細は実行結果へ伝えない。
+  }
+  if (!token || /[\s\u0000-\u001f\u007f]/u.test(token)) {
+    throw new Error("github_write_credential_unavailable; mutation_sent=false");
+  }
+  assertToolExecutionNotCancelled(signal, "github.write");
+  const protectedToken = token;
+  return {
+    env: { BLUE_TANUKI_GITHUB_REPOS: source.BLUE_TANUKI_GITHUB_REPOS, GITHUB_TOKEN: protectedToken },
+    read_request: (target, requestSignal) => requireGitHubResponseWithoutCredential(
+      defaultGitHubReadRequest(target, requestSignal), protectedToken),
+    request: (target, requestSignal) => requireGitHubResponseWithoutCredential(
+      defaultGitHubWriteRequest(target, requestSignal), protectedToken),
+  };
+}
+
+async function requireGitHubResponseWithoutCredential<T extends GitHubReadResponse>(
+  pendingResponse: Promise<T>,
+  token: string,
+): Promise<T> {
+  try {
+    const response = await pendingResponse;
+    if (Object.values(response).some(value => typeof value === "string" && value.includes(token)) ||
+        (response.body.includes("\\") && JSON.stringify(parseJsonOrText(response.body)).includes(token))) {
+      throw new Error("github_write_credential_echo");
+    }
+    return response;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(token)) throw new Error("github_write_credential_echo");
+    throw error;
+  }
+}
+
 function stableJson(value: unknown): string {
   const seen = new WeakSet<object>();
   const normalize = (v: unknown): unknown => {
@@ -8017,243 +8069,111 @@ export const githubWriteTool: Tool = {
   description: "Create plan-bound GitHub issues, comments, pull requests, submit pull request reviews to an exact expected HEAD, push one new file to an existing non-default branch, create unpublished draft releases on exact existing tags, and publish an exact asset-free draft release as a separate effect. release.publish requires an explicit make_latest policy of true, false, or legacy, which is shown in the L3 review. Issue close and reopen are separate, each limited to one exact unlocked issue. Repository writes require target recheck and no-store L3 content review. Pull request creation binds repositories and branch tips. Inline comments bind exact diff lines. Issue updates are limited to the reviewed title/body.",
   required_capabilities: requireToolOperationDescriptor("github.write").required_capabilities,
   async inspect_target_version(args, options = {}): Promise<GitHubWriteTargetVersionObservation> {
+    const { signal, command_digest, operation_plan_binding_digest } = options;
+    const adapterOptions: GitHubWriteOptions = { signal, command_digest, operation_plan_binding_digest,
+      ...githubWriteAdapterConnection(args, options.env, options.resolve_github_write_credential, signal) };
     if (githubOperation(args) === "release.draft.create") {
-      return await inspectGitHubReleaseDraftCreateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubReleaseDraftCreateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "release.publish") {
-      return await inspectGitHubReleasePublishTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubReleasePublishTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "code.push") {
-      return await inspectGitHubCodePushTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubCodePushTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.create") {
-      return await inspectGitHubPullRequestCreateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestCreateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.merge") {
-      return await inspectGitHubPullRequestMergeTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestMergeTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.review.submit") {
-      return await inspectGitHubPullRequestReviewSubmitTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestReviewSubmitTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.update") {
-      return await inspectGitHubIssueUpdateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueUpdateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.update") {
-      return await inspectGitHubPullRequestUpdateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestUpdateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.close") {
-      return await inspectGitHubIssueCloseTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueCloseTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.reopen") {
-      return await inspectGitHubIssueReopenTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueReopenTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.label") {
-      return await inspectGitHubIssueLabelTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueLabelTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.comment.create") {
-      return await inspectGitHubIssueCommentCreateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueCommentCreateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.comment.create") {
-      return await inspectGitHubPullRequestCommentCreateTargetVersion(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestCommentCreateTargetVersion(args, adapterOptions);
     }
     if (githubOperation(args) !== "issue.create") {
       throw new Error(`github.write ${githubOperation(args)} target observation is not implemented; status=BUILD_GAP`);
     }
-    return await inspectGitHubIssueCreateTargetVersion(args, {
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-      ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-    });
+    return await inspectGitHubIssueCreateTargetVersion(args, adapterOptions);
   },
   async inspect_content_review(args, options = {}): Promise<GitHubIssueCreateContentReview | GitHubIssueUpdateContentReview | GitHubPullRequestUpdateContentReview |
     GitHubIssueCloseContentReview | GitHubIssueReopenContentReview | GitHubIssueLabelContentReview | GitHubIssueCommentCreateContentReview | GitHubPullRequestCommentCreateContentReview | GitHubPullRequestCreateContentReview |
     GitHubPullRequestMergeContentReview | GitHubPullRequestReviewSubmitContentReview | GitHubCodePushContentReview | GitHubReleaseDraftCreateContentReview |
     GitHubReleasePublishContentReview> {
+    const { signal, command_digest, operation_plan_binding_digest } = options;
+    const adapterOptions: GitHubWriteOptions = { signal, command_digest, operation_plan_binding_digest,
+      ...githubWriteAdapterConnection(args, options.env, options.resolve_github_write_credential, signal) };
     if (githubOperation(args) === "release.draft.create") {
-      return await inspectGitHubReleaseDraftCreateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubReleaseDraftCreateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "release.publish") {
-      return await inspectGitHubReleasePublishContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubReleasePublishContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "code.push") {
-      return await inspectGitHubCodePushContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubCodePushContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.create") {
-      return await inspectGitHubPullRequestCreateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestCreateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.merge") {
-      return await inspectGitHubPullRequestMergeContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestMergeContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.review.submit") {
-      return await inspectGitHubPullRequestReviewSubmitContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestReviewSubmitContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.update") {
-      return await inspectGitHubIssueUpdateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueUpdateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.update") {
-      return await inspectGitHubPullRequestUpdateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestUpdateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.close") {
-      return await inspectGitHubIssueCloseContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueCloseContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.reopen") {
-      return await inspectGitHubIssueReopenContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueReopenContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.label") {
-      return await inspectGitHubIssueLabelContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueLabelContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "issue.comment.create") {
-      return await inspectGitHubIssueCommentCreateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubIssueCommentCreateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) === "pr.comment.create") {
-      return await inspectGitHubPullRequestCommentCreateContentReview(args, {
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-        ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-      });
+      return await inspectGitHubPullRequestCommentCreateContentReview(args, adapterOptions);
     }
     if (githubOperation(args) !== "issue.create") {
       throw new Error(`github.write ${githubOperation(args)} content review is not implemented; status=BUILD_GAP`);
     }
-    return await inspectGitHubIssueCreateContentReview(args, {
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.command_digest ? { command_digest: options.command_digest } : {}),
-      ...(options.operation_plan_binding_digest ? { operation_plan_binding_digest: options.operation_plan_binding_digest } : {}),
-    });
+    return await inspectGitHubIssueCreateContentReview(args, adapterOptions);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const observation = context.target_version_observation?.schema_version === "blue-tanuki.github-write-target-version.v1"
       ? context.target_version_observation : undefined;
     // Target observations bind operationPlanDigest(command); context.command_digest is the Executor ticket digest.
-    return await invokeGitHubWrite(args, { signal: context.signal,
+    return await invokeGitHubWrite(args, {
+      ...githubWriteAdapterConnection(args, undefined, context.resolve_github_write_credential, context.signal),
+      signal: context.signal,
       command_digest: observation?.command_digest ?? context.command_digest,
       expected_target_version_observation: observation,
       operation_plan_binding_digest: observation?.operation_plan_binding_digest });

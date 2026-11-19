@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -37,6 +37,8 @@ import { goalPurposeMemoryStorage, operationResultMemoryStorage } from "../src/o
 import { operationPlanRecoveryEvidenceFromObservation } from "../src/operation_plan_recovery_evidence.js";
 import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../src/recovery_inspection.js";
 import { createMcpToolCallProposal, inspectMcpCatalog } from "../src/mcp_connection_client.js";
+import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
+import { storeBlueTanukiSecret } from "../src/secret_store.js";
 
 const MCP_SERVE_FIXTURE_PATH = fileURLToPath(new URL("./fixtures/mcp_live_process_server.mjs", import.meta.url));
 
@@ -3182,9 +3184,19 @@ describe("Gateway process MCP OwnerのL3確認→no-store再確認→合成call"
 });
 
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
-  it.each(githubWriteCases)(
-    "実Gateway processは$operation/$comment_kindを明示L3承認後だけ一度送信し、同じOwnerへ保存結果を返す",
-    async ({ operation, comment_kind, inline_range, action }) => {
+  const cases: Array<GitHubWriteCase & {
+    credential: "raw" | "DPAPI" | "DPAPI missing" | "DPAPI foreign key" | "DPAPI repository denied";
+  }> =
+    githubWriteCases.map((scenario) => ({ ...scenario, credential: "raw" }));
+  if (process.platform === "win32") {
+    cases.push({ operation: "issue.create", credential: "DPAPI" },
+      { operation: "issue.create", credential: "DPAPI missing" },
+      { operation: "issue.create", credential: "DPAPI foreign key" },
+      { operation: "issue.create", credential: "DPAPI repository denied" });
+  }
+  it.each(cases)(
+    "実Gateway processは$operation/$comment_kindのL3承認・資格境界と保存結果を守る（$credential）",
+    async ({ operation, comment_kind, inline_range, action, credential }) => {
     const inlineReview = comment_kind === "pull_request_review_inline";
     const inlineRange = inlineReview && inline_range === true;
     const scenario = githubWriteScenario(operation, comment_kind, inline_range, action);
@@ -3206,6 +3218,12 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const stateRoot = join(tempRoot, "state");
     mkdirSync(workspace, { recursive: true });
     vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
+    const credentialValues = [fakeGitHubToken];
+    const expectCredentialsHidden = (...observations: string[]) => {
+      for (const observed of observations) {
+        for (const value of credentialValues) expect(observed.includes(value)).toBe(false);
+      }
+    };
 
     const mockRequests: Array<{ method: string; path: string; authorization: string | undefined; body: string }> = [];
     const mockResponses: Array<{ method: string; path: string; status: number; finished: boolean; closed: boolean }> = [];
@@ -3357,6 +3375,24 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const frames: ServedGatewayFrame[] = [];
 
     try {
+      let githubEnvFile: string | undefined;
+      if (credential !== "raw") {
+        githubEnvFile = join(tempRoot, "github-fixture.env");
+        const key = credential === "DPAPI foreign key" ? "GOOGLE_ACCESS_TOKEN" : "GITHUB_TOKEN";
+        const stored = storeBlueTanukiSecret(key, fakeGitHubToken, { envFilePath: githubEnvFile, env: {} });
+        expect(stored).toMatchObject({ ref_key: `${key}_REF`, storage: "win32_dpapi_current_user", os_protected: true });
+        const secretPath = dpapiSecretPathFromReference(stored.ref);
+        expect(dirname(secretPath)).toBe(join(tempRoot, "secrets"));
+        const encrypted = readFileSync(secretPath, "utf8").trim();
+        expect(encrypted.length).toBeGreaterThan(0);
+        expectCredentialsHidden(encrypted);
+        credentialValues.push(stored.ref, secretPath, encrypted);
+        writeFileSync(githubEnvFile, `GITHUB_TOKEN_REF=${JSON.stringify(stored.ref)}\n`, "utf8");
+        if (credential === "DPAPI missing") {
+          renameSync(secretPath, `${secretPath}.held`);
+          expect(existsSync(secretPath)).toBe(false);
+        }
+      }
       mockServer.listen(0, "127.0.0.1");
       await once(mockServer, "listening");
       const mockAddress = mockServer.address();
@@ -3392,7 +3428,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
 
       const gatewayPort = await reserveServedGatewayPort();
       const networkGuardPath = resolve(findWorkspaceRoot(), "apps", "gateway", "test", "fixtures", "github_loopback_network_guard.cjs");
-      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { githubMockPort: mockPort, networkGuardPath });
+      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { githubMockPort: mockPort, networkGuardPath,
+        ...(githubEnvFile ? { githubEnvFile } : {}),
+        ...(credential === "DPAPI repository denied" ? { githubRepos: "fixture-owner/other-repo" } : {}) });
       await waitForServedGatewayHealth(gatewayPort, gateway);
       socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
 
@@ -3404,6 +3442,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         })}` }),
       });
       expect(reviewRequest.status).toBe(202);
+      expectCredentialsHidden(await reviewRequest.text());
 
       const loadQueue = async (): Promise<{ pending_approvals: Array<Record<string, unknown>> }> => {
         const response = await fetch(`http://127.0.0.1:${gatewayPort}/approval`, {
@@ -3426,6 +3465,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
       expect(typeof pending.approval_token).toBe("string");
       expect(String(pending.operation ?? pending.target)).toContain("github.write");
       expect(mutationRequests()).toHaveLength(0);
+      expectCredentialsHidden(JSON.stringify(pending));
 
       const approvalUrl = `http://127.0.0.1:${gatewayPort}/approval/${encodeURIComponent(String(pending.command_id))}`;
       const prematureApproval = await fetch(approvalUrl, {
@@ -3434,7 +3474,9 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         body: JSON.stringify({ verdict: "approve", approval_token: pending.approval_token }),
       });
       expect(prematureApproval.status).toBe(409);
-      expect(await prematureApproval.json()).toMatchObject({ error: "approval_content_review_required" });
+      const prematureText = await prematureApproval.text();
+      expect(JSON.parse(prematureText)).toMatchObject({ error: "approval_content_review_required" });
+      expectCredentialsHidden(prematureText);
       expect(mutationRequests()).toHaveLength(0);
 
       const contentReviewResponse = await fetch(`${approvalUrl}/content`, {
@@ -3442,6 +3484,16 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         headers: { authorization: "Bearer f05.02-synthetic-resume-token" },
       });
       const contentReviewText = await contentReviewResponse.text();
+      expectCredentialsHidden(contentReviewText);
+      if (credential !== "raw" && credential !== "DPAPI") {
+        expect(contentReviewResponse.status).toBe(404);
+        expect(contentReviewResponse.headers.get("cache-control")).toBe("no-store");
+        expect(JSON.parse(contentReviewText)).toEqual({ error: "approval_content_review_unavailable" });
+        expect(mockRequests).toEqual([]);
+        expectCredentialsHidden(JSON.stringify(frames), ...readUtf8FilesUnder(join(tempRoot, "audit")),
+          readFileSync(completeHistoryPath, "utf8"), gateway.stdout.join(""), gateway.stderr.join(""));
+        return;
+      }
       expect(contentReviewResponse.status, JSON.stringify({
         response: contentReviewText,
         github_routes: mockRequests.map(({ method, path }) => ({ method, path })),
@@ -3521,6 +3573,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
       expect(contentReview.review_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(JSON.stringify(contentReview)).not.toContain(fakeGitHubToken);
       expect(mutationRequests()).toHaveLength(0);
+      expect(mockRequests.every((item) => item.method === "GET")).toBe(true);
 
       const githubRequestCountBeforeApproval = mockRequests.length;
       const finalApproval = await fetch(approvalUrl, {
@@ -3530,6 +3583,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
           content_review_digest: contentReview.review_digest }),
       });
       const finalApprovalText = await finalApproval.text();
+      expectCredentialsHidden(finalApprovalText);
       expect(finalApproval.status, JSON.stringify({ response: finalApprovalText,
         mock_requests: mockRequests.map(({ method, path }) => ({ method, path })), gateway_stderr: gateway.stderr.join("") })).toBe(200);
       const finalApprovalBody = JSON.parse(finalApprovalText) as Record<string, unknown>;
@@ -3663,6 +3717,8 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
       const persistedHistory = readFileSync(completeHistoryPath, "utf8");
       const persistedSessions = readUtf8FilesUnder(join(tempRoot, "sessions")).join("\n");
       const processOutput = gateway.stdout.join("") + gateway.stderr.join("");
+      expectCredentialsHidden(JSON.stringify(persistedPlan), JSON.stringify(frames), memory,
+        persistedGatewayMemory, persistedAudit, persistedHistory, persistedSessions, processOutput);
       for (const privateValue of [...scenario.private_values, fakeGitHubToken]) {
         expect(persistedGatewayMemory).not.toContain(privateValue);
         expect(persistedAudit).not.toContain(privateValue);
@@ -3757,7 +3813,8 @@ async function stopServedMcpFixture(child: ChildProcessWithoutNullStreams): Prom
 }
 
 function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string,
-  options: { githubMockPort?: number; networkGuardPath?: string; mcpEndpoint?: string; llmEndpoint?: string } = {}): ServedGatewayProcess {
+  options: { githubMockPort?: number; githubEnvFile?: string; githubRepos?: string;
+    networkGuardPath?: string; mcpEndpoint?: string; llmEndpoint?: string } = {}): ServedGatewayProcess {
   const repositoryRoot = findWorkspaceRoot();
   const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
   if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
@@ -3786,8 +3843,8 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
   });
   if (options.githubMockPort !== undefined) {
     Object.assign(env, {
-      GITHUB_TOKEN: "f05.02-synthetic-github-token",
-      BLUE_TANUKI_GITHUB_REPOS: ["fixture-owner/synthetic-repo", GITHUB_PR_HEAD_REPOSITORY].join(" "),
+      ...(options.githubEnvFile ? { BLUE_TANUKI_ENV_FILE: options.githubEnvFile } : { GITHUB_TOKEN: "f05.02-synthetic-github-token" }),
+      BLUE_TANUKI_GITHUB_REPOS: options.githubRepos ?? ["fixture-owner/synthetic-repo", GITHUB_PR_HEAD_REPOSITORY].join(" "),
       BT_F05_02_GITHUB_MOCK_PORT: String(options.githubMockPort),
     });
   }

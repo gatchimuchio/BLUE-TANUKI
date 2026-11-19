@@ -95,6 +95,7 @@ interface ResolveOptions {
   platform?: NodeJS.Platform;
   protector?: SecretProtector;
   keyringFactory?: SecretKeyringFactory;
+  require_dpapi_key_match?: true;
 }
 
 const OS_KEYRING_REF_PREFIX = "os-keyring:v1:";
@@ -172,18 +173,21 @@ function isWellFormedDpapiSecretRef(ref: string): boolean {
   }
 }
 
+function dpapiCredentialFileMatchesKey(target: string, key: BlueTanukiSecretKey): boolean {
+  const keyName = key.toLowerCase();
+  const allowedName = new RegExp(`^${keyName}(?:\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?\\.dpapi$`, "u");
+  if (!allowedName.test(path.basename(target).toLowerCase())) return false;
+  const entry = lstatSync(target);
+  return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1;
+}
+
 /** Observe that a protected reference belongs to this install and provider without resolving its value. */
 export function isManagedLlmCredentialReference(key: LlmSecretKey, ref: string, envFilePath: string): boolean {
   if (process.platform !== "win32") return isMatchingOsKeyringRef(ref, process.platform, key);
   try {
     const target = pathFromRef(ref);
     const directory = secretDirForEnvFile(envFilePath, {});
-    const basename = path.basename(target).toLowerCase();
-    const keyName = key.toLowerCase();
-    const allowedName = new RegExp(`^${keyName}(?:\\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?\\.dpapi$`, "u");
-    if (path.dirname(target).toLowerCase() !== directory.toLowerCase() || !allowedName.test(basename)) return false;
-    const entry = lstatSync(target);
-    return entry.isFile() && !entry.isSymbolicLink() && entry.nlink === 1;
+    return path.dirname(target).toLowerCase() === directory.toLowerCase() && dpapiCredentialFileMatchesKey(target, key);
   } catch { return false; }
 }
 
@@ -515,6 +519,9 @@ function resolveSecretRefs(
         throw new Error(`${secretRefKey(key)} requires Windows DPAPI secret storage`);
       }
       const secretPath = pathFromRef(ref);
+      if (opts.require_dpapi_key_match && !dpapiCredentialFileMatchesKey(secretPath, key)) {
+        throw new Error(`${secretRefKey(key)} does not match the protected secret key`);
+      }
       const protectedValue = readFileSync(secretPath, "utf8").trim();
       if (!protectedValue) {
         throw new Error(`${secretRefKey(key)} points to an empty secret file`);

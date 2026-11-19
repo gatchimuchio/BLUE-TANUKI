@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import * as https from "node:https";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import {
@@ -12,6 +14,11 @@ import { githubWriteTool, inspectGitHubIssueCommentCreateContentReview, inspectG
   inspectGitHubPullRequestCreateContentReview, inspectGitHubPullRequestCreateTargetVersion,
   inspectGitHubPullRequestReviewSubmitContentReview, inspectGitHubPullRequestReviewSubmitTargetVersion,
   inspectGitHubCodePushContentReview, inspectGitHubCodePushTargetVersion } from "../src/tools/builtin.js";
+
+vi.mock("node:https", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:https")>(),
+  request: vi.fn(),
+}));
 
 function command(toolName = "synthetic.read", capabilities: string[] = ["fs:read"]): Extract<ExecuteCommand, { type: "tool_call" }> {
   return { id: "synthetic-command", type: "tool_call",
@@ -32,6 +39,77 @@ function runtime(invoke: (args: Record<string, unknown>) => Promise<unknown>, to
 }
 
 describe("承認内容からExecutorへの固定", () => {
+  it("GitHubの保護参照を許可済みの対象確認でだけ解決し、資格を含む応答を拒否する", async () => {
+    const ref = "synthetic-github-reference";
+    const token = "synthetic-protected-github-token";
+    const legacy = "synthetic-raw-github-value";
+    const env = { GITHUB_TOKEN_REF: ref, GITHUB_TOKEN: legacy, BLUE_TANUKI_GITHUB_REPOS: "fixture/allowed" };
+    const resolve = vi.fn((_ref: string) => token);
+    const tools = new ToolRegistry();
+    tools.register(githubWriteTool);
+    const executor = new Executor({ approval_authority: createExecutorApprovalAuthority(), tools, llm: new StubBackend(),
+      resolve_github_write_credential: resolve });
+    const source = command("github.write", [...(githubWriteTool.required_capabilities ?? [])]);
+    source.payload.arguments = { operation: "issue.create", owner: "fixture", repo: "allowed", title: "合成の課題" };
+    const digest = "f".repeat(64);
+    const request = vi.mocked(https.request);
+    let reflectCredential = false;
+    const repository = { id: 123, name: "allowed", full_name: "fixture/allowed", owner: { login: "fixture" }, private: true };
+    request.mockImplementation(((options: https.RequestOptions, onResponse: (response: EventEmitter) => void) => {
+      const req = new EventEmitter();
+      return Object.assign(req, {
+        end() {
+          const res = Object.assign(new EventEmitter(), { statusCode: 200, headers: { "content-type": "application/json" } });
+          onResponse(res);
+          const body = JSON.stringify(repository);
+          const escaped = "\\u0073" + token.slice(1);
+          res.emit("data", reflectCredential ? body.slice(0, -1) + `,"description":"${escaped}"}` : body);
+          res.emit("end");
+        },
+        destroy() {},
+      });
+    }) as typeof https.request);
+
+    try {
+      await expect(executor.inspectCommandTargetVersion(source, { ...env, BLUE_TANUKI_GITHUB_REPOS: "fixture/other" }, digest))
+        .rejects.toThrow(/denied repository/);
+      await expect(executor.inspectCommandTargetVersion({
+        ...source, payload: { ...source.payload, arguments: { operation: "pr.create", owner: "fixture", repo: "allowed",
+          head_repository: "contributor/fork", base: "main", head: "change", title: "合成の変更" } },
+      }, env, digest)).rejects.toThrow(/denied repository/);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+
+      resolve.mockImplementationOnce(() => { throw new Error(`private keyring error for ${ref}`); });
+      await expect(executor.inspectCommandTargetVersion(source, env, digest))
+        .rejects.toThrow(/^github_write_credential_unavailable; mutation_sent=false$/);
+      expect(request).not.toHaveBeenCalled();
+
+      const review = await executor.inspectCommandContentReview(source, env, digest);
+      expect(review).toMatchObject({ kind: "github_issue_create", operation_plan_binding_digest: digest,
+        repository_visibility: "private", used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(review)).not.toContain(token);
+      expect(JSON.stringify(review)).not.toContain(ref);
+      expect(resolve.mock.calls).toEqual([[ref], [ref], [ref]]);
+      expect(request.mock.calls).toHaveLength(2);
+      for (const [options] of request.mock.calls) {
+        expect(options).toMatchObject({ protocol: "https:", hostname: "api.github.com", method: "GET",
+          path: "/repos/fixture/allowed", headers: { Authorization: `Bearer ${token}` } });
+      }
+      expect(env.GITHUB_TOKEN).toBe(legacy);
+
+      reflectCredential = true;
+      await expect(executor.inspectCommandTargetVersion(source, env, digest)).rejects.toThrow(/^github_write_credential_echo$/);
+      reflectCredential = false;
+      const { GITHUB_TOKEN_REF: _unused, ...legacyEnv } = env;
+      await expect(executor.inspectCommandTargetVersion(source, legacyEnv, digest)).resolves.toMatchObject({ repository_id: 123 });
+      expect(request.mock.calls.at(-1)?.[0]).toMatchObject({ headers: { Authorization: `Bearer ${legacy}` } });
+      expect(resolve).toHaveBeenCalledTimes(4);
+    } finally {
+      request.mockReset();
+    }
+  });
+
   it("GitHub issue.comment.createのtargetとno-store reviewをExecutorで同じPlanへ結ぶ", async () => {
     const args = { operation: "issue.comment.create", owner: "gatchimuchio", repo: "blue-tanuki", number: 7, body: "合成コメント" };
     const source: ExecuteCommand = {

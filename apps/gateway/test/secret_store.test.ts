@@ -45,6 +45,30 @@ function pathFromDpapiRef(ref: string): string {
 }
 
 describe("LLM secret store", () => {
+  it("rejects another connector's DPAPI file before unprotecting a GitHub write credential", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-github-secret-scope-"));
+    try {
+      const envFilePath = path.join(root, "blue-tanuki.env");
+      const storage = { envFilePath, platform: "win32" as const, protector: fakeProtector };
+      const github = storeBlueTanukiSecret("GITHUB_TOKEN", "fixture-github-secret", storage);
+      const google = storeBlueTanukiSecret("GOOGLE_ACCESS_TOKEN", "fixture-google-secret", storage);
+      const decoded: string[] = [];
+      const read = { platform: "win32" as const, require_dpapi_key_match: true as const,
+        protector: { ...fakeProtector, unprotect: (protectedValue: string) => {
+          const value = fakeProtector.unprotect(protectedValue);
+          decoded.push(value);
+          return value;
+        } } };
+      expect(() => resolveSecretMaterial({ GITHUB_TOKEN_REF: google.ref }, "GITHUB_TOKEN", read))
+        .toThrow("GITHUB_TOKEN_REF does not match the protected secret key");
+      expect(decoded).toEqual([]);
+      expect(resolveSecretMaterial({ GITHUB_TOKEN_REF: github.ref }, "GITHUB_TOKEN", read)).toBe("fixture-github-secret");
+      expect(decoded).toEqual(["fixture-github-secret"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves only the requested secret without mutating the environment", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-scoped-secret-store-"));
     try {

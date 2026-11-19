@@ -159,6 +159,8 @@ export interface ExecutorDeps {
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
   /** Googleの組込み読取経路向けに、Gatewayで指定した資格参照だけを解決する。 */
   resolve_google_read_access_token?: (key: GoogleReadTokenKey, secretRef: string) => string | undefined;
+  /** Gatewayが組込みgithub.writeで使うOS保護資格参照を解決する。 */
+  resolve_github_write_credential?: (secretRef: string) => string | undefined;
   /** Gatewayの組込みfile.searchだけを固定workerへ送る。省略はcore開発用。 */
   file_search_worker?: FileSearchWorker;
   /**
@@ -1203,6 +1205,7 @@ export class Executor {
         env?: Readonly<Record<string, string | undefined>>;
         operation_plan_binding_digest?: string;
         command_digest?: string;
+        resolve_github_write_credential?: ExecutorDeps["resolve_github_write_credential"];
       } = {},
     ): Promise<BrokerTargetVersionObservation> => {
       if (!tool.inspect_target_version) throw new Error(`${tool.name} target version resolver is not connected`);
@@ -1272,6 +1275,8 @@ export class Executor {
       }
       const observation = await inspectTargetVersion(tool, command.payload.arguments, {
         ...(env ? { env } : {}),
+        ...(this.deps.resolve_github_write_credential
+          ? { resolve_github_write_credential: this.deps.resolve_github_write_credential } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
@@ -1890,6 +1895,8 @@ export class Executor {
       const review = await tool.inspect_content_review(args, {
         ...(env ? { env } : {}),
         ...(signal ? { signal } : {}),
+        ...(this.deps.resolve_github_write_credential
+          ? { resolve_github_write_credential: this.deps.resolve_github_write_credential } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
       });
@@ -3092,6 +3099,7 @@ export class Executor {
           tool === composioScopesTool || tool === composioExecuteTool ? this.resolveComposioApiKey(process.env) : undefined;
         const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
         if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
+        const githubCredentialResolver = tool === githubWriteTool ? this.deps.resolve_github_write_credential : undefined;
         markInvoked("tool_adapter");
         return tool.invoke(payload.arguments, {
           command_id: id,
@@ -3103,6 +3111,15 @@ export class Executor {
           signal: controller.signal,
           ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
           ...(googleReadAccessToken !== undefined ? { google_read_access_token: googleReadAccessToken } : {}),
+          ...(githubCredentialResolver ? { resolve_github_write_credential: (secretRef: string) => {
+            const token = githubCredentialResolver(secretRef);
+            remainingTimeoutMs();
+            assertTicketCurrent(record);
+            record.runtime.assert_execution_owner?.();
+            assertCurrentHdsGoalVersion(command);
+            before_action_dispatch?.();
+            return token;
+          } } : {}),
           ...(guardedBrowserFormSubmit ? { before_browser_form_submit: guardedBrowserFormSubmit } : {}),
           ...(assertCurrentSettingsWrite ? { assert_current_settings_write: assertCurrentSettingsWrite } : {}),
           on_execution_lifecycle: observeLifecycle,

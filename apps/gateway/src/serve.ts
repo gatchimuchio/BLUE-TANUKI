@@ -8403,6 +8403,7 @@ async function serveWithOwnerLease(
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
+    resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
       const entry = recordCompleteHistory({

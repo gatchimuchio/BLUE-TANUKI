@@ -1015,6 +1015,8 @@ export interface ToolContext {
   composio_api_key?: string;
   /** 選択されたGoogleの組込み読取toolだけが受け取る一時的な接続資格。 */
   google_read_access_token?: string;
+  /** 組込みgithub.writeが許可済みリポジトリでだけ使う資格参照の解決口。 */
+  resolve_github_write_credential?: (secretRef: string) => string | undefined;
   /** Gateway-controlled one-shot gate immediately before a guarded browser form GET. */
   before_browser_form_submit?: () => void;
   /** Rechecks the consumed ticket and current authority after protected local input. */
@@ -1042,6 +1044,7 @@ export interface Tool {
     signal?: AbortSignal;
     operation_plan_binding_digest?: string;
     command_digest?: string;
+    resolve_github_write_credential?: ToolContext["resolve_github_write_credential"];
   }): Promise<BrokerTargetVersionObservation>;
   /** No-store content/target projection revealed only through the authenticated owner-review endpoint. */
   inspect_content_review?(args: Record<string, unknown>, options?: {
@@ -1049,6 +1052,7 @@ export interface Tool {
     signal?: AbortSignal;
     operation_plan_binding_digest?: string;
     command_digest?: string;
+    resolve_github_write_credential?: ToolContext["resolve_github_write_credential"];
   }): Promise<ToolContentReview>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
