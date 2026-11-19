@@ -53,6 +53,13 @@ export interface WebChatTaskOutcome {
 /** Backwards-compatible name for the D4 Runtime status projection. */
 export type WebChatD4RuntimeTaskOutcome = WebChatTaskOutcome;
 
+export interface WebChatD4RuntimeCancellationScope {
+  readonly request_id: string;
+  readonly scope_digest: string;
+  readonly runtime_ref_digest: string;
+  readonly session_ref_digest: string;
+}
+
 export type WebChatD4RuntimeCancellationStatus =
   | {
       readonly status: "request_recorded";
@@ -1868,10 +1875,10 @@ export interface WebChatOptions {
   /** Read-only J/M-backed task outcome projection for an authenticated D4 Runtime submission. */
   onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
   /** Read-only, content-free cancellation evidence for the exact authenticated D4 Runtime request. */
-  onD4RuntimeIntentCancellationStatus?: (input: { request_id: string }) => Promise<WebChatD4RuntimeCancellationStatus>;
+  onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) => Promise<WebChatD4RuntimeCancellationStatus>;
   /** Request abort for the single exact active command bound to an authenticated D4 Runtime submission. */
   onD4RuntimeIntentCancellation?: (
-    input: { request_id: string; runtime_ref_digest: string; session_ref_digest: string },
+    input: WebChatD4RuntimeCancellationScope,
   ) => Promise<WebChatD4RuntimeIntentCancellation | null>;
   /** Read-only J/M-backed task outcome projection for an authenticated owner task submission. */
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;

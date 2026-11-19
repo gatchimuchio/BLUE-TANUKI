@@ -396,6 +396,8 @@ or live LLM credentials can remain unset during local setup.
 
 ## 復旧診断
 
+macOSの製品アプリでは「復旧診断」から、保存済みの台帳と復旧保留の状態を読み取れます。Gatewayの起動や復元の操作は発生しません。
+
 インストール時の構成で現在の台帳を読み取るには `recovery-inspect` を使います。
 特定のバックアップを検査する場合は、Control Centerで確認した具体的なIDを指定します。
 

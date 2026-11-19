@@ -157,6 +157,7 @@ import type {
   WebChatSettingsWriteContentReview,
   WebChatEmergencyStopSnapshot,
   WebChatApprovalControlContext,
+  WebChatD4RuntimeCancellationScope,
   WebChatD4RuntimeCancellationStatus,
   WebChatD4RuntimeIntentCancellation,
   WebChatD4RuntimeTaskOutcome,
@@ -4797,22 +4798,24 @@ async function serveWithOwnerLease(
                 return projectD4RuntimeTaskOutcome(undefined, request_id);
               }
             },
-            onD4RuntimeIntentCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatD4RuntimeCancellationStatus> => {
-              let operationPlans: unknown;
-              try { operationPlans = hds.getRuntimeSnapshot().operation_plans; }
-              catch {
-                return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
-              }
-              const binding = projectD4RuntimeRequestCommandIds(operationPlans, request_id);
-              if (binding.status !== "matched") return projectD4RuntimeCancellationStatus(operationPlans, request_id, []);
+            onD4RuntimeIntentCancellationStatus: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeCancellationStatus> => {
               try {
-                const observations = executionStore.taskExecutionCancellationEvidenceForCommands(binding.command_ids);
-                return projectD4RuntimeCancellationStatus(operationPlans, request_id, observations);
+                const operationPlans = hds.getRuntimeSnapshot().operation_plans;
+                const binding = projectD4RuntimeRequestCommandIds(operationPlans, scope.request_id);
+                if (binding.status === "ambiguous" || binding.status === "invalid") {
+                  return projectD4RuntimeCancellationStatus(operationPlans, scope.request_id, []);
+                }
+                const scoped = ownerTaskSubmissionStore.readD4RuntimeCancellationCommands(scope);
+                const planCommands = binding.status === "matched" ? binding.command_ids : [];
+                const commandIds = [...new Set([...scoped.matching, ...planCommands])]
+                  .filter(commandId => !scoped.conflicting.includes(commandId));
+                const observations = executionStore.taskExecutionCancellationEvidenceForCommands(commandIds);
+                return projectD4RuntimeCancellationStatus(operationPlans, scope.request_id, observations, scoped.matching);
               } catch {
                 return { status: "unknown", reason_code: "projection_unavailable", used_for_authority: false, may_execute: false };
               }
             },
-            onD4RuntimeIntentCancellation: async (scope: D4RuntimeExecutionBinding): Promise<WebChatD4RuntimeIntentCancellation | null> => {
+            onD4RuntimeIntentCancellation: async (scope: WebChatD4RuntimeCancellationScope): Promise<WebChatD4RuntimeIntentCancellation | null> => {
               ownerLease.assertActive();
               const commands = new Set(activeTaskExecutions.d4RuntimeCommands(scope));
               const activeCommandIds = new Set(activeTaskExecutions.snapshot().map((execution) => execution.command_id));
@@ -4825,6 +4828,15 @@ async function serveWithOwnerLease(
                 actor: "d4-runtime-adapter-token-holder",
                 token_kind: "d4_runtime",
               });
+              if (cancellation?.status === "cancel_requested") {
+                try {
+                  ownerTaskSubmissionStore.bindD4RuntimeCancellationCommand(scope, commandId);
+                } catch {
+                  gatewayLog.error("D4 Runtime cancellation binding unavailable; cancellation signal remains delivered", {
+                    used_for_authority: false,
+                  });
+                }
+              }
               return cancellation ? {
                 status: cancellation.status,
                 cancel_request_accepted: true,

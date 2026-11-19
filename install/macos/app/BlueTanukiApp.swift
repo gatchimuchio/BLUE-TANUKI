@@ -139,7 +139,10 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         beginOperation("インストール状態を確認しています。", detail: "管理対象の常駐プロセスだけを読み取り確認します。") {
             try self.validateInstalledProduct()
             let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
-            let output = try self.runShellCapturingOutput(launcher, arguments: ["resident-status"])
+            let (data, _) = try self.runShell(launcher, arguments: ["resident-status"], captureOutput: true)
+            guard let output = String(data: data, encoding: .utf8) else {
+                throw AppError.invalidResidentStatus
+            }
             let lines = output.split(whereSeparator: { $0.isNewline }).map(String.init)
             let statusLine = lines.first
             let healthLine = lines.first(where: { $0.hasPrefix("resident_health=") })
@@ -184,6 +187,39 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
                 self.setStatus("Gatewayは停止中です。", detail: "保存済みの設定とscheduleは変更していません。起動するには「コントロールセンターを開く」を選んでください。")
             case .failure(let error):
                 self.showFailure("稼働状態の確認", error: error)
+            }
+        }
+    }
+
+    @objc private func inspectRecovery() {
+        beginOperation("復旧状態を確認しています。", detail: "保存済みの台帳と復旧保護の状態を読み取ります。") {
+            try self.validateInstalledProduct()
+            let launcher = self.installRoot.appendingPathComponent("BlueTanukiLauncher.sh")
+            let (data, exitCode) = try self.runShell(
+                launcher, arguments: ["recovery-inspect", "--json"], captureOutput: true, accepting: [0, 2]
+            )
+            guard let report = try? JSONDecoder().decode(RecoveryDiagnostic.self, from: data),
+                  report.schema_version == 11, report.surface == "recovery_inspection", report.mode == "read_only",
+                  !report.used_for_authority, !report.may_execute,
+                  exitCode == (report.status == .verified && report.runtime_recovery_fence.status == .clear ? 0 : 2) else {
+                throw AppError.invalidRecoveryDiagnostic
+            }
+            return report
+        } completion: { result in
+            switch result {
+            case .success(let report):
+                switch report.runtime_recovery_fence.status {
+                case .pending:
+                    self.setStatus("初期化結果の照合が保留中です。", detail: "復旧処理を再送せず、保存済みの復旧記録を確認してください。")
+                case .unavailable:
+                    self.setStatus("復旧保護の状態を確認できません。", detail: "データを保持し、ログと復旧手順を確認してください。")
+                case .clear where report.status == .residuals_present:
+                    self.setStatus("台帳に未照合項目があります。", detail: "データを保持し、確認済みのバックアップと照合してください。")
+                case .clear:
+                    self.setStatus("台帳の読み取り検査が完了しました。", detail: "復元の可否とGatewayの稼働状態は別途確認してください。")
+                }
+            case .failure(let error):
+                self.showFailure("復旧診断", error: error)
             }
         }
     }
@@ -261,7 +297,7 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
     private func buildWindow() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 455),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 505),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -306,8 +342,8 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 
         let thirdRow = NSStackView(views: [
             makeButton("稼働状態を確認", action: #selector(checkProductStatus)),
+            makeButton("復旧診断", action: #selector(inspectRecovery)),
             makeButton("ログを表示", action: #selector(showLogs)),
-            makeButton("アンインストール…", action: #selector(uninstallProduct)),
         ])
         thirdRow.orientation = .horizontal
         thirdRow.alignment = .centerY
@@ -318,7 +354,8 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
 
-        let stack = NSStackView(views: [title, subtitle, statusLabel, detailLabel, firstRow, secondRow, thirdRow, footer])
+        let uninstallButton = makeButton("アンインストール…", action: #selector(uninstallProduct))
+        let stack = NSStackView(views: [title, subtitle, statusLabel, detailLabel, firstRow, secondRow, thirdRow, uninstallButton, footer])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.distribution = .fill
@@ -388,23 +425,10 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
         try runShell(uninstaller, arguments: ["--dry-run", "--quiet"])
     }
 
-    private func runShell(_ script: URL, arguments: [String]) throws {
-        try runShell(script, arguments: arguments, standardOutput: FileHandle.nullDevice)
-    }
-
-    private func runShellCapturingOutput(_ script: URL, arguments: [String]) throws -> String {
-        let output = Pipe()
-        try runShell(script, arguments: arguments, standardOutput: output)
-        guard let data = try output.fileHandleForReading.readToEnd() else {
-            throw AppError.invalidResidentStatus
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw AppError.invalidResidentStatus
-        }
-        return text
-    }
-
-    private func runShell(_ script: URL, arguments: [String], standardOutput: Any) throws {
+    @discardableResult
+    private func runShell(
+        _ script: URL, arguments: [String], captureOutput: Bool = false, accepting acceptedExitCodes: Set<Int32> = [0]
+    ) throws -> (Data, Int32) {
         guard fileManager.fileExists(atPath: script.path) else { throw AppError.missingComponent }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -418,13 +442,37 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
             "LOGNAME": user,
         ]
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = standardOutput
+        let output = captureOutput ? Pipe() : nil
+        if let output = output {
+            process.standardOutput = output
+        } else {
+            process.standardOutput = FileHandle.nullDevice
+        }
         process.standardError = FileHandle.nullDevice
         try process.run()
+        var captured = Data()
+        var oversized = false
+        if let output = output {
+            do {
+                while let bytes = try output.fileHandleForReading.read(upToCount: 8192), !bytes.isEmpty {
+                    if oversized || captured.count + bytes.count > 1_048_576 {
+                        oversized = true
+                    } else {
+                        captured.append(bytes)
+                    }
+                }
+            } catch {
+                if process.isRunning { process.terminate() }
+                process.waitUntilExit()
+                throw error
+            }
+        }
         process.waitUntilExit()
-        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+        guard process.terminationReason == .exit, acceptedExitCodes.contains(process.terminationStatus) else {
             throw AppError.commandFailed(process.terminationStatus)
         }
+        guard !oversized else { throw AppError.commandOutputTooLarge }
+        return (captured, process.terminationStatus)
     }
 
     private func beginOperation<Output>(
@@ -468,6 +516,8 @@ private final class BlueTanukiAppDelegate: NSObject, NSApplicationDelegate, NSWi
 private enum AppError: Error, CustomStringConvertible {
     case invalidInstaller
     case invalidResidentStatus
+    case invalidRecoveryDiagnostic
+    case commandOutputTooLarge
     case missingComponent
     case notInstalled
     case commandFailed(Int32)
@@ -476,11 +526,29 @@ private enum AppError: Error, CustomStringConvertible {
         switch self {
         case .invalidInstaller: return "同梱インストーラーの完全性を確認できません"
         case .invalidResidentStatus: return "常駐プロセスの状態応答を確認できません"
+        case .invalidRecoveryDiagnostic: return "復旧診断の応答を確認できません"
+        case .commandOutputTooLarge: return "診断出力が画面で確認できる上限を超えました"
         case .missingComponent: return "必要な製品ファイルが見つかりません"
         case .notInstalled: return "製品が未インストールか、管理ファイルがありません"
         case .commandFailed: return "管理処理が正常終了しませんでした"
         }
     }
+}
+
+private struct RecoveryDiagnostic: Decodable {
+    enum Status: String, Decodable { case verified, residuals_present }
+    struct Fence: Decodable {
+        enum Status: String, Decodable { case clear, pending, unavailable }
+        let status: Status
+    }
+
+    let schema_version: Int
+    let surface: String
+    let mode: String
+    let status: Status
+    let runtime_recovery_fence: Fence
+    let used_for_authority: Bool
+    let may_execute: Bool
 }
 
 private enum ResidentProductStatus {

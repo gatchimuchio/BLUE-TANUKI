@@ -20,6 +20,9 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
     const otherScopeDigest = sha256("another-runtime-session");
     const submissionId = "c50d591d-8034-4a38-a094-6d9f6eaa3e8c";
     const requestId = "d3c678b0-86ed-4f71-a9ef-5948aa04bdb7";
+    const scope = { request_id: requestId, scope_digest: scopeDigest,
+      runtime_ref_digest: sha256("runtime"), session_ref_digest: sha256("session") };
+    const wrongSession = { ...scope, session_ref_digest: sha256("other session") };
 
     let store = new GatewayWebChatOwnerTaskStore(filepath);
     try {
@@ -32,6 +35,10 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
       })).toEqual({ status: "accepted", request_id: requestId });
       expect(store.getD4RuntimeIntentStatus({ submission_id: submissionId, scope_digest: otherScopeDigest }))
         .toBeNull();
+      expect(store.readD4RuntimeCancellationCommands(scope)).toEqual({ matching: [], conflicting: [] });
+      store.bindD4RuntimeCancellationCommand({ ...scope, scope_digest: otherScopeDigest }, "not-bound");
+      store.bindD4RuntimeCancellationCommand(scope, "cancelled-command");
+      store.bindD4RuntimeCancellationCommand(wrongSession, "cancelled-command");
     } finally {
       store.close();
     }
@@ -40,6 +47,10 @@ describe("GatewayWebChatOwnerTaskStore D4 Runtime submissions", () => {
     try {
       expect(store.getD4RuntimeIntentStatus({ submission_id: submissionId, scope_digest: scopeDigest }))
         .toEqual({ request_id: requestId, state: "outcome_unknown" });
+      expect(store.readD4RuntimeCancellationCommands(scope)).toEqual({ matching: ["cancelled-command"], conflicting: [] });
+      expect(store.readD4RuntimeCancellationCommands(wrongSession)).toEqual({ matching: [], conflicting: ["cancelled-command"] });
+      expect(store.readD4RuntimeCancellationCommands({ ...scope, scope_digest: otherScopeDigest }))
+        .toEqual({ matching: [], conflicting: [] });
       expect(store.claimD4RuntimeIntent({
         submission_id: submissionId,
         payload_digest: sha256("content-free payload digest"),

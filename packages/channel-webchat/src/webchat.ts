@@ -2053,7 +2053,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             })))
           : undefined;
         const cancellationStatus = status && this.opts.onD4RuntimeIntentCancellationStatus
-          ? normalizeD4RuntimeCancellationStatus(await this.opts.onD4RuntimeIntentCancellationStatus({ request_id: status.request_id })
+          ? normalizeD4RuntimeCancellationStatus(await this.opts.onD4RuntimeIntentCancellationStatus({
+              request_id: status.request_id,
+              scope_digest: scopeDigest,
+              runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
+              session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id),
+            })
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
                 used_for_authority: false as const, may_execute: false as const })))
           : undefined;
@@ -2122,6 +2127,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         }
         const cancellation = await this.opts.onD4RuntimeIntentCancellation({
           request_id: status.request_id,
+          scope_digest: scopeDigest,
           runtime_ref_digest: d4RuntimeReferenceDigest(config.token, "runtime", parsed.data.runtime_id),
           session_ref_digest: d4RuntimeReferenceDigest(config.token, "session", parsed.data.session_id),
         });

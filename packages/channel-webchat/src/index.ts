@@ -22,6 +22,7 @@ export {
   type WebChatD4RuntimeIntentResult,
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,
+  type WebChatD4RuntimeCancellationScope,
   type WebChatD4RuntimeCancellationStatus,
   type WebChatD4RuntimeTaskOutcome,
   type WebChatD4RuntimeIntentCancellation,

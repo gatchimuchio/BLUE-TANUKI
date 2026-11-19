@@ -38,6 +38,7 @@ const GOAL_ASSESSMENT_REASON_CODES = new Set([
   "rules_satisfied",
 ]);
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const COMMAND_ID = /^[^\u0000-\u001f\u007f]{1,256}$/u;
 const DIGEST = /^[a-f0-9]{64}$/iu;
 const D4_RUNTIME_OWNER_DIGEST = operationPlanDigest("d4-runtime-adapter-token-holder");
 const WEBCHAT_OWNER_TASK_DIGEST = operationPlanDigest("webchat-owner-token-holder");
@@ -162,7 +163,7 @@ function projectRequestCommandIds(
   const commandIds = new Set<string>();
   for (const binding of bindings) {
     if (!isRecord(binding) || typeof binding.request_id !== "string" || typeof binding.command_id !== "string" ||
-        !/^[^\u0000-\u001f\u007f]{1,256}$/u.test(binding.command_id)) {
+        !COMMAND_ID.test(binding.command_id)) {
       return { status: "invalid" };
     }
     if (binding.request_id === requestId) commandIds.add(binding.command_id);
@@ -184,14 +185,15 @@ function unknownCancellationStatus(
   return { status: "unknown", reason_code, used_for_authority: false, may_execute: false };
 }
 
-/** Projects only durable, request-bound cancellation metadata; it never claims external processing stopped. */
+/** Scoped command IDs come from the exact authenticated D4 receipt lookup in the private inbox. */
 export function projectD4RuntimeCancellationStatus(
   operationPlans: unknown,
   requestId: string,
   observations: readonly TaskExecutionCancellationEvidence[],
+  scopedCommandIds: readonly string[] = [],
 ): WebChatD4RuntimeCancellationStatus {
   return projectTaskCancellationStatus(
-    operationPlans, requestId, observations, D4_RUNTIME_OWNER_DIGEST, ["d4_runtime"],
+    operationPlans, requestId, observations, D4_RUNTIME_OWNER_DIGEST, ["d4_runtime"], scopedCommandIds,
   );
 }
 
@@ -211,12 +213,20 @@ function projectTaskCancellationStatus(
   observations: readonly TaskExecutionCancellationEvidence[],
   ownerIdentityDigest: string,
   tokenKinds: readonly TaskExecutionCancellationEvidence["token_kind"][],
+  scopedCommandIds: readonly string[] = [],
 ): WebChatD4RuntimeCancellationStatus {
   const binding = projectRequestCommandIds(operationPlans, requestId, ownerIdentityDigest);
-  if (binding.status === "not_found") return unknownCancellationStatus("projection_unavailable");
   if (binding.status === "ambiguous") return unknownCancellationStatus("projection_ambiguous");
-  if (binding.status === "invalid") return unknownCancellationStatus("projection_invalid");
-  const commandIds = new Set(binding.command_ids);
+  if (binding.status === "invalid" || scopedCommandIds.some((id) => typeof id !== "string" || !COMMAND_ID.test(id))) {
+    return unknownCancellationStatus("projection_invalid");
+  }
+  if (binding.status === "not_found" && scopedCommandIds.length === 0) {
+    return unknownCancellationStatus("projection_unavailable");
+  }
+  const commandIds = new Set(scopedCommandIds);
+  if (binding.status === "matched") {
+    for (const id of binding.command_ids) commandIds.add(id);
+  }
   const matching = observations.filter((event) => commandIds.has(event.command_id) && tokenKinds.includes(event.token_kind));
   if (matching.length === 0) return unknownCancellationStatus("no_recorded_evidence");
 

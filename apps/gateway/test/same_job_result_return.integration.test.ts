@@ -493,7 +493,7 @@ describe("served Telegram result return and request-bound media ingress", () => 
 });
 
 describe("served D4 Runtime cancellation", () => {
-  it("interrupts the admitted compute of its exact scoped intent without claiming external stop", async () => {
+  it("interrupts its exact scoped compute and reopens the observation after restart without replay", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-d4-runtime-cancel-"));
     const token = "synthetic-d4-runtime-cancellation-token-only";
     const runtime = "blue_tanuki";
@@ -565,6 +565,8 @@ describe("served D4 Runtime cancellation", () => {
       const wrongSession = await post("/runtime/intent/cancel", { ...input, session_id: "unrelated-d4-session" });
       expect(wrongSession.status).toBe(404);
       expect(disconnected).toBe(false);
+      const before = await post("/runtime/intent/status", input);
+      expect(await before.json()).toMatchObject({ found: true, cancellation: { status: "unknown", may_execute: false } });
       const cancelled = await post("/runtime/intent/cancel", input);
       expect(cancelled.status).toBe(202);
       expect(await cancelled.json()).toEqual({ found: true, accepted: true, cancellation: {
@@ -574,9 +576,30 @@ describe("served D4 Runtime cancellation", () => {
       } });
       await waitFor(() => disconnected ? true : null, gateway, "compute connection did not receive the abort");
       expect(providerRequests).toBe(1);
-      const status = await post("/runtime/intent/status", input);
-      expect(status.status).toBe(200);
-      expect(await status.json()).toMatchObject({ found: true, cancellation: { status: "unknown", may_execute: false } });
+      const observed = await waitFor(async () => {
+        const status = await post("/runtime/intent/status", input);
+        expect(status.status).toBe(200);
+        const payload = await status.json() as { found: boolean; cancellation?: { status: string } };
+        return payload.cancellation?.status === "execution_observed" ? payload : null;
+      }, gateway, "the cancellation observation was not projected");
+      expect(observed).toMatchObject({ found: true, cancellation: {
+        status: "execution_observed", cancel_request_accepted: true, executor_settled: true,
+        external_processing_stop: "unknown", used_for_authority: false, may_execute: false,
+      } });
+      socket.terminate();
+      socket = undefined;
+      await stopChild(gateway);
+      gateway = spawnGateway(env);
+      await waitForHealth(gatewayPort, gateway, 40_000);
+      const after = await post("/runtime/intent/status", input);
+      expect(after.status).toBe(200);
+      expect(await after.json()).toMatchObject({ found: true, cancellation: observed.cancellation });
+      const otherAfter = await post("/runtime/intent/status", { ...input, session_id: "unrelated-d4-session" });
+      expect(otherAfter.status).toBe(200);
+      expect(await otherAfter.json()).toEqual({ found: false });
+      const duplicate = await post("/runtime/intent", { ...input, intent: "合成テストで短い文章を要約してください。" });
+      expect(await duplicate.json()).toMatchObject({ accepted: true, duplicate: true });
+      expect(providerRequests).toBe(1);
     } finally {
       socket?.terminate();
       if (gateway) await stopChild(gateway);
@@ -584,7 +607,7 @@ describe("served D4 Runtime cancellation", () => {
       await closeServer(provider);
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
     }
-  }, 70_000);
+  }, 120_000);
 });
 
 function seedTelegramWait(stateRoot: string, historyFile: string, fileRoot: string): {

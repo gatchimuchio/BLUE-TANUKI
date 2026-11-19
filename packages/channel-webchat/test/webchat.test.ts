@@ -28,6 +28,8 @@ import {
   type WebChatOwnerTaskSubmissionStore,
   type WebChatTaskOutcome,
   type WebChatD4RuntimeTaskOutcome,
+  type WebChatD4RuntimeCancellationScope,
+  type WebChatD4RuntimeCancellationStatus,
   type WebChatD4RuntimeIntentCancellation,
   type WebChatRuntimeSurface,
   type WebChatSettingsSurface,
@@ -195,7 +197,9 @@ async function setup(
       webhook_token?: string;
       d4_runtime_intent?: { token: string; runtime_id: string };
       onD4RuntimeIntentTaskOutcome?: (input: { request_id: string }) => Promise<WebChatD4RuntimeTaskOutcome>;
-      onD4RuntimeIntentCancellation?: (input: { request_id: string }) =>
+      onD4RuntimeIntentCancellationStatus?: (input: WebChatD4RuntimeCancellationScope) =>
+        Promise<WebChatD4RuntimeCancellationStatus>;
+      onD4RuntimeIntentCancellation?: (input: WebChatD4RuntimeCancellationScope) =>
         Promise<WebChatD4RuntimeIntentCancellation | null>;
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       maintenance_token?: string;
@@ -229,6 +233,7 @@ async function setup(
     webhook_token: opts.webhook_token,
     d4_runtime_intent: opts.d4_runtime_intent,
     onD4RuntimeIntentTaskOutcome: opts.onD4RuntimeIntentTaskOutcome,
+    onD4RuntimeIntentCancellationStatus: opts.onD4RuntimeIntentCancellationStatus,
     onD4RuntimeIntentCancellation: opts.onD4RuntimeIntentCancellation,
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
@@ -4549,12 +4554,29 @@ describe("WebChatChannel — HTTP inbound", () => {
       used_for_authority: false,
       may_execute: false,
     };
-    const calls: string[] = [];
+    const cancellationStatus: WebChatD4RuntimeCancellationStatus = {
+      status: "execution_observed",
+      cancel_request_accepted: true,
+      executor_settled: true,
+      executor_status: "suspended",
+      local_worker_stop: "worker_exit_observed",
+      external_processing_stop: "unknown",
+      cancel_requested_at_ms: 100,
+      observed_at_ms: 150,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const cancelCalls: WebChatD4RuntimeCancellationScope[] = [];
+    const statusCalls: WebChatD4RuntimeCancellationScope[] = [];
     let cancellable = true;
     const runtimeCtx = await setup({
       d4_runtime_intent: { token: D4_RUNTIME_TOKEN, runtime_id: "blue_tanuki" },
-      onD4RuntimeIntentCancellation: async ({ request_id }) => {
-        calls.push(request_id);
+      onD4RuntimeIntentCancellationStatus: async (scope) => {
+        statusCalls.push(scope);
+        return cancellationStatus;
+      },
+      onD4RuntimeIntentCancellation: async (scope) => {
+        cancelCalls.push(scope);
         return cancellable
           ? { ...cancellation, command_id: "private-command-id" } as WebChatD4RuntimeIntentCancellation
           : null;
@@ -4598,9 +4620,36 @@ describe("WebChatChannel — HTTP inbound", () => {
           may_execute: false,
         },
       });
-      expect(calls).toEqual([(accepted.body as { request_id: string }).request_id]);
       expect(JSON.stringify(response.body)).not.toContain("private-command-id");
       expect(JSON.stringify(response.body)).not.toContain("summarize the current task");
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${TOKEN}` })).status).toBe(401);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        ...input, runtime_id: "another_runtime",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).status).toBe(403);
+      expect((await postJson(runtimeCtx.port, "/runtime/intent/status", {
+        ...input, session_id: "another-session-1234",
+      }, { authorization: `Bearer ${D4_RUNTIME_TOKEN}` })).body).toEqual({ found: false });
+      const status = await postJson(runtimeCtx.port, "/runtime/intent/status", input,
+        { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });
+      const scope = {
+        request_id: (accepted.body as { request_id: string }).request_id,
+        scope_digest: createHash("sha256")
+          .update("blue-tanuki.d4-runtime.intent-submission-scope.v1\0", "utf8")
+          .update(JSON.stringify([input.runtime_id, input.session_id]), "utf8").digest("hex"),
+        runtime_ref_digest: createHmac("sha256", D4_RUNTIME_TOKEN)
+          .update("blue-tanuki.d4-runtime.runtime.v1\0", "utf8").update(input.runtime_id, "utf8").digest("hex"),
+        session_ref_digest: createHmac("sha256", D4_RUNTIME_TOKEN)
+          .update("blue-tanuki.d4-runtime.session.v1\0", "utf8").update(input.session_id, "utf8").digest("hex"),
+      };
+      expect(cancelCalls).toEqual([scope]);
+      expect(statusCalls).toEqual([scope]);
+      expect(status.status).toBe(200);
+      expect(status.body).toMatchObject({ found: true, request_id: scope.request_id, cancellation: cancellationStatus });
+      const statusBody = JSON.stringify(status.body);
+      expect(statusBody).not.toContain(scope.scope_digest);
+      expect(statusBody).not.toContain(scope.runtime_ref_digest);
+      expect(statusBody).not.toContain(scope.session_ref_digest);
       cancellable = false;
       const inactive = await postJson(runtimeCtx.port, "/runtime/intent/cancel", input,
         { authorization: `Bearer ${D4_RUNTIME_TOKEN}` });

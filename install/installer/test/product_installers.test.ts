@@ -98,4 +98,23 @@ describe("downloadable product installer packages", () => {
     expect(launcher).toContain('BLUE_TANUKI_STATE_ROOT="$STATE_ROOT"');
     expect(launcher).toContain("export BLUE_TANUKI_STATE_ROOT");
   });
+
+  it("connects macOS native recovery diagnosis to the installed read-only command", () => {
+    const app = read("install/macos/app/BlueTanukiApp.swift");
+    const pack = read("scripts/package_macos_app.ts");
+    const launcher = read("install/unix/product/BlueTanukiLauncher.sh");
+    const start = app.indexOf("@objc private func inspectRecovery()");
+    const end = app.indexOf("@objc private func restartNormally()", start);
+    expect(pack).toContain('"install/macos/app/BlueTanukiApp.swift"');
+    expect(app).toContain('makeButton("復旧診断", action: #selector(inspectRecovery))');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const action = app.slice(start, end);
+    expect(action).toMatch(/validateInstalledProduct\(\)[\s\S]+arguments: \["recovery-inspect", "--json"\], captureOutput: true, accepting: \[0, 2\]/);
+    expect(action).toContain('report.mode == "read_only"');
+    expect(action).toContain("!report.used_for_authority, !report.may_execute");
+    expect(action).toContain("exitCode == (report.status == .verified && report.runtime_recovery_fence.status == .clear ? 0 : 2)");
+    expect(action).not.toMatch(/recovery-reconcile|resident-start|\.next_safe_action/);
+    expect(launcher).toMatch(/recovery-inspect\)[\s\S]*?--recovery-inspect --env-file "\$ENV_FILE" "\$@"/);
+  });
 });

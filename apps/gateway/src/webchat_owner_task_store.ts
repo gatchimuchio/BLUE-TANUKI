@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import type {
+  WebChatD4RuntimeCancellationScope,
   WebChatD4RuntimeIntentClaim,
   WebChatD4RuntimeIntentResult,
   WebChatOwnerTaskSubmissionClaim,
@@ -19,6 +20,8 @@ const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const OWNER_TASK_SCOPE = sha256("webchat-owner-task-scope.v1");
 const D4_RUNTIME_TARGET = /^d4-runtime:[a-f0-9]{64}$/u;
+const CANCELLATION_COMMAND_ID = /^[^\u0000-\u001f\u007f]{1,256}$/u;
+const MAX_CANCELLATION_COMMANDS_PER_REQUEST = 256;
 const OWNER_TASK_RESULT_TTL_MS = 15 * 60 * 1000;
 const OWNER_TASK_RESULT_MAX_ENTRIES = 512;
 const OWNER_TASK_RESULT_MAX_BYTES = 64 * 1024;
@@ -90,6 +93,12 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
         created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
         PRIMARY KEY(scope_digest,event_digest)
+      ) STRICT;`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS webchat_d4_cancellation_commands (
+        request_id TEXT NOT NULL REFERENCES webchat_owner_task_inbox(request_id),
+        command_id TEXT NOT NULL CHECK(length(command_id) BETWEEN 1 AND 256),
+        binding_digest TEXT NOT NULL CHECK(length(binding_digest) = 64),
+        PRIMARY KEY(request_id,command_id)
       ) STRICT;`);
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") {
@@ -176,6 +185,45 @@ export class GatewayWebChatOwnerTaskStore implements WebChatOwnerTaskSubmissionS
     }
     const eventDigest = sha256(`webchat-d4-runtime-intent-event.v1\0${input.submission_id.toLowerCase()}`);
     return this.getStatusInScope(input.scope_digest, eventDigest);
+  }
+
+  /** Preserve which command received the authenticated submission's cancellation signal. */
+  bindD4RuntimeCancellationCommand(scope: WebChatD4RuntimeCancellationScope, commandId: string): void {
+    this.assertOpen();
+    const bindingDigest = cancellationBindingDigest(scope);
+    if (!CANCELLATION_COMMAND_ID.test(commandId)) throw new Error("webchat_d4_cancellation_command_invalid");
+    this.db.prepare(`INSERT INTO webchat_d4_cancellation_commands (request_id,command_id,binding_digest)
+      SELECT request_id,?,? FROM webchat_owner_task_inbox
+      WHERE request_id=? AND scope_digest=? AND scope_digest<>? AND delivery_state<>'rejected'
+      ON CONFLICT(request_id,command_id) DO NOTHING`)
+      .run(commandId, bindingDigest, scope.request_id, scope.scope_digest, OWNER_TASK_SCOPE);
+  }
+
+  /** Return observation bindings only. The Broker ledger independently proves what happened. */
+  readD4RuntimeCancellationCommands(scope: WebChatD4RuntimeCancellationScope): {
+    matching: readonly string[]; conflicting: readonly string[];
+  } {
+    this.assertOpen();
+    const bindingDigest = cancellationBindingDigest(scope);
+    const records = this.db.prepare(`SELECT command.command_id,command.binding_digest
+      FROM webchat_d4_cancellation_commands command
+      JOIN webchat_owner_task_inbox inbox ON inbox.request_id=command.request_id
+      WHERE inbox.request_id=? AND inbox.scope_digest=? AND inbox.scope_digest<>? AND inbox.delivery_state<>'rejected'
+      ORDER BY command.command_id LIMIT ?`)
+      .all(scope.request_id, scope.scope_digest, OWNER_TASK_SCOPE, MAX_CANCELLATION_COMMANDS_PER_REQUEST + 1) as
+      { command_id: string; binding_digest: string }[];
+    if (records.length > MAX_CANCELLATION_COMMANDS_PER_REQUEST) {
+      throw new Error("webchat_d4_cancellation_command_limit_exceeded");
+    }
+    const matching: string[] = [];
+    const conflicting: string[] = [];
+    for (const record of records) {
+      if (!CANCELLATION_COMMAND_ID.test(record.command_id) || !DIGEST.test(record.binding_digest)) {
+        throw new Error("webchat_d4_cancellation_command_invalid");
+      }
+      (record.binding_digest === bindingDigest ? matching : conflicting).push(record.command_id);
+    }
+    return { matching, conflicting };
   }
 
   getD4RuntimeIntentResult(input: {
@@ -464,4 +512,13 @@ function validateSubmissionRow(row: SubmissionRow): void {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function cancellationBindingDigest(scope: WebChatD4RuntimeCancellationScope): string {
+  if (!REQUEST_ID.test(scope.request_id) || !DIGEST.test(scope.scope_digest) ||
+      !DIGEST.test(scope.runtime_ref_digest) || !DIGEST.test(scope.session_ref_digest)) {
+    throw new Error("webchat_d4_cancellation_scope_invalid");
+  }
+  return sha256(JSON.stringify(["webchat-d4-cancellation-scope.v1", scope.request_id, scope.scope_digest,
+    scope.runtime_ref_digest, scope.session_ref_digest]));
 }
