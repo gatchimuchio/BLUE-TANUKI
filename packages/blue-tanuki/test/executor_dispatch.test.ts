@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { meaningUpdateCandidateDigest, type ExecuteCommand } from "@blue-tanuki/protocol";
 import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, type ChannelDispatcher } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import type { LLMBackend, LLMRequest, LLMResponse } from "../src/llm/base.js";
+import { gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
+  type GoogleReadTokenKey } from "../src/tools/google_read.js";
 import { ToolRegistry, echoTool, type Tool } from "../src/tools/registry.js";
 
 const stubUpstream = {
@@ -82,6 +84,79 @@ function approved(command: ExecuteCommand) {
     reason: "test approval",
   });
 }
+
+describe("Executor Google read credential binding", () => {
+  it("resolves only the preferred slot for each exact built-in Google reader", async () => {
+    const tools = new ToolRegistry();
+    const resolve = vi.fn((key: GoogleReadTokenKey, _ref: string) => `synthetic-selected-${key}`);
+    const executor = new Executor({ approval_authority: executorApproval, tools, llm: new StubBackend(),
+      resolve_google_read_access_token: resolve });
+    const selected: Array<string | undefined> = [];
+    let commandNumber = 0;
+    const dispatch = (target: Executor, tool: Tool) => target.execute(approved({
+      id: `google-read-credential-fixture-${++commandNumber}`,
+      type: "tool_call", payload: { tool_name: tool.name, arguments: {} },
+      constraints: { allowed_tools: [tool.name], allowed_capabilities: [...(tool.required_capabilities ?? [])] },
+      upstream_decision: stubUpstream,
+    }));
+    try {
+      for (const key of ["GMAIL_ACCESS_TOKEN", "GOOGLE_CALENDAR_ACCESS_TOKEN", "GOOGLE_DRIVE_ACCESS_TOKEN", "GOOGLE_ACCESS_TOKEN"]) {
+        vi.stubEnv(key, undefined);
+        vi.stubEnv(`${key}_REF`, undefined);
+      }
+      for (const tool of [gmailReadTool, googleCalendarReadTool, googleDriveReadTool]) {
+        tools.register(tool);
+        vi.spyOn(tool, "invoke").mockImplementation(async (_args, context) => {
+          selected.push(context.google_read_access_token);
+          return { checked: true };
+        });
+      }
+
+      vi.stubEnv("GMAIL_ACCESS_TOKEN", " synthetic-gmail-raw ");
+      vi.stubEnv("GMAIL_ACCESS_TOKEN_REF", "synthetic-gmail-ref");
+      vi.stubEnv("GOOGLE_ACCESS_TOKEN", "synthetic-shared-raw");
+      vi.stubEnv("GOOGLE_ACCESS_TOKEN_REF", "synthetic-shared-ref");
+      expect(await dispatch(executor, gmailReadTool)).toMatchObject({ status: "success" });
+      expect(selected.at(-1)).toBe("synthetic-gmail-raw");
+      expect(resolve).not.toHaveBeenCalled();
+
+      vi.stubEnv("GMAIL_ACCESS_TOKEN", undefined);
+      expect(await dispatch(executor, gmailReadTool)).toMatchObject({ status: "success" });
+      expect(selected.at(-1)).toBe("synthetic-selected-GMAIL_ACCESS_TOKEN");
+      expect(resolve.mock.calls).toEqual([["GMAIL_ACCESS_TOKEN", "synthetic-gmail-ref"]]);
+      expect(process.env.GMAIL_ACCESS_TOKEN).toBeUndefined();
+
+      expect(await dispatch(executor, googleCalendarReadTool)).toMatchObject({ status: "success" });
+      expect(selected.at(-1)).toBe("synthetic-shared-raw");
+      expect(resolve).toHaveBeenCalledTimes(1);
+
+      vi.stubEnv("GOOGLE_ACCESS_TOKEN", undefined);
+      expect(await dispatch(executor, googleDriveReadTool)).toMatchObject({ status: "success" });
+      expect(selected.at(-1)).toBe("synthetic-selected-GOOGLE_ACCESS_TOKEN");
+      expect(resolve).toHaveBeenNthCalledWith(2, "GOOGLE_ACCESS_TOKEN", "synthetic-shared-ref");
+
+      vi.stubEnv("GOOGLE_DRIVE_ACCESS_TOKEN_REF", "synthetic-broken-ref");
+      resolve.mockImplementationOnce(() => { throw new Error("synthetic-private-storage-detail"); });
+      expect(await dispatch(executor, googleDriveReadTool)).toMatchObject({ status: "failed", error: "google_read_credential_unavailable" });
+      expect(resolve).toHaveBeenNthCalledWith(3, "GOOGLE_DRIVE_ACCESS_TOKEN", "synthetic-broken-ref");
+      expect(googleDriveReadTool.invoke).toHaveBeenCalledTimes(1);
+
+      const otherTools = new ToolRegistry();
+      const sameNameAdapter: Tool = { ...gmailReadTool, invoke: vi.fn(async (_args, context) => {
+        expect(context).not.toHaveProperty("google_read_access_token");
+        return { checked: true };
+      }) };
+      otherTools.register(sameNameAdapter);
+      const otherExecutor = new Executor({ approval_authority: executorApproval, tools: otherTools,
+        llm: new StubBackend(), resolve_google_read_access_token: resolve });
+      expect(await dispatch(otherExecutor, sameNameAdapter)).toMatchObject({ status: "success", result: { checked: true } });
+      expect(resolve).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe("Executor.executeChannelSend — dispatcher path", () => {
   it("records resource admission refusal as a failed, not-invoked execution", async () => {
@@ -318,9 +393,8 @@ describe("Executor.executeToolCall - permission envelope", () => {
     let signalSeen = false;
     let aborted = false;
     const slowTool: Tool = {
-      name: "slow",
+      ...echoTool,
       description: "never completes unless aborted",
-      required_capabilities: ["tool:slow"],
       async invoke(_args, ctx) {
         signalSeen = ctx.signal instanceof AbortSignal;
         await new Promise<void>((resolve) => {
@@ -342,10 +416,10 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const command: ExecuteCommand = {
       id: "cmd-slow-timeout",
       type: "tool_call",
-      payload: { tool_name: "slow", arguments: {} },
+      payload: { tool_name: slowTool.name, arguments: {} },
       constraints: {
-        allowed_tools: ["slow"],
-        allowed_capabilities: ["tool:slow"],
+        allowed_tools: [slowTool.name],
+        allowed_capabilities: [...(slowTool.required_capabilities ?? [])],
         timeout_ms: 10,
       },
       upstream_decision: stubUpstream,
@@ -368,9 +442,8 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const started = new Promise<void>((resolve) => { toolStarted = resolve; });
     const lateSentinel = "late-tool-result-must-not-be-used";
     const slowTool: Tool = {
-      name: "slow",
+      ...echoTool,
       description: "settles with a late result when cancelled",
-      required_capabilities: ["tool:slow"],
       async invoke(_args, ctx) {
         observedSignal = ctx.signal;
         toolStarted();
@@ -388,8 +461,8 @@ describe("Executor.executeToolCall - permission envelope", () => {
     const command: ExecuteCommand = {
       id: "cmd-slow-cancelled",
       type: "tool_call",
-      payload: { tool_name: "slow", arguments: {} },
-      constraints: { allowed_tools: ["slow"], allowed_capabilities: ["tool:slow"] },
+      payload: { tool_name: slowTool.name, arguments: {} },
+      constraints: { allowed_tools: [slowTool.name], allowed_capabilities: [...(slowTool.required_capabilities ?? [])] },
       upstream_decision: stubUpstream,
     };
 

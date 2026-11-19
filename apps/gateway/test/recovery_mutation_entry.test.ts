@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createRequire } from "node:module";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import { parseEnvFile } from "../src/env_file.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 import { inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
+import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
 import { storeBlueTanukiSecret, storeLlmApiKeySecret } from "../src/secret_store.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -1373,7 +1374,8 @@ require("node:module").syncBuiltinESMExports();
     }
   }, 30_000);
 
-  it("returns privately reviewed Daily Brief sources and rejects stale or repeated acquisition", async () => {
+  it.each(process.platform === "win32" ? ["raw token", "DPAPI references"] : ["raw token"])(
+    "returns privately reviewed Daily Brief sources and rejects stale or repeated acquisition with %s", async (mode) => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), "blue-tanuki-daily-brief-read-l3-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
@@ -1382,6 +1384,9 @@ require("node:module").syncBuiltinESMExports();
     const cronStorePath = join(root, "state", "private-state", "cron-events", "cron-events.sqlite");
     const ownerToken = "synthetic-daily-brief-owner-token";
     const googleToken = "synthetic-daily-brief-google-token";
+    const gmailToken = mode === "DPAPI references" ? "synthetic-daily-brief-gmail-specific-token" : googleToken;
+    const firstTokenCodeUnit = googleToken.charCodeAt(0).toString(16).padStart(4, "0");
+    const escapedDriveCredential = `\\u${firstTokenCodeUnit}${googleToken.slice(1)}`;
     const privateTitle = "fixture-private-drive-title";
     const privateId = "fixture-private-drive-id";
     const calendarTitle = "fixture-private-calendar-title";
@@ -1391,7 +1396,20 @@ require("node:module").syncBuiltinESMExports();
     const undisplayedGmailSnippet = "fixture-private-gmail-snippet";
     const staticContent = "synthetic reminder outside the private Daily Brief read";
     const scheduledTarget = "webchat-owner-token-holder";
-    writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
+    const protectedRefs = mode === "DPAPI references" ? [
+      storeBlueTanukiSecret("GOOGLE_ACCESS_TOKEN", googleToken, { envFilePath: envFile, env: {} }),
+      storeBlueTanukiSecret("GMAIL_ACCESS_TOKEN", gmailToken, { envFilePath: envFile, env: {} }),
+    ] : [];
+    for (const stored of protectedRefs) expect(stored.storage).toBe("win32_dpapi_current_user");
+    writeFileSync(envFile, ["LLM_BACKEND=stub", ...protectedRefs.map(stored =>
+      `${stored.ref_key}=${JSON.stringify(stored.ref)}`), ""].join("\n"), "utf8");
+    const credentialValues = [...new Set([googleToken, gmailToken, escapedDriveCredential,
+      ...protectedRefs.map(stored => stored.ref)])];
+    const expectCredentialsHidden = (...observations: string[]) => {
+      for (const observed of observations) {
+        for (const value of credentialValues) expect(observed.includes(value)).toBe(false);
+      }
+    };
     const port = await reserveLoopbackPort();
     const origin = `http://127.0.0.1:${port}`;
     const env = {
@@ -1403,7 +1421,7 @@ require("node:module").syncBuiltinESMExports();
       BLUE_TANUKI_DAILY_BRIEF_TARGET: scheduledTarget,
       BLUE_TANUKI_DAILY_BRIEF_CHANNEL: "webchat",
       BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "600000",
-      GOOGLE_ACCESS_TOKEN: googleToken,
+      ...(mode === "raw token" ? { GOOGLE_ACCESS_TOKEN: googleToken } : {}),
       BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: "static-private-read-fixture", channel: "webchat",
         target: scheduledTarget, content: staticContent, interval_ms: 250 }]),
     };
@@ -1424,15 +1442,16 @@ require("node:module").syncBuiltinESMExports();
     const scheduledAtMs = Date.now() - 5_000;
     const occurrence = seedOccurrence(scheduledAtMs);
     const googleRequests: Array<{ method?: string; host?: string; tokenMatched: boolean; path: string }> = [];
+    let echoDriveCredential = false;
     const googleFixture = createServer((request, response) => {
       const path = request.url ?? "";
       const host = typeof request.headers["x-fixture-provider-host"] === "string"
         ? request.headers["x-fixture-provider-host"] : undefined;
       googleRequests.push({ method: request.method, host, path,
-        tokenMatched: request.headers.authorization === `Bearer ${googleToken}` });
+        tokenMatched: request.headers.authorization === `Bearer ${host === "gmail.googleapis.com" ? gmailToken : googleToken}` });
       let payload: unknown;
       if (request.method === "GET" && host === "www.googleapis.com" && path.startsWith("/drive/v3/files?")) {
-        payload = { files: [{ id: privateId, name: privateTitle, mimeType: "text/plain",
+        payload = { files: [{ id: privateId, name: echoDriveCredential ? googleToken : privateTitle, mimeType: "text/plain",
           modifiedTime: new Date(scheduledAtMs - 60_000).toISOString(), trashed: false }] };
       } else if (request.method === "GET" && host === "www.googleapis.com" && path.startsWith("/calendar/v3/calendars/primary/events?")) {
         const start = new URL(path, "https://www.googleapis.com").searchParams.get("timeMin");
@@ -1453,7 +1472,8 @@ require("node:module").syncBuiltinESMExports();
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(payload));
+      const json = JSON.stringify(payload);
+      response.end(echoDriveCredential ? json.replace(googleToken, escapedDriveCredential) : json);
     });
     const listening = once(googleFixture, "listening");
     googleFixture.listen(0, "127.0.0.1");
@@ -1501,6 +1521,7 @@ require("node:module").syncBuiltinESMExports();
       await expect.poll(() => deliveries.includes(staticContent), { timeout: 5_000 }).toBe(true);
 
       const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
+      expectCredentialsHidden(JSON.stringify(runtime.body));
       expect(runtime.body.scheduled_tasks).toEqual(expect.arrayContaining([expect.objectContaining({
         id: "daily_brief", local_acquisition_due: expect.objectContaining({ occurrence_id_digest: occurrence,
           services: expect.arrayContaining(["gmail", "calendar", "drive"]), used_for_authority: false, may_execute: false }),
@@ -1539,6 +1560,7 @@ require("node:module").syncBuiltinESMExports();
         const commandId = String(proposal.body.command_id);
         const requestId = String(proposal.body.request_id);
         const queue = await requestJson(port, "/approval", { token: resumeToken });
+        expectCredentialsHidden(JSON.stringify(queue.body));
         const pending = (queue.body.pending_approvals as Record<string, unknown>[]).find((entry) => entry.command_id === commandId);
         expect(pending).toMatchObject({ operation: "credential.access", approval_level: "L3_final_review", risk: "high",
           final_review_required: true, content_review_required: true, approval_token: expect.any(String) });
@@ -1559,7 +1581,7 @@ require("node:module").syncBuiltinESMExports();
         service: "drive", tool_name: "google.drive.read", api_host: "www.googleapis.com", max_results: 5,
         scheduled_at_ms: scheduledAtMs, scope: expect.stringContaining(new Date(scheduledAtMs).toISOString()),
         review_digest: expect.stringMatching(/^[a-f0-9]{64}$/), no_store: true, used_for_authority: false, may_execute: false });
-      expect(JSON.stringify(reviewed.body)).not.toContain(googleToken);
+      expectCredentialsHidden(JSON.stringify(reviewed.body));
       const reviewedVerdict = { ...drive.verdict, content_review_digest: reviewed.body.review_digest };
       expect((await post(drive.route, resumeToken, reviewedVerdict)).status).toBe(409);
       expect((await post("/resume", resumeToken, { ...reviewedVerdict, request_id: drive.commandId })).status).toBe(409);
@@ -1572,7 +1594,7 @@ require("node:module").syncBuiltinESMExports();
       expect(approved.headers.get("cache-control")).toBe("no-store");
       expect(approved.body).toMatchObject({ result: { daily_brief_read: { service: "drive",
         items: [{ title: privateTitle }], incomplete: false, used_for_authority: false } } });
-      expect(JSON.stringify(approved.body)).not.toContain(googleToken);
+      expectCredentialsHidden(JSON.stringify(approved.body));
       expect(JSON.stringify(approved.body)).not.toContain(privateId);
       expect(googleRequests).toEqual([{ method: "GET", host: "www.googleapis.com", tokenMatched: true,
         path: expect.stringMatching(/^\/drive\/v3\/files\?/) }]);
@@ -1608,7 +1630,8 @@ require("node:module").syncBuiltinESMExports();
         expect(response.headers.get("cache-control")).toBe("no-store");
         expect(response.body).toMatchObject({ result: { daily_brief_read: { service,
           items: [{ title }], incomplete: false, used_for_authority: false } } });
-        for (const undisplayed of [calendarId, gmailId, undisplayedGmailSnippet, googleToken]) {
+        expectCredentialsHidden(JSON.stringify(review.body), JSON.stringify(response.body));
+        for (const undisplayed of [calendarId, gmailId, undisplayedGmailSnippet]) {
           expect(JSON.stringify(response.body)).not.toContain(undisplayed);
         }
         return { request, verdict };
@@ -1650,21 +1673,64 @@ require("node:module").syncBuiltinESMExports();
       const memoryFile = join(root, "memory.jsonl");
       for (const observed of [JSON.stringify(history.body), readFileSync(historyFile, "utf8"), readFileSync(auditFile, "utf8"),
         ...(existsSync(memoryFile) ? [readFileSync(memoryFile, "utf8")] : []), gateway.output.join(""), webSocketFrames.join("\n")]) {
-        for (const privateValue of [privateTitle, privateId, calendarTitle, calendarId, gmailTitle, gmailId, undisplayedGmailSnippet, googleToken]) {
+        expectCredentialsHidden(observed);
+        for (const privateValue of [privateTitle, privateId, calendarTitle, calendarId, gmailTitle, gmailId, undisplayedGmailSnippet]) {
           expect(observed).not.toContain(privateValue);
         }
       }
       gateway = spawnGateway(env, preload);
-      await waitForHealth(port, gateway, 20_000);
+      await waitForHealth(port, gateway, 35_000);
       expect((await post(proposalRoute, ownerToken, { occurrence_id_digest: nextOccurrence, service: "gmail" })).status).toBe(409);
       expect((await post(`${gmail.request.route}/daily-brief-read`, resumeToken, gmail.verdict)).status).toBe(409);
       expect(googleRequests).toHaveLength(4);
+
+      const failedReads: Array<{ requestId: string; state: "not_attempted" | "outcome_unknown" }> = [];
+      const gmailRef = protectedRefs.find(stored => stored.key === "GMAIL_ACCESS_TOKEN");
+      if (gmailRef) {
+        const approveFailedRead = async (service: "gmail" | "drive", expectedCalls: number) => {
+          const request = await approvalFor(service, seedOccurrence(Date.now() - 1));
+          const review = await post(`${request.route}/content`, resumeToken);
+          expect(review.status).toBe(200);
+          expect(review.headers.get("cache-control")).toBe("no-store");
+          expect(googleRequests).toHaveLength(expectedCalls);
+          const failed = await post(`${request.route}/daily-brief-read`, resumeToken,
+            { ...request.verdict, content_review_digest: review.body.review_digest });
+          expect(failed.status).toBe(409);
+          expect(failed.headers.get("cache-control")).toBe("no-store");
+          expect(failed.body).toEqual({ error: "daily_brief_result_unavailable" });
+          expectCredentialsHidden(JSON.stringify(review.body), JSON.stringify(failed.body));
+          return request.requestId;
+        };
+        const gmailSecretPath = dpapiSecretPathFromReference(gmailRef.ref);
+        renameSync(gmailSecretPath, `${gmailSecretPath}.unavailable`);
+        failedReads.push({ requestId: await approveFailedRead("gmail", 4), state: "not_attempted" });
+        expect(googleRequests).toHaveLength(4);
+
+        echoDriveCredential = true;
+        failedReads.push({ requestId: await approveFailedRead("drive", 4), state: "outcome_unknown" });
+        expect(googleRequests).toHaveLength(5);
+        expect(googleRequests[4]).toMatchObject({ method: "GET", host: "www.googleapis.com", tokenMatched: true,
+          path: expect.stringMatching(/^\/drive\/v3\/files\?/) });
+      }
+      await stopChild(gateway.child);
+      if (failedReads.length > 0) {
+        const finalHistory = new CompleteHistoryStore({ filepath: historyFile });
+        expect(finalHistory.verify()).toBe(true);
+        for (const { requestId, state } of failedReads) {
+          expect(finalHistory.replay({ kind: "execution_history", request_id: requestId })).toMatchObject([
+            { payload: { status: "failed", execution_receipt: { state, used_for_authority: false } } },
+          ]);
+        }
+      }
+      expectCredentialsHidden(gateway.output.join(""), readFileSync(historyFile, "utf8"), readFileSync(auditFile, "utf8"),
+        ...(existsSync(memoryFile) ? [readFileSync(memoryFile, "utf8")] : []));
+      for (const value of [googleToken, gmailToken]) expect(readFileSync(envFile, "utf8").includes(value)).toBe(false);
     } finally {
       webSocket?.terminate();
       if (gateway) await stopChild(gateway.child);
       await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
     }
-  }, 75_000);
+  }, 120_000);
 
   it("quiesces J/M and meaning-update consumers for selected restore, verifies reopened stores, and keeps existing plans held", async () => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-jm-restore-l3-"));

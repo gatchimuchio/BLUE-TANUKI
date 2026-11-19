@@ -109,6 +109,8 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
+import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
+  type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
 import { isSettingsWriteTool, settingsWriteActivationReview } from "./tools/settings_write.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
@@ -153,6 +155,8 @@ export interface ExecutorDeps {
   tools: ToolRegistry;
   /** Gatewayが保護参照を解決する。資格値を受け取るのはComposio組込みの経路だけ。 */
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
+  /** Googleの組込み読取経路向けに、Gatewayで指定した資格参照だけを解決する。 */
+  resolve_google_read_access_token?: (key: GoogleReadTokenKey, secretRef: string) => string | undefined;
   /** Gatewayの組込みfile.searchだけを固定workerへ送る。省略はcore開発用。 */
   file_search_worker?: FileSearchWorker;
   /**
@@ -1162,6 +1166,27 @@ export class Executor {
       // 参照やOS資格ストアの例外を実行結果に含めない。
     }
     throw new Error("composio_credential_unavailable");
+  }
+
+  private resolveGoogleReadAccessToken(tool: Tool, env: Readonly<Record<string, string | undefined>>): string | undefined {
+    const keys = tool === gmailReadTool ? GOOGLE_READ_TOKEN_KEYS.gmail
+      : tool === googleCalendarReadTool ? GOOGLE_READ_TOKEN_KEYS.calendar
+      : tool === googleDriveReadTool ? GOOGLE_READ_TOKEN_KEYS.drive : undefined;
+    if (!keys) return undefined;
+    for (const key of keys) {
+      const raw = env[key]?.trim();
+      if (raw) return raw;
+      const ref = env[`${key}_REF`];
+      if (!ref) continue;
+      try {
+        const token = this.deps.resolve_google_read_access_token?.(key, ref)?.trim();
+        if (token) return token;
+      } catch {
+        // 参照やOS資格ストアの例外を実行結果に含めない。
+      }
+      throw new Error("google_read_credential_unavailable");
+    }
+    return undefined;
   }
 
   /** Read-only preflight for exact registered built-in target resolvers. */
@@ -3056,7 +3081,8 @@ export class Executor {
         before_action_dispatch?.();
         const composioApiKey = tool === composioSearchTool || tool === composioAccountsTool ||
           tool === composioScopesTool || tool === composioExecuteTool ? this.resolveComposioApiKey(process.env) : undefined;
-        if (composioApiKey !== undefined) remainingTimeoutMs();
+        const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
+        if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
         markInvoked("tool_adapter");
         return tool.invoke(payload.arguments, {
           command_id: id,
@@ -3067,6 +3093,7 @@ export class Executor {
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
           ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
+          ...(googleReadAccessToken !== undefined ? { google_read_access_token: googleReadAccessToken } : {}),
           ...(guardedBrowserFormSubmit ? { before_browser_form_submit: guardedBrowserFormSubmit } : {}),
           ...(assertCurrentSettingsWrite ? { assert_current_settings_write: assertCurrentSettingsWrite } : {}),
           on_execution_lifecycle: observeLifecycle,

@@ -266,7 +266,7 @@ import {
   readCronNotificationState,
 } from "./resident_notifications.js";
 import { probeGatewaySelfHealth } from "./runtime_health.js";
-import { hasSecretMaterial, resolveSecretMaterial } from "./secret_store.js";
+import { hasSecretMaterial, resolveSecretMaterial, secretRefKey } from "./secret_store.js";
 import {
   documentOrganizationSourceFromRequest,
   presentRestoredDocumentOrganizationProjection,
@@ -8376,6 +8376,7 @@ async function serveWithOwnerLease(
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
+    resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
       const entry = recordCompleteHistory({
         kind: "audit_history",

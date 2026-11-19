@@ -1011,6 +1011,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** 組込みComposio toolだけが受け取る一時的な接続資格。 */
   composio_api_key?: string;
+  /** 選択されたGoogleの組込み読取toolだけが受け取る一時的な接続資格。 */
+  google_read_access_token?: string;
   /** Gateway-controlled one-shot gate immediately before a guarded browser form GET. */
   before_browser_form_submit?: () => void;
   /** Rechecks the consumed ticket and current authority after protected local input. */

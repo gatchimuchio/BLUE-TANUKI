@@ -72,7 +72,7 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
-import { resolveSecretMaterial } from "./secret_store.js";
+import { resolveSecretMaterial, secretRefKey } from "./secret_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
@@ -400,6 +400,7 @@ async function runCliWithExecutionStore(
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
+    resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     approval_authority: executorApproval,
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
       try {

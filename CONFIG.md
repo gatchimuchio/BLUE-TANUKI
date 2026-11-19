@@ -348,16 +348,12 @@ through capability envelope, Approval Gate, and audit.
 
 ### Secret-store refs for external connectors
 
-External connector credentials may be supplied as secret-store references instead
-of raw env values. The gateway resolves refs at startup and fails closed when a
-reference cannot be unprotected.
-
-Supported ref forms include:
+対応済みの接続では、OSの資格保管先を示す参照を設定できる。解決する時点は継続接続の
+開始時や個別操作の実行直前など、利用する経路によって異なる。以下はWindows DPAPI形式の例。
 
 ```bash
 OPENROUTER_API_KEY_REF=win32-dpapi-current-user:file:...
 COMPOSIO_API_KEY_REF=win32-dpapi-current-user:file:...
-GITHUB_TOKEN_REF=win32-dpapi-current-user:file:...
 GOOGLE_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
 GMAIL_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
 GOOGLE_CALENDAR_ACCESS_TOKEN_REF=win32-dpapi-current-user:file:...
@@ -374,6 +370,11 @@ Google read integrations:
 - `gmail.read` returns Gmail message metadata summaries.
 - `google.calendar.read` returns event metadata summaries.
 - `google.drive.read` returns Drive file metadata/search summaries.
+
+GatewayとCLIは、上の3操作が承認され実行するときに、対象サービスの設定だけを読む。
+サービス固有の値、同じキーの保護参照、共通 `GOOGLE_ACCESS_TOKEN`、共通の保護参照の
+順に調べる。設定済みの参照から取得できない場合はその読み取りを止める。
+解決した資格は対象のGoogle APIへの要求だけに使い、環境変数へ書き戻さない。
 
 Google write integrations:
 
