@@ -8,6 +8,18 @@ import { parseCronEventResultReceipt, type CronEventResultReceipt } from "./cron
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
 
+export const GOOGLE_DAILY_BRIEF_DUE_SOURCE = "daily-brief:boot:local-acquisition-due";
+
+export interface CronLocalAcquisitionDue {
+  readonly status: "awaiting_authorized_acquisition";
+  readonly occurrence_id_digest: string;
+  readonly schedule_payload_digest: string;
+  readonly scheduled_at_ms: number;
+  readonly recorded_at_ms: number;
+  readonly used_for_authority: false;
+  readonly may_execute: false;
+}
+
 export interface CronEventIdentity {
   readonly source: string;
   readonly event_id: string;
@@ -259,6 +271,28 @@ export class GatewayCronEventStore {
     }
     const source_digest = sha256(source.normalize("NFKC").trim());
     return this.readCurrentCursor(source_digest)?.sequence ?? null;
+  }
+
+  /** Settle the local due marker. This source has no inbound or execution handler. */
+  recordLocalAcquisitionDue(event: CronEventIdentity): void {
+    if (event.source !== GOOGLE_DAILY_BRIEF_DUE_SOURCE) throw new Error("cron_local_acquisition_due_source_invalid");
+    this.settle(event, "handler_returned");
+  }
+
+  /** Expose a marker only from a settled, mirrored cursor for the current configured version. */
+  latestLocalAcquisitionDue(payloadDigest: string): CronLocalAcquisitionDue | null {
+    if (!DIGEST.test(payloadDigest)) throw new Error("cron_local_acquisition_due_payload_invalid");
+    const cursor = this.readCurrentCursor(sha256(GOOGLE_DAILY_BRIEF_DUE_SOURCE));
+    if (!cursor || cursor.delivery_state !== "handler_returned" || cursor.payload_digest !== payloadDigest) return null;
+    return {
+      status: "awaiting_authorized_acquisition",
+      occurrence_id_digest: sha256(cursor.event_id),
+      schedule_payload_digest: cursor.payload_digest,
+      scheduled_at_ms: cursor.sequence,
+      recorded_at_ms: cursor.updated_at_ms,
+      used_for_authority: false,
+      may_execute: false,
+    };
   }
 
   settle(

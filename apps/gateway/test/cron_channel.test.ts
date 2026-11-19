@@ -11,7 +11,11 @@ import {
   dailyBriefCronFromEnv,
   nextDailyFireAtMs,
 } from "../src/cron_channel.js";
-import { GatewayCronEventStore } from "../src/cron_event_store.js";
+import {
+  createCronEventIdentity,
+  GatewayCronEventStore,
+  GOOGLE_DAILY_BRIEF_DUE_SOURCE,
+} from "../src/cron_event_store.js";
 import { createCronEventResultReceipt } from "../src/cron_event_result_receipt.js";
 import { InboundRouter } from "@blue-tanuki/channel-base";
 
@@ -140,7 +144,6 @@ describe("CronSchedulerChannel", () => {
   it("holds scheduled consumers when Cron restore is not cleanly observed or its store is ambiguous", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 9, 6, 30, 0, 0));
-    const { root, store } = makeTestEventStore("blue-tanuki-cron-metadata-");
     const received: unknown[] = [];
     const heldObservation = {
       operation: "restore",
@@ -646,6 +649,95 @@ describe("CronSchedulerChannel", () => {
     } finally {
       await ch.stop();
       store.close();
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists a Google Daily Brief occurrence without admitting it to the inbound handler", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 4, 9, 7, 0);
+    vi.setSystemTime(now);
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-local-due-");
+    const env = {
+      BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
+      BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: "gmail,calendar,gmail",
+      BLUE_TANUKI_DAILY_BRIEF_TARGET: "synthetic-destination",
+      BLUE_TANUKI_DAILY_BRIEF_CONTENT: "synthetic private payload",
+      BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "1000",
+    };
+    const handler = vi.fn(async () => undefined);
+    const makeChannel = (eventStore: GatewayCronEventStore, services: string) => new CronSchedulerChannel({
+      tasks: cronSchedulesFromEnv({ ...env, BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES: services }),
+      event_store: eventStore,
+      onFire: vi.fn(() => { throw new Error("normal occurrence hook must not be called"); }),
+      onHandlerReturned: vi.fn(() => { throw new Error("no inbound handler returned"); }),
+      log: () => undefined,
+    });
+    const channel = makeChannel(store, env.BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES);
+    let reopened: GatewayCronEventStore | undefined;
+    try {
+      await channel.start(handler);
+      expect(channel.snapshot()[0]).toMatchObject({ running: true, next_fire_at_ms: now + 1000 });
+      expect(channel.snapshot()[0]?.local_acquisition_due).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
+      const snapshot = channel.snapshot()[0]!;
+      expect(snapshot).toMatchObject({ used_for_authority: false, local_acquisition_due: {
+        status: "awaiting_authorized_acquisition",
+        occurrence_id_digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        schedule_payload_digest: snapshot.payload_hash,
+        scheduled_at_ms: now + 1000,
+        recorded_at_ms: now + 1000,
+        used_for_authority: false,
+        may_execute: false,
+      } });
+      expect(handler).not.toHaveBeenCalled();
+      expect(JSON.stringify(snapshot)).not.toContain(env.BLUE_TANUKI_DAILY_BRIEF_CONTENT);
+      const event = createCronEventIdentity(GOOGLE_DAILY_BRIEF_DUE_SOURCE, now + 1000, snapshot.payload_hash);
+      expect(store.claim(event)).toEqual({ status: "duplicate", delivery_state: "handler_returned" });
+      expect(store.resultReceipt(event)).toBeNull();
+      expect(store.latestSequenceForSource("cron:boot:daily_brief")).toBeNull();
+
+      await channel.stop();
+      store.close();
+      reopened = new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"));
+      const sameScope = makeChannel(reopened, " Calendar GMAIL ");
+      await sameScope.start(handler);
+      try {
+        expect(sameScope.snapshot()[0]).toMatchObject({
+          next_fire_at_ms: now + 2000, local_acquisition_due: snapshot.local_acquisition_due,
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(sameScope.snapshot()[0]?.local_acquisition_due).toEqual(snapshot.local_acquisition_due);
+        await vi.advanceTimersByTimeAsync(1);
+        const nextOccurrence = sameScope.snapshot()[0]?.local_acquisition_due;
+        expect(nextOccurrence?.scheduled_at_ms).toBe(now + 2000);
+        expect(nextOccurrence?.occurrence_id_digest).not.toBe(snapshot.local_acquisition_due?.occurrence_id_digest);
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        await sameScope.stop();
+      }
+      const differentScope = makeChannel(reopened, "drive");
+      expect(differentScope.snapshot()[0]?.payload_hash).not.toBe(snapshot.payload_hash);
+      expect(differentScope.snapshot()[0]?.local_acquisition_due).toBeUndefined();
+
+      const invalidScope = makeChannel(reopened, "gmail,unsupported");
+      await invalidScope.start(handler);
+      try {
+        expect(invalidScope.snapshot()[0]).toMatchObject({
+          content_source_hold: "google_authorized_acquisition_not_wired", running: false, next_fire_at_ms: null,
+        });
+        expect(invalidScope.snapshot()[0]?.local_acquisition_due).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        await invalidScope.stop();
+      }
+    } finally {
+      await channel.stop();
+      store.close();
+      reopened?.close();
       rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();
     }

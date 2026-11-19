@@ -2551,7 +2551,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   ["expires", formatDate(item.approval_expires_at_ms), false],
                   ["payload", item.payload_hash || "not recorded", false]
                 ];
-                if (sourceHeld) fields.push(["取得元", "Googleの定期取得は未接続です。", false]);
+                if (sourceHeld) {
+                  fields.push(["取得元", "Googleの定期取得は未接続です。", false]);
+                  const marker = item.local_acquisition_due;
+                  if (item.id === "daily_brief" && item.origin === "boot" && isObject(marker) &&
+                      marker.status === "awaiting_authorized_acquisition" &&
+                      marker.used_for_authority === false && marker.may_execute === false &&
+                      typeof marker.occurrence_id_digest === "string" && /^[a-f0-9]{64}$/.test(marker.occurrence_id_digest) &&
+                      typeof marker.schedule_payload_digest === "string" && /^[a-f0-9]{64}$/.test(marker.schedule_payload_digest) &&
+                      marker.schedule_payload_digest === item.payload_hash &&
+                      Number.isSafeInteger(marker.scheduled_at_ms) && marker.scheduled_at_ms > 0 &&
+                      Number.isSafeInteger(marker.recorded_at_ms) && marker.recorded_at_ms > 0) {
+                    fields.push(["前回の予定到達", formatDate(marker.scheduled_at_ms), false]);
+                  }
+                  if (item.running === true && item.recovery_hold === null &&
+                      Number.isSafeInteger(item.next_fire_at_ms) && item.next_fire_at_ms > 0) {
+                    fields.push(["次の予定", formatDate(item.next_fire_at_ms), false]);
+                  }
+                }
                 return '<article class="schedule-item"><dl class="kv">' +
                   fields
                     .map(function (field) {

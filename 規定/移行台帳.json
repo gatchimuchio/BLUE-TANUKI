@@ -11,7 +11,7 @@
   "debts": [
     { "path": "AUDIT.md", "sha256": "be19096bae5d022ba0ed72a34ca6c7d7bf3fd758fb8e494514290cb4ce6f5608" },
     { "path": "CLAIM.md", "sha256": "02d7f591f16f31099117c8eba386539697f7b5c7e0c6c6acddef2c25f0dcc757" },
-    { "path": "CONFIG.md", "sha256": "5ab6ff6460561b702147201565c7cfa4c0e2fdccc2d23685ac4b16a1b98dc03e" },
+    { "path": "CONFIG.md", "sha256": "6ecb50c760a997adff90bb64e53722b73f31cfd7d9c271ba8305647baa142fe3" },
     { "path": "deploy/systemd/README.md", "sha256": "041412c5b66118a358486f24a6a4ac44f93288c5eb43f342603522a860c6a425" },
     { "path": "docs/BLUE_TANUKI_AUTHORITY_MODEL.md", "sha256": "f4f66c41a2ba0df24f879729318fb1ee6f81b43d46d16ce50027f621d9c08e21" },
     { "path": "docs/CAPABILITY_ENVELOPE.md", "sha256": "38fd5137502e8d6d3ae0711bc291842c953052f5bc4ae4e621a04655120773fb" },
@@ -46,7 +46,7 @@
     { "path": "docs/LLM_EXTENSION_SURFACE.md", "sha256": "873a10c4126c0f994256e19a225e8b16f102072463bd1178c94f8ea62fe98243" },
     { "path": "docs/OPENCLAW_REJECTION_AUDIT.md", "sha256": "b9c5c68999ee10df9d0fddf1213d2388e16f33fabc1dbc838d333dc07612fc8d" },
     { "path": "docs/OPENROUTER_BACKEND.md", "sha256": "a27ab09cfdb7ace897e9c621bd8ad6e178acf05a3b2f8d060d1f07367557e1db" },
-    { "path": "docs/operator-surfaces/DAILY_OPERATOR.md", "sha256": "d46d58f7cc08692c066bf7b82e83b68ec6aa9f585a44c91f97d25e1aaa8b52d6" },
+    { "path": "docs/operator-surfaces/DAILY_OPERATOR.md", "sha256": "d299dfff74ad7ff3d67101af0b863136fbf828de35618624375f478e9f161292" },
     { "path": "docs/operator-surfaces/DEVELOPER_OPERATOR.md", "sha256": "5c666fdea0c8844a56a2c9aeca56db13f28c626d9a5a54bc8f2c679c63a897c3" },
     { "path": "docs/operator-surfaces/INDEX.md", "sha256": "08501456592905fe584ccbb0eea5cd8f0b20cb7387ab7e46e8881f8261fc9fa4" },
     { "path": "docs/operator-surfaces/SHARED_SUBSTRATE.md", "sha256": "0b8f2ae50b9d570f322b4d35cb2c43227c3634449b69e5e6458cb3ea3fd54fc2" },

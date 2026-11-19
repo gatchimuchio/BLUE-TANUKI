@@ -473,10 +473,10 @@ describe("runDoctor — happy paths", () => {
       expect(r.ok, JSON.stringify(r.checks.filter((check) => check.level === "error"))).toBe(true);
       expect(r.checks.find((c) => c.id === "google_daily_brief_source")).toMatchObject({
         level: "warn",
-        detail: "保留。JとBrokerを経由する定期取得は未接続です。設定済みサービス gmail,calendar,drive",
+        detail: "定刻の到達をローカルに記録します。JとBrokerを経由する定期取得は保留です。設定済みサービス gmail,calendar,drive",
       });
       expect(r.checks.find((c) => c.id === "cron_schedules")).toMatchObject({
-        level: "ok", detail: "2 configured (1 enabled, 1 held)",
+        level: "ok", detail: "2 configured (1 enabled, 1 local occurrence only)",
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });

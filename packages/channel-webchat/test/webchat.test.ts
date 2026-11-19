@@ -2310,9 +2310,24 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(outputs["native-credential-approval-status"]).toContain("更新した資格情報");
   });
 
-  it("shows the held Google Daily Brief beside independently running schedules", () => {
-    const start = CONTROL_CENTER_SCRIPT.indexOf("function renderSchedules(");
-    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function operationCoreRiskTone(", start + 1);
+  it("shows only recorded Google Daily Brief occurrences beside independently running schedules", async () => {
+    const ctx = await setup();
+    let html: string;
+    try {
+      await ctx.ch.start(async () => undefined);
+      const response = await fetch(`http://127.0.0.1:${ctx.port}/app`);
+      expect(response.status).toBe(200);
+      html = await response.text();
+    } finally {
+      await ctx.teardown();
+    }
+    expect(html).toContain('id="runtime-schedule-list"');
+    const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+      .map((match) => match[1] ?? "").find((script) => script.includes("function renderSchedules(")) ?? "";
+    expect(inline).not.toBe("");
+    new Script(inline);
+    const start = inline.indexOf("function renderSchedules(");
+    const end = inline.indexOf("\n      function operationCoreRiskTone(", start + 1);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const rendered: Record<string, string> = {};
@@ -2324,21 +2339,45 @@ describe("WebChatChannel — Control Center shell", () => {
       function compactJson(value) { return JSON.stringify(value); }
       function redactRuntimeValue(value) { return value; }
       function badge(value) { return String(value); }
-      function formatDate() { return ""; }
+      function formatDate(value) { return "time-" + String(value); }
       function formatInterval() { return ""; }
       function escapeHtml(value) { return String(value); }
-      ${CONTROL_CENTER_SCRIPT.slice(start, end)}
+      ${inline.slice(start, end)}
       renderSchedules(snapshot);
     `);
-    run.runInNewContext({ output: rendered, snapshot: {
-      runtime_schedules: [{ id: "static-reminder", status: "active" }],
-      scheduled_tasks: [{ id: "daily_brief", enabled: true, running: false,
-        content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false }],
+    const task = { id: "daily_brief", origin: "boot", enabled: true, running: false, recovery_hold: null,
+      payload_hash: "a".repeat(64), content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false };
+    const evaluate = (dailyTask: Record<string, unknown>) => run.runInNewContext({ output: rendered, snapshot: {
+      runtime_schedules: [{ id: "static-reminder", status: "active" }], scheduled_tasks: [dailyTask],
     } });
+    evaluate(task);
     expect(rendered["runtime-schedule-list"]).toContain("static-reminder");
     expect(rendered["runtime-schedule-list"]).toContain("daily_brief");
     expect(rendered["runtime-schedule-list"]).toContain("保留");
     expect(rendered["runtime-schedule-list"]).toContain("Googleの定期取得は未接続です。");
+    expect(rendered["runtime-schedule-list"]).not.toContain("前回の予定到達");
+    expect(rendered["runtime-schedule-list"]).not.toContain("次の予定");
+
+    const marker = { status: "awaiting_authorized_acquisition", occurrence_id_digest: "b".repeat(64),
+      schedule_payload_digest: task.payload_hash, scheduled_at_ms: 10_000, recorded_at_ms: 10_001,
+      used_for_authority: false, may_execute: false };
+    const scheduled = { ...task, running: true, next_fire_at_ms: 20_000, local_acquisition_due: marker };
+    evaluate(scheduled);
+    expect(rendered["runtime-schedule-list"]).toContain("<dt>前回の予定到達</dt><dd>time-10000</dd>");
+    expect(rendered["runtime-schedule-list"]).toContain("<dt>次の予定</dt><dd>time-20000</dd>");
+    expect(rendered["runtime-schedule-list"]).toContain("Googleの定期取得は未接続です。");
+    expect(rendered["runtime-schedule-list"]).not.toContain(marker.occurrence_id_digest);
+
+    for (const invalidMarker of [
+      { ...marker, status: "acquired" },
+      { ...marker, schedule_payload_digest: "c".repeat(64) },
+      { ...marker, scheduled_at_ms: "10000" },
+      { ...marker, used_for_authority: true },
+      { ...marker, may_execute: true },
+    ]) {
+      evaluate({ ...scheduled, local_acquisition_due: invalidMarker });
+      expect(rendered["runtime-schedule-list"]).not.toContain("前回の予定到達");
+    }
   });
 
   it("renders task-purpose relation review against its queued digests without treating it as execution authority", async () => {

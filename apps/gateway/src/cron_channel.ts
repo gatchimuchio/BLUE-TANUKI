@@ -8,11 +8,13 @@ import type { InboundChannel, InboundHandler } from "@blue-tanuki/channel-base";
 import type { RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
 import {
   createCronEventIdentity,
+  GOOGLE_DAILY_BRIEF_DUE_SOURCE,
   type CronEventIdentity,
+  type CronLocalAcquisitionDue,
   type GatewayCronEventStore,
 } from "./cron_event_store.js";
 import type { CronEventResultReceipt } from "./cron_event_result_receipt.js";
-import { googleDailyBriefSourceConfigured } from "./google_daily_brief.js";
+import { googleDailyBriefSourceConfigured, parseGoogleServices } from "./google_daily_brief.js";
 
 type CronContentSourceHold = "google_authorized_acquisition_not_wired";
 
@@ -34,6 +36,7 @@ export interface CronTaskOptions {
   payload_hash?: string;
   delegation?: RuntimeScheduleDelegation;
   content_source_hold?: CronContentSourceHold;
+  google_service_scope_digest?: string;
 }
 
 export interface CronSchedulerOptions {
@@ -57,6 +60,7 @@ export interface DailyBriefCronOptions {
   /** For tests or smoke. If set, triggers every N ms instead of daily. */
   interval_ms?: number;
   content_source_hold?: CronContentSourceHold;
+  google_service_scope_digest?: string;
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -77,6 +81,7 @@ export interface CronTaskSnapshot {
   last_fire_at_ms: number | null;
   recovery_hold: "restore_observation_unverified" | null;
   content_source_hold?: CronContentSourceHold;
+  local_acquisition_due?: CronLocalAcquisitionDue;
   used_for_authority?: false;
 }
 
@@ -112,6 +117,8 @@ interface NormalizedCronTask {
   payload_hash: string;
   delegation?: RuntimeScheduleDelegation;
   content_source_hold?: CronContentSourceHold;
+  google_service_scope_digest?: string;
+  local_acquisition_due_only: boolean;
 }
 
 interface CronTaskRuntime {
@@ -177,7 +184,7 @@ export class CronSchedulerChannel implements InboundChannel {
         this.log(`[cron] task disabled id=${runtime.task.id}`);
         continue;
       }
-      if (runtime.task.content_source_hold) {
+      if (runtime.task.content_source_hold && !runtime.task.local_acquisition_due_only) {
         this.log(`[cron] task held id=${runtime.task.id} reason=${runtime.task.content_source_hold}`);
         continue;
       }
@@ -243,7 +250,8 @@ export class CronSchedulerChannel implements InboundChannel {
     if (existing) this.stopRuntime(existing);
     const runtime = createRuntime(normalized);
     this.runtimes.set(normalized.id, runtime);
-    if (this.started && !this.recoveryHold && normalized.enabled && !normalized.content_source_hold && this.handler) {
+    if (this.started && !this.recoveryHold && normalized.enabled &&
+        (!normalized.content_source_hold || normalized.local_acquisition_due_only) && this.handler) {
       this.scheduleTask(runtime, this.handler);
     }
     return this.snapshotForRuntime(runtime);
@@ -259,18 +267,15 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private scheduleTask(runtime: CronTaskRuntime, handler: InboundHandler): void {
     const task = runtime.task;
+    const lastScheduledAt = this.eventStore?.latestSequenceForSource(cronTaskEventSource(task)) ?? null;
+    runtime.lastFireAtMs = lastScheduledAt;
     runtime.running = true;
     if (task.interval_ms && task.interval_ms > 0) {
-      const source = `cron:${task.origin}:${task.id}`;
-      const lastScheduledAt = this.eventStore?.latestSequenceForSource(source) ?? null;
-      runtime.lastFireAtMs = lastScheduledAt;
       runtime.nextFireAtMs = nextIntervalFireAtMs(this.nowMs(), task.interval_ms, lastScheduledAt);
       this.scheduleNextInterval(runtime, handler);
       this.log(`[cron] task interval enabled id=${task.id} interval_ms=${task.interval_ms}`);
       return;
     }
-    const source = `cron:${task.origin}:${task.id}`;
-    runtime.lastFireAtMs = this.eventStore?.latestSequenceForSource(source) ?? null;
     this.scheduleNextDaily(runtime, handler);
   }
 
@@ -324,7 +329,7 @@ export class CronSchedulerChannel implements InboundChannel {
   }
 
   private enqueueFire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
-    const source = `cron:${runtime.task.origin}:${runtime.task.id}`;
+    const source = cronTaskEventSource(runtime.task);
     const queued = (this.pendingBySource.get(source) ?? Promise.resolve())
       .then(() => this.fire(runtime, handler, scheduledAtMs))
       .catch((error: unknown) => {
@@ -342,8 +347,10 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
     const task = runtime.task;
-    // Bind the durable occurrence to its schedule version before handing the configured content to J.
-    const event = createCronEventIdentity(`cron:${task.origin}:${task.id}`, scheduledAtMs, task.payload_hash);
+    if (task.local_acquisition_due_only &&
+        (!this.started || !runtime.running || this.runtimes.get(task.id) !== runtime || this.recoveryHold)) return;
+    // Bind the durable occurrence to its schedule version before choosing the consumer.
+    const event = createCronEventIdentity(cronTaskEventSource(task), scheduledAtMs, task.payload_hash);
     const eventStore = this.eventStore;
     if (!eventStore) {
       this.log(`[cron] event not dispatched id=${task.id} status=durable_store_unavailable`);
@@ -357,6 +364,16 @@ export class CronSchedulerChannel implements InboundChannel {
     runtime.lastFireAtMs = scheduledAtMs;
     this.inFlightEventIds.add(event.event_id);
     try {
+      if (task.local_acquisition_due_only) {
+        try {
+          // A due marker is local observation only. Never build an inbound request for it.
+          eventStore.recordLocalAcquisitionDue(event);
+        } catch (error) {
+          eventStore.settle(event, "outcome_unknown");
+          throw error;
+        }
+        return;
+      }
       const payloadHash = cronPayloadHash(task);
       try {
         this.onFire?.(this.snapshotForRuntime(runtime, payloadHash), event, task.delegation);
@@ -429,6 +446,14 @@ export class CronSchedulerChannel implements InboundChannel {
   }
 
   private snapshotForRuntime(runtime: CronTaskRuntime, payloadHash?: string): CronTaskSnapshot {
+    let localAcquisitionDue: CronLocalAcquisitionDue | null = null;
+    if (runtime.task.local_acquisition_due_only && !this.recoveryHold && this.eventStore && !this.eventStore.isClosed()) {
+      try {
+        localAcquisitionDue = this.eventStore.latestLocalAcquisitionDue(runtime.task.payload_hash);
+      } catch {
+        this.log("[cron] local Daily Brief occurrence unavailable");
+      }
+    }
     return {
       id: runtime.task.id,
       name: runtime.task.name,
@@ -448,6 +473,7 @@ export class CronSchedulerChannel implements InboundChannel {
         content_source_hold: runtime.task.content_source_hold,
         used_for_authority: false as const,
       } : {}),
+      ...(localAcquisitionDue ? { local_acquisition_due: localAcquisitionDue } : {}),
     };
   }
 }
@@ -485,6 +511,16 @@ export function dailyBriefCronFromEnv(env: Record<string, string | undefined> = 
   const channel = env.BLUE_TANUKI_DAILY_BRIEF_CHANNEL ?? "telegram";
   const target = env.BLUE_TANUKI_DAILY_BRIEF_TARGET;
   if (!target) throw new Error("BLUE_TANUKI_DAILY_BRIEF_TARGET is required when daily brief is enabled");
+  const googleEnabled = googleDailyBriefSourceConfigured(env);
+  let googleServiceScopeDigest: string | undefined;
+  if (googleEnabled) {
+    try {
+      const services = Array.from(new Set(parseGoogleServices(env.BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES))).sort();
+      googleServiceScopeDigest = createHash("sha256").update(JSON.stringify(services)).digest("hex");
+    } catch {
+      // Retain the configuration hold for unsupported service selections.
+    }
+  }
   return {
     enabled,
     channel,
@@ -493,7 +529,8 @@ export function dailyBriefCronFromEnv(env: Record<string, string | undefined> = 
     time: env.BLUE_TANUKI_DAILY_BRIEF_TIME ?? "07:00",
     time_zone: env.BLUE_TANUKI_DAILY_BRIEF_TIME_ZONE,
     interval_ms: parsePositiveInt(env.BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS),
-    ...(googleDailyBriefSourceConfigured(env) ? { content_source_hold: "google_authorized_acquisition_not_wired" } : {}),
+    ...(googleEnabled ? { content_source_hold: "google_authorized_acquisition_not_wired" } : {}),
+    ...(googleServiceScopeDigest ? { google_service_scope_digest: googleServiceScopeDigest } : {}),
   };
 }
 
@@ -523,6 +560,7 @@ function dailyBriefTaskFromOptions(opts: DailyBriefCronOptions): CronTaskOptions
     time_zone: opts.time_zone,
     interval_ms: opts.interval_ms,
     content_source_hold: opts.content_source_hold,
+    google_service_scope_digest: opts.google_service_scope_digest,
   };
 }
 
@@ -571,22 +609,43 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
     if (task.interval_ms !== undefined && timeZone !== undefined) {
       throw new Error(`cron task ${id} cannot set time_zone for an interval schedule`);
     }
+    const channel = requireTrimmed(task.channel, `cron task ${id} channel`);
+    const target = requireTrimmed(task.target, `cron task ${id} target`);
+    const content = requireTrimmed(task.content, `cron task ${id} content`);
+    const googleServiceScopeDigest = task.google_service_scope_digest;
+    const localAcquisitionDueOnly = id === "daily_brief" && task.name === "daily_brief" &&
+      (task.origin === undefined || task.origin === "boot") &&
+      task.content_source_hold === "google_authorized_acquisition_not_wired" &&
+      googleServiceScopeDigest !== undefined && /^[a-f0-9]{64}$/u.test(googleServiceScopeDigest);
+    const payloadHash = localAcquisitionDueOnly
+      ? createHash("sha256").update(JSON.stringify([
+        GOOGLE_DAILY_BRIEF_DUE_SOURCE,
+        cronPayloadHash({ channel, target, content, time, interval_ms: task.interval_ms, time_zone: timeZone }),
+        googleServiceScopeDigest,
+      ])).digest("hex")
+      : task.payload_hash ?? cronPayloadHash(task);
     return {
       id,
       name: task.name ?? "scheduled_message",
       origin: task.origin ?? "boot",
       enabled: task.enabled !== false,
-      channel: requireTrimmed(task.channel, `cron task ${id} channel`),
-      target: requireTrimmed(task.target, `cron task ${id} target`),
-      content: requireTrimmed(task.content, `cron task ${id} content`),
+      channel,
+      target,
+      content,
       time,
       time_zone: timeZone,
       interval_ms: task.interval_ms,
-      payload_hash: task.payload_hash ?? cronPayloadHash(task),
+      payload_hash: payloadHash,
       delegation: task.delegation,
       content_source_hold: task.content_source_hold,
+      google_service_scope_digest: googleServiceScopeDigest,
+      local_acquisition_due_only: localAcquisitionDueOnly,
     };
   });
+}
+
+function cronTaskEventSource(task: NormalizedCronTask): string {
+  return task.local_acquisition_due_only ? GOOGLE_DAILY_BRIEF_DUE_SOURCE : `cron:${task.origin}:${task.id}`;
 }
 
 function createRuntime(task: NormalizedCronTask): CronTaskRuntime {

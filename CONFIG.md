@@ -182,7 +182,7 @@ GOOGLE_CALENDAR_ACCESS_TOKEN=<calendar-read-token>
 GOOGLE_DRIVE_ACCESS_TOKEN=<drive-read-token>
 ```
 
-Daily Brief still enters HDS-BRAIN through the same trusted cron lane. Runtime snapshots expose timing metadata and payload hashes, not brief content.
+固定文のDaily BriefはHDSの予定送信経路を通ります。Googleを取得元に設定すると、定刻の到達をローカルに記録し、Control Centerに取得待ちを表示します。定刻だけではGoogleへ接続せず、設定したチャネルにも送信しません。
 
 ## Generic scheduled messages
 
@@ -416,12 +416,9 @@ Daily Brief Google source:
 ```bash
 BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED=1
 BLUE_TANUKI_DAILY_BRIEF_GOOGLE_SERVICES=gmail,calendar,drive
-BLUE_TANUKI_DAILY_BRIEF_GOOGLE_MAX_RESULTS=5
-BLUE_TANUKI_DAILY_BRIEF_GMAIL_QUERY="newer_than:1d"
-BLUE_TANUKI_DAILY_BRIEF_GOOGLE_CALENDAR_ID=primary
-BLUE_TANUKI_DAILY_BRIEF_GOOGLE_CALENDAR_DAYS=1
-BLUE_TANUKI_DAILY_BRIEF_DRIVE_QUERY="trashed=false"
 ```
+
+Google付きの予定は到達時刻と対象サービスを設定します。定期取得は接続待ちです。個別の読み取りは上記のツールで依頼し、各操作のL3審査を通してください。
 
 Calendar attendee invites, Drive delete/share, autonomous cross-service actions, and unbounded file writes are not available here. Missing tokens fail closed before a request is sent. Doctor checks the Google Daily Brief source only when `BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED` is set.
 

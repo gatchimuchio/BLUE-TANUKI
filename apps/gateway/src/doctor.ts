@@ -918,14 +918,16 @@ function checkCronSchedules(env: NodeJS.ProcessEnv): CheckDraft {
   try {
     const tasks = cronSchedulesFromEnv(env);
     const enabled = tasks.filter((task) => task.enabled !== false && !task.content_source_hold).length;
-    const held = tasks.filter((task) => task.enabled !== false && task.content_source_hold).length;
+    const localDue = tasks.filter((task) => task.enabled !== false && task.google_service_scope_digest !== undefined).length;
+    const held = tasks.filter((task) => task.enabled !== false && task.content_source_hold &&
+      task.google_service_scope_digest === undefined).length;
     return {
       id: "cron_schedules",
       level: "ok",
       label: "cron schedules",
       detail: tasks.length === 0
         ? "none configured"
-        : `${tasks.length} configured (${enabled} enabled${held ? `, ${held} held` : ""})`,
+        : `${tasks.length} configured (${enabled} enabled${localDue ? `, ${localDue} local occurrence only` : ""}${held ? `, ${held} held` : ""})`,
     };
   } catch (e) {
     return {
@@ -983,7 +985,7 @@ function checkGoogleDailyBriefSource(env: NodeJS.ProcessEnv): CheckDraft {
     id: "google_daily_brief_source",
     level: "warn",
     label: "Google Daily Brief source",
-    detail: `保留。JとBrokerを経由する定期取得は未接続です。設定済みサービス ${services.join(",")}`,
+    detail: `定刻の到達をローカルに記録します。JとBrokerを経由する定期取得は保留です。設定済みサービス ${services.join(",")}`,
   };
 }
 

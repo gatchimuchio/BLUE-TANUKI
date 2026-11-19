@@ -46,12 +46,14 @@ Daily Operator reuses:
 
 DSTで指定した壁時計時刻が存在しない日は、欠落した時間幅だけ先へ進める（例：02:30が存在しない日は03:30）。同じ壁時計時刻が二度現れる日は最初の時刻だけを使う。時計変更・スリープ復帰後は最大1分間隔で時刻を再確認し、経過した複数日の予定を連続実行せず一回だけ扱い、次の未来の予定へ進む。予定の発火は外部作用の承認を意味せず、通常のHDS／Approval経路を通る。
 
+Google付きDaily Briefは定刻への到達をローカルの予定台帳に記録する。Control Centerは現在の設定に一致する記録の時刻を表示し、定期取得は保留として示す。到達記録をGoogleへの接続やチャネル送信に使わない。個別のGoogle読み取りはその操作のL3審査を通す。
+
 ## 5. Approval Levels per Operation (L1/L2/L3 ApprovalLevel + ApprovalRisk)
 
 | Operation | ApprovalLevel | ApprovalRisk | Notes |
 |---|---|---|---|
 | Daily Brief status view | L1_observe | low | metadata only |
-| Gmail / Calendar / Drive read | L1_observe | low | bounded summaries only |
+| Gmail／Calendar／Drive読み取り | L3_final_review | high | 資格情報を使用する読み取り |
 | schedule.list | L1_observe | low | safe metadata only |
 | reminder draft or local note | L2_operate | medium | no future execution until approved |
 | schedule.create/update/delete | L3_final_review | high | future action mutation |

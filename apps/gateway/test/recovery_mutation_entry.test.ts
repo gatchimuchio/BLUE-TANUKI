@@ -12,7 +12,7 @@ import { WebSocket } from "ws";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
-import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
+import { createCronEventIdentity, GatewayCronEventStore, GOOGLE_DAILY_BRIEF_DUE_SOURCE } from "../src/cron_event_store.js";
 import { parseEnvFile } from "../src/env_file.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
@@ -1122,10 +1122,11 @@ describe("Recovery mutation HDS L3 entry", () => {
     }
   }, 30_000);
 
-  it("holds an enabled Google Daily Brief without network requests while static cron keeps firing", async () => {
-    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-daily-brief-hold-"));
+  it("records a Google Daily Brief due occurrence without inbound or network effects while static cron keeps firing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-daily-brief-due-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
+    const historyFile = join(root, "complete-history.jsonl");
     const preload = join(root, "google-loopback.cjs");
     writeFileSync(envFile, "LLM_BACKEND=stub\n", "utf8");
     const port = await reserveLoopbackPort();
@@ -1138,54 +1139,115 @@ describe("Recovery mutation HDS L3 entry", () => {
     const listening = once(googleFixture, "listening");
     googleFixture.listen(0, "127.0.0.1");
     await listening;
+    let gateway: ReturnType<typeof spawnGateway> | undefined;
+    let webSocket: WebSocket | undefined;
     try {
       const address = googleFixture.address();
       if (!address || typeof address === "string") throw new Error("Google fixture did not bind loopback");
       writeFileSync(preload, `
 const https = require("node:https");
 const http = require("node:http");
-const originalRequest = https.request;
-https.request = function (target, ...args) {
-  if (target.hostname === "gmail.googleapis.com" || target.hostname === "www.googleapis.com") {
-    return http.request({ hostname: "127.0.0.1", port: ${address.port}, path: target.path, method: target.method }, ...args);
+function routeGoogle(target, ...args) {
+  if (target.hostname !== "gmail.googleapis.com" && target.hostname !== "www.googleapis.com") {
+    throw new Error("unexpected HTTPS target in Daily Brief fixture");
   }
-  return originalRequest.call(this, target, ...args);
+  return http.request({ hostname: "127.0.0.1", port: ${address.port}, path: target.path, method: target.method }, ...args);
+}
+https.request = routeGoogle;
+https.get = function (target, ...args) {
+  const request = routeGoogle(target, ...args);
+  request.end();
+  return request;
+};
+globalThis.fetch = async function () {
+  throw new Error("unexpected fetch in Daily Brief fixture");
 };
 require("node:module").syncBuiltinESMExports();
 `, "utf8");
+      const scheduledTarget = "synthetic-user";
+      const staticContent = "synthetic static reminder";
       const env = {
-        ...isolatedRuntimeEnvironment(root, envFile, join(root, "complete-history.jsonl"), port),
+        ...isolatedRuntimeEnvironment(root, envFile, historyFile, port),
         BLUE_TANUKI_DAILY_BRIEF_ENABLED: "1",
         BLUE_TANUKI_DAILY_BRIEF_GOOGLE_ENABLED: "1",
-        BLUE_TANUKI_DAILY_BRIEF_TARGET: "synthetic-user",
+        BLUE_TANUKI_DAILY_BRIEF_TARGET: scheduledTarget,
         BLUE_TANUKI_DAILY_BRIEF_CHANNEL: "webchat",
         BLUE_TANUKI_DAILY_BRIEF_INTERVAL_MS: "100",
         GOOGLE_ACCESS_TOKEN: "synthetic-local-google-token",
         BLUE_TANUKI_SCHEDULES_JSON: JSON.stringify([{ id: "static-synthetic", channel: "webchat",
-          target: "synthetic-user", content: "synthetic static reminder", interval_ms: 250 }]),
+          target: scheduledTarget, content: staticContent, interval_ms: 250 }]),
       };
-      const gateway = spawnGateway(env, preload);
+      gateway = spawnGateway(env, preload);
       await waitForHealth(port, gateway, 20_000);
-      const deadline = Date.now() + 5_000;
-      let scheduledTasks: unknown = [];
-      let lastStaticFire: unknown;
-      while (Date.now() < deadline) {
+      const ticket = await requestJson(port, "/ws-ticket", {
+        method: "POST", token: inboundToken, body: { user: scheduledTarget },
+      });
+      expect(ticket.status).toBe(200);
+      webSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?ticket=${encodeURIComponent(String(ticket.body.ticket))}`);
+      const deliveredContents: unknown[] = [];
+      webSocket.on("message", (data: Buffer) => {
+        const message = JSON.parse(data.toString("utf8")) as { kind?: unknown; content?: unknown };
+        if (message.kind === "channel_send") deliveredContents.push(message.content);
+      });
+      await once(webSocket, "open");
+      let daily: Record<string, unknown> | undefined;
+      await expect.poll(async () => {
         const runtime = await requestJson(port, "/runtime/snapshot", { token: inboundToken });
         expect(runtime.status).toBe(200);
-        scheduledTasks = runtime.body.scheduled_tasks;
-        lastStaticFire = (scheduledTasks as Array<Record<string, unknown>>)
-          .find((item) => item.id === "static-synthetic")?.last_fire_at_ms;
-        if (typeof lastStaticFire === "number") break;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      expect(lastStaticFire).toBeTypeOf("number");
-      expect(scheduledTasks).toEqual(expect.arrayContaining([expect.objectContaining({
-        id: "daily_brief", enabled: true, running: false, next_fire_at_ms: null, last_fire_at_ms: null,
+        const tasks = runtime.body.scheduled_tasks as Array<Record<string, unknown>>;
+        daily = tasks.find((item) => item.id === "daily_brief");
+        return {
+          due: Boolean(daily?.local_acquisition_due),
+          staticFired: typeof tasks.find((item) => item.id === "static-synthetic")?.last_fire_at_ms === "number",
+          staticDelivered: deliveredContents.includes(staticContent),
+        };
+      }, { timeout: 5_000 }).toEqual({ due: true, staticFired: true, staticDelivered: true });
+      expect(daily).toMatchObject({
+        id: "daily_brief", enabled: true, running: true, next_fire_at_ms: expect.any(Number),
         content_source_hold: "google_authorized_acquisition_not_wired", used_for_authority: false,
-      })]));
+      });
+      const due = daily?.local_acquisition_due as Record<string, unknown>;
+      expect(due).toEqual({
+        status: "awaiting_authorized_acquisition",
+        occurrence_id_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        schedule_payload_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        scheduled_at_ms: expect.any(Number),
+        recorded_at_ms: expect.any(Number),
+        used_for_authority: false,
+        may_execute: false,
+      });
+      const event = createCronEventIdentity(GOOGLE_DAILY_BRIEF_DUE_SOURCE,
+        due.scheduled_at_ms as number, String(due.schedule_payload_digest));
+      expect(due.schedule_payload_digest).toBe(daily?.payload_hash);
+      expect(due.occurrence_id_digest).toBe(createHash("sha256").update(event.event_id).digest("hex"));
+      const eventHistory = await requestJson(port,
+        `/history?request_id=${encodeURIComponent(event.event_id)}`, { token: inboundToken });
+      expect(eventHistory.status).toBe(200);
+      expect(eventHistory.body).toMatchObject({ history: { chain_valid: true, entries: [] } });
+      expect(deliveredContents.every((content) => content === staticContent)).toBe(true);
+      expect(JSON.stringify(daily)).not.toContain("synthetic-local-google-token");
       expect(googleRequests).toBe(0);
       await stopChild(gateway.child);
+      const persisted = new DatabaseSync(join(root, "state", "private-state", "cron-events", "cron-events.sqlite"), { readOnly: true });
+      try {
+        expect(persisted.prepare(`SELECT event_id, sequence, payload_digest, delivery_state FROM cron_event_inbox WHERE event_id=?
+          UNION ALL SELECT event_id, sequence, payload_digest, delivery_state FROM cron_event_archive WHERE event_id=?`)
+          .all(event.event_id, event.event_id)).toEqual([{
+          event_id: event.event_id,
+          sequence: event.sequence,
+          payload_digest: event.payload_digest,
+          delivery_state: "handler_returned",
+        }]);
+        expect(persisted.prepare("SELECT event_id FROM cron_event_result_receipt WHERE event_id=?").get(event.event_id))
+          .toBeUndefined();
+        expect(persisted.prepare("SELECT event_id FROM cron_approval_handoff WHERE event_id=?").get(event.event_id))
+          .toBeUndefined();
+      } finally {
+        persisted.close();
+      }
     } finally {
+      webSocket?.terminate();
+      if (gateway) await stopChild(gateway.child);
       await new Promise<void>((resolve, reject) => googleFixture.close((error) => error ? reject(error) : resolve()));
     }
   }, 30_000);
