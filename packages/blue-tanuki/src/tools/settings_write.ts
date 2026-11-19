@@ -2,6 +2,8 @@ import {
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
@@ -24,13 +26,15 @@ import { assertToolExecutionNotCancelled, type SettingsWriteContentReview, type 
 export interface SettingsWritePort {
   inspect(expectedLlmProvider?: SettingsWriteLlmProvider,
     llmPatch?: NonNullable<SettingsWritePatch["llm"]>,
-    googleScope?: SettingsWriteGoogleReadCredentialScope): Promise<{
+    googleScope?: SettingsWriteGoogleReadCredentialScope,
+    githubWriteRegistration?: true): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
     provider_activation_ready?: true;
     credential_rotation_ready?: true;
     google_read_registration_ready?: true;
+    github_write_registration_ready?: true;
     values: {
       model: string | null;
       temperature: number | null;
@@ -108,10 +112,14 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         throw new Error("settings_write_target_changed_during_review");
       }
       const googleScope = patch.google_read?.register_credential;
+      const githubRegistration = patch.github_write?.register_credential === true;
+      const registrationChange = githubRegistration
+        ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE
+        : SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE;
       const changes = patch.llm
         ? buildLlmChanges(patch.llm, target)
         : patch.composio ? buildComposioChanges(patch.composio, target.values.composio)
-          : [SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE];
+          : [registrationChange];
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
         kind: "settings_write" as const,
@@ -121,6 +129,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         ...(patch.llm?.rotate_credential ? { credential_rotation: settingsWriteCredentialRotationReview(
           SettingsWriteNativeLlmProviderSchema.parse(expected_llm_provider)) } : {}),
         ...(googleScope ? { google_read_registration: settingsWriteGoogleReadCredentialReview(googleScope) } : {}),
+        ...(githubRegistration ? { github_write_registration: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -143,9 +152,12 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       }
       assertToolExecutionNotCancelled(context.signal, "settings.write");
       if (settingsWriteRequiresNativeCredentialEntry(args.patch)) {
-        if (!context.assert_current_settings_write) throw new Error(args.patch.llm?.rotate_credential
-          ? "llm_credential_rotation_not_authorized" : args.patch.google_read
-            ? "google_read_credential_registration_not_authorized" : "llm_credential_registration_not_authorized");
+        if (!context.assert_current_settings_write) {
+          if (args.patch.github_write) throw new Error("github_write_credential_registration_not_authorized");
+          throw new Error(args.patch.llm?.rotate_credential
+            ? "llm_credential_rotation_not_authorized" : args.patch.google_read
+              ? "google_read_credential_registration_not_authorized" : "llm_credential_registration_not_authorized");
+        }
         return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider, {
           command_digest: context.operation_plan_command_digest,
           assert_current: context.assert_current_settings_write,
@@ -184,9 +196,12 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   const expectedProvider = args.expected_llm_provider;
   const llm = args.patch.llm;
   const googleScope = args.patch.google_read?.register_credential;
-  const target = googleScope
-    ? await port.inspect(undefined, undefined, googleScope)
-    : await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
+  const githubRegistration = args.patch.github_write?.register_credential;
+  const target = githubRegistration
+    ? await port.inspect(undefined, undefined, undefined, true)
+    : googleScope
+      ? await port.inspect(undefined, undefined, googleScope)
+      : await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
   if (expectedProvider !== undefined &&
       (target.llm_provider !== expectedProvider || target.managed_llm_settings !== true)) {
     throw new Error("settings_write_bound_llm_target_unavailable");
@@ -199,6 +214,9 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   }
   if (googleScope && target.google_read_registration_ready !== true) {
     throw new Error("settings_write_google_read_registration_unavailable");
+  }
+  if (githubRegistration && target.github_write_registration_ready !== true) {
+    throw new Error("settings_write_github_write_registration_unavailable");
   }
   return target;
 }

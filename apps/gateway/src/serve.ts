@@ -196,7 +196,8 @@ import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_c
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
-import { nativeLlmCredentialPromptAvailable, promptForGoogleReadCredential, promptForLlmCredential } from "./llm_credential_prompt.js";
+import { nativeLlmCredentialPromptAvailable, promptForGitHubWriteCredential, promptForGoogleReadCredential,
+  promptForLlmCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -1323,6 +1324,7 @@ async function serveWithOwnerLease(
     available: nativeCredentialPromptAvailable,
     request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
     requestGoogleRead: (scope, signal) => promptForGoogleReadCredential(scope, signal, nativePromptEnv),
+    requestGitHubWrite: signal => promptForGitHubWriteCredential(signal, nativePromptEnv),
     assertCurrent: (commandDigest) => {
       const approval = nativeCredentialApproval.getStore();
       if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
@@ -5319,6 +5321,7 @@ async function serveWithOwnerLease(
         : {}),
       onOwnerLlmSettingsProposal: submitOwnerLlmSettingsProposal,
       onOwnerGoogleReadCredentialProposal: submitOwnerGoogleReadCredentialProposal,
+      onOwnerGitHubWriteCredentialProposal: submitOwnerGitHubWriteCredentialProposal,
       onOwnerDailyBriefRead: submitOwnerDailyBriefRead,
       onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
@@ -5365,6 +5368,10 @@ async function serveWithOwnerLease(
         },
         inspectGoogleReadCredentialRegistration: async (scope) => {
           try { return (await settingsWritePort.inspect(undefined, undefined, scope)).google_read_registration_ready === true; }
+          catch { return false; }
+        },
+        inspectGitHubWriteCredentialRegistration: async () => {
+          try { return (await settingsWritePort.inspect(undefined, undefined, undefined, true)).github_write_registration_ready === true; }
           catch { return false; }
         },
       }),
@@ -5947,6 +5954,10 @@ async function serveWithOwnerLease(
     return submitOwnerSettingsProposal(input, { patch: { google_read: { register_credential: input.scope } } });
   }
 
+  function submitOwnerGitHubWriteCredentialProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }) {
+    return submitOwnerSettingsProposal(input, { patch: { github_write: { register_credential: true } } });
+  }
+
   async function submitOwnerSettingsProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }, rawArguments: unknown) {
     const unavailable = { accepted: false as const, status: "settings_proposal_unavailable" as const,
       used_for_authority: false as const, may_execute: false as const };
@@ -5958,9 +5969,12 @@ async function serveWithOwnerLease(
       const { patch, expected_llm_provider } = arguments_.data;
       const llm = patch.llm;
       const googleScope = patch.google_read?.register_credential;
+      const githubWriteRegistration = patch.github_write?.register_credential;
       const target = await settingsWritePort.inspect(expected_llm_provider,
-        llm?.activation || llm?.rotate_credential ? llm : undefined, googleScope);
-      if (googleScope !== undefined) {
+        llm?.activation || llm?.rotate_credential ? llm : undefined, googleScope, githubWriteRegistration);
+      if (githubWriteRegistration) {
+        if (target.github_write_registration_ready !== true) return unavailable;
+      } else if (googleScope !== undefined) {
         if (target.google_read_registration_ready !== true) return unavailable;
       } else {
         if (!llm || !expected_llm_provider || target.llm_provider !== expected_llm_provider || target.managed_llm_settings !== true) {
@@ -5986,7 +6000,8 @@ async function serveWithOwnerLease(
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.source_interface": "gui" } as const;
       const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
-        content: googleScope !== undefined ? "選択された Google 読み取り用の資格情報を保護して保存する。"
+        content: githubWriteRegistration ? "GitHub 書き込み用の資格情報を保護して保存する。"
+          : googleScope !== undefined ? "選択された Google 読み取り用の資格情報を保護して保存する。"
           : llm?.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
           : llm?.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"
           : "現行プロバイダーの非秘密の運転設定を変更する。", timestamp: Date.now(), metadata });
@@ -6846,6 +6861,7 @@ async function serveWithOwnerLease(
           ...(snapshot.activation ? { activation: snapshot.activation } : {}),
           ...(snapshot.credential_rotation ? { credential_rotation: snapshot.credential_rotation } : {}),
           ...(snapshot.google_read_registration ? { google_read_registration: snapshot.google_read_registration } : {}),
+          ...(snapshot.github_write_registration ? { github_write_registration: snapshot.github_write_registration } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,

@@ -2325,10 +2325,12 @@ function candidatePlan(value: unknown): OperationPlan {
   return plan;
 }
 
-function stepOwnerSettingsInput(step: OperationStep): "activation" | "credential_rotation" | "google_read_registration" | undefined {
+function stepOwnerSettingsInput(step: OperationStep):
+  "activation" | "credential_rotation" | "google_read_registration" | "github_write_registration" | undefined {
   if (step.operation !== "settings.write") return undefined;
-  const patch = step.parameters?.patch as { llm?: unknown; google_read?: unknown } | null | undefined;
+  const patch = step.parameters?.patch as { llm?: unknown; google_read?: unknown; github_write?: unknown } | null | undefined;
   if (patch?.google_read !== undefined) return "google_read_registration";
+  if (patch?.github_write !== undefined) return "github_write_registration";
   const llm = patch?.llm;
   if (typeof llm !== "object" || llm === null) return undefined;
   if ("rotate_credential" in llm) return "credential_rotation";
@@ -2344,11 +2346,17 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
   const taskPolicyDigests = new Map<string, { rules_digest: string; source_request_id: string }>();
   for (const p of state.plans) {
     const first = p.revisions[0]!.plan;
-    const googleRegistration = first.steps.some((step) => stepOwnerSettingsInput(step) === "google_read_registration");
-    if (googleRegistration !== (p.owner_settings_google_read_registration === true) ||
-        (googleRegistration && (p.revisions.length !== 1 || first.steps.length !== 1 ||
-          !hasConnectedPlanTarget(first.steps[0]!)))) {
-      throw new Error("plan_settings_google_read_registration_requires_owner_input");
+    const credentialRegistrations = [
+      ["google_read_registration", p.owner_settings_google_read_registration],
+      ["github_write_registration", p.owner_settings_github_write_registration],
+    ] as const;
+    const ownerSettingsInputs = first.steps.map(stepOwnerSettingsInput);
+    for (const [registration, recorded] of credentialRegistrations) {
+      const present = ownerSettingsInputs.includes(registration);
+      if (present !== (recorded === true) ||
+          (present && (p.revisions.length !== 1 || first.steps.length !== 1 || !hasConnectedPlanTarget(first.steps[0]!)))) {
+        throw new Error(`plan_settings_${registration}_requires_owner_input`);
+      }
     }
     if (ids.has(first.plan_id)) throw new Error("plan_checkpoint_duplicate_identity");
     ids.add(first.plan_id);
@@ -2782,9 +2790,11 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
   }
   if (step.operation === "settings.write") {
     const settings = SettingsWriteArgumentsSchema.safeParse(parameters);
+    if (!settings.success) return false;
+    const { patch } = settings.data;
+    const scope = patch.github_write ? "github.write" : patch.google_read ? "google.read" : "llm.runtime";
     return step.adapter === "internal_runtime" && step.target.kind === "settings" &&
-      step.target.id === "gateway.runtime-config" && settings.success &&
-      step.target.scope === (settings.data.patch.google_read ? "google.read" : "llm.runtime") && step.effects.length === 2 &&
+      step.target.id === "gateway.runtime-config" && step.target.scope === scope && step.effects.length === 2 &&
       step.effects[0] === "settings_change" && step.effects[1] === "write" &&
       step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
       step.permission.final_review_required && step.permission.approval_gate_required &&
@@ -4501,6 +4511,7 @@ export class OperationPlanLedger {
       ...(ownerSettingsInput === "activation" ? { owner_settings_activation: true } : {}),
       ...(ownerSettingsInput === "credential_rotation" ? { owner_settings_credential_rotation: true } : {}),
       ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
+      ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
     return operationPlanDigest(plan.plan_id);
   }
@@ -4659,7 +4670,8 @@ export class OperationPlanLedger {
     const ownerSettingsInput = stepOwnerSettingsInput(step);
     if ((ownerSettingsInput === "activation" && !p.owner_settings_activation) ||
         (ownerSettingsInput === "credential_rotation" && !p.owner_settings_credential_rotation) ||
-        (ownerSettingsInput === "google_read_registration" && !p.owner_settings_google_read_registration)) {
+        (ownerSettingsInput === "google_read_registration" && !p.owner_settings_google_read_registration) ||
+        (ownerSettingsInput === "github_write_registration" && !p.owner_settings_github_write_registration)) {
       throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
@@ -8506,9 +8518,10 @@ export class OperationPlanLedger {
     const next = candidatePlan(input);
     const old = p.revisions.at(-1)!.plan;
     if (next.plan_id !== old.plan_id || next.request_id !== old.request_id) throw new Error("plan_revision_identity_changed");
-    const ownerSettingsInput = p.owner_settings_activation ? "activation" : p.owner_settings_credential_rotation
-      ? "credential_rotation" : p.owner_settings_google_read_registration
-        ? "google_read_registration" : next.steps.map(stepOwnerSettingsInput).find(Boolean);
+    const ownerSettingsInput = p.owner_settings_github_write_registration ? "github_write_registration"
+      : p.owner_settings_activation ? "activation" : p.owner_settings_credential_rotation
+        ? "credential_rotation" : p.owner_settings_google_read_registration
+          ? "google_read_registration" : next.steps.map(stepOwnerSettingsInput).find(Boolean);
     if (ownerSettingsInput) {
       throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }

@@ -240,6 +240,13 @@ export async function promptForGoogleReadCredential(
   return promptForNativeCredential(GOOGLE_READ_LABELS[scope], "google_read_credential_prompt", signal, source);
 }
 
+export function promptForGitHubWriteCredential(
+  signal: AbortSignal,
+  source: NodeJS.ProcessEnv = process.env,
+): Promise<Buffer | null> {
+  return promptForNativeCredential("GitHub 書き込み用アクセストークン", "github_write_credential_prompt", signal, source);
+}
+
 async function promptForNativeCredential(label: string, errorPrefix: string, signal: AbortSignal,
   source: NodeJS.ProcessEnv): Promise<Buffer | null> {
   if (signal.aborted) return null;

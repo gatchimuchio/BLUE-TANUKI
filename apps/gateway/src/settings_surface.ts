@@ -40,6 +40,7 @@ export interface SettingsSurfaceOptions {
   nativeCredentialPromptAvailable?: () => boolean;
   inspectCredentialRotation?: (provider: SettingsWriteLlmProvider) => Promise<boolean>;
   inspectGoogleReadCredentialRegistration?: (scope: SettingsWriteGoogleReadCredentialScope) => Promise<boolean>;
+  inspectGitHubWriteCredentialRegistration?: () => Promise<boolean>;
 }
 
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
@@ -71,6 +72,7 @@ export interface SettingsSnapshot {
   writable: false;
   write_block_reason: "settings_write_requires_hds_l3_final_review";
   google_read_credential_registration_available?: SettingsWriteGoogleReadCredentialScope[];
+  github_write_credential_registration_available?: true;
   approval: {
     mode: ReturnType<typeof setupConfigFromEnv>["approval"]["mode"];
     final_review_remains_required: true;
@@ -209,6 +211,7 @@ type NativeCredentialRegistration = {
   available(): boolean;
   request(provider: "anthropic" | "openai" | "openrouter", signal: AbortSignal): Promise<Buffer | null>;
   requestGoogleRead?(scope: SettingsWriteGoogleReadCredentialScope, signal: AbortSignal): Promise<Buffer | null>;
+  requestGitHubWrite?(signal: AbortSignal): Promise<Buffer | null>;
   assertCurrent(commandDigest: string): void;
 };
 
@@ -262,7 +265,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
   const hasAlternateLlmRoute = (config: Env) => Boolean(envValue(config, "BLUE_TANUKI_LLM_BACKEND_HINT", "LLM_PROVIDERS_JSON",
     "BLUE_TANUKI_LLM_FALLBACK_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"));
   const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider,
-    llmPatch?: NonNullable<SettingsWritePatch["llm"]>, googleScope?: SettingsWriteGoogleReadCredentialScope) => {
+    llmPatch?: NonNullable<SettingsWritePatch["llm"]>, googleScope?: SettingsWriteGoogleReadCredentialScope, githubWriteRegistration?: true) => {
     const target = envFilePath(env);
     if (!target) throw new Error("settings_write_env_file_unavailable");
     const before = await fs.lstat(target).catch(() => undefined);
@@ -301,22 +304,26 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       if (!nativeRegistration?.available()) throw new Error("llm_credential_registration_unavailable");
       await assertLocalCredentialTarget(target, after, env);
     }
-    let googleReadRegistrationKey: (typeof SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)[SettingsWriteGoogleReadCredentialScope]["key"] | undefined;
-    if (googleScope !== undefined) {
-      const scope = SettingsWriteGoogleReadCredentialScopeSchema.parse(googleScope);
-      if (env.BLUE_TANUKI_SAFE_MODE === "1" || !nativeRegistration?.requestGoogleRead || !nativeRegistration.available()) {
-        throw new Error("google_read_credential_registration_unavailable");
+    const firstRegistration = githubWriteRegistration ? {
+      key: "GITHUB_TOKEN" as const, prefix: "github_write_credential_registration",
+    } : googleScope !== undefined ? {
+      key: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[SettingsWriteGoogleReadCredentialScopeSchema.parse(googleScope)].key,
+      prefix: "google_read_credential_registration",
+    } : undefined;
+    if (firstRegistration) {
+      const { key, prefix } = firstRegistration;
+      const prompt = githubWriteRegistration ? nativeRegistration?.requestGitHubWrite : nativeRegistration?.requestGoogleRead;
+      if (env.BLUE_TANUKI_SAFE_MODE === "1" || !prompt || !nativeRegistration?.available()) {
+        throw new Error(`${prefix}_unavailable`);
       }
-      const { key } = SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[scope];
       const settingsKeys = Object.keys(parsed.values).map((name) => process.platform === "win32" ? name.toUpperCase() : name);
       const assignments = raw.split(/\r?\n/u).filter((line) => /^\s*[A-Za-z_][A-Za-z0-9_]*\s*=/u.test(line));
       if (new Set(settingsKeys).size !== assignments.length) throw new Error("settings_write_target_key_duplicated");
       const referenceKey = secretRefKey(key);
       const occupied = [...Object.keys(parsed.values), ...Object.keys(env), ...inheritedEnvKeys]
         .some((name) => name.toUpperCase() === key || name.toUpperCase() === referenceKey);
-      if (occupied) throw new Error("google_read_credential_registration_slot_configured");
+      if (occupied) throw new Error(`${prefix}_slot_configured`);
       await assertLocalCredentialTarget(target, after, env);
-      googleReadRegistrationKey = key;
     }
     const activationUpdates = llmPatch?.activation && managedTarget
       ? prepareLlmProviderActivation(llmPatch, config.llm.provider, parsed.values, configuredEnv, inheritedEnvKeys)
@@ -336,7 +343,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       managed_llm_settings: managedLlmSettings,
       activationUpdates,
       credentialRotation,
-      googleReadRegistrationKey,
+      firstRegistration,
       values: {
         model: boundModel ?? null,
         temperature: config.llm.temperature ?? null,
@@ -356,19 +363,21 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     };
   };
   return {
-    inspect: async (expectedLlmProvider, llmPatch, googleScope) => {
+    inspect: async (expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration) => {
       const { target_state_digest, llm_provider, managed_llm_settings, values, activationUpdates, credentialRotation,
-        googleReadRegistrationKey } = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope);
+        firstRegistration } = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration);
       return { target_state_digest, llm_provider, managed_llm_settings, values,
         ...(activationUpdates ? { provider_activation_ready: true as const } : {}),
         ...(credentialRotation ? { credential_rotation_ready: true as const } : {}),
-        ...(googleReadRegistrationKey ? { google_read_registration_ready: true as const } : {}) };
+        ...(firstRegistration?.key === "GITHUB_TOKEN" ? { github_write_registration_ready: true as const } :
+          firstRegistration ? { google_read_registration_ready: true as const } : {}) };
     },
     apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider, context) => serializeWrite(async () => {
       const llmPatch = patch.llm;
       const activation = llmPatch?.activation;
       const googleScope = patch.google_read?.register_credential;
-      const state = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope);
+      const githubWriteRegistration = patch.github_write?.register_credential;
+      const state = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
           state.target_state_digest !== expectedTargetStateDigest) {
         throw new Error("settings_write_target_changed_before_invoke");
@@ -380,8 +389,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       if (activation && !state.activationUpdates) throw new Error("llm_activation_not_ready");
       if (llmPatch?.rotate_credential && !state.credentialRotation) throw new Error("llm_credential_rotation_not_ready");
       const credentialProvider = state.credentialRotation?.provider ?? (activation?.register_credential ? activation.provider : undefined);
-      const credentialKey = state.googleReadRegistrationKey ?? (credentialProvider ? llmApiKeyForProvider(credentialProvider) : undefined);
-      const registrationPrefix = googleScope === undefined ? "llm_credential_registration" : "google_read_credential_registration";
+      const credentialKey = state.firstRegistration?.key ?? (credentialProvider ? llmApiKeyForProvider(credentialProvider) : undefined);
+      const registrationPrefix = state.firstRegistration?.prefix ?? "llm_credential_registration";
       const updates = state.activationUpdates ??
         (patch.llm ? llmSettingsWriteEnvPatch(patch.llm, state.llm_provider, expectedLlmProvider !== undefined) : {});
       const composio = patch.composio;
@@ -403,7 +412,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       }
       if (!credentialKey && Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
       const recheckTarget = async () => {
-        const latest = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope);
+        const latest = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration);
         if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
           throw new Error("settings_write_target_changed_before_persist");
         }
@@ -428,7 +437,9 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         if (credentialKey) {
           if (!nativeRegistration || !context?.signal) throw new Error(`${registrationPrefix}_not_authorized`);
           recheckRegistration();
-          const credential = googleScope !== undefined
+          const credential = githubWriteRegistration
+            ? await nativeRegistration.requestGitHubWrite?.(context.signal)
+            : googleScope !== undefined
             ? await nativeRegistration.requestGoogleRead?.(googleScope, context.signal)
             : credentialProvider && await nativeRegistration.request(credentialProvider, context.signal);
           if (!credential) throw new Error(`${registrationPrefix}_cancelled`);
@@ -443,8 +454,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
               }
               throw new Error(`${registrationPrefix}_storage_failed`);
             }
-            if (state.googleReadRegistrationKey && stored.ref_key !== secretRefKey(state.googleReadRegistrationKey)) {
-              throw new Error("google_read_credential_registration_storage_binding_mismatch");
+            if (state.firstRegistration && stored.ref_key !== secretRefKey(state.firstRegistration.key)) {
+              throw new Error(`${registrationPrefix}_storage_binding_mismatch`);
             }
             if (state.credentialRotation && (stored.ref_key !== state.credentialRotation.referenceKey || stored.ref === state.credentialRotation.reference)) {
               // Keep the existing credential even if storage unexpectedly returns its identity.
@@ -457,7 +468,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         if (state.credentialRotation) {
           if (!stored) throw new Error("llm_credential_rotation_storage_binding_mismatch");
           content = replaceCredentialRefLine(state.raw, state.credentialRotation.referenceKey, stored.ref);
-        } else if (state.googleReadRegistrationKey && stored) {
+        } else if (state.firstRegistration && stored) {
           const newline = state.raw.includes("\r\n") ? "\r\n" : "\n";
           const separator = state.raw && !state.raw.endsWith("\n") ? newline : "";
           content = `${state.raw}${separator}${stored.ref_key}=${JSON.stringify(stored.ref)}${newline}`;
@@ -481,7 +492,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         }
         if (credentialKey) {
           const message = error instanceof Error ? error.message : "";
-          throw new Error(/^(?:(?:llm_credential_(?:prompt|registration|rotation)|google_read_credential_(?:prompt|registration))_[a-z_]+|settings_write_target_changed_before_persist)$/u.test(message)
+          throw new Error(/^(?:(?:llm_credential_(?:prompt|registration|rotation)|(?:google_read|github_write)_credential_(?:prompt|registration))_[a-z_]+|settings_write_target_changed_before_persist)$/u.test(message)
             ? message : `${registrationPrefix}_failed`);
         }
         throw error;
@@ -493,8 +504,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       if (state.credentialRotation && (saved.raw !== content || saved.llm_provider !== state.credentialRotation.provider)) {
         throw new Error("llm_credential_rotation_outcome_unknown");
       }
-      if (state.googleReadRegistrationKey && saved.raw !== content) {
-        throw new Error("google_read_credential_registration_outcome_unknown");
+      if (state.firstRegistration && saved.raw !== content) {
+        throw new Error(`${registrationPrefix}_outcome_unknown`);
       }
       if (activation) {
         const observed = parseEnvFile(saved.raw);
@@ -794,6 +805,9 @@ export function createWebChatSettingsSurface(
         const readiness = await Promise.all(scopes.map(opts.inspectGoogleReadCredentialRegistration));
         const available = scopes.filter((_scope, index) => readiness[index]);
         if (available.length > 0) snapshot.google_read_credential_registration_available = available;
+      }
+      if (snapshot.llm.native_credential_prompt_available && await opts.inspectGitHubWriteCredentialRegistration?.()) {
+        snapshot.github_write_credential_registration_available = true;
       }
       return snapshot;
     },

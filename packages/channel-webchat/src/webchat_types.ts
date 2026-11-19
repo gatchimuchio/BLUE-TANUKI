@@ -1,7 +1,8 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
   ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
-  SettingsWriteCredentialRotationReview, SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
+  SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
+  SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
   SettingsWriteLlmProvider, SettingsWritePatch,
 } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
@@ -1045,9 +1046,10 @@ export interface WebChatSettingsWriteContentReview {
   );
   credential_rotation?: SettingsWriteCredentialRotationReview;
   google_read_registration?: SettingsWriteGoogleReadCredentialReview;
+  github_write_registration?: SettingsWriteGitHubWriteCredentialReview;
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
-      "google_read.credential_reference" |
+      "google_read.credential_reference" | "github_write.credential_reference" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";
@@ -2027,10 +2029,13 @@ export interface WebChatOwnerLlmSettingsProposal {
   purpose_version?: number;
 }
 
-export interface WebChatOwnerGoogleReadCredentialProposal {
-  scope: SettingsWriteGoogleReadCredentialScope;
+export interface WebChatOwnerCredentialProposal {
   goal_ref?: string;
   purpose_version?: number;
+}
+
+export interface WebChatOwnerGoogleReadCredentialProposal extends WebChatOwnerCredentialProposal {
+  scope: SettingsWriteGoogleReadCredentialScope;
 }
 
 export interface WebChatOptions {
@@ -2107,6 +2112,8 @@ export interface WebChatOptions {
   onOwnerLlmSettingsProposal?: (input: WebChatOwnerLlmSettingsProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerGoogleReadCredentialProposal?: (input: WebChatOwnerGoogleReadCredentialProposal & { actor: string }) =>
+    Promise<Record<string, unknown>>;
+  onOwnerGitHubWriteCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerDailyBriefRead?: (input: WebChatDailyBriefReadRequest & { actor: string }) =>
     Promise<Record<string, unknown>>;

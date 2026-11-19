@@ -21,6 +21,12 @@ export const SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE = Object.freeze({
 export const SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE = Object.freeze({
   key: "google_read.credential_reference", before: "unconfigured", after: "register_on_restart",
 } as const);
+export const SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE = Object.freeze({
+  key: "github_write.credential_reference", before: "unconfigured", after: "register_on_restart",
+} as const);
+export const SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW = Object.freeze({
+  api_host: "api.github.com", protected_reference_configured: false,
+} as const);
 export const SettingsWriteGoogleReadCredentialScopeSchema = z.enum(["gmail", "calendar", "drive", "shared"]);
 export type SettingsWriteGoogleReadCredentialScope = z.infer<typeof SettingsWriteGoogleReadCredentialScopeSchema>;
 export const SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS = Object.freeze({
@@ -77,8 +83,9 @@ export const SettingsWritePatchSchema = z.object({
       (composio.dry_run === undefined && composio.live_execution === undefined),
     "disconnect resets dry_run and live_execution and cannot be combined with explicit values").optional(),
   google_read: z.object({ register_credential: SettingsWriteGoogleReadCredentialScopeSchema }).strict().optional(),
+  github_write: z.object({ register_credential: z.literal(true) }).strict().optional(),
 }).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) +
-  Number(patch.google_read !== undefined) === 1,
+  Number(patch.google_read !== undefined) + Number(patch.github_write !== undefined) === 1,
   "exactly one settings domain must be changed per request");
 
 export const SettingsWriteLlmProviderSchema = z.enum(["stub", "anthropic", "openai", "openai-compatible", "openrouter"]);
@@ -114,12 +121,13 @@ export type SettingsWriteLlmProvider = z.infer<typeof SettingsWriteLlmProviderSc
 export type SettingsWriteNativeLlmProvider = z.infer<typeof SettingsWriteNativeLlmProviderSchema>;
 export type SettingsWriteCredentialRotationReview = ReturnType<typeof settingsWriteCredentialRotationReview>;
 export type SettingsWriteGoogleReadCredentialReview = ReturnType<typeof settingsWriteGoogleReadCredentialReview>;
+export type SettingsWriteGitHubWriteCredentialReview = typeof SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
 
 export function settingsWriteRequiresNativeCredentialEntry(patch: SettingsWritePatch): boolean {
   return patch.llm?.activation?.register_credential === true || patch.llm?.rotate_credential === true ||
-    patch.google_read !== undefined;
+    patch.google_read !== undefined || patch.github_write !== undefined;
 }
 
 export function settingsWriteCredentialRotationReview(provider: SettingsWriteNativeLlmProvider) {

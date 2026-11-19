@@ -27,6 +27,8 @@ import {
   memoryPersonalizationTargetIdentityDigest,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
@@ -1805,6 +1807,8 @@ export class Executor {
       const llm = parsedArgs.success ? parsedArgs.data.patch.llm : undefined;
       const googleScope = parsedArgs.success ? parsedArgs.data.patch.google_read?.register_credential : undefined;
       const googleRegistration = googleScope ? settingsWriteGoogleReadCredentialReview(googleScope) : null;
+      const githubRegistration = parsedArgs.success && parsedArgs.data.patch.github_write
+        ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW : null;
       const activation = llm?.activation;
       const rotation = llm?.rotate_credential && parsedArgs.success
         ? settingsWriteCredentialRotationReview(SettingsWriteNativeLlmProviderSchema.parse(parsedArgs.data.expected_llm_provider))
@@ -1815,6 +1819,7 @@ export class Executor {
             operationPlanDigest(activation ? settingsWriteActivationReview(activation) : null) ||
           operationPlanDigest(review.credential_rotation ?? null) !== operationPlanDigest(rotation) ||
           operationPlanDigest(review.google_read_registration ?? null) !== operationPlanDigest(googleRegistration) ||
+          operationPlanDigest(review.github_write_registration ?? null) !== operationPlanDigest(githubRegistration) ||
           review.request_payload_digest !== operationPlanDigest(settingsWriteRequestBinding(parsedArgs.data)) ||
           review.target_version_digest !== operationPlanDigest(observation) ||
           review.operation_plan_binding_digest !== operationPlanBindingDigest ||
@@ -1830,6 +1835,10 @@ export class Executor {
       if (googleRegistration &&
           operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE])) {
         throw new Error("settings.write content review returned unexpected Google read registration changes");
+      }
+      if (githubRegistration &&
+          operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE])) {
+        throw new Error("settings.write content review returned unexpected GitHub write registration changes");
       }
       if (activation) {
         const exactChanges = new Map(review.changes.map((change) => [change.key, change]));

@@ -300,6 +300,12 @@ Gatewayの `github.write` は、許可リストの照合後にOS保護ストア�
 資格は対象確認・L3内容審査・承認後の実行および結果照合のために
 `api.github.com` への要求で使う。WindowsのDPAPI参照はGitHub書き込み用のファイルを指定する。
 
+ローカルのControl Center `/app` の「設定」でGitHub書き込み用資格を初回登録できる。
+L3の内容を確認して承認し、OSの伏字入力欄にトークンを入力する。再起動後に
+`GITHUB_TOKEN_REF` が有効になる。既存の値・参照がある場合は初回登録を受け付けない。
+保存時にGitHubへ接続せず、資格の有効性やGitHub側で付与された権限は確認しない。
+書き込み先のリポジトリ許可リストは `BLUE_TANUKI_GITHUB_REPOS` で別途設定する。
+
 ```text
 tool:github.write operation=issue.create owner=gatchimuchio repo=blue-tanuki title="Bug report" body="details"
 tool:github.write operation=issue.comment.create owner=gatchimuchio repo=blue-tanuki number=1 body="follow-up"

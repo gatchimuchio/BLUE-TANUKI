@@ -3,6 +3,8 @@ import {
   OPERATION_ADAPTER_REGISTRY,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SettingsWriteLlmProviderSchema,
@@ -17,6 +19,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const SETTINGS_LLM_PROVIDERS = ${SETTINGS_LLM_PROVIDERS_JSON};
       const SETTINGS_LLM_ACTIVATION_DESTINATIONS = ${JSON.stringify(SETTINGS_WRITE_ACTIVATION_DESTINATIONS)};
       const SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE = ${JSON.stringify(SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE)};
+      const SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE)};
+      const SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW = ${JSON.stringify(SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW)};
       const SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE)};
       const SETTINGS_GOOGLE_READ_API_HOSTS = ${JSON.stringify(Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
         .map(([scope, target]) => [scope, target.api_hosts])))};
@@ -66,7 +70,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         settingsRuntimeSnapshot: null,
         googleReadCredentialScopes: [],
         googleReadCredentialNextScreen: null,
-        googleReadCredentialSubmitting: false,
+        githubWriteCredentialAvailable: false,
+        githubWriteCredentialNextScreen: null,
+        settingsCredentialSubmitting: false,
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         connectorsSnapshot: null,
         connectorsCandidateTask: null,
@@ -4450,9 +4456,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           ["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname);
       }
 
-      function updateGoogleReadCredentialButton() {
-        byId("prepare-google-read-credential").disabled = state.googleReadCredentialSubmitting ||
+      function updateSettingsCredentialButtons() {
+        byId("prepare-google-read-credential").disabled = state.settingsCredentialSubmitting ||
           !state.googleReadCredentialScopes.includes(byId("google-read-credential-scope").value);
+        byId("prepare-github-write-credential").disabled = state.settingsCredentialSubmitting ||
+          state.githubWriteCredentialAvailable !== true;
       }
 
       function renderGoogleReadCredentialAvailability(scopes) {
@@ -4472,14 +4480,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         select.value = "";
         select.disabled = available.length === 0;
-        updateGoogleReadCredentialButton();
+        updateSettingsCredentialButtons();
         setText("google-read-credential-status", !local ? "設置先のControl Centerを開いて登録してください。"
           : scopes === undefined ? "設定を読み込んで登録先を確認してください。"
           : available.length === 0 ? "現在、この端末から新規登録できる登録先はありません。" : "");
       }
 
+      function renderGitHubWriteCredentialAvailability(available) {
+        const local = isLocalCredentialControlCenter();
+        state.githubWriteCredentialAvailable = local && available === true;
+        updateSettingsCredentialButtons();
+        setText("github-write-credential-status", !local ? "設置先のControl Centerを開いて登録してください。"
+          : available === undefined ? "設定を読み込んで登録可否を確認してください。"
+          : available !== true ? "現在、この端末から新規登録できません。" : "");
+      }
+
       function renderSettingsSnapshot(snapshot) {
         renderGoogleReadCredentialAvailability(snapshot.google_read_credential_registration_available ?? []);
+        renderGitHubWriteCredentialAvailability(snapshot.github_write_credential_registration_available === true);
         const llm = snapshot.llm || {};
         const routeModel = llm.command_route && llm.command_route.model;
         const model = typeof routeModel === "string" && routeModel !== "(provider default)" ? routeModel : String(llm.model ?? "");
@@ -6305,33 +6323,38 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
-      async function prepareGoogleReadCredentialPlan() {
-        if (state.googleReadCredentialSubmitting) return;
-        const next = byId("open-google-read-credential-review");
+      async function prepareSettingsCredentialPlan(kind) {
+        if (state.settingsCredentialSubmitting) return;
+        const googleRead = kind === "google-read";
+        const nextScreen = googleRead ? "googleReadCredentialNextScreen" : "githubWriteCredentialNextScreen";
+        const status = kind + "-credential-status";
+        const next = byId("open-" + kind + "-credential-review");
         next.hidden = true;
-        state.googleReadCredentialNextScreen = null;
+        state[nextScreen] = null;
         const tokenInput = byId("settings-owner-token");
         const token = tokenInput.value.trim();
-        const scope = byId("google-read-credential-scope").value;
+        const scope = googleRead ? byId("google-read-credential-scope").value : undefined;
+        const available = googleRead ? state.googleReadCredentialScopes.includes(scope) : state.githubWriteCredentialAvailable;
         let goal;
         try {
-          if (!isLocalCredentialControlCenter() || !state.googleReadCredentialScopes.includes(scope)) {
-            throw new Error("この端末で設定を読み込み、登録先を選んでください。");
+          if (!isLocalCredentialControlCenter() || !available) {
+            throw new Error(googleRead ? "この端末で設定を読み込み、登録先を選んでください。"
+              : "この端末で設定を読み込み、登録可否を確認してください。");
           }
           if (!token) throw new Error("変更申請用のowner tokenを入力してください。");
           goal = settingsProposalGoal();
         } catch (error) {
-          setText("google-read-credential-status", error.message);
+          setText(status, error.message);
           return;
         }
-        state.googleReadCredentialSubmitting = true;
-        updateGoogleReadCredentialButton();
-        setText("google-read-credential-status", "資格情報を登録するための審査を申請しています。");
+        state.settingsCredentialSubmitting = true;
+        updateSettingsCredentialButtons();
+        setText(status, "資格情報を登録するための審査を申請しています。");
         try {
-          const response = await fetch("/owner/google-read-credential-proposal", {
+          const response = await fetch("/owner/" + kind + "-credential-proposal", {
             method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
             headers: { "content-type": "application/json", ...authHeaders(token) },
-            body: JSON.stringify({ scope, ...goal })
+            body: JSON.stringify({ ...(googleRead ? { scope } : {}), ...goal })
           });
           const result = response.status === 202 && hasNoStore(response) ? await response.json() : null;
           const isId = function (value) { return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value); };
@@ -6340,24 +6363,24 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             throw new Error("invalid_settings_proposal_receipt");
           }
           if (!goal.goal_ref && result.status === "approval_required" && isId(result.command_id)) {
-            setText("google-read-credential-status", "承認待ちです。承認画面で登録先を確認してください。");
-            state.googleReadCredentialNextScreen = "approvals";
+            setText(status, "承認待ちです。承認画面で登録内容を確認してください。");
+            state[nextScreen] = "approvals";
             next.textContent = "承認を開く";
           } else if (goal.goal_ref && result.status === "candidate_ready" &&
               typeof result.plan_id_digest === "string" && /^[a-f0-9]{64}$/.test(result.plan_id_digest)) {
-            setText("google-read-credential-status", "委任目的に結び付いた計画候補を作成しました。計画画面で目的と登録先を確認してください。");
-            state.googleReadCredentialNextScreen = "tasks";
+            setText(status, "委任目的に結び付いた計画候補を作成しました。計画画面で目的と登録内容を確認してください。");
+            state[nextScreen] = "tasks";
             next.textContent = "計画を開く";
           } else {
             throw new Error("invalid_settings_proposal_receipt");
           }
           next.hidden = false;
         } catch {
-          setText("google-read-credential-status", "申請の受付を確認できませんでした。再申請の前に計画と承認の状態を確認してください。");
+          setText(status, "申請の受付を確認できませんでした。再申請の前に計画と承認の状態を確認してください。");
         } finally {
           if (tokenInput.value.trim() === token) tokenInput.value = "";
-          state.googleReadCredentialSubmitting = false;
-          updateGoogleReadCredentialButton();
+          state.settingsCredentialSubmitting = false;
+          updateSettingsCredentialButtons();
         }
       }
 
@@ -6402,6 +6425,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.settingsToken = token;
         state.settingsRuntimeSnapshot = null;
         renderGoogleReadCredentialAvailability();
+        renderGitHubWriteCredentialAvailability();
         byId("prepare-llm-credential-rotation").hidden = true;
         sessionStorage.setItem("bt.settingsToken", token);
         try {
@@ -7225,7 +7249,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const dailyBriefService = dailyBriefCard ? card.getAttribute("data-daily-brief-service") : null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
         const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
-        const nativeCredential = verdict === "approve" && ["register", "rotate", "google-read"].includes(nativeCredentialMode);
+        const nativeCredential = verdict === "approve" && ["register", "rotate", "google-read", "github-write"].includes(nativeCredentialMode);
         if (nativeCredential) {
           if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
             throw new Error("この端末のControl Centerで対象を確認してから承認してください。");
@@ -7275,11 +7299,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const confirmed = responseBody?.ok === true && result?.approval === "approve" && result.executed === true && result.status === "success";
           const saved = nativeCredentialMode === "google-read"
             ? "資格情報をこの端末の保護ストアに登録しました。製品を再起動してください。Googleとの接続とトークンのスコープは未確認です。"
+            : nativeCredentialMode === "github-write"
+              ? "資格情報をこの端末の保護ストアに登録しました。製品を再起動してください。GitHubとの接続とトークンの権限は未確認です。"
             : nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
             : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
           setText("native-credential-approval-status", confirmed ? saved
             : "資格情報の保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
           if (confirmed && nativeCredentialMode === "google-read") renderGoogleReadCredentialAvailability();
+          if (confirmed && nativeCredentialMode === "github-write") renderGitHubWriteCredentialAvailability(false);
           await loadApprovals();
           return;
         }
@@ -7740,38 +7767,47 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
         if (review.kind === "settings_write") {
           const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
-          if (Object.hasOwn(review, "google_read_registration")) {
-            const registration = review.google_read_registration;
-            const scope = registration?.scope;
-            const hosts = typeof scope === "string" && Object.hasOwn(SETTINGS_GOOGLE_READ_API_HOSTS, scope)
-              ? SETTINGS_GOOGLE_READ_API_HOSTS[scope] : null;
+          const googleRead = Object.hasOwn(review, "google_read_registration");
+          const githubWrite = Object.hasOwn(review, "github_write_registration");
+          if (googleRead || githubWrite) {
+            const registration = googleRead ? review.google_read_registration : review.github_write_registration;
+            const scope = googleRead ? registration?.scope : undefined;
+            const hosts = githubWrite ? [SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW.api_host]
+              : typeof scope === "string" && Object.hasOwn(SETTINGS_GOOGLE_READ_API_HOSTS, scope)
+                ? SETTINGS_GOOGLE_READ_API_HOSTS[scope] : null;
+            const expectedChange = googleRead ? SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE : SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE;
+            const registrationValid = registration && hosts && (googleRead
+              ? Object.keys(registration).length === 3 && registration.protected_reference_configured === false &&
+                Array.isArray(registration.api_hosts) && registration.api_hosts.length === hosts.length &&
+                hosts.every(function (host, index) { return registration.api_hosts[index] === host; })
+              : Object.keys(registration).length === 2 && registration.api_host === SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW.api_host &&
+                registration.protected_reference_configured === SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW.protected_reference_configured);
             const change = Array.isArray(review.changes) && review.changes.length === 1 ? review.changes[0] : null;
-            if (!isLocalCredentialControlCenter() || !hasNoStore(response) || !card.isConnected ||
+            if (googleRead === githubWrite || !isLocalCredentialControlCenter() || !hasNoStore(response) || !card.isConnected ||
                 token !== byId("approval-token").value.trim() || Object.keys(review).length !== 13 ||
                 review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
                 review.used_for_authority !== false || review.may_execute !== false ||
                 ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
                   review.operation_plan_binding_digest].every(isDigest) ||
-                !hosts || !registration || Object.keys(registration).length !== 3 || registration.protected_reference_configured !== false ||
-                !Array.isArray(registration.api_hosts) || registration.api_hosts.length !== hosts.length ||
-                !hosts.every(function (host, index) { return registration.api_hosts[index] === host; }) ||
-                !change || Object.keys(change).length !== 3 || change.key !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.key ||
-                change.before !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.before || change.after !== SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE.after) {
-              throw new Error("Google資格情報の登録内容がこのL3承認要求に結び付いていません");
+                !registrationValid || !change || Object.keys(change).length !== 3 || change.key !== expectedChange.key ||
+                change.before !== expectedChange.before || change.after !== expectedChange.after) {
+              throw new Error("資格情報の登録内容がこのL3承認要求に結び付いていません");
             }
             view.replaceChildren();
             const heading = document.createElement("strong");
-            heading.textContent = GOOGLE_READ_CREDENTIAL_LABELS[scope] + "の資格情報を登録";
+            heading.textContent = googleRead ? GOOGLE_READ_CREDENTIAL_LABELS[scope] + "の資格情報を登録" : "GitHub書き込み用の資格情報を登録";
             const destination = document.createElement("p");
-            destination.textContent = "対象のGoogle APIホスト " + hosts.join("、");
+            destination.textContent = "対象APIホスト " + hosts.join("、");
             const note = document.createElement("p");
             note.className = "muted";
-            note.textContent = "承認後に、この端末の専用入力画面で読み取り専用スコープのOAuthアクセストークンを登録します。反映後はGatewayを再起動してください。Googleとの接続とトークンのスコープはこの操作では確認しません。";
+            note.textContent = googleRead
+              ? "承認後に、この端末の専用入力画面で読み取り専用スコープのOAuthアクセストークンを登録します。反映後はGatewayを再起動してください。Googleとの接続とトークンのスコープはこの操作では確認しません。"
+              : "承認後に、この端末の専用入力画面で書き込み用アクセストークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。GitHubとの接続とトークンの権限はこの操作では確認しません。";
             const digests = document.createElement("small");
             digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
             view.append(heading, destination, note, digests);
             state.approvalContentDigests[commandId] = review.review_digest;
-            approve.setAttribute("data-native-credential-entry", "google-read");
+            approve.setAttribute("data-native-credential-entry", googleRead ? "google-read" : "github-write");
             approve.textContent = "承認して入力画面を開く";
             approve.disabled = false;
             button.textContent = "登録先を再確認";
@@ -11332,6 +11368,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("settings-token").addEventListener("input", function () {
         state.settingsRuntimeSnapshot = null;
         renderGoogleReadCredentialAvailability();
+        renderGitHubWriteCredentialAvailability();
         byId("prepare-llm-credential-rotation").hidden = true;
       });
       byId("settings-provider-choice").addEventListener("change", function () {
@@ -11355,10 +11392,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("open-llm-settings-review").addEventListener("click", function () {
         openSettingsProposalScreen(state.settingsProposalNextScreen);
       });
-      byId("google-read-credential-scope").addEventListener("change", updateGoogleReadCredentialButton);
-      byId("prepare-google-read-credential").addEventListener("click", prepareGoogleReadCredentialPlan);
+      byId("google-read-credential-scope").addEventListener("change", updateSettingsCredentialButtons);
+      byId("prepare-google-read-credential").addEventListener("click", function () { return prepareSettingsCredentialPlan("google-read"); });
       byId("open-google-read-credential-review").addEventListener("click", function () {
         openSettingsProposalScreen(state.googleReadCredentialNextScreen);
+      });
+      byId("prepare-github-write-credential").addEventListener("click", function () { return prepareSettingsCredentialPlan("github-write"); });
+      byId("open-github-write-credential-review").addEventListener("click", function () {
+        openSettingsProposalScreen(state.githubWriteCredentialNextScreen);
       });
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {

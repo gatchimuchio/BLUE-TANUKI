@@ -437,6 +437,15 @@ ${CONTROL_CENTER_STYLE}    </style>
             </div>
             <p id="google-read-credential-status" class="muted" role="status"></p>
           </section>
+          <section class="settings-subsection" aria-labelledby="github-write-credential-title">
+            <h3 id="github-write-credential-title">GitHub書き込み用の資格情報</h3>
+            <p class="muted">承認後、この端末の専用入力画面で書き込み用アクセストークンを登録します。</p>
+            <div class="action-row">
+              <button id="prepare-github-write-credential" type="button" disabled>資格情報の登録を申請</button>
+              <button id="open-github-write-credential-review" type="button" hidden>審査を開く</button>
+            </div>
+            <p id="github-write-credential-status" class="muted" role="status"></p>
+          </section>
           <section class="settings-subsection" aria-labelledby="mascot-settings-title">
             <div class="row">
               <h3 id="mascot-settings-title">Mascot</h3>

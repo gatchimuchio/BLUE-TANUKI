@@ -8,6 +8,8 @@ import {
   parseInboundRequestAtBoundary,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   settingsWriteGoogleReadCredentialReview,
@@ -1226,6 +1228,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="settings-cost-per-24h"');
     expect(html).toContain('id="settings-register-credential" type="checkbox"');
     expect(html).toContain('id="google-read-credential-scope" disabled');
+    expect(html).toContain('id="prepare-github-write-credential" type="button" disabled');
     expect(html).toContain("専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください");
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
@@ -1461,6 +1464,28 @@ describe("WebChatChannel — Control Center shell", () => {
     await prepareGooglePlan();
     expect(node("google-read-credential-status").textContent).toContain("受付を確認できませんでした");
     expect(node("open-google-read-credential-review").hidden).toBe(true);
+
+    const githubSnapshot = { ...googleSnapshot, github_write_credential_registration_available: true };
+    const prepareGitHub = node("prepare-github-write-credential");
+    const prepareGitHubPlan = prepareGitHub.events.get("click")!;
+    const beforeGitHub = calls.length;
+    noStore = true;
+    browser.location.hostname = "external.example.test";
+    api.renderSettingsSnapshot(githubSnapshot);
+    expect(prepareGitHub.disabled).toBe(true);
+    await prepareGitHubPlan();
+    expect(calls).toHaveLength(beforeGitHub);
+
+    browser.location.hostname = "127.0.0.1";
+    api.renderSettingsSnapshot(githubSnapshot);
+    expect(prepareGitHub.disabled).toBe(false);
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareGitHubPlan();
+    expect(calls[beforeGitHub]).toEqual({ path: "/owner/github-write-credential-proposal", token: OWNER_TOKEN,
+      body: { goal_ref: goal.value, purpose_version: 2 } });
+    expect(node("settings-owner-token").value).toBe("");
+    expect(node("github-write-credential-status").textContent).toContain("計画候補");
+    expect(node("open-github-write-credential-review").hidden).toBe(false);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2575,7 +2600,7 @@ describe("WebChatChannel — Control Center shell", () => {
       getAttribute: (name: string) => name === "data-command" ? commandId : null,
       querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : selector === '[data-verdict="approve"]' ? approve : null,
     };
-    const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const state = { approvalContentDigests: Object.create(null) as Record<string, string>, googleReadCredentialScopes: [] };
     const localStart = CONTROL_CENTER_SCRIPT.indexOf("function isLocalCredentialControlCenter(");
     const localEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderSettingsSnapshot(", localStart + 1);
     const submitStart = CONTROL_CENTER_SCRIPT.indexOf("async function submitApproval(");
@@ -2611,6 +2636,8 @@ describe("WebChatChannel — Control Center shell", () => {
         state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub", "openai"],
         SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS, posts, submit,
         SETTINGS_LLM_CREDENTIAL_ROTATION_CHANGE: SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+        SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
+        SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
         SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
         SETTINGS_GOOGLE_READ_API_HOSTS: Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
           .map(([scope, target]) => [scope, target.api_hosts])),
@@ -2713,6 +2740,24 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(JSON.parse(String(posts[2]!.options.body))).toEqual({ verdict: "approve",
       approval_token: "fixture-single-use-token", content_review_digest: googleReview.review_digest });
     expect(outputs["native-credential-approval-status"]).toContain("Googleとの接続とトークンのスコープは未確認");
+
+    const githubReview = { ...baseReview, github_write_registration: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
+      changes: [SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE] };
+    await expect(evaluate(githubReview, "no-store", "external.example.test")).rejects.toThrow();
+    await expect(evaluate(githubReview, "private, max-age=60")).rejects.toThrow();
+    await expect(evaluate({ ...githubReview, github_write_registration: { ...githubReview.github_write_registration,
+      api_host: "unlisted.example.test" } })).rejects.toThrow();
+    await expect(evaluate({ ...githubReview, github_write_registration: { ...githubReview.github_write_registration,
+      token: "synthetic-never-project" } })).rejects.toThrow();
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    await evaluate(githubReview, "no-store", "127.0.0.1", true);
+    expect(JSON.stringify(view.children)).toContain("api.github.com");
+    expect(attributes.get("data-native-credential-entry")).toBe("github-write");
+    expect(posts[3]?.path).toBe(`/approval/${commandId}/native-credential`);
+    expect(JSON.parse(String(posts[3]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: githubReview.review_digest });
+    expect(outputs["native-credential-approval-status"]).toContain("GitHubとの接続とトークンの権限は未確認");
   });
 
   it("shows only recorded Google Daily Brief occurrences beside independently running schedules", async () => {

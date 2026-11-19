@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -39,6 +39,7 @@ import { correlateOperationPlanBindings, inspectGatewayRecoveryState } from "../
 import { createMcpToolCallProposal, inspectMcpCatalog } from "../src/mcp_connection_client.js";
 import { dpapiSecretPathFromReference } from "../src/runtime_path_config.js";
 import { storeBlueTanukiSecret } from "../src/secret_store.js";
+import { parseEnvFile } from "../src/env_file.js";
 
 const MCP_SERVE_FIXTURE_PATH = fileURLToPath(new URL("./fixtures/mcp_live_process_server.mjs", import.meta.url));
 
@@ -3185,14 +3186,15 @@ describe("Gateway process MCP OwnerのL3確認→no-store再確認→合成call"
 
 describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
   const cases: Array<GitHubWriteCase & {
-    credential: "raw" | "DPAPI" | "DPAPI missing" | "DPAPI foreign key" | "DPAPI repository denied";
+    credential: "raw" | "DPAPI" | "DPAPI missing" | "DPAPI foreign key" | "DPAPI repository denied" | "DPAPI native registration";
   }> =
     githubWriteCases.map((scenario) => ({ ...scenario, credential: "raw" }));
   if (process.platform === "win32") {
     cases.push({ operation: "issue.create", credential: "DPAPI" },
       { operation: "issue.create", credential: "DPAPI missing" },
       { operation: "issue.create", credential: "DPAPI foreign key" },
-      { operation: "issue.create", credential: "DPAPI repository denied" });
+      { operation: "issue.create", credential: "DPAPI repository denied" },
+      { operation: "issue.create", credential: "DPAPI native registration" });
   }
   it.each(cases)(
     "実Gateway processは$operation/$comment_kindのL3承認・資格境界と保存結果を守る（$credential）",
@@ -3212,6 +3214,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
     const headRepositoryPath = "/repos/" + headRepositoryFullName;
     const issueTargetPath = `/repos/${String(scenario.parameters.owner)}/${String(scenario.parameters.repo)}/issues/${String(scenario.parameters.number ?? 7)}`;
     const fakeGitHubToken = "f05.02-synthetic-github-token";
+    const nativeRegistration = credential === "DPAPI native registration";
     const tempRoot = mkdtempSync(join(tmpdir(), "blue-github-write-served-"));
     servedGatewayTempRoots.push(tempRoot);
     const workspace = join(tempRoot, "workspace");
@@ -3376,8 +3379,31 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
 
     try {
       let githubEnvFile: string | undefined;
-      if (credential !== "raw") {
-        githubEnvFile = join(tempRoot, "github-fixture.env");
+      const baseConfig = "# 合成設定\r\nUNRELATED_SETTING=preserved\r\n";
+      const nativePromptLog = join(tempRoot, "native-prompt.log");
+      let nativePromptPreload: string | undefined;
+      if (credential !== "raw") githubEnvFile = join(tempRoot, "github-fixture.env");
+      if (nativeRegistration) {
+        writeFileSync(githubEnvFile!, baseConfig, "utf8");
+        nativePromptPreload = join(tempRoot, "native-github-prompt.cjs");
+        writeFileSync(nativePromptPreload, `const cp = require("node:child_process");
+const realSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  const script = args?.at(-2) === "-EncodedCommand" ? Buffer.from(args.at(-1), "base64").toString("utf16le") : "";
+  if (!script.includes("UseSystemPasswordChar")) return realSpawn(command, args, options);
+  require("node:fs").appendFileSync(${JSON.stringify(nativePromptLog)}, "native-prompt\\n");
+  const child = new (require("node:events").EventEmitter)();
+  child.stdout = new (require("node:stream").PassThrough)();
+  child.kill = () => true;
+  setImmediate(() => {
+    child.stdout.end(Buffer.from(${JSON.stringify(fakeGitHubToken)}));
+    child.emit("close", 0);
+  });
+  return child;
+};
+require("node:module").syncBuiltinESMExports();
+`, "utf8");
+      } else if (githubEnvFile) {
         const key = credential === "DPAPI foreign key" ? "GOOGLE_ACCESS_TOKEN" : "GITHUB_TOKEN";
         const stored = storeBlueTanukiSecret(key, fakeGitHubToken, { envFilePath: githubEnvFile, env: {} });
         expect(stored).toMatchObject({ ref_key: `${key}_REF`, storage: "win32_dpapi_current_user", os_protected: true });
@@ -3428,10 +3454,89 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
 
       const gatewayPort = await reserveServedGatewayPort();
       const networkGuardPath = resolve(findWorkspaceRoot(), "apps", "gateway", "test", "fixtures", "github_loopback_network_guard.cjs");
-      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { githubMockPort: mockPort, networkGuardPath,
+      const gatewayOptions = { githubMockPort: mockPort, networkGuardPath,
         ...(githubEnvFile ? { githubEnvFile } : {}),
-        ...(credential === "DPAPI repository denied" ? { githubRepos: "fixture-owner/other-repo" } : {}) });
+        ...(credential === "DPAPI repository denied" ? { githubRepos: "fixture-owner/other-repo" } : {}) };
+      gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, { ...gatewayOptions, nativePromptPreload });
       await waitForServedGatewayHealth(gatewayPort, gateway);
+      if (nativeRegistration) {
+        const origin = `http://127.0.0.1:${gatewayPort}`;
+        const ownerToken = "f05.02-synthetic-owner-token";
+        const resumeToken = "f05.02-synthetic-resume-token";
+        const app = await fetch(origin + "/app", { signal: AbortSignal.timeout(10_000) });
+        expect(app.status).toBe(200);
+        expect(await app.text()).toContain('id="prepare-github-write-credential"');
+        const post = async (route: string, token: string, data?: Record<string, unknown>, requestOrigin = origin) => {
+          const response = await fetch(origin + route, { method: "POST", signal: AbortSignal.timeout(30_000),
+            headers: { authorization: `Bearer ${token}`, origin: requestOrigin,
+              ...(data ? { "content-type": "application/json" } : {}) },
+            ...(data ? { body: JSON.stringify(data) } : {}) });
+          const text = await response.text();
+          expectCredentialsHidden(text);
+          return { response, body: JSON.parse(text) as Record<string, unknown> };
+        };
+        const configResponse = await fetch(origin + "/settings/config", {
+          headers: { authorization: "Bearer f05.02-synthetic-settings-token" }, signal: AbortSignal.timeout(10_000),
+        });
+        expect(configResponse.status).toBe(200);
+        expect(await configResponse.json()).toMatchObject({ github_write_credential_registration_available: true });
+        const proposalRoute = "/owner/github-write-credential-proposal";
+        expect((await post(proposalRoute, resumeToken, {})).response.status).toBe(401);
+        expect((await post(proposalRoute, ownerToken, {}, "http://untrusted.invalid")).response.status).toBe(403);
+        expect((await post(proposalRoute, ownerToken, { token: "fixture-invalid-body-token" })).response.status).toBe(400);
+        writeFileSync(githubEnvFile!, baseConfig + "GITHUB_TOKEN=fixture-existing-token\r\n", "utf8");
+        expect((await post(proposalRoute, ownerToken, {})).response.status).toBe(409);
+        writeFileSync(githubEnvFile!, baseConfig, "utf8");
+
+        const proposal = await post(proposalRoute, ownerToken, {});
+        expect(proposal.response.status, JSON.stringify(proposal.body)).toBe(202);
+        expect(proposal.body).toMatchObject({ accepted: true, status: "approval_required", command_id: expect.any(String) });
+        const queueResponse = await fetch(origin + "/approval", { headers: { authorization: `Bearer ${resumeToken}` } });
+        expect(queueResponse.status).toBe(200);
+        const queue = await queueResponse.json() as { pending_approvals: Record<string, unknown>[] };
+        const pending = queue.pending_approvals.find(item => item.command_id === proposal.body.command_id);
+        expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
+        const approvalRoute = `/approval/${encodeURIComponent(String(proposal.body.command_id))}`;
+        const review = await post(approvalRoute + "/content", resumeToken);
+        expect(review.response.status, JSON.stringify(review.body)).toBe(200);
+        expect(review.response.headers.get("cache-control")).toBe("no-store");
+        expect(review.body).toMatchObject({ kind: "settings_write", operation: "settings.write", no_store: true,
+          github_write_registration: { api_host: "api.github.com", protected_reference_configured: false },
+          changes: [{ key: "github_write.credential_reference", before: "unconfigured", after: "register_on_restart" }],
+          review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+        const verdict = { verdict: "approve", approval_token: pending!.approval_token, content_review_digest: review.body.review_digest };
+        const nativeApproval = approvalRoute + "/native-credential";
+        expect((await post(approvalRoute, resumeToken, verdict)).response.status).toBe(409);
+        expect((await post(nativeApproval, resumeToken, verdict, "http://untrusted.invalid")).response.status).toBe(403);
+        expect((await post(nativeApproval, resumeToken, { ...verdict, content_review_digest: "0".repeat(64) })).response.status).toBe(409);
+        expect(existsSync(nativePromptLog)).toBe(false);
+        expect(existsSync(join(tempRoot, "secrets"))).toBe(false);
+        expect(readFileSync(githubEnvFile!, "utf8")).toBe(baseConfig);
+        expect(mockRequests).toEqual([]);
+
+        const saved = await post(nativeApproval, resumeToken, verdict);
+        expect(saved.response.status, JSON.stringify(saved.body)).toBe(200);
+        expect(saved.body).toMatchObject({ result: { approval: "approve", status: "success" } });
+        const config = readFileSync(githubEnvFile!, "utf8");
+        const reference = parseEnvFile(config).values.GITHUB_TOKEN_REF;
+        expect(reference).toMatch(/^win32-dpapi-current-user:file:/u);
+        expect(config).toBe(baseConfig + `GITHUB_TOKEN_REF=${JSON.stringify(reference)}\r\n`);
+        const credentialPath = dpapiSecretPathFromReference(reference!);
+        expect(readdirSync(join(tempRoot, "secrets"))).toEqual([basename(credentialPath)]);
+        const ciphertext = readFileSync(credentialPath, "utf8").trim();
+        expect(ciphertext.length).toBeGreaterThan(0);
+        expectCredentialsHidden(ciphertext);
+        credentialValues.push(reference!, credentialPath, ciphertext);
+        expectCredentialsHidden(JSON.stringify(saved.body), JSON.stringify(queue), JSON.stringify(review.body));
+        expect((await post(nativeApproval, resumeToken, verdict)).response.status).toBe(409);
+        expect((await post(proposalRoute, ownerToken, {})).response.status).toBe(409);
+        expect(readFileSync(nativePromptLog, "utf8")).toBe("native-prompt\n");
+        expect(mockRequests).toEqual([]);
+        await stopServedGateway(gateway);
+        expectCredentialsHidden(gateway.stdout.join(""), gateway.stderr.join(""));
+        gateway = startServedGateway(gatewayPort, stateRoot, workspace, tempRoot, gatewayOptions);
+        await waitForServedGatewayHealth(gatewayPort, gateway);
+      }
       socket = await connectServedGatewayWebChat(gatewayPort, "fixture-owner", frames);
 
       const reviewRequest = await fetch(`http://127.0.0.1:${gatewayPort}/operators/developer/invoke`, {
@@ -3485,7 +3590,7 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
       });
       const contentReviewText = await contentReviewResponse.text();
       expectCredentialsHidden(contentReviewText);
-      if (credential !== "raw" && credential !== "DPAPI") {
+      if (credential !== "raw" && credential !== "DPAPI" && !nativeRegistration) {
         expect(contentReviewResponse.status).toBe(404);
         expect(contentReviewResponse.headers.get("cache-control")).toBe("no-store");
         expect(JSON.parse(contentReviewText)).toEqual({ error: "approval_content_review_unavailable" });
@@ -3681,7 +3786,8 @@ describe("WebChat OwnerのL3確認→合成GitHub write→保存結果", () => {
         const row = persistedDb.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id = 1").get() as
           { checkpoint_json: string } | undefined;
         if (!row) throw new Error("Gateway process did not persist the J Operation Plan checkpoint");
-        persistedPlan = (JSON.parse(row.checkpoint_json) as ReturnType<OperationPlanStateStore["load"]>).plans[0]!;
+        persistedPlan = (JSON.parse(row.checkpoint_json) as ReturnType<OperationPlanStateStore["load"]>).plans
+          .find(candidate => candidate.revisions[0]?.plan.plan_id === planId)!;
       } finally { persistedDb.close(); }
       expect(persistedPlan.bindings.at(-1), JSON.stringify({ requests: mockRequests.map(({ method, path }) => ({ method, path })),
         responses: mockResponses.map(({ method, path, status }) => ({ method, path, status })), unexpectedMockRequests,
@@ -3814,7 +3920,7 @@ async function stopServedMcpFixture(child: ChildProcessWithoutNullStreams): Prom
 
 function startServedGateway(port: number, stateRoot: string, workspace: string, tempRoot: string,
   options: { githubMockPort?: number; githubEnvFile?: string; githubRepos?: string;
-    networkGuardPath?: string; mcpEndpoint?: string; llmEndpoint?: string } = {}): ServedGatewayProcess {
+    networkGuardPath?: string; nativePromptPreload?: string; mcpEndpoint?: string; llmEndpoint?: string } = {}): ServedGatewayProcess {
   const repositoryRoot = findWorkspaceRoot();
   const entrypoint = join(repositoryRoot, "apps", "gateway", "dist", "main.js");
   if (!existsSync(entrypoint)) throw new Error("built Gateway process entrypoint is unavailable");
@@ -3849,6 +3955,7 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
     });
   }
   if (options.mcpEndpoint !== undefined) env.BLUE_TANUKI_MCP_ENDPOINT = options.mcpEndpoint;
+  if (options.nativePromptPreload) env.BLUE_TANUKI_SETTINGS_TOKEN = "f05.02-synthetic-settings-token";
   if (options.llmEndpoint !== undefined) {
     const providerName = "mcp-owner-local-fixture";
     Object.assign(env, {
@@ -3866,7 +3973,8 @@ function startServedGateway(port: number, stateRoot: string, workspace: string, 
     });
   }
   // No host GITHUB_TOKEN or provider credential is inherited; the configured mock gets only a synthetic token.
-  const args = options.networkGuardPath ? ["--require", options.networkGuardPath, entrypoint, "--serve"] : [entrypoint, "--serve"];
+  const preloads = [options.networkGuardPath, options.nativePromptPreload].filter((file): file is string => file !== undefined);
+  const args = [...preloads.flatMap((file) => ["--require", file]), entrypoint, "--serve"];
   const child = spawn(process.execPath, args, {
     cwd: repositoryRoot, env, stdio: "pipe", windowsHide: true,
   });

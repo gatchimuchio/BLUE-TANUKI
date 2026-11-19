@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE, SettingsWriteArgumentsSchema,
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
+  SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE, SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW, SettingsWriteArgumentsSchema,
   llmSettingsWriteEnvKeys } from "@blue-tanuki/protocol";
 import { createSettingsWriteTool } from "../src/tools/settings_write.js";
 
@@ -262,6 +263,52 @@ describe("settings.write credential rotation", () => {
     await expect(tool.invoke(args, { ...context, assert_current_settings_write: assertCurrent })).resolves.toEqual(receipt);
     expect(apply).toHaveBeenCalledOnce();
     expect(apply).toHaveBeenCalledWith(args.patch, target.target_state_digest, "openai", {
+      command_digest: observe.command_digest, signal, assert_current: assertCurrent,
+    });
+  });
+});
+
+describe("settings.write GitHub write credential registration", () => {
+  const github_write = { register_credential: true } as const;
+  const args = { patch: { github_write } };
+  const observe = { command_digest: "b".repeat(64), operation_plan_binding_digest: "d".repeat(64) };
+
+  it("accepts only a first registration request without credential material or other settings", () => {
+    expect(SettingsWriteArgumentsSchema.safeParse(args).success).toBe(true);
+    for (const invalidArgs of [
+      { patch: { github_write: { register_credential: false } } },
+      { patch: { github_write: { ...github_write, token: "synthetic-token" } } },
+      { patch: { github_write: { ...github_write, credential_reference: "synthetic-reference" } } },
+      { patch: { github_write, google_read: { register_credential: "shared" } } },
+      { ...args, expected_llm_provider: "openai" },
+    ]) {
+      expect(SettingsWriteArgumentsSchema.safeParse(invalidArgs).success).toBe(false);
+    }
+  });
+
+  it("reviews exactly one protected reference and passes the native authority callback before dispatch", async () => {
+    const target: SettingsWriteTarget = await port().inspect();
+    const inspect = vi.fn(async () => target);
+    const receipt = { changed_keys: ["GITHUB_TOKEN_REF"], restart_required: true as const };
+    const apply = vi.fn(async () => receipt);
+    const tool = createSettingsWriteTool({ inspect, apply });
+    await expect(tool.inspect_content_review!(args, observe)).rejects.toThrow("settings_write_github_write_registration_unavailable");
+    inspect.mockResolvedValue({ ...target, github_write_registration_ready: true });
+    const review = await tool.inspect_content_review!(args, observe);
+    expect(inspect.mock.calls).toEqual(Array.from({ length: 3 }, () => [undefined, undefined, undefined, true]));
+    expect(review).toMatchObject({ github_write_registration: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
+      changes: [SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE], no_store: true, used_for_authority: false, may_execute: false });
+    expect(review).not.toHaveProperty("google_read_registration");
+    const observation = await tool.inspect_target_version!(args, observe);
+    const signal = new AbortController().signal;
+    const context = { command_id: "github-registration-fixture", operation_plan_command_digest: observe.command_digest,
+      upstream_commit_hash: "a".repeat(64), target_version_observation: observation, signal };
+    await expect(tool.invoke(args, context)).rejects.toThrow("github_write_credential_registration_not_authorized");
+    expect(apply).not.toHaveBeenCalled();
+    const assertCurrent = vi.fn();
+    await expect(tool.invoke(args, { ...context, assert_current_settings_write: assertCurrent })).resolves.toEqual(receipt);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(apply).toHaveBeenCalledWith(args.patch, target.target_state_digest, undefined, {
       command_digest: observe.command_digest, signal, assert_current: assertCurrent,
     });
   });

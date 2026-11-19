@@ -165,8 +165,14 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
     }
   });
 
-  it("requires structured owner input and a separate L3 approval for Google read credential registration", () => {
-    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-google-settings-"));
+  it.each([
+    { field: "google_read", registration: "drive", scope: "google.read", refKey: "GOOGLE_DRIVE_ACCESS_TOKEN_REF",
+      marker: "owner_settings_google_read_registration" },
+    { field: "github_write", registration: true, scope: "github.write", refKey: "GITHUB_TOKEN_REF",
+      marker: "owner_settings_github_write_registration" },
+  ] as const)("requires structured owner input and a separate L3 approval for $scope credential registration",
+    ({ field, registration, scope, refKey, marker }) => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-credential-settings-"));
     let saved: OperationPlanCheckpoint | undefined;
     let recoveryHolds: unknown;
     const planState: OperationPlanStatePort = { load: () => saved,
@@ -175,37 +181,38 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       compareAndSetRecoveryHoldState: (_expected, state) => { recoveryHolds = state; } };
     const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
       operation_plan_state: planState });
-    const origin = ownerOrigin("settings-google-drive", "prepare Google read credential registration");
-    const googleArgs = { patch: { google_read: { register_credential: "drive" } } };
+    const origin = ownerOrigin(`settings-${field}`, "prepare initial protected credential registration");
+    const credentialArgs = { patch: { [field]: { register_credential: registration } } };
+    const ownerInputError = `plan_settings_${field}_registration_requires_owner_input`;
     try {
-      expect(() => controller.prepareSettingsWritePlan({ ...origin }, googleArgs)).toThrow("settings_plan_owner_origin_required");
+      expect(() => controller.prepareSettingsWritePlan({ ...origin }, credentialArgs)).toThrow("settings_plan_owner_origin_required");
       expect(() => controller.prepareSettingsWritePlan(origin, {
-        patch: { google_read: { ...googleArgs.patch.google_read, token: "fixture-value" } },
+        patch: { [field]: { register_credential: registration, token: "fixture-value" } },
       })).toThrow("settings_plan_arguments_invalid");
-      const candidate = controller.prepareSettingsWritePlan(origin, googleArgs);
-      expect(saved?.plans[0]?.owner_settings_google_read_registration).toBe(true);
+      const candidate = controller.prepareSettingsWritePlan(origin, credentialArgs);
+      expect(saved?.plans[0]?.[marker]).toBe(true);
       const plan = saved!.plans[0]!.revisions[0]!.plan;
-      expect(plan.steps[0]).toMatchObject({ target: { id: "gateway.runtime-config", scope: "google.read" },
-        preparation: { validation: [{ expected: { changed_keys: ["GOOGLE_DRIVE_ACCESS_TOKEN_REF"], restart_required: true } }] } });
+      expect(plan.steps[0]).toMatchObject({ target: { id: "gateway.runtime-config", scope },
+        preparation: { validation: [{ expected: { changed_keys: [refKey], restart_required: true } }] } });
 
       const genericLedger = new OperationPlanLedger();
-      expect(() => genericLedger.retainCandidate(plan, origin)).toThrow("plan_settings_google_read_registration_requires_owner_input");
+      expect(() => genericLedger.retainCandidate(plan, origin)).toThrow(ownerInputError);
       const ordinaryPlan = { ...plan, steps: [{ ...plan.steps[0]!, target: { kind: "settings" as const,
         id: "gateway.runtime-config", scope: "llm.runtime" }, parameters: args }] };
       const ordinaryId = genericLedger.retainCandidate(ordinaryPlan, origin);
       expect(() => genericLedger.revise({ action: "revise", plan_id: ordinaryId,
         expected_revision_digest: operationPlanDigest(ordinaryPlan), plan }, origin))
-        .toThrow("plan_settings_google_read_registration_requires_owner_input");
+        .toThrow(ownerInputError);
 
-      const review = ownerOrigin("settings-google-drive-review", `plan:review ${JSON.stringify({
+      const review = ownerOrigin(`settings-${field}-review`, `plan:review ${JSON.stringify({
         plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, step_id: candidate.step_id_digest,
       })}`);
       const selected = controller.decide(review).command;
-      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: googleArgs },
+      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: credentialArgs },
         constraints: { timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS } });
       expect(evaluateApproval(selected!, [], { actor: origin.user, default_mode: "full_access" }))
         .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write",
-          target: "settings.write:gateway.runtime-config:google.read" } });
+          target: `settings.write:gateway.runtime-config:${scope}` } });
     } finally {
       controller.close();
       rmSync(root, { recursive: true, force: true });
