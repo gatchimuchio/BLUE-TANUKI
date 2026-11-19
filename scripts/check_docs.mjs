@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { decodeQeInstruction } from "./decode_qe_instruction.mjs";
 
 const root = process.cwd();
+const qeDirectory = "docs/qe/現行";
+const qeSpecFile = "01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json";
+const qePlanFile = "02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json";
+const qeInstructionFile = "03_BLUE-TANUKI_指示書_rev6_1_LLM日本語意味圧縮.json";
+const expectedCanonicalFiles = [qeSpecFile, qePlanFile, qeInstructionFile];
 
 const requiredDocs = [
   "AGENTS.md",
@@ -10,9 +16,7 @@ const requiredDocs = [
   "docs/BACKUP_REF_MIGRATION.md",
   "docs/QE_CURRENT_AUTHORITY.md",
   "docs/qe/現行/MANIFEST.json",
-  "docs/qe/現行/01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json",
-  "docs/qe/現行/02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json",
-  "docs/qe/現行/03_BLUE-TANUKI_Codex全域施工指示書_rev6_0_確定.json",
+  ...expectedCanonicalFiles.map(file => `${qeDirectory}/${file}`),
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -188,30 +192,48 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
 const qeManifest = JSON.parse(read("docs/qe/現行/MANIFEST.json"));
 const qeCanonicalFiles = Object.keys(qeManifest.文書 ?? {});
 const qeParsed = {};
-const expectedCanonicalFiles = [
-  "01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json",
-  "02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json",
-  "03_BLUE-TANUKI_Codex全域施工指示書_rev6_0_確定.json",
-].sort();
-if (qeManifest.版 !== "6.0" || JSON.stringify([...qeCanonicalFiles].sort()) !== JSON.stringify(expectedCanonicalFiles)) {
-  failures.push("現行QE manifestがrev6.0・三文書ではない");
+const qePointer = read("docs/QE_CURRENT_AUTHORITY.md");
+if (qeManifest.版 !== "6.1" || JSON.stringify([...qeCanonicalFiles].sort()) !== JSON.stringify(expectedCanonicalFiles)) {
+  failures.push("現行QE manifestがrev6.0仕様・工程とrev6.1指示の三文書ではない");
 }
-const activeNames = fs.readdirSync(path.join(root, "docs/qe/現行")).filter(file => /^0[1-3]_.*\.json$/.test(file)).sort();
+const activeNames = fs.readdirSync(path.join(root, qeDirectory)).filter(file => /^0[1-3]_.*\.json$/.test(file)).sort();
 if (JSON.stringify(activeNames) !== JSON.stringify([...qeCanonicalFiles].sort())) {
   failures.push("現行ディレクトリに現行三点以外の版/不足ファイルが混在");
 }
-for (const file of qeCanonicalFiles) {
-  const rel = "docs/qe/現行/" + file;
+for (const file of expectedCanonicalFiles) {
+  const rel = `${qeDirectory}/${file}`;
   if (!exists(rel)) continue;
-  const actualHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, rel))).digest("hex");
-  const doc = JSON.parse(read(rel));
-  qeParsed[file.slice(0, 2)] = doc;
-  if (actualHash !== qeManifest.文書[file].SHA256) failures.push(`${rel}: manifest SHA-256不一致`);
-  if (doc.識別?.版 !== "6.0" || doc.識別?.公開 === false) {
-    failures.push(`${rel}: rev6.0でない、または公開禁止の現行正本`);
+  const bytes = fs.readFileSync(path.join(root, rel));
+  const actualHash = crypto.createHash("sha256").update(bytes).digest("hex");
+  const manifestEntry = qeManifest.文書?.[file];
+  if (actualHash !== manifestEntry?.SHA256 || bytes.length !== manifestEntry?.バイト数) {
+    failures.push(`${rel}: manifest SHA-256またはバイト数が不一致`);
   }
-  if (!read("docs/QE_CURRENT_AUTHORITY.md").includes(actualHash)) {
-    failures.push(`${rel}: 現行ピンにSHA-256がない`);
+  if (!qePointer.includes(actualHash)) failures.push(`${rel}: 現行ピンにSHA-256がない`);
+  let doc = JSON.parse(bytes);
+  const isInstruction = file === qeInstructionFile;
+  if (isInstruction) {
+    const decodedHash = manifestEntry?.復号SHA256;
+    try {
+      doc = decodeQeInstruction(doc, {
+        S: { name: qeSpecFile, bytes: fs.readFileSync(path.join(root, qeDirectory, qeSpecFile)) },
+        P: { name: qePlanFile, bytes: fs.readFileSync(path.join(root, qeDirectory, qePlanFile)) },
+      }, decodedHash);
+      for (const [key, source] of [["仕様書", qeSpecFile], ["工程表", qePlanFile]]) {
+        const binding = doc.固定上位原典?.[key];
+        if (binding?.文書名 !== source || binding?.SHA256 !== qeManifest.文書?.[source]?.SHA256 || binding?.版 !== "6.0") {
+          failures.push(`${rel}: 復号後の上位原典 ${key} が現行manifestと不一致`);
+        }
+      }
+      if (!qePointer.includes(decodedHash)) failures.push(`${rel}: 現行ピンに復号SHA-256がない`);
+    } catch (error) {
+      failures.push(`${rel}: ${error.message}`);
+      continue;
+    }
+  }
+  qeParsed[file.slice(0, 2)] = doc;
+  if (doc.識別?.版 !== (isInstruction ? "6.1" : "6.0") || doc.識別?.公開 === false) {
+    failures.push(`${rel}: 版の不一致または公開禁止の現行正本`);
   }
 }
 const qeActualCounts = {
@@ -259,14 +281,15 @@ if (qeSpec && qePlan && qeWork) {
   if (JSON.stringify([...unitIDs].sort()) !== JSON.stringify([...indexedUnits].sort())) {
     failures.push("QE施工工程の198索引とCodex施工命令のIDが不一致");
   }
-  const phases = new Set(qePlan.工程.map(item => item.ID));
-  if (["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"].some(id => !phases.has(id)) ||
+  const phases = Array.from({ length: 10 }, (_, i) => `P${i}`).join(",");
+  if (qePlan.工程.map(item => item.ID).join(",") !== phases ||
+      qeWork.施工工程_一から十まで?.map(item => item.工程ID).join(",") !== phases ||
       !qeWork.施工実行方式?.本体?.includes("P2") ||
-      !qeWork.起動命令?.一文?.includes("P0からP9")) {
-    failures.push("rev6.0全域P0-P9工程またはP2先行施工命令が欠落");
+      !qeWork.起動命令?.一文?.includes("P2")) {
+    failures.push("全域P0-P9工程またはP2先行施工命令が欠落");
   }
-  if (qeManifest.採用記録?.根拠?.includes("2026-11-16") !== true ||
-      qeManifest.変更の責任境界?.採用?.includes("rev6.0") !== true ||
+  if (qeManifest.採用記録?.根拠?.includes("2026-11-19") !== true ||
+      qeManifest.変更の責任境界?.採用?.includes("rev6.1") !== true ||
       qeManifest.変更の責任境界?.施工?.includes("P0-P9") !== true) {
     failures.push("owner採用・製品施工委任の記録が欠落");
   }

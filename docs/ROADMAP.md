@@ -2,7 +2,7 @@
 
 ## 現在の位置
 
-`QE_STAGE=QE_BUILD`。2026-11-16のowner指示に基づき、現行はrev6.0の三点正本であり、実体とSHAは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定する。HDS原点資料は本製品の必要資料とせず、製品に実装するHDSの判断・学習・停止とBLUE RuntimeのJ/M状態管理を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
+`QE_STAGE=QE_BUILD`。2026-11-19のowner指示に基づき、現行はrev6.0仕様書・工程表とrev6.1指示書の三点正本であり、実体とSHAは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定する。HDS原点資料は本製品の必要資料とせず、製品に実装するHDSの判断・学習・停止とBLUE RuntimeのJ/M状態管理を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
 工程は全域棚卸し・設計から**全431要求・全機能・全5OSを常時施工対象とする**P2全体一括実装を継続し、全体の`SYSTEM_SHAPED`／`BUILD_COVERED`後にQC、OS別QAへ進む。198索引は実装traceであり、局所選定・局所完了gateではない。旧BUILD_BATCH記録は過去の実績を示す履歴のみであり、次の局所案件を選ぶ命令ではない。Windowsは所有PCで最終確認し、他4OSはOS契約に忠実な仮想環境で独立に検査する。仮想で再現できない物理条件は別に未確認として扱う。
 

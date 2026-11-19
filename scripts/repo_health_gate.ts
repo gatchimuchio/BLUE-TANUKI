@@ -19,6 +19,7 @@ export const PRODUCTION_GRAPH_ALLOWED = new Set([
   "apps/gateway/src/cli_router.ts",
   "apps/gateway/src/env_file.ts",
   "apps/gateway/src/audit_config.ts",
+  "apps/gateway/src/safe_mode.ts",
 ]);
 export const FORBIDDEN_GRAPH_FILES = [
   "apps/gateway/src/doctor.ts",

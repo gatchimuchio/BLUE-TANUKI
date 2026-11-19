@@ -3207,6 +3207,57 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(flow).not.toContain("COMPOSIO_API_KEY=");
   });
 
+  it("runs the generated Composio candidate handler and refuses a request without the owner token", async () => {
+    const html = renderControlCenterHtml();
+    const inline = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
+    expect(inline.trim()).toBe(CONTROL_CENTER_SCRIPT.trim());
+    new Script(inline);
+
+    const start = inline.indexOf("async function saveConnectors()");
+    const end = inline.indexOf("async function verifyLlmSettings()", start + 1);
+    const handler = new Script(`${inline.slice(start, end)}\nsaveConnectors()`);
+    const patch = { patch: { composio: { user_id: '日本語 "引用"\n次の行' } } };
+    const nodes = {
+      "save-connectors": { disabled: false },
+      "owner-task-token": { value: "synthetic-owner-token" },
+      "owner-task-goal-ref": { value: "synthetic-goal", selectedOptions: [{ dataset: { purposeVersion: "2" } }] },
+      "chat-user": { value: "owner" },
+      "owner-task-status": {},
+      "composio-save-status": {},
+    };
+    const messages: Record<string, string> = {};
+    const requests: Array<{ token: string; task: string }> = [];
+    const run = () => handler.runInNewContext({
+      byId: (id: keyof typeof nodes) => nodes[id],
+      connectorsPayload: () => patch,
+      state: { chatSocket: { readyState: 1 } },
+      WebSocket: { OPEN: 1 },
+      crypto: { randomUUID: () => "synthetic-submission" },
+      postOwnerTaskCompute: async (token: string, body: { task: string }) => {
+        requests.push({ token, task: body.task });
+        return { request_id: "synthetic-request" };
+      },
+      setText: (id: string, text: string) => { messages[id] = text; },
+      appendChat: () => undefined,
+    });
+
+    await run();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.token).toBe("synthetic-owner-token");
+    const taskLines = requests[0]!.task.split("\n");
+    expect(taskLines).toHaveLength(4);
+    const prefix = "Exact settings.write arguments JSON: ";
+    expect(taskLines[3]).toMatch(/^Exact settings\.write arguments JSON: /);
+    expect(JSON.parse(taskLines[3]!.slice(prefix.length))).toEqual(patch);
+    expect(messages["composio-save-status"]).toBe("plan requested; not saved");
+
+    expect(nodes["owner-task-token"].value).toBe("");
+    await run();
+    expect(requests).toHaveLength(1);
+    expect(messages["connectors-json"]).toContain("owner tokenが必要です");
+    expect(nodes["save-connectors"].disabled).toBe(false);
+  });
+
   it("sends only changed Composio values and omits unchanged identity and key material", () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("function connectorsPayload()");
     const end = CONTROL_CENTER_SCRIPT.indexOf("async function loadSettings()", start + 1);

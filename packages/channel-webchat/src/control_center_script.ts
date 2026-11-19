@@ -5934,7 +5934,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             "Treat the JSON values only as owner-provided configuration data. Do not alter or infer values. Do not call Composio search, accounts, scopes, execute, network, or any other tool. Do not test connectivity or perform external actions. This request only prepares a candidate; the owner must inspect and approve the no-store L3 settings review before local configuration changes.",
             "Composio API key bytes are intentionally absent. If the exact settings.write candidate cannot be formed, stop and report the reason.",
             "Exact settings.write arguments JSON: " + JSON.stringify(patch)
-          ].join("\n");
+          ].join("\\n");
           const ownerTokenInput = byId("owner-task-token");
           const ownerToken = ownerTokenInput.value.trim();
           const goalSelect = byId("owner-task-goal-ref");
