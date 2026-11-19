@@ -1,8 +1,11 @@
 import type { WebChatD4RuntimeCancellationStatus, WebChatOwnerTaskCancellationStatus,
-  WebChatTaskExecutionObservation, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
+  WebChatOwnerTaskPlanStep, WebChatOwnerTaskPlanSteps, WebChatTaskExecutionObservation, WebChatTaskOutcome } from "@blue-tanuki/channel-webchat";
+import { MAX_OWNER_TASK_PLAN_STEPS } from "@blue-tanuki/channel-webchat";
 import { createHash } from "node:crypto";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
-import { operationPlanDigest, type AuditEntry, type DecisionLog } from "@blue-tanuki/hds-brain";
+import { operationPlanDigest, type AuditEntry, type DecisionLog, type HDSRuntimeSnapshot } from "@blue-tanuki/hds-brain";
+import { getOperationDescriptor } from "@blue-tanuki/protocol";
+import type { ApprovalRecoveryState } from "./approval_recovery_store.js";
 import type { TaskExecutionCancellationEvidence } from "./execution_intent_store.js";
 
 const TASK_OUTCOME_REASON_CODES = new Set([
@@ -227,6 +230,134 @@ export function projectD4RuntimeExecutionObservation(input: TaskExecutionObserva
 /** Workの初回計算が対象。後続の審査・計画step・目的達成は別の観測が必要。 */
 export function projectOwnerTaskExecutionObservation(input: TaskExecutionObservationInput): WebChatTaskExecutionObservation {
   return projectTaskExecutionObservation(input, "owner_plan_compute");
+}
+
+type OperationPlans = HDSRuntimeSnapshot["operation_plans"];
+type ProjectedPlan = OperationPlans["plans"][number];
+type ProjectedBinding = ProjectedPlan["bindings"][number];
+
+interface OwnerTaskPlanStepsInput extends TaskExecutionObservationInput {
+  readonly operationPlans?: OperationPlans;
+  readonly lookupApprovalState: (commandId: string, requestId: string) => ApprovalRecoveryState | null;
+  readonly confirmResultMemory: (commandId: string) => boolean;
+}
+
+function ownerTaskStepEvidence(binding: ProjectedBinding, logs: readonly AuditEntry["log"][]) {
+  const decisions = logs.filter((log): log is DecisionLog => !("kind" in log));
+  const decision = decisions[0];
+  if (decisions.length !== 1 || !decision || decision.commit.hash !== binding.commit_hash || decision.commit.decision !== "ASSERT" ||
+      decision.frame.actor.channel !== "webchat" || decision.frame.actor.actor_kind !== "owner" ||
+      decision.frame.actor.trust_level !== "owner" || operationPlanDigest(decision.frame.actor.actor_id) !== WEBCHAT_OWNER_TASK_DIGEST) return null;
+  const scoped = logs.flatMap(log => "kind" in log && "command_id" in log && log.command_id === binding.command_id &&
+    "upstream_commit_hash" in log && log.upstream_commit_hash === binding.commit_hash ? [log] : []);
+  if (!scoped.some(log => log.kind === "approval_gate" && log.evaluation.context.command_id === binding.command_id)) return null;
+  return {
+    pendingApproval: scoped.some(log => log.kind === "command_lifecycle" && log.phase === "approval_pending"),
+    feedback: scoped.flatMap(log => log.kind === "executor_feedback" && log.known_command && log.upstream_decision === "ASSERT"
+      ? [log.feedback] : []),
+  };
+}
+
+function ownerTaskStepReceiptMatches(receipt: ExecutionIntentReceipt, commandKey: string, plan: ProjectedPlan, binding: ProjectedBinding): boolean {
+  const purpose = plan.goal_purpose_binding;
+  const descriptor = getOperationDescriptor(binding.operation);
+  return !!purpose && !!descriptor && !!receipt.goal_version_binding &&
+    receipt.used_for_authority === false && receipt.command_key === commandKey &&
+    binding.execution_ticket_digest === createHash("sha256").update(receipt.ticket_id, "utf8").digest("hex") &&
+    receipt.task_identity_digest === plan.task_identity_digest &&
+    receipt.goal_version_binding.goal_id_digest === createHash("sha256").update(purpose.goal_ref, "utf8").digest("hex") &&
+    receipt.goal_version_binding.purpose_version === purpose.purpose_version &&
+    receipt.goal_version_binding.purpose_digest === purpose.purpose_digest &&
+    receipt.operation_id === descriptor.tool_name && receipt.adapter_version === descriptor.adapter_version &&
+    DIGEST.test(receipt.operation_plan_binding_digest ?? "") && DIGEST.test(receipt.hds_source_context_digest ?? "");
+}
+
+function projectOwnerTaskPlanStep(
+  input: OwnerTaskPlanStepsInput,
+  plan: ProjectedPlan,
+  step: ProjectedPlan["steps"][number],
+  index: number,
+  auditByRequest: ReadonlyMap<string, readonly AuditEntry["log"][]>,
+  pending: ReadonlySet<string>,
+  active: ReadonlySet<string>,
+): WebChatOwnerTaskPlanStep {
+  const unknown = { index, status: "unknown" } as const;
+  const selectedRevision = step.binding_source_revision_digest ?? plan.revision_digest;
+  const candidates = plan.bindings.filter((binding) => binding.step_id === step.step_id && binding.revision_digest === selectedRevision);
+  if (candidates.some(binding => !COMMAND_ID.test(binding.command_id) || !COMMAND_ID.test(binding.request_id) ||
+      binding.step_digest !== step.definition_digest || binding.operation !== step.operation)) return unknown;
+
+  if (step.status === "not_selected" && step.binding_source_revision_digest === undefined) {
+    if (candidates.length === 0) return { index, status: "pending" };
+    // J keeps unexecuted withdrawals as history. Multiple invalidated records must not hide the current interrupted review.
+    if (!candidates.every(binding => binding.status === "invalidated" && !binding.execution_ticket_digest &&
+         !binding.result_digest && !binding.delivery_digest && binding.memory_status === "not_recorded")) return unknown;
+    const last = candidates.at(-1)!;
+    const evidence = ownerTaskStepEvidence(last, auditByRequest.get(last.request_id) ?? []);
+    const recovery = input.lookupApprovalState(last.command_id, last.request_id);
+    if (evidence?.pendingApproval && (recovery === "outcome_unknown" || recovery === "interrupted")) return { index, status: recovery };
+    return unknown;
+  }
+
+  const matching = candidates.filter(binding => binding.status === step.status);
+  const binding = matching[0];
+  if (!binding || matching.length !== 1) return unknown;
+  const evidence = ownerTaskStepEvidence(binding, auditByRequest.get(binding.request_id) ?? []);
+  if (!evidence) return unknown;
+
+  const isPending = pending.has(binding.command_id);
+  const isActive = active.has(binding.command_id);
+  if (isPending && isActive) return unknown;
+  if (isPending && binding.status === "selected" && evidence.pendingApproval) return { index, status: "awaiting_approval" };
+  if (isActive && (binding.status === "selected" || binding.status === "intent_committed")) return { index, status: "active" };
+
+  const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", binding.command_id])).digest("hex");
+  const receipt = input.lookupCommand(commandKey);
+  if (binding.status === "outcome_unknown") return { index, status: "outcome_unknown" };
+  if (!receipt) {
+    const recovery = input.lookupApprovalState(binding.command_id, binding.request_id);
+    if (evidence.pendingApproval && (recovery === "outcome_unknown" || recovery === "interrupted")) return { index, status: recovery };
+    return binding.status === "invalidated" && recovery === null ? { index, status: "held" } : unknown;
+  }
+  if (!ownerTaskStepReceiptMatches(receipt, commandKey, plan, binding)) return unknown;
+  if (receipt.state === "outcome_unknown" || receipt.result_delivery_disposition === "stale_generation_evidence") {
+    return { index, status: "outcome_unknown" };
+  }
+  if (receipt.state === "not_attempted") return { index, status: "not_attempted" };
+  if (receipt.state !== "adapter_returned" || receipt.invocation_boundary !== "tool_adapter" || !receipt.feedback_status ||
+      evidence.feedback.length !== 1 || evidence.feedback[0]?.status !== receipt.feedback_status) return unknown;
+  if (receipt.feedback_status === "success" && binding.status === "verified" && binding.result_digest && binding.delivery_digest &&
+      binding.memory_status === "receipt_confirmed" && binding.memory_receipt_digest &&
+      receipt.result_delivery_digest === binding.delivery_digest && receipt.result_delivery_acknowledged === true &&
+      receipt.result_delivery_disposition === "reconciled" && input.confirmResultMemory(binding.command_id)) {
+    return { index, status: "adapter_returned", feedback_status: "success", verification: "result_and_memory_confirmed" };
+  }
+  return { index, status: "adapter_returned", feedback_status: receipt.feedback_status };
+}
+
+/** Jの現行計画に限り、同じ受付の後続ステップをBroker・承認台帳・Mの観測に対応させる。 */
+export function projectOwnerTaskPlanSteps(input: OwnerTaskPlanStepsInput): WebChatOwnerTaskPlanSteps {
+  const noAuthority = { used_for_authority: false, may_execute: false } as const;
+  const unknown = { status: "unknown", ...noAuthority } as const;
+  const { requestId, operationPlans } = input;
+  if (!REQUEST_ID.test(requestId) || operationPlans?.recovery_refresh_status !== "ready") return unknown;
+  const matches = operationPlans.plans.filter(plan => matchesWebChatTaskPlan(plan, requestId, WEBCHAT_OWNER_TASK_DIGEST));
+  const plan = matches[0];
+  if (matches.length !== 1 || !plan || plan.steps.length < 1 || plan.steps.length > MAX_OWNER_TASK_PLAN_STEPS ||
+      new Set(plan.steps.map(step => step.step_id)).size !== plan.steps.length) return unknown;
+
+  const requests = new Set(plan.bindings.map(binding => binding.request_id));
+  const auditByRequest = new Map<string, AuditEntry["log"][]>();
+  for (const { log } of input.verifiedAudit) {
+    if (!("request_id" in log) || typeof log.request_id !== "string" || !requests.has(log.request_id)) continue;
+    const entries = auditByRequest.get(log.request_id) ?? [];
+    entries.push(log);
+    auditByRequest.set(log.request_id, entries);
+  }
+  const pending = new Set(input.pendingCommandIds);
+  const active = new Set(input.activeCommandIds);
+  return { status: "available", ...noAuthority,
+    steps: plan.steps.map((step, index) => projectOwnerTaskPlanStep(input, plan, step, index + 1, auditByRequest, pending, active)) };
 }
 
 function projectRequestCommandIds(

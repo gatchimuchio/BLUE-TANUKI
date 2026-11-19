@@ -23,6 +23,7 @@ describe("GatewayApprovalRecoveryStore", () => {
     const requestId = "synthetic-request-secret-sentinel";
     const first = makeStore();
     first.store.recordPending(commandId, requestId);
+    expect(first.store.lookupState(commandId, requestId)).toBe("pending");
     first.store.close();
 
     const bytes = readFileSync(first.filepath);
@@ -32,6 +33,9 @@ describe("GatewayApprovalRecoveryStore", () => {
     const reopened = new GatewayApprovalRecoveryStore(first.filepath);
     try {
       expect(reopened.state(commandId)).toBe("interrupted");
+      expect(reopened.lookupState(commandId, requestId)).toBe("interrupted");
+      expect(reopened.lookupState(commandId, "different-request")).toBeNull();
+      expect(reopened.lookupState("different-command", requestId)).toBeNull();
       expect(reopened.listInterrupted()).toEqual([expect.objectContaining({
         command_id_digest: approvalRecoveryCommandIdDigest(commandId),
         state: "interrupted",
@@ -45,7 +49,8 @@ describe("GatewayApprovalRecoveryStore", () => {
   it("uses an atomic one-time resolving transition and recovers a crash as outcome unknown", () => {
     const { filepath, store } = makeStore();
     const commandId = "synthetic-command-resolution";
-    store.recordPending(commandId, "synthetic-request-resolution");
+    const requestId = "synthetic-request-resolution";
+    store.recordPending(commandId, requestId);
     expect(store.beginResolution(commandId)).toBe(true);
     expect(store.beginResolution(commandId)).toBe(false);
     store.close();
@@ -53,6 +58,7 @@ describe("GatewayApprovalRecoveryStore", () => {
     const reopened = new GatewayApprovalRecoveryStore(filepath);
     try {
       expect(reopened.state(commandId)).toBe("outcome_unknown");
+      expect(reopened.lookupState(commandId, requestId)).toBe("outcome_unknown");
       expect(reopened.beginResolution(commandId)).toBe(false);
       expect(reopened.listInterrupted()).toEqual([expect.objectContaining({ state: "outcome_unknown" })]);
     } finally {

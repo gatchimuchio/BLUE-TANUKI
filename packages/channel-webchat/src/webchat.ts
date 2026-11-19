@@ -81,8 +81,11 @@ import {
   sanitizeHistorySnapshot,
 } from "./webchat_request_helpers.js";
 
+import { MAX_OWNER_TASK_PLAN_STEPS } from "./webchat_types.js";
 import type {
   WebChatTaskExecutionObservation,
+  WebChatOwnerTaskPlanStep,
+  WebChatOwnerTaskPlanSteps,
   WebChatAboutSurface,
   WebChatTaskOutcome,
   WebChatTaskApprovalWithdrawal,
@@ -650,6 +653,39 @@ function normalizeTaskExecutionObservation(value: unknown): WebChatTaskExecution
   if (hasExactKeys(observation, fields) && (status === "awaiting_approval" || status === "active" || status === "held" ||
       status === "not_attempted" || status === "outcome_unknown")) return { status, ...noAuthority };
   return { status: "unknown", ...noAuthority };
+}
+
+function normalizeOwnerTaskPlanSteps(value: unknown): WebChatOwnerTaskPlanSteps {
+  const noAuthority = { used_for_authority: false, may_execute: false } as const;
+  const unknown = { status: "unknown", ...noAuthority } as const;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return unknown;
+  const observation = value as Record<string, unknown>;
+  if (!hasExactKeys(observation, ["status", "used_for_authority", "may_execute", "steps"]) ||
+      observation.used_for_authority !== false || observation.may_execute !== false || observation.status !== "available" ||
+      !Array.isArray(observation.steps) || observation.steps.length < 1 || observation.steps.length > MAX_OWNER_TASK_PLAN_STEPS) {
+    return unknown;
+  }
+  const steps: WebChatOwnerTaskPlanStep[] = [];
+  for (const value of observation.steps as unknown[]) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return unknown;
+    const step = value as Record<string, unknown>;
+    const { index, status, feedback_status, verification } = step;
+    if (index !== steps.length + 1) return unknown;
+    if (status === "adapter_returned") {
+      if (feedback_status === "success" && verification === "result_and_memory_confirmed" &&
+          hasExactKeys(step, ["index", "status", "feedback_status", "verification"])) {
+        steps.push({ index, status, feedback_status, verification });
+      } else if ((feedback_status === "success" || feedback_status === "failed" || feedback_status === "suspended") &&
+          hasExactKeys(step, ["index", "status", "feedback_status"])) {
+        steps.push({ index, status, feedback_status });
+      } else return unknown;
+    } else if (hasExactKeys(step, ["index", "status"]) && (status === "pending" || status === "awaiting_approval" ||
+      status === "active" || status === "interrupted" || status === "outcome_unknown" || status === "not_attempted" ||
+      status === "held" || status === "unknown")) {
+      steps.push({ index, status });
+    } else return unknown;
+  }
+  return { status: "available", steps, ...noAuthority };
 }
 
 function normalizeTaskApprovalWithdrawal(value: unknown): WebChatTaskApprovalWithdrawal | null {
@@ -1580,6 +1616,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           ? normalizeTaskExecutionObservation(await this.opts.onOwnerTaskSubmissionExecutionObservation({ request_id: status.request_id })
               .catch(() => undefined))
           : undefined;
+        const planSteps = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionPlanSteps
+          ? normalizeOwnerTaskPlanSteps(await this.opts.onOwnerTaskSubmissionPlanSteps({ request_id: status.request_id })
+              .catch(() => undefined))
+          : undefined;
         const cancellation = status && status.state !== "rejected" && this.opts.onOwnerTaskSubmissionCancellationStatus
           ? normalizeTaskCancellationStatus(await this.opts.onOwnerTaskSubmissionCancellationStatus({ request_id: status.request_id })
               .catch(() => ({ status: "unknown" as const, reason_code: "projection_unavailable" as const,
@@ -1602,6 +1642,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           ? { found: true, request_id: status.request_id, state: status.state,
               ...(taskOutcome ? { task_outcome: taskOutcome } : {}),
               ...(executionObservation ? { execution_observation: executionObservation } : {}),
+              ...(planSteps ? { plan_steps: planSteps } : {}),
               ...(cancellation ? { cancellation } : {}),
               ...(taskResult ? { result: taskResult } : {}) }
           : { found: false }));

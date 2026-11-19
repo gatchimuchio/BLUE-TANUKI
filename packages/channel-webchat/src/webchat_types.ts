@@ -65,6 +65,21 @@ export type WebChatTaskExecutionObservation = {
 
 export type WebChatD4RuntimeExecutionObservation = WebChatTaskExecutionObservation;
 
+export const MAX_OWNER_TASK_PLAN_STEPS = 100;
+
+export type WebChatOwnerTaskPlanStep = { readonly index: number } & (
+  { readonly status: "pending" | "awaiting_approval" | "active" | "interrupted" | "outcome_unknown" | "not_attempted" | "held" | "unknown" } |
+  { readonly status: "adapter_returned"; readonly feedback_status: "success";
+    readonly verification?: "result_and_memory_confirmed" } |
+  { readonly status: "adapter_returned"; readonly feedback_status: "failed" | "suspended" }
+);
+
+/** 本人の受付に対応する現行計画の順序と観測状態だけを返す。 */
+export type WebChatOwnerTaskPlanSteps = { readonly used_for_authority: false; readonly may_execute: false } & (
+  { readonly status: "available"; readonly steps: readonly WebChatOwnerTaskPlanStep[] } |
+  { readonly status: "unknown" }
+);
+
 export interface WebChatD4RuntimeCancellationScope {
   readonly request_id: string;
   readonly scope_digest: string;
@@ -2022,6 +2037,8 @@ export interface WebChatOptions {
   onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
   /** Read-only execution evidence for the initial computation of this authenticated owner task. */
   onOwnerTaskSubmissionExecutionObservation?: (input: { request_id: string }) => Promise<WebChatTaskExecutionObservation>;
+  /** 同じ仕事に結び付いた現行計画ステップの読取専用観測。 */
+  onOwnerTaskSubmissionPlanSteps?: (input: { request_id: string }) => Promise<WebChatOwnerTaskPlanSteps>;
   /** Read-only cancellation evidence for the exact authenticated owner task request. */
   onOwnerTaskSubmissionCancellationStatus?: (input: { request_id: string }) => Promise<WebChatOwnerTaskCancellationStatus>;
   /** Request abort for the single active command bound to an authenticated owner task request. */

@@ -185,7 +185,8 @@ import type {
 } from "@blue-tanuki/channel-webchat";
 import { projectD4RuntimeActiveCommand, projectD4RuntimeCancellationStatus, projectD4RuntimeRequestCommandIds,
   projectD4RuntimeExecutionObservation, projectD4RuntimeTaskOutcome, projectOwnerTaskActiveCommand, projectOwnerTaskCancellationStatus,
-  projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
+  projectOwnerTaskExecutionObservation, projectOwnerTaskOutcome, projectOwnerTaskPlanSteps,
+  projectOwnerTaskRequestCommandIds } from "./task_outcome_projection.js";
 import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
@@ -5019,6 +5020,22 @@ async function serveWithOwnerLease(
           pendingCommandIds: ownerTaskPendingApprovals(request_id, new Set()).map(item => item.command.id),
           activeCommandIds: activeTaskExecutions.snapshot().map(item => item.command_id),
           lookupCommand: key => executionStore.lookupCommand(key),
+        });
+      },
+      onOwnerTaskSubmissionPlanSteps: async ({ request_id }: { request_id: string }) => {
+        const audit = hds.getAudit();
+        if (!audit.isPersistent() || !audit.verify()) {
+          return { status: "unknown" as const, used_for_authority: false as const, may_execute: false as const };
+        }
+        return projectOwnerTaskPlanSteps({
+          requestId: request_id,
+          operationPlans: hds.getRuntimeSnapshot().operation_plans,
+          verifiedAudit: audit.list(),
+          pendingCommandIds: [...pendingApprovals.keys()],
+          activeCommandIds: activeTaskExecutions.snapshot().map(item => item.command_id),
+          lookupCommand: key => executionStore.lookupCommand(key),
+          lookupApprovalState: (commandId, requestId) => approvalRecoveryStore.lookupState(commandId, requestId),
+          confirmResultMemory: commandId => hds.operationPlanResultReadyForReturn(commandId),
         });
       },
       onOwnerTaskSubmissionCancellationStatus: async ({ request_id }: { request_id: string }): Promise<WebChatOwnerTaskCancellationStatus> => {

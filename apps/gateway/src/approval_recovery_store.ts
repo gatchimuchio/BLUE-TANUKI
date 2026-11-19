@@ -37,6 +37,14 @@ export function approvalRecoveryCommandIdDigest(value: string): string {
   return digestId("command", value);
 }
 
+function parseState(row: { state: string } | undefined): ApprovalRecoveryState | null {
+  if (!row) return null;
+  if (row.state !== "pending" && row.state !== "resolving" && row.state !== "interrupted" && row.state !== "outcome_unknown") {
+    throw new Error("approval_recovery_store_invalid");
+  }
+  return row.state;
+}
+
 function parseRow(row: ApprovalRecoveryRow): InterruptedApprovalRecoverySnapshot {
   if (!DIGEST.test(row.command_id_digest) || !DIGEST.test(row.request_id_digest) ||
       (row.state !== "interrupted" && row.state !== "outcome_unknown") ||
@@ -129,11 +137,15 @@ export class GatewayApprovalRecoveryStore {
     this.assertOpen();
     const row = this.db.prepare("SELECT state FROM approval_recovery WHERE command_id_digest=?")
       .get(digestId("command", commandId)) as { state: string } | undefined;
-    if (!row) return null;
-    if (row.state !== "pending" && row.state !== "resolving" && row.state !== "interrupted" && row.state !== "outcome_unknown") {
-      throw new Error("approval_recovery_store_invalid");
-    }
-    return row.state;
+    return parseState(row);
+  }
+
+  /** 同じ審査要求の記録だけを表示用に取得する。承認や実行には使わない。 */
+  lookupState(commandId: string, requestId: string): ApprovalRecoveryState | null {
+    this.assertOpen();
+    const row = this.db.prepare("SELECT state FROM approval_recovery WHERE command_id_digest=? AND request_id_digest=?")
+      .get(digestId("command", commandId), digestId("request", requestId)) as { state: string } | undefined;
+    return parseState(row);
   }
 
   beginResolution(commandId: string): boolean {

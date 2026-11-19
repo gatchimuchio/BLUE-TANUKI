@@ -218,6 +218,7 @@ async function setup(
         Promise<WebChatD4RuntimeIntentCancellation | null>;
       onOwnerTaskSubmissionOutcome?: (input: { request_id: string }) => Promise<WebChatTaskOutcome>;
       onOwnerTaskSubmissionExecutionObservation?: WebChatOptions["onOwnerTaskSubmissionExecutionObservation"];
+      onOwnerTaskSubmissionPlanSteps?: WebChatOptions["onOwnerTaskSubmissionPlanSteps"];
       maintenance_token?: string;
       resume_approval_tokens?: WebChatOptions["resume_approval_tokens"];
       resume_approval_token_ttl_ms?: number;
@@ -253,6 +254,7 @@ async function setup(
     onD4RuntimeIntentCancellation: opts.onD4RuntimeIntentCancellation,
     onOwnerTaskSubmissionOutcome: opts.onOwnerTaskSubmissionOutcome,
     onOwnerTaskSubmissionExecutionObservation: opts.onOwnerTaskSubmissionExecutionObservation,
+    onOwnerTaskSubmissionPlanSteps: opts.onOwnerTaskSubmissionPlanSteps,
     maintenance_token: opts.maintenance_token ?? (opts.update || opts.recovery ? MAINTENANCE_TOKEN : undefined),
     host: "127.0.0.1",
     onResume: opts.onResume as never,
@@ -822,11 +824,21 @@ describe("WebChatChannel — Control Center shell", () => {
         await submitOwnerTask();
         const afterSubmit = { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
           newSubmissionHidden: byId("owner-task-new-submission").hidden };
-        byId("owner-task-token").value = "owner-token";
-        await checkOwnerTaskSubmissionStatus();
-        const afterStatusReview = { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
-          newSubmissionHidden: byId("owner-task-new-submission").hidden,
-          statusText: byId("owner-task-status").textContent, statusClass: byId("owner-task-status").className };
+        async function review(runtimeToken) {
+          byId("owner-task-token").value = "owner-token";
+          byId("runtime-token").value = runtimeToken;
+          await checkOwnerTaskSubmissionStatus();
+          return { currentId: ownerTaskSubmissionIdMemory, statusId: ownerTaskStatusSubmissionId(),
+            newSubmissionHidden: byId("owner-task-new-submission").hidden,
+            statusText: byId("owner-task-status").textContent, statusClass: byId("owner-task-status").className };
+        }
+        const afterStatusReview = await review("");
+        const afterUnresolvedReview = await review("runtime-fixture-token");
+        const afterUnresolvedWithdrawal = await review("runtime-fixture-token");
+        const afterUnknownPlanWithdrawal = await review("runtime-fixture-token");
+        const afterWithdrawnReview = await review("runtime-fixture-token");
+        const afterMalformedPlan = await review("runtime-fixture-token");
+        const afterStaleRuntimeReview = await review("retired-runtime-token");
         clearOwnerTaskSubmissionId();
         const afterExplicitNewId = { currentId: ownerTaskSubmissionIdMemory,
           statusIds: ownerTaskStatusSubmissionIds(), newSubmissionHidden: byId("owner-task-new-submission").hidden };
@@ -835,11 +847,36 @@ describe("WebChatChannel — Control Center shell", () => {
         byId("owner-task-status-submission-id").value = "";
         pendingOwnerTaskSubmissionId();
         renderOwnerTaskStatusSubmissionIds(ownerTaskStatusSubmissionId());
-        return { afterSubmit, afterStatusReview, afterExplicitNewId,
+        return { afterSubmit, afterStatusReview, afterUnresolvedReview, afterUnresolvedWithdrawal, afterUnknownPlanWithdrawal,
+          afterWithdrawnReview, afterMalformedPlan, afterStaleRuntimeReview, afterExplicitNewId,
           restoredCurrentId: ownerTaskSubmissionIdMemory, restoredStatusId: ownerTaskStatusSubmissionId(),
           restoredStatusIds: ownerTaskStatusSubmissionIds() };
       })()
     `);
+    const flags = { used_for_authority: false, may_execute: false } as const;
+    const achieved = { status: "achieved", reason_code: "goal_completion_rules_satisfied", completion_evidence: {
+      rules_digest: "a".repeat(64), evidence_digest: "b".repeat(64), rule_count: 1, satisfied_rule_count: 1, ...flags,
+    }, ...flags };
+    const withdrawal = { status: "approval_withdrawn", cancel_request_accepted: true, executor_started: false,
+      external_processing_stop: "unknown", cancel_requested_at_ms: 1, ...flags };
+    const accepted = { found: true, request_id: gatewayRequestId, state: "handler_returned" };
+    const unresolvedPlan = { status: "available", steps: [
+      { index: 1, status: "interrupted" }, { index: 2, status: "outcome_unknown" },
+    ], ...flags };
+    const verifiedPlan = { status: "available", steps: [{ index: 1, status: "adapter_returned", feedback_status: "success",
+      verification: "result_and_memory_confirmed" }], ...flags };
+    const responses = [
+      { ...accepted, execution_observation: { status: "adapter_returned", feedback_status: "success", ...flags },
+        plan_steps: verifiedPlan, task_outcome: achieved },
+      { ...accepted, state: "outcome_unknown", task_outcome: achieved, plan_steps: unresolvedPlan },
+      { ...accepted, cancellation: withdrawal, plan_steps: unresolvedPlan },
+      { ...accepted, cancellation: withdrawal, plan_steps: { status: "unknown", ...flags } },
+      { ...accepted, cancellation: withdrawal,
+        plan_steps: { status: "available", steps: [{ index: 1, status: "not_attempted" }], ...flags } },
+      { ...accepted, task_outcome: achieved, plan_steps: { status: "available",
+        steps: [{ index: 1, status: "held", private_output: "private-fixture" }], ...flags } },
+      { ...accepted, task_outcome: achieved, plan_steps: verifiedPlan },
+    ];
     const result = await harness.runInNewContext({
       nodes, submitted,
       crypto: { randomUUID: () => nextId },
@@ -848,19 +885,21 @@ describe("WebChatChannel — Control Center shell", () => {
       Option: function Option(this: { text: string; value: string }, text: string, value: string) { this.text = text; this.value = value; },
       byId: (id: string) => nodes[id],
       state: { chatSocket: { readyState: 1 } }, WebSocket: { OPEN: 1 },
-      postJson: async () => ({ found: true, request_id: gatewayRequestId, state: "handler_returned",
-        execution_observation: { status: "adapter_returned", feedback_status: "success", used_for_authority: false, may_execute: false },
-        task_outcome: {
-        status: "achieved", reason_code: "goal_completion_rules_satisfied", completion_evidence: {
-          rules_digest: "a".repeat(64), evidence_digest: "b".repeat(64), rule_count: 1,
-          satisfied_rule_count: 1, used_for_authority: false, may_execute: false,
-        }, used_for_authority: false, may_execute: false,
-      } }),
-      loadRuntime: async () => ({}),
+      postJson: async () => responses.shift(),
+      loadRuntime: async () => {
+        if (nodes["runtime-token"]?.value === "retired-runtime-token") nodes["runtime-token"].value = "current-runtime-token";
+        return {};
+      },
       appendChat: () => {},
     }) as {
       afterSubmit: { currentId: string; statusId: string; newSubmissionHidden: boolean };
       afterStatusReview: { currentId: string; statusId: string; newSubmissionHidden: boolean; statusText: string; statusClass: string };
+      afterUnresolvedReview: { currentId: string; newSubmissionHidden: boolean; statusText: string };
+      afterUnresolvedWithdrawal: { currentId: string; newSubmissionHidden: boolean; statusText: string };
+      afterUnknownPlanWithdrawal: { currentId: string; newSubmissionHidden: boolean };
+      afterWithdrawnReview: { currentId: string; newSubmissionHidden: boolean; statusText: string };
+      afterMalformedPlan: { currentId: string; newSubmissionHidden: boolean; statusText: string };
+      afterStaleRuntimeReview: { currentId: string; newSubmissionHidden: boolean };
       afterExplicitNewId: { currentId: string; statusIds: string[]; newSubmissionHidden: boolean };
       restoredCurrentId: string; restoredStatusId: string; restoredStatusIds: string[];
     };
@@ -871,7 +910,19 @@ describe("WebChatChannel — Control Center shell", () => {
       newSubmissionHidden: false, statusClass: "badge good" });
     expect(result.afterStatusReview.statusText).toContain("委任仕事: 達成（owner明示規則 1/1");
     expect(result.afterStatusReview.statusText).toContain("初回計算の経路から成功応答を確認しました。");
+    expect(result.afterStatusReview.statusText).toContain("計画工程 1「成功応答・結果とM受領票を確認済み」");
     expect(result.afterStatusReview.statusText).toContain("証拠digest bbbbbbbbbbbb");
+    expect(result.afterUnresolvedReview).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
+    expect(result.afterUnresolvedReview.statusText).toContain("計画工程 1「中断・要照合」、2「結果不明・再送しないでください」");
+    expect(result.afterUnresolvedWithdrawal).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
+    expect(result.afterUnresolvedWithdrawal.statusText).toContain("承認待ちを取り消しました。");
+    expect(result.afterUnknownPlanWithdrawal).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
+    expect(result.afterWithdrawnReview).toMatchObject({ currentId: submittedId, newSubmissionHidden: false });
+    expect(result.afterWithdrawnReview.statusText).toContain("計画工程 1「未試行」");
+    expect(result.afterMalformedPlan).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
+    expect(result.afterMalformedPlan.statusText).toContain("計画工程の状態は未確認です。");
+    expect(result.afterMalformedPlan.statusText).not.toContain("private-fixture");
+    expect(result.afterStaleRuntimeReview).toMatchObject({ currentId: submittedId, newSubmissionHidden: true });
     expect(result.afterExplicitNewId).toEqual({ currentId: nextId, statusIds: [submittedId], newSubmissionHidden: true });
     expect(result.restoredCurrentId).toBe(nextId);
     expect(result.restoredStatusId).toBe(submittedId);
@@ -1790,6 +1841,39 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).not.toContain("EXPIRED PRIVATE SOURCE PATH MUST NOT RENDER");
     expect(rendered).not.toContain("RAW SHELL OUTPUT MUST NOT RENDER");
     expect(rendered).not.toContain("SYNTHETIC PRIVATE SEARCH LINE MUST NOT RENDER");
+
+    const invalidatedStep = { step_id: "9".repeat(64), operation: "file.search", status: "invalidated",
+      binding: { command_digest: "8".repeat(64), memory_status: "not_recorded" } };
+    const reviewablePlan = { plan_id: "e".repeat(64), revision: 2, revision_digest: "f".repeat(64),
+      status: "awaiting_step_review", step_count: 1, owner_authentication_required: true,
+      goal_purpose_binding_status: "current",
+      goal_purpose_binding: { goal_ref: "goal_0123456789abcdef", purpose_version: 2, purpose_digest: "c".repeat(64) },
+      goal_purpose_relation: { status: "owner_reviewed_supports" }, steps: [invalidatedStep] };
+    const renderFreshReview = (plan: object, recoveryRefreshStatus = "ready") => {
+      new Script(script).runInNewContext({ document, observation: { ...observation,
+        plans: [plan], displayed_count: 1, plan_count: 1, recovery_refresh_status: recoveryRefreshStatus } });
+      return nodes["operation-plan-state-list"]?.innerHTML ?? "";
+    };
+    const review = renderFreshReview(reviewablePlan);
+    expect(review.match(/data-operation-plan-review="true"/g)).toHaveLength(1);
+    expect(review).toContain("Jでstepを再審査");
+    expect(review).toContain('data-revision-digest="' + "f".repeat(64) + '" data-step-id="' + "9".repeat(64) + '"');
+    expect(review).toContain('data-owner-authentication-required="true"');
+    for (const unavailable of [
+      renderFreshReview(reviewablePlan, "pending"),
+      renderFreshReview({ ...reviewablePlan, status: "held_residual", recovery_hold_reason: "held_residual" }),
+      renderFreshReview({ ...reviewablePlan, goal_purpose_binding_status: "stale" }),
+      renderFreshReview({ ...reviewablePlan, revision_digest: "invalid" }),
+      renderFreshReview({ ...reviewablePlan, owner_authentication_required: false }),
+      renderFreshReview({ ...reviewablePlan, steps: [{ ...invalidatedStep, status: "selected" }] }),
+      renderFreshReview({ ...reviewablePlan, steps: [{ ...invalidatedStep, status: "intent_committed" }] }),
+      renderFreshReview({ ...reviewablePlan, steps: [{ ...invalidatedStep, status: "outcome_unknown" }] }),
+      renderFreshReview({ ...reviewablePlan, steps: [{ ...invalidatedStep, binding: {
+        ...invalidatedStep.binding, execution_ticket_digest: "2".repeat(64),
+      } }] }),
+    ]) {
+      expect(unavailable).not.toContain('data-operation-plan-review="true"');
+    }
   });
 
   it("shows same-workspace failed-test recovery only after the saved search receipt is current", () => {
@@ -6281,7 +6365,7 @@ describe("WebChatChannel — HTTP inbound", () => {
     }
   });
 
-  it("returns initial computation and J outcome from the same owner submission without exposing raw result data", async () => {
+  it("returns initial computation, plan steps and J outcome from the same owner submission without exposing raw result data", async () => {
     const submissionId = "00000000-0000-4000-8000-000000000051";
     const requestId = "00000000-0000-4000-8000-000000000052";
     const store = createTestOwnerTaskSubmissionStore();
@@ -6304,10 +6388,15 @@ describe("WebChatChannel — HTTP inbound", () => {
     };
     const projectedRequests: string[] = [];
     const executionRequests: string[] = [];
+    const planStepRequests: string[] = [];
     type ExecutionObservation = Awaited<ReturnType<NonNullable<WebChatOptions["onOwnerTaskSubmissionExecutionObservation"]>>>;
+    type PlanSteps = Awaited<ReturnType<NonNullable<WebChatOptions["onOwnerTaskSubmissionPlanSteps"]>>>;
     let executionObservation: ExecutionObservation = {
       status: "adapter_returned", feedback_status: "success", used_for_authority: false, may_execute: false,
     };
+    let planSteps: PlanSteps = { status: "available", used_for_authority: false, may_execute: false,
+      steps: [{ index: 1, status: "adapter_returned", feedback_status: "success", verification: "result_and_memory_confirmed" },
+        { index: 2, status: "interrupted" }] };
     const ownerCtx = await setup({
       owner_token: OWNER_TOKEN,
       owner_task_submission_store: store,
@@ -6319,6 +6408,10 @@ describe("WebChatChannel — HTTP inbound", () => {
         executionRequests.push(request_id);
         return executionObservation;
       },
+      onOwnerTaskSubmissionPlanSteps: async ({ request_id }) => {
+        planStepRequests.push(request_id);
+        return planSteps;
+      },
     });
     try {
       await ownerCtx.ch.start(async () => {});
@@ -6328,16 +6421,18 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(unauthorized.status).toBe(401);
       expect(projectedRequests).toEqual([]);
       expect(executionRequests).toEqual([]);
+      expect(planStepRequests).toEqual([]);
 
       const status = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: submissionId,
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
       expect(status.status).toBe(200);
       expect(status.body).toMatchObject({ found: true, request_id: requestId, state: "handler_returned", task_outcome: outcome,
-        execution_observation: executionObservation });
+        execution_observation: executionObservation, plan_steps: planSteps });
 
       outcome = { ...outcome, raw_result: "must-not-leak" } as unknown as WebChatTaskOutcome;
       executionObservation = { ...executionObservation, raw_result: "private-calculation" } as unknown as ExecutionObservation;
+      planSteps = { ...planSteps, steps: [{ index: 1, status: "active", target_path: "private-plan-target" }] } as unknown as PlanSteps;
       const invalid = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: submissionId,
       }, { authorization: `Bearer ${OWNER_TOKEN}` });
@@ -6345,9 +6440,11 @@ describe("WebChatChannel — HTTP inbound", () => {
         found: true,
         task_outcome: { status: "unknown", reason_code: "projection_invalid", used_for_authority: false, may_execute: false },
         execution_observation: { status: "unknown", used_for_authority: false, may_execute: false },
+        plan_steps: { status: "unknown", used_for_authority: false, may_execute: false },
       });
       expect(JSON.stringify(invalid.body)).not.toContain("must-not-leak");
       expect(JSON.stringify(invalid.body)).not.toContain("private-calculation");
+      expect(JSON.stringify(invalid.body)).not.toContain("private-plan-target");
 
       const missing = await postJson(ownerCtx.port, "/owner/task-submission-status", {
         submission_id: "00000000-0000-4000-8000-000000000053",
@@ -6355,6 +6452,7 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(missing.body).toEqual({ found: false });
       expect(projectedRequests).toEqual([requestId, requestId]);
       expect(executionRequests).toEqual([requestId, requestId]);
+      expect(planStepRequests).toEqual([requestId, requestId]);
     } finally {
       await ownerCtx.teardown();
     }

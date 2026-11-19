@@ -1440,6 +1440,38 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      function ownerTaskPlanStepsSummary(value) {
+        const unknown = { text: "計画工程の状態は未確認です。", unsettled: true };
+        if (value === undefined) return { text: "", unsettled: false };
+        if (!isObject(value) || value.status !== "available" || value.used_for_authority !== false || value.may_execute !== false ||
+            Object.keys(value).length !== 4 || !Array.isArray(value.steps) || value.steps.length < 1 || value.steps.length > 100) {
+          return unknown;
+        }
+        const phaseLabels = {
+          pending: "着手前", awaiting_approval: "承認待ち", active: "実行中", interrupted: "中断・要照合",
+          outcome_unknown: "結果不明・再送しないでください", not_attempted: "未試行", held: "保留", unknown: "未確認",
+        };
+        const feedbackLabels = { success: "成功応答", failed: "失敗応答", suspended: "停止応答" };
+        const steps = [];
+        let unsettled = false;
+        for (const [offset, step] of value.steps.entries()) {
+          if (!isObject(step) || step.index !== offset + 1 || typeof step.status !== "string") return unknown;
+          let label;
+          if (step.status === "adapter_returned") {
+            if (typeof step.feedback_status !== "string" || !Object.hasOwn(feedbackLabels, step.feedback_status)) return unknown;
+            const verified = step.verification === "result_and_memory_confirmed" && step.feedback_status === "success";
+            if ((step.verification !== undefined && !verified) || Object.keys(step).length !== (verified ? 4 : 3)) return unknown;
+            label = feedbackLabels[step.feedback_status] + (verified ? "・結果とM受領票を確認済み" : "");
+          } else {
+            if (!Object.hasOwn(phaseLabels, step.status) || Object.keys(step).length !== 2) return unknown;
+            label = phaseLabels[step.status];
+            if (["awaiting_approval", "active", "interrupted", "outcome_unknown", "unknown"].includes(step.status)) unsettled = true;
+          }
+          steps.push(String(step.index) + "「" + label + "」");
+        }
+        return { text: "計画工程 " + steps.join("、") + "。", unsettled: unsettled };
+      }
+
       async function ownerTaskSubmissionResultSummary(value) {
         const flags = value && value.used_for_authority === false && value.may_execute === false;
         if (!isObject(value) || !flags) return { text: "回答本文projectionが不正なため表示しません。", content: null };
@@ -1547,7 +1579,6 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const submissionSelect = byId("owner-task-status-submission-id");
         const ownerToken = ownerTokenInput.value.trim();
         const submissionId = ownerTaskStatusSubmissionId();
-        const isCurrentSubmission = submissionId !== null && submissionId === ownerTaskSubmissionIdMemory;
         const resultPane = byId("owner-task-result");
         const resultStatus = byId("owner-task-result-status");
         resultPane.textContent = "";
@@ -1557,7 +1588,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!ownerToken) throw new Error("依頼状態の照会にはowner tokenを入力してください");
         if (!submissionId) throw new Error("照会できるowner task依頼IDがありません");
         const wasSubmissionSelectDisabled = submissionSelect.disabled;
-        const selectionChanged = function () { return ownerTaskStatusSubmissionId() !== submissionId; };
+        const selectionChanged = function () {
+          return ownerTaskStatusSubmissionId() !== submissionId || ownerTokenInput.value.trim() !== ownerToken;
+        };
         button.disabled = true;
         submissionSelect.disabled = true;
         byId("owner-task-new-submission").hidden = true;
@@ -1592,10 +1625,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           }[result.state];
           const stateSummary = "依頼ID末尾: " + submissionId.slice(-12) + "。" + stateMessage + " Gateway参照ID末尾: " + result.request_id.slice(-12);
           const executionSummary = ownerTaskExecutionObservationSummary(result.execution_observation);
-          const receiptSummary = stateSummary + (executionSummary ? " " + executionSummary : "");
+          const planSteps = ownerTaskPlanStepsSummary(result.plan_steps);
+          const receiptSummary = [stateSummary, executionSummary, planSteps.text].filter(Boolean).join(" ");
           const taskOutcomeSummary = ownerTaskSubmissionOutcomeSummary(result.task_outcome);
           const cancellationSummary = ownerTaskCancellationSummary(result.cancellation);
           const resultSummary = await ownerTaskSubmissionResultSummary(result.result);
+          if (selectionChanged()) return;
           resultStatus.textContent = resultSummary.text;
           resultStatus.hidden = false;
           if (resultSummary.content !== null) {
@@ -1603,27 +1638,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             resultPane.hidden = false;
           }
           status.className = result.state === "rejected" ? "badge bad" : "badge warn";
-          if (!byId("runtime-token").value.trim()) {
+          const runtimeToken = byId("runtime-token").value.trim();
+          if (!runtimeToken) {
             status.textContent = receiptSummary + (taskOutcomeSummary
               ? " " + taskOutcomeSummary.text
-              : " Runtime token未入力のためJ/M plan照合は未実施です。") +
+              : " Runtimeの詳細照会にはRuntime tokenが必要です。") +
               (cancellationSummary ? " " + cancellationSummary : "");
-            if (taskOutcomeSummary?.achieved && result.state !== "rejected") status.className = "badge good";
-            if (isCurrentSubmission && result.state !== "dispatching" && (result.state === "rejected" ||
-                taskOutcomeSummary?.achieved || ownerTaskApprovalWithdrawn(result.cancellation))) {
-              byId("owner-task-new-submission").hidden = false;
-            }
           } else {
             status.textContent = receiptSummary + " Runtime planを照合しています。";
             const runtimeSnapshot = await loadRuntime("owner-task-status");
-            if (selectionChanged()) return;
+            if (selectionChanged() || byId("runtime-token").value.trim() !== runtimeToken) return;
             const correlation = await ownerTaskRuntimeCorrelation(result.request_id, runtimeSnapshot);
-            if (selectionChanged()) return;
+            if (selectionChanged() || byId("runtime-token").value.trim() !== runtimeToken) return;
             status.textContent = receiptSummary + " " + correlation +
               (cancellationSummary ? " " + cancellationSummary : "");
-            if (isCurrentSubmission && result.state !== "dispatching") {
-              byId("owner-task-new-submission").hidden = false;
-            }
+          }
+          const handlerSettled = result.state === "handler_returned" && !planSteps.unsettled &&
+            result.execution_observation?.status !== "outcome_unknown";
+          const completed = handlerSettled && taskOutcomeSummary?.achieved;
+          if (completed) status.className = "badge good";
+          if (submissionId === ownerTaskSubmissionIdMemory && (result.state === "rejected" || completed ||
+              (handlerSettled && ownerTaskApprovalWithdrawn(result.cancellation)))) {
+            byId("owner-task-new-submission").hidden = false;
           }
         } catch (error) {
           if (selectionChanged()) return;
@@ -3633,8 +3669,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '</dd><dt>観測M receipt</dt><dd>' + escapeHtml(localFileState.memory_status || "not_recorded") +
                   '</dd><dt>観測evidence digest</dt><dd class="mono">' + escapeHtml(shortDigest(localFileState.evidence_digest)) + '</dd>'
                 : '';
-              const stepReviewButton = planReviewReady && step.status === "not_selected" &&
-                typeof step.step_id === "string" && /^[a-f0-9]{64}$/.test(step.step_id)
+               const invalidatedSelectionCanBeReviewed = step.status === "invalidated" &&
+                 plan.owner_authentication_required === true && taskOutcome?.status !== "achieved" &&
+                 plan.goal_purpose_binding_status === "current" && purposeBinding &&
+                 typeof purposeBinding.goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(purposeBinding.goal_ref) &&
+                 Number.isSafeInteger(purposeBinding.purpose_version) && purposeBinding.purpose_version > 0 &&
+                 typeof purposeBinding.purpose_digest === "string" && /^[a-f0-9]{64}$/.test(purposeBinding.purpose_digest) &&
+                 /^[a-f0-9]{64}$/.test(binding.command_digest || "") && binding.memory_status === "not_recorded" &&
+                 binding.execution_ticket_digest === undefined && binding.result_digest === undefined &&
+                 binding.delivery_digest === undefined;
+               const stepReviewButton = planReviewReady && reconciliationStepReady &&
+                 (step.status === "not_selected" || invalidatedSelectionCanBeReviewed)
                 ? '<button type="button" class="secondary" data-operation-plan-review="true" data-plan-id="' +
                   escapeHtml(plan.plan_id) + '" data-revision-digest="' + escapeHtml(plan.revision_digest) +
                   '" data-step-id="' + escapeHtml(step.step_id) + '" data-goal-purpose-binding="' +
@@ -3643,7 +3688,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '" data-owner-reauthentication-binding="' +
                   escapeHtml(isObject(plan.owner_reauthentication_binding) ? JSON.stringify(plan.owner_reauthentication_binding) : '') +
                   '" data-owner-authentication-required="' + String(plan.owner_authentication_required === true) +
-                  '">Jでstep審査を開始</button><p class="muted">' +
+                   '">' + (invalidatedSelectionCanBeReviewed ? 'Jでstepを再審査' : 'Jでstep審査を開始') + '</button><p class="muted">' +
+                   (invalidatedSelectionCanBeReviewed ? '前回の選択は失効しています。現行の委任目的で新しい審査を開始します。' : '') +
                   (plan.owner_authentication_required === true
                     ? (isObject(plan.owner_reauthentication_binding)
                       ? '別入口で作成された計画です。step審査ではTasks欄へowner tokenを再入力し、Jが元のowner・channel・revisionを照合します。必要なL3はApproval待ちです。'
@@ -10772,6 +10818,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         });
       });
       byId("owner-task-new-submission").addEventListener("click", function () {
+        if (byId("owner-task-new-submission").hidden) return;
         const confirmed = window.confirm(
           "Tasks／Runtimeで先行依頼の状態を確認し、同じ仕事の重複実行にならないと判断した場合だけ、新しい依頼IDへ切り替えてください。続行しますか？");
         if (!confirmed) return;
@@ -10781,7 +10828,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("owner-task-result-status").textContent = "";
         byId("owner-task-result-status").hidden = true;
         const status = byId("owner-task-status");
-        status.textContent = "新しい依頼IDを用意しました。先行依頼との重複がないことを確認した場合だけ再送してください。";
+        status.textContent = "新しい依頼IDを用意しました。先行依頼との重複がないことを確認してから送信してください。";
         status.className = "badge warn";
       });
       byId("check-owner-task-status").addEventListener("click", function () {

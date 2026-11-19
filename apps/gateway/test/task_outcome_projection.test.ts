@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ExecutionIntentReceipt } from "@blue-tanuki/core";
 import { operationPlanDigest, type AuditEntry } from "@blue-tanuki/hds-brain";
+import { getOperationDescriptor } from "@blue-tanuki/protocol";
 import type { TaskExecutionCancellationEvidence } from "../src/execution_intent_store.js";
 import {
   projectD4RuntimeActiveCommand,
@@ -10,6 +11,7 @@ import {
   projectOwnerTaskCancellationStatus,
   projectOwnerTaskExecutionObservation,
   projectOwnerTaskOutcome,
+  projectOwnerTaskPlanSteps,
 } from "../src/task_outcome_projection.js";
 
 const requestId = "a4d61cc0-46c3-49dc-9826-0b8a9fe302da";
@@ -69,6 +71,98 @@ describe("owner task initial computation observation", () => {
       goal_version_binding: { ...purpose, purpose_version: 3 } }) })).toMatchObject({ status: "unknown" });
     expect(projectOwnerTaskExecutionObservation({ ...input, lookupCommand: () => ({ ...receipt,
       invocation_boundary: "tool_adapter", operation_plan_binding_digest: "8".repeat(64) }) })).toMatchObject({ status: "unknown" });
+  });
+});
+
+describe("owner task plan step observation", () => {
+  const owner = "webchat-owner-token-holder";
+  const followUp = "b4d61cc0-46c3-49dc-9826-0b8a9fe302da";
+  const command = "selected-step-command";
+  const revision = "a".repeat(64);
+  const stepId = "b".repeat(64);
+  const definition = "c".repeat(64);
+  const commit = "d".repeat(64);
+  const task = "e".repeat(64);
+  const purpose = { goal_ref: "goal_fixture", purpose_version: 2, purpose_digest: "f".repeat(64) };
+  const descriptor = getOperationDescriptor("file.search")!;
+  const commandKey = createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command])).digest("hex");
+  const ticket = "fixture-broker-ticket";
+  const delivery = "1".repeat(64);
+  const receipt: ExecutionIntentReceipt = {
+    ticket_id: ticket, command_key: commandKey, command_digest: "2".repeat(64), proof_digest: "3".repeat(64),
+    hds_source_context_digest: "4".repeat(64), operation_plan_binding_digest: "5".repeat(64), task_identity_digest: task,
+    goal_version_binding: { goal_id_digest: createHash("sha256").update(purpose.goal_ref).digest("hex"),
+      purpose_version: purpose.purpose_version, purpose_digest: purpose.purpose_digest },
+    operation_id: descriptor.tool_name, adapter_version: descriptor.adapter_version,
+    execution_epoch: "fixture-epoch", issued_at_ms: 1, expires_at_ms: 2, state: "adapter_returned", invocation_boundary: "tool_adapter",
+    feedback_status: "success", used_for_authority: false, result_delivery_digest: delivery,
+    result_delivery_acknowledged: true, result_delivery_disposition: "reconciled",
+  };
+  const binding = { step_id: stepId, step_digest: definition, revision_digest: revision, operation: "file.search", command_id: command,
+    request_id: followUp, commit_hash: commit, status: "verified", result_digest: "6".repeat(64), delivery_digest: delivery,
+    execution_ticket_digest: createHash("sha256").update(ticket).digest("hex"), memory_status: "receipt_confirmed",
+    memory_receipt_digest: "7".repeat(64) };
+  const step = { step_id: stepId, definition_digest: definition, operation: "file.search", status: "verified",
+    binding_source_revision_digest: revision };
+  const plan = { request_id: `operation-request:${requestId}`, owner_identity_digest: operationPlanDigest(owner),
+    channel_identity_digest: operationPlanDigest("webchat"), task_identity_digest: task, revision_digest: revision,
+    goal_purpose_binding: purpose, steps: [step], bindings: [binding] };
+  type Input = Parameters<typeof projectOwnerTaskPlanSteps>[0];
+  const projection = (...plans: unknown[]) => ({ plans, recovery_refresh_status: "ready" } as Input["operationPlans"]);
+  const decision = { request_id: followUp, frame: { actor: { actor_id: owner, channel: "webchat", actor_kind: "owner", trust_level: "owner" } },
+    commit: { hash: commit, decision: "ASSERT" } };
+  const gate = { kind: "approval_gate", request_id: followUp, command_id: command,
+    upstream_commit_hash: commit, evaluation: { context: { command_id: command } } };
+  const pending = { kind: "command_lifecycle", phase: "approval_pending", request_id: followUp, command_id: command, upstream_commit_hash: commit };
+  const feedback = { kind: "executor_feedback", request_id: followUp, command_id: command, known_command: true,
+    upstream_decision: "ASSERT", upstream_commit_hash: commit, feedback: { status: "success" } };
+  const entries = (...logs: unknown[]) => logs.map(log => ({ log })) as AuditEntry[];
+  const input: Input = { requestId, operationPlans: projection(plan), verifiedAudit: entries(decision, gate, pending, feedback),
+    pendingCommandIds: [], activeCommandIds: [], lookupCommand: key => key === commandKey ? receipt : null,
+    lookupApprovalState: () => null, confirmResultMemory: commandId => commandId === command };
+  const flags = { used_for_authority: false, may_execute: false };
+
+  it("distinguishes a matched adapter response from J result and durable memory confirmation", () => {
+    const response = { index: 1, status: "adapter_returned", feedback_status: "success" };
+    expect(projectOwnerTaskPlanSteps(input)).toEqual({ status: "available", ...flags,
+      steps: [{ ...response, verification: "result_and_memory_confirmed" }] });
+    expect(projectOwnerTaskPlanSteps({ ...input, confirmResultMemory: () => false }))
+      .toEqual({ status: "available", ...flags, steps: [response] });
+    expect(projectOwnerTaskPlanSteps({ ...input, lookupCommand: () => ({ ...receipt, result_delivery_digest: "8".repeat(64) }) }))
+      .toEqual({ status: "available", ...flags, steps: [response] });
+    expect(projectOwnerTaskPlanSteps({ ...input, lookupCommand: () => ({ ...receipt, result_delivery_disposition: "stale_generation_evidence" }) }))
+      .toMatchObject({ steps: [{ status: "outcome_unknown" }] });
+  });
+
+  it("confines matching to exactly one owner plan, step, follow-up request, and ticket", () => {
+    expect(projectOwnerTaskPlanSteps({ ...input, operationPlans: projection(plan, plan) })).toEqual({ status: "unknown", ...flags });
+    expect(projectOwnerTaskPlanSteps({ ...input, operationPlans: projection({ ...plan, owner_identity_digest: operationPlanDigest("other") }) }))
+      .toEqual({ status: "unknown", ...flags });
+    expect(projectOwnerTaskPlanSteps({ ...input, lookupCommand: () => ({ ...receipt, ticket_id: "other-ticket" }) }))
+      .toMatchObject({ steps: [{ status: "unknown" }] });
+    expect(projectOwnerTaskPlanSteps({ ...input, verifiedAudit: entries(decision, gate, { ...feedback, request_id: requestId }) }))
+      .toMatchObject({ steps: [{ status: "unknown" }] });
+    expect(projectOwnerTaskPlanSteps({ ...input, lookupCommand: () => ({ ...receipt,
+      goal_version_binding: { ...receipt.goal_version_binding!, purpose_version: 3 } }) })).toMatchObject({ steps: [{ status: "unknown" }] });
+  });
+
+  it("reports the latest exact interrupted approval after prior withdrawals and keeps ambiguous execution unknown", () => {
+    const preStart = { ...binding, result_digest: undefined, delivery_digest: undefined, execution_ticket_digest: undefined,
+      memory_receipt_digest: undefined, memory_status: "not_recorded" };
+    const selectedPlan = { ...plan, steps: [{ ...step, status: "selected" }], bindings: [{ ...preStart, status: "selected" }] };
+    expect(projectOwnerTaskPlanSteps({ ...input, operationPlans: projection(selectedPlan), pendingCommandIds: [command],
+      lookupCommand: () => null })).toMatchObject({ steps: [{ status: "awaiting_approval" }] });
+    const interruptedPlan = { ...plan, steps: [{ ...step, status: "not_selected", binding_source_revision_digest: undefined }],
+      bindings: [{ ...preStart, status: "invalidated", request_id: requestId, command_id: "withdrawn-command" },
+        { ...preStart, status: "invalidated" }] };
+    const recovered: Input = { ...input, operationPlans: projection(interruptedPlan), lookupCommand: () => null,
+      lookupApprovalState: (commandId, request) => commandId === command && request === followUp ? "interrupted" : null };
+    expect(projectOwnerTaskPlanSteps(recovered)).toMatchObject({ steps: [{ status: "interrupted" }] });
+    expect(projectOwnerTaskPlanSteps({ ...recovered, lookupApprovalState: () => "outcome_unknown" }))
+      .toMatchObject({ steps: [{ status: "outcome_unknown" }] });
+    expect(projectOwnerTaskPlanSteps({ ...recovered, operationPlans: projection({ ...interruptedPlan,
+      bindings: [{ ...interruptedPlan.bindings[0], execution_ticket_digest: "8".repeat(64) }, interruptedPlan.bindings[1]] }) }))
+      .toMatchObject({ steps: [{ status: "unknown" }] });
   });
 });
 

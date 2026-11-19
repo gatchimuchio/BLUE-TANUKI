@@ -955,6 +955,21 @@ describe("delegated goal purpose owner review", () => {
         headers: { authorization: `Bearer ${authorization}`, "content-type": "application/json" },
         body: JSON.stringify({ submission_id: id }),
       });
+      const readPlanStepStatus = async () => {
+        const response = await ownerTask("status", submissionId);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        const body = await response.json() as { request_id?: string; plan_steps?: unknown };
+        expect(body.request_id).toBe(submissionBody.request_id);
+        for (const restricted of [relativePath, task, planId, revisionDigest, String(deleteStep?.step_id)]) {
+          expect(JSON.stringify(body.plan_steps)).not.toContain(restricted);
+        }
+        return body.plan_steps;
+      };
+      const scopeFlags = { used_for_authority: false, may_execute: false };
+      expect(await readPlanStepStatus()).toMatchObject({ status: "available", ...scopeFlags,
+        steps: [{ index: 1, status: "awaiting_approval" }] });
+      expect((await ownerTask("status", submissionId, token)).status).toBe(401);
       expect((await ownerTask("cancel", submissionId, token)).status).toBe(401);
       expect((await ownerTask("cancel", "eccfb7aa-8b69-4e97-abde-fb902eb97aba")).status).toBe(404);
       const withdrawalResponse = await ownerTask("cancel", submissionId);
@@ -979,8 +994,29 @@ describe("delegated goal purpose owner review", () => {
       const renewedReviewReply = waitForWebChatSend(taskWebSocket, "renewed file.delete plan review");
       expect((await requestStepReview()).status).toBe(202);
       expect((await renewedReviewReply).length).toBeGreaterThan(0);
-      const pending = await waitFor(loadDeleteApproval, gateway, "file.delete did not queue a fresh L3 content review");
-      expect(pending.command_id).not.toBe(withdrawing.command_id);
+      const interrupted = await waitFor(loadDeleteApproval, gateway, "file.delete did not queue a fresh L3 content review");
+      expect(interrupted.command_id).not.toBe(withdrawing.command_id);
+      expect(await readPlanStepStatus()).toMatchObject({ status: "available", ...scopeFlags,
+        steps: [{ index: 1, status: "awaiting_approval" }] });
+
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await forceStopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await readPlanStepStatus()).toMatchObject({ status: "available", ...scopeFlags,
+        steps: [{ index: 1, status: "interrupted" }] });
+      expect(await loadDeleteApproval()).toBeNull();
+      const obsoleteApproval = await postApproval(String(interrupted.command_id), interrupted.approval_token);
+      expect(obsoleteApproval.status).toBe(409);
+      expect(readFileSync(fixturePath, "utf8")).toBe(originalContent);
+
+      taskWebSocket = await connectTaskSocket();
+      const freshStepReply = waitForWebChatSend(taskWebSocket, "file.delete plan review after interrupted approval");
+      expect((await requestStepReview()).status).toBe(202);
+      expect((await freshStepReply).length).toBeGreaterThan(0);
+      const pending = await waitFor(loadDeleteApproval, gateway, "interrupted file.delete did not queue a fresh L3 review");
+      expect(pending.command_id).not.toBe(interrupted.command_id);
       expect(pending.approval_token).toBeTruthy();
       expect(pending.operation).toContain("file.delete");
       expect(existsSync(fixturePath)).toBe(true);
@@ -1042,6 +1078,16 @@ describe("delegated goal purpose owner review", () => {
       });
       expect(verifiedPlan.steps).toMatchObject([expect.objectContaining({ operation: "file.delete", status: "verified",
         binding: expect.objectContaining({ memory_status: "receipt_confirmed" }) })]);
+      const resultObservation = { status: "available", ...scopeFlags, steps: [{ index: 1, status: "adapter_returned",
+        feedback_status: "success", verification: "result_and_memory_confirmed" }] };
+      expect(await readPlanStepStatus()).toMatchObject(resultObservation);
+      taskWebSocket.close();
+      taskWebSocket = undefined;
+      await stopChild(gateway.child);
+      gateway = spawnGateway(runtimeEnv);
+      await waitForHealth(gatewayPort, gateway);
+      expect(await readPlanStepStatus()).toMatchObject(resultObservation);
+      expect(await loadDeleteApproval()).toBeNull();
     } finally {
       taskWebSocket?.close();
       if (gateway) await stopChild(gateway.child);
