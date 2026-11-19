@@ -714,6 +714,7 @@ export interface SettingsWriteContentReview {
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
       "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" |
+      "telegram.inbound_grants" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";

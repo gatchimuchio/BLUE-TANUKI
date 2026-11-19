@@ -3,7 +3,7 @@ import type {
   ComposioActionContentReview, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
   SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
   SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
-  SettingsWriteLlmProvider, SettingsWritePatch, SettingsWriteTelegramBotCredentialReview,
+  SettingsWriteLlmProvider, SettingsWritePatch, SettingsWriteTelegramBotCredentialReview, TelegramInboundGrant,
 } from "@blue-tanuki/protocol";
 import type { TicketStore } from "./ticket_store.js";
 import type { ResumeApprovalTokenStore } from "./resume_approval_token_store.js";
@@ -1047,10 +1047,10 @@ export interface WebChatSettingsWriteContentReview {
   credential_rotation?: SettingsWriteCredentialRotationReview;
   google_read_registration?: SettingsWriteGoogleReadCredentialReview;
   github_write_registration?: SettingsWriteGitHubWriteCredentialReview;
-  telegram_bot_registration?: SettingsWriteTelegramBotCredentialReview;
+  telegram_bot_registration?: SettingsWriteTelegramBotCredentialReview & { initial_inbound_grant?: TelegramInboundGrant };
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
-      "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" |
+      "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" | "telegram.inbound_grants" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
       "composio.revoked_actions" | "composio.api_base_url" | "composio.dry_run" |
       "composio.live_execution" | "composio.api_key";
@@ -2116,7 +2116,7 @@ export interface WebChatOptions {
     Promise<Record<string, unknown>>;
   onOwnerGitHubWriteCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
-  onOwnerTelegramBotCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string }) =>
+  onOwnerTelegramBotCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string; initial_inbound_grant?: TelegramInboundGrant }) =>
     Promise<Record<string, unknown>>;
   onOwnerDailyBriefRead?: (input: WebChatDailyBriefReadRequest & { actor: string }) =>
     Promise<Record<string, unknown>>;

@@ -29,13 +29,13 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
-  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
-  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
   settingsWriteCredentialRotationReview,
   settingsWriteGoogleReadCredentialReview,
+  settingsWriteTelegramBotCredentialChanges,
+  settingsWriteTelegramBotCredentialReview,
   settingsWriteRequestBinding,
   settingsWriteTargetIdentityDigest,
   McpCallTargetVersionObservationSchema,
@@ -1811,8 +1811,8 @@ export class Executor {
       const googleRegistration = googleScope ? settingsWriteGoogleReadCredentialReview(googleScope) : null;
       const githubRegistration = parsedArgs.success && parsedArgs.data.patch.github_write
         ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW : null;
-      const telegramRegistration = parsedArgs.success && parsedArgs.data.patch.telegram
-        ? SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW : null;
+      const telegram = parsedArgs.success ? parsedArgs.data.patch.telegram : undefined;
+      const telegramRegistration = telegram ? settingsWriteTelegramBotCredentialReview(telegram.initial_inbound_grant_digest) : null;
       const activation = llm?.activation;
       const rotation = llm?.rotate_credential && parsedArgs.success
         ? settingsWriteCredentialRotationReview(SettingsWriteNativeLlmProviderSchema.parse(parsedArgs.data.expected_llm_provider))
@@ -1845,8 +1845,8 @@ export class Executor {
           operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE])) {
         throw new Error("settings.write content review returned unexpected GitHub write registration changes");
       }
-      if (telegramRegistration &&
-          operationPlanDigest(review.changes) !== operationPlanDigest([SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE])) {
+      if (telegram && operationPlanDigest(review.changes) !==
+          operationPlanDigest(settingsWriteTelegramBotCredentialChanges(telegram.initial_inbound_grant_digest))) {
         throw new Error("settings.write content review returned unexpected Telegram bot registration changes");
       }
       if (activation) {

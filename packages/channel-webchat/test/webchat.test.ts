@@ -14,6 +14,7 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
+  SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
   settingsWriteGoogleReadCredentialReview,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
@@ -1232,6 +1233,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="google-read-credential-scope" disabled');
     expect(html).toContain('id="prepare-github-write-credential" type="button" disabled');
     expect(html).toContain('id="prepare-telegram-bot-credential" type="button" disabled');
+    expect(html).toContain('id="telegram-initial-inbound-grant" hidden disabled');
     expect(html).toContain("専用入力画面に対応したデスクトップでローカルのControl Centerを開いてください");
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
@@ -1275,6 +1277,8 @@ describe("WebChatChannel — Control Center shell", () => {
     let noStore = true;
     const browserIdentity = {};
     const browser = { top: browserIdentity, self: browserIdentity, location: { protocol: "http:", hostname: "127.0.0.1" } };
+    const browserStorage: Record<string, string> = {};
+    const settingsState = {};
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
       section("function resetSettingsProposalGoals(", "function connectorsPayload("),
@@ -1283,7 +1287,7 @@ describe("WebChatChannel — Control Center shell", () => {
       section('byId("verify-llm-settings").addEventListener', 'byId("connect-chat").addEventListener'),
       "({ renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
-      byId: node, state: {}, sessionStorage: { setItem: () => {} }, window: browser,
+      byId: node, state: settingsState, sessionStorage: { setItem: (key: string, value: string) => { browserStorage[key] = value; } }, window: browser,
       document: { createElement: () => ({ value: "", textContent: "" }) },
       GOOGLE_READ_CREDENTIAL_LABELS: { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" },
       SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
@@ -1503,6 +1507,8 @@ describe("WebChatChannel — Control Center shell", () => {
     await node("load-telegram-bot-credential-status").events.get("click")!();
     expect(calls[beforeTelegram]).toEqual({ path: "/settings/config", token: SETTINGS_TOKEN, body: undefined });
     expect(prepareTelegram.disabled).toBe(false);
+    const firstTelegramGrantFields = node("telegram-initial-inbound-grant");
+    expect(firstTelegramGrantFields.hidden).toBe(true);
     node("settings-owner-token").value = OWNER_TOKEN;
     await prepareTelegram.events.get("click")!();
     expect(calls[beforeTelegram + 1]).toEqual({ path: "/owner/telegram-bot-credential-proposal", token: OWNER_TOKEN,
@@ -1513,6 +1519,32 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(openTelegramReview.hidden).toBe(false);
     openTelegramReview.events.get("click")!();
     expect(screens.at(-1)).toBe("tasks");
+
+    currentSettings = { ...githubSnapshot, telegram_bot_initial_grant_registration_available: true };
+    await node("load-telegram-bot-credential-status").events.get("click")!();
+    expect(firstTelegramGrantFields.hidden).toBe(false);
+    expect(firstTelegramGrantFields.disabled).toBe(false);
+    const userId = node("telegram-inbound-user-id");
+    const chatId = node("telegram-inbound-chat-id");
+    const threadId = node("telegram-inbound-thread-id");
+    userId.value = "381724391";
+    chatId.value = "-1004729148133";
+    threadId.value = "1e3";
+    const beforeFirstTelegram = calls.length;
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await prepareTelegram.events.get("click")!();
+    expect(calls).toHaveLength(beforeFirstTelegram);
+    expect(node("telegram-bot-credential-status").textContent).toContain("IDを確認");
+    threadId.value = "";
+    await prepareTelegram.events.get("click")!();
+    expect(calls[beforeFirstTelegram]).toEqual({ path: "/owner/telegram-bot-credential-proposal", token: OWNER_TOKEN,
+      body: { goal_ref: goal.value, purpose_version: 2,
+        initial_inbound_grant: { user_id: "381724391", chat_id: "-1004729148133", message_thread_id: null } } });
+    expect([userId.value, chatId.value, threadId.value]).toEqual(["", "", ""]);
+    expect(JSON.stringify({ browserStorage, settingsState })).not.toContain("-1004729148133");
+    api.renderSettingsSnapshot({ ...currentSettings, telegram_bot_credential_registration_available: true });
+    expect(firstTelegramGrantFields.hidden).toBe(true);
+    expect(prepareTelegram.disabled).toBe(true);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2668,9 +2700,11 @@ describe("WebChatChannel — Control Center shell", () => {
         SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
         SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
         SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
+        SETTINGS_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE: SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
         SETTINGS_GOOGLE_READ_API_HOSTS: Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
           .map(([scope, target]) => [scope, target.api_hosts])),
         GOOGLE_READ_CREDENTIAL_LABELS: { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" },
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
         window: { top: windowIdentity, self: windowIdentity, location: { protocol: "http:", hostname } },
         setText: (id: string, value: string) => { outputs[id] = value; }, loadApprovals: async () => {},
       });
@@ -2806,6 +2840,35 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(JSON.parse(String(posts[4]!.options.body))).toEqual({ verdict: "approve",
       approval_token: "fixture-single-use-token", content_review_digest: telegramReview.review_digest });
     expect(outputs["telegram-bot-credential-status"]).toContain("Gatewayを再起動");
+
+    const initialGrant = { user_id: "381724391", chat_id: "-1004729148133", message_thread_id: 4097 };
+    const initialTelegramReview = {
+      ...telegramReview,
+      telegram_bot_registration: { ...telegramReview.telegram_bot_registration,
+        initial_inbound_grant_digest: "3".repeat(64), initial_inbound_grant: initialGrant },
+      changes: [SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE, SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE],
+    };
+    await expect(evaluate(initialTelegramReview, "private, max-age=60")).rejects.toThrow();
+    const { initial_inbound_grant: _grant, ...digestOnly } = initialTelegramReview.telegram_bot_registration;
+    for (const invalid of [
+      { ...initialTelegramReview, telegram_bot_registration: digestOnly },
+      { ...initialTelegramReview, telegram_bot_registration: { ...digestOnly, initial_inbound_grant: { ...initialGrant, scope: "any" } } },
+      { ...initialTelegramReview, telegram_bot_registration: { ...digestOnly,
+        initial_inbound_grant: { ...initialGrant, message_thread_id: "4097" } } },
+      { ...initialTelegramReview, changes: [...initialTelegramReview.changes].reverse() },
+    ]) {
+      await expect(evaluate(invalid)).rejects.toThrow();
+      expect(approve.disabled).toBe(true);
+      expect(state.approvalContentDigests[commandId]).toBeUndefined();
+      expect(JSON.stringify(view.children)).not.toContain(initialGrant.chat_id);
+    }
+    expect(posts).toHaveLength(5);
+    await evaluate(initialTelegramReview, "no-store", "127.0.0.1", true);
+    expect(JSON.stringify(view.children)).toContain("ユーザーID 381724391、チャットID -1004729148133、トピックID 4097");
+    expect(posts[5]?.path).toBe(`/approval/${commandId}/native-credential`);
+    expect(JSON.parse(String(posts[5]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: initialTelegramReview.review_digest });
+    expect(JSON.stringify(state)).not.toContain(initialGrant.chat_id);
   });
 
   it("shows only recorded Google Daily Brief occurrences beside independently running schedules", async () => {

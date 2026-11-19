@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
@@ -133,6 +133,8 @@ import {
   OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   SettingsWriteArgumentsSchema,
+  TelegramInboundGrantSchema,
+  type TelegramInboundGrant,
   settingsWriteRequiresNativeCredentialEntry,
   type SettingsWriteGoogleReadCredentialScope,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
@@ -1310,6 +1312,21 @@ async function serveWithOwnerLease(
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
   const nativeCredentialApproval = new AsyncLocalStorage<{ commandDigest: string; assertCurrent: () => void }>();
+  const telegramInitialGrantKey = randomBytes(32);
+  const telegramInitialGrants = new Map<string, { grant: Readonly<TelegramInboundGrant>; expiresAt: number; timer: NodeJS.Timeout }>();
+  function discardTelegramInitialGrant(digest: string): void {
+    const candidate = telegramInitialGrants.get(digest);
+    if (!candidate) return;
+    clearTimeout(candidate.timer);
+    telegramInitialGrants.delete(digest);
+  }
+  function readTelegramInitialGrant(digest: string): Readonly<TelegramInboundGrant> | undefined {
+    const candidate = telegramInitialGrants.get(digest);
+    if (!candidate) return undefined;
+    if (Date.now() < candidate.expiresAt) return candidate.grant;
+    discardTelegramInitialGrant(digest);
+    return undefined;
+  }
   // .env is loaded before serve(). Retain only inherited desktop session metadata for native input.
   const unixSessionKeys = ["DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "XAUTHORITY",
     "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"];
@@ -1326,6 +1343,7 @@ async function serveWithOwnerLease(
     requestGoogleRead: (scope, signal) => promptForGoogleReadCredential(scope, signal, nativePromptEnv),
     requestGitHubWrite: signal => promptForGitHubWriteCredential(signal, nativePromptEnv),
     requestTelegramBot: signal => promptForTelegramBotCredential(signal, nativePromptEnv),
+    readTelegramInitialInboundGrant: readTelegramInitialGrant,
     assertCurrent: (commandDigest) => {
       const approval = nativeCredentialApproval.getStore();
       if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
@@ -4076,6 +4094,14 @@ async function serveWithOwnerLease(
     return args.success && settingsWriteRequiresNativeCredentialEntry(args.data.patch);
   }
 
+  function discardResolvedTelegramInitialGrant(commandId: string, pending: PendingApproval | undefined): void {
+    if (pendingApprovals.has(commandId) || pending?.command.type !== "tool_call" ||
+        pending.command.payload.tool_name !== "settings.write") return;
+    const args = SettingsWriteArgumentsSchema.safeParse(pending.command.payload.arguments);
+    const digest = args.success ? args.data.patch.telegram?.initial_inbound_grant_digest : undefined;
+    if (digest) discardTelegramInitialGrant(digest);
+  }
+
   async function resumePendingApproval(
     command_id: string,
     verdict: "approve" | "reject" | "block",
@@ -4102,6 +4128,7 @@ async function serveWithOwnerLease(
       try {
         return await resumePendingApprovalCore(command_id, verdict, ctx);
       } finally {
+        discardResolvedTelegramInitialGrant(command_id, pending);
         if (trackFinalization) activeCommandFinalizations.delete(finalization);
         resolveFinalization();
       }
@@ -4133,6 +4160,7 @@ async function serveWithOwnerLease(
       }
       return await resumePendingApprovalCore(command_id, verdict, ctx, executionController);
     } finally {
+      discardResolvedTelegramInitialGrant(command_id, pending);
       recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(command_id));
       if (trackFinalization) activeCommandFinalizations.delete(finalization);
       resolveFinalization();
@@ -5388,6 +5416,10 @@ async function serveWithOwnerLease(
           try { return (await settingsWritePort.inspect(undefined, undefined, undefined, undefined, true)).telegram_bot_registration_ready === true; }
           catch { return false; }
         },
+        inspectTelegramBotInitialGrantRegistration: async () => {
+          try { return (await settingsWritePort.inspect(undefined, undefined, undefined, undefined, undefined, true)).telegram_bot_registration_ready === true; }
+          catch { return false; }
+        },
       }),
       runtime: {
         getSnapshot: async () => {
@@ -5972,8 +6004,32 @@ async function serveWithOwnerLease(
     return submitOwnerSettingsProposal(input, { patch: { github_write: { register_credential: true } } });
   }
 
-  function submitOwnerTelegramBotCredentialProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }) {
-    return submitOwnerSettingsProposal(input, { patch: { telegram: { register_credential: true } } });
+  async function submitOwnerTelegramBotCredentialProposal(input: { actor: string; goal_ref?: string; purpose_version?: number;
+    initial_inbound_grant?: TelegramInboundGrant }) {
+    const { initial_inbound_grant, ...owner } = input;
+    if (initial_inbound_grant === undefined) {
+      return submitOwnerSettingsProposal(owner, { patch: { telegram: { register_credential: true } } });
+    }
+    const grant = TelegramInboundGrantSchema.safeParse(initial_inbound_grant);
+    if (owner.actor !== OWNER_TASK_APPROVAL_ACTOR || !grant.success || telegramInitialGrants.size >= 32) {
+      return { accepted: false as const, status: "settings_proposal_unavailable" as const, used_for_authority: false as const, may_execute: false as const };
+    }
+    const digest = createHmac("sha256", telegramInitialGrantKey)
+      .update(JSON.stringify(["telegram-initial-inbound-grant.v1", randomUUID(), grant.data]), "utf8").digest("hex");
+    const ttlMs = 10 * 60 * 1000;
+    const timer = setTimeout(() => discardTelegramInitialGrant(digest), ttlMs);
+    timer.unref();
+    telegramInitialGrants.set(digest, { grant: Object.freeze(grant.data), expiresAt: Date.now() + ttlMs, timer });
+    let retained = false;
+    try {
+      const result = await submitOwnerSettingsProposal(owner, {
+        patch: { telegram: { register_credential: true, initial_inbound_grant_digest: digest } },
+      });
+      retained = result.accepted;
+      return result;
+    } finally {
+      if (!retained) discardTelegramInitialGrant(digest);
+    }
   }
 
   async function submitOwnerSettingsProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }, rawArguments: unknown) {
@@ -5988,7 +6044,7 @@ async function serveWithOwnerLease(
       const llm = patch.llm;
       const googleScope = patch.google_read?.register_credential;
       const githubWriteRegistration = patch.github_write?.register_credential;
-      const telegramBotRegistration = patch.telegram?.register_credential;
+      const telegramBotRegistration = patch.telegram?.initial_inbound_grant_digest ?? patch.telegram?.register_credential;
       const target = await settingsWritePort.inspect(expected_llm_provider,
         llm?.activation || llm?.rotate_credential ? llm : undefined, googleScope, githubWriteRegistration, telegramBotRegistration);
       if (telegramBotRegistration) {
@@ -6021,7 +6077,9 @@ async function serveWithOwnerLease(
         "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
         "blue_tanuki.operation_core.source_interface": "gui" } as const;
       const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: input.actor,
-        content: telegramBotRegistration ? "設定済みの受信許可範囲で使用するTelegram Botトークンを保護して保存する。"
+        content: telegramBotRegistration ? typeof telegramBotRegistration === "string"
+          ? "指定したTelegram受信許可を設定し、Botトークンを保護して保存する。"
+          : "設定済みの受信許可範囲で使用するTelegram Botトークンを保護して保存する。"
           : githubWriteRegistration ? "GitHub 書き込み用の資格情報を保護して保存する。"
           : googleScope !== undefined ? "選択された Google 読み取り用の資格情報を保護して保存する。"
           : llm?.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
@@ -6876,6 +6934,10 @@ async function serveWithOwnerLease(
         if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "settings_write" ||
             snapshot.command_digest !== operationPlanDigest(pending.command) ||
             snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        const telegramRegistration = snapshot.telegram_bot_registration;
+        const initialGrantDigest = telegramRegistration?.initial_inbound_grant_digest;
+        const initialGrant = initialGrantDigest ? readTelegramInitialGrant(initialGrantDigest) : undefined;
+        if (initialGrantDigest && !initialGrant) return null;
         const review: WebChatSettingsWriteContentReview = {
           kind: "settings_write",
           command_id,
@@ -6887,7 +6949,8 @@ async function serveWithOwnerLease(
           ...(snapshot.credential_rotation ? { credential_rotation: snapshot.credential_rotation } : {}),
           ...(snapshot.google_read_registration ? { google_read_registration: snapshot.google_read_registration } : {}),
           ...(snapshot.github_write_registration ? { github_write_registration: snapshot.github_write_registration } : {}),
-          ...(snapshot.telegram_bot_registration ? { telegram_bot_registration: snapshot.telegram_bot_registration } : {}),
+          ...(telegramRegistration ? { telegram_bot_registration: { ...telegramRegistration,
+            ...(initialGrant ? { initial_inbound_grant: initialGrant } : {}) } } : {}),
           changes: snapshot.changes,
           request_payload_digest: snapshot.request_payload_digest,
           target_version_digest: snapshot.target_version_digest,
@@ -9263,6 +9326,7 @@ async function serveWithOwnerLease(
     shutdown: async () => {
       gatewayLog.info("shutting down");
       gatewayShuttingDown = true;
+      for (const digest of telegramInitialGrants.keys()) discardTelegramInitialGrant(digest);
       waitDeadlineScheduler.stop();
       clearInterval(failureMemoryVerificationTimer);
       activeTaskExecutions.abortAll();

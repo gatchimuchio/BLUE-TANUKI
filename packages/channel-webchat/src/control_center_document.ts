@@ -298,12 +298,20 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="screen-card"><h3>Metadata Boundary</h3><p class="muted">Channel metadata is normalized before review.</p></div>
           </div>
           <section class="settings-subsection" aria-labelledby="telegram-bot-credential-title">
-            <h3 id="telegram-bot-credential-title">Telegram Botの資格情報</h3>
-            <p class="muted">設置先の <code>.env</code> に有効な <code>TELEGRAM_INBOUND_GRANTS_JSON</code> が必要です。承認後、この端末の専用入力画面でBotトークンを登録します。登録後はGatewayを再起動してください。</p>
+            <h3 id="telegram-bot-credential-title">Telegram Botの登録</h3>
+            <p class="muted">受信許可が未設定なら、許可するユーザー・チャット・トピックを1組登録できます。承認後、この端末の専用画面でBotトークンを入力し、登録後にGatewayを再起動してください。</p>
+            <fieldset id="telegram-initial-inbound-grant" hidden disabled>
+              <legend>初回の受信許可</legend>
+              <div class="status-grid">
+                <label>ユーザーID<input id="telegram-inbound-user-id" type="text" inputmode="numeric" maxlength="16" autocomplete="off" /></label>
+                <label>チャットID<input id="telegram-inbound-chat-id" type="text" maxlength="17" autocomplete="off" /></label>
+                <label>トピックID（トピックを使わない場合は空欄）<input id="telegram-inbound-thread-id" type="text" inputmode="numeric" maxlength="16" autocomplete="off" /></label>
+              </div>
+            </fieldset>
             <div class="action-row">
               <button type="button" data-screen="settings">認証と委任目的を設定</button>
               <button id="load-telegram-bot-credential-status" type="button">登録可否を確認</button>
-              <button id="prepare-telegram-bot-credential" type="button" disabled>Botトークンの登録を申請</button>
+              <button id="prepare-telegram-bot-credential" type="button" disabled>Botの登録を申請</button>
               <button id="open-telegram-bot-credential-review" type="button" hidden>審査を開く</button>
             </div>
             <p id="telegram-bot-credential-status" class="muted" role="status">登録可否を確認してください。</p>

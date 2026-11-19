@@ -4,14 +4,14 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
-  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
-  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
   settingsWriteCredentialRotationReview,
   settingsWriteGoogleReadCredentialReview,
+  settingsWriteTelegramBotCredentialChanges,
+  settingsWriteTelegramBotCredentialReview,
   settingsWriteRequestBinding,
   settingsWriteRequiresNativeCredentialEntry,
   settingsWriteTargetIdentityDigest,
@@ -30,7 +30,8 @@ export interface SettingsWritePort {
     llmPatch?: NonNullable<SettingsWritePatch["llm"]>,
     googleScope?: SettingsWriteGoogleReadCredentialScope,
     githubWriteRegistration?: true,
-    telegramBotRegistration?: true): Promise<{
+    telegramBotRegistration?: true | string,
+    telegramInitialReadiness?: true): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
@@ -117,13 +118,14 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       }
       const googleScope = patch.google_read?.register_credential;
       const githubRegistration = patch.github_write?.register_credential === true;
-      const telegramRegistration = patch.telegram?.register_credential === true;
-      const registrationChange = telegramRegistration ? SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE
-        : githubRegistration ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE : SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE;
+      const telegramRegistration = patch.telegram;
+      const registrationChanges = telegramRegistration
+        ? settingsWriteTelegramBotCredentialChanges(telegramRegistration.initial_inbound_grant_digest)
+        : [githubRegistration ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE : SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE];
       const changes = patch.llm
         ? buildLlmChanges(patch.llm, target)
         : patch.composio ? buildComposioChanges(patch.composio, target.values.composio)
-          : [registrationChange];
+          : registrationChanges;
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
         kind: "settings_write" as const,
@@ -134,7 +136,8 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
           SettingsWriteNativeLlmProviderSchema.parse(expected_llm_provider)) } : {}),
         ...(googleScope ? { google_read_registration: settingsWriteGoogleReadCredentialReview(googleScope) } : {}),
         ...(githubRegistration ? { github_write_registration: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW } : {}),
-        ...(telegramRegistration ? { telegram_bot_registration: SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW } : {}),
+        ...(telegramRegistration ? { telegram_bot_registration: settingsWriteTelegramBotCredentialReview(
+          telegramRegistration.initial_inbound_grant_digest) } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -203,8 +206,9 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   const llm = args.patch.llm;
   const googleScope = args.patch.google_read?.register_credential;
   const githubRegistration = args.patch.github_write?.register_credential;
-  const telegramRegistration = args.patch.telegram?.register_credential;
-  const target = telegramRegistration ? await port.inspect(undefined, undefined, undefined, undefined, true)
+  const telegramRegistration = args.patch.telegram;
+  const target = telegramRegistration ? await port.inspect(undefined, undefined, undefined, undefined,
+    telegramRegistration.initial_inbound_grant_digest ?? true)
     : githubRegistration ? await port.inspect(undefined, undefined, undefined, true)
     : googleScope ? await port.inspect(undefined, undefined, googleScope)
     : await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);

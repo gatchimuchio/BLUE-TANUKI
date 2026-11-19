@@ -33,10 +33,12 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
+  SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
   SettingsWriteActivationSchema,
   SettingsWriteArgumentsSchema,
   SettingsWriteGoogleReadCredentialScopeSchema,
   SettingsWriteLlmProviderSchema,
+  TelegramInboundGrantSchema,
   SettingsWriteNativeLlmProviderSchema,
   settingsWriteCredentialRotationReview,
   settingsWriteGoogleReadCredentialReview,
@@ -355,6 +357,9 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
     : Object.hasOwn(review, "telegram_bot_registration") ? "telegram_bot_registration" : undefined;
   if (registrationKey) {
     const change = review.changes[0];
+    const telegramRegistration = registrationKey === "telegram_bot_registration" ? review.telegram_bot_registration : undefined;
+    const initialGrantReview = telegramRegistration && (Object.hasOwn(telegramRegistration, "initial_inbound_grant") ||
+      Object.hasOwn(telegramRegistration, "initial_inbound_grant_digest"));
     if (!hasExactKeys({ ...review }, [
       "kind", "command_id", "command_digest", "review_digest", "operation", registrationKey,
       "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
@@ -363,7 +368,7 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
         review.used_for_authority !== false || review.may_execute !== false ||
         ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
           review.operation_plan_binding_digest].every(digest => typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) ||
-        review.changes.length !== 1 || !change ||
+        review.changes.length !== (initialGrantReview ? 2 : 1) || !change ||
         !hasExactKeys({ ...change }, ["key", "before", "after"])) return false;
     const expectedChange = registrationKey === "google_read_registration"
       ? SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE : registrationKey === "github_write_registration"
@@ -373,9 +378,19 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
       const registration = review[registrationKey];
       const expected = registrationKey === "github_write_registration" ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW
         : SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW;
-      return !!registration && hasExactKeys({ ...registration }, ["api_host", "protected_reference_configured"]) &&
-        registration.api_host === expected.api_host &&
-        registration.protected_reference_configured === expected.protected_reference_configured;
+      if (!registration || registration.api_host !== expected.api_host ||
+          registration.protected_reference_configured !== expected.protected_reference_configured) return false;
+      if (!initialGrantReview) return hasExactKeys({ ...registration }, ["api_host", "protected_reference_configured"]);
+      const grantChange = review.changes[1];
+      const expectedGrantChange = SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE;
+      return !!telegramRegistration && hasExactKeys({ ...telegramRegistration }, ["api_host", "protected_reference_configured",
+        "initial_inbound_grant", "initial_inbound_grant_digest"]) &&
+        typeof telegramRegistration.initial_inbound_grant_digest === "string" &&
+        /^[a-f0-9]{64}$/.test(telegramRegistration.initial_inbound_grant_digest) &&
+        TelegramInboundGrantSchema.safeParse(telegramRegistration.initial_inbound_grant).success &&
+        !!grantChange && hasExactKeys({ ...grantChange }, ["key", "before", "after"]) &&
+        grantChange.key === expectedGrantChange.key && grantChange.before === expectedGrantChange.before &&
+        grantChange.after === expectedGrantChange.after;
     }
     const registration = review.google_read_registration;
     const scope = SettingsWriteGoogleReadCredentialScopeSchema.safeParse(registration?.scope);
@@ -390,7 +405,8 @@ function validSettingsWriteReview(review: WebChatSettingsWriteContentReview, com
     return !review.changes.some(change => change?.key === "llm.provider" || change?.key === "llm.credential_reference" ||
       change?.key === SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE.key ||
       change?.key === SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE.key ||
-      change?.key === SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE.key);
+      change?.key === SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE.key ||
+      change?.key === SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE.key);
   }
   if (!hasExactKeys({ ...review }, [
     "kind", "command_id", "command_digest", "review_digest", "operation", "expected_llm_provider",
@@ -900,7 +916,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/llm-settings-proposal body:{expected_provider,patch,goal_ref?,purpose_version?} auth:dedicated owner bearer, no-store
  *   POST /owner/google-read-credential-proposal body:{scope,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/github-write-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
- *   POST /owner/telegram-bot-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
+ *   POST /owner/telegram-bot-credential-proposal body:{initial_inbound_grant?,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
@@ -4793,9 +4809,9 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const googleRead = kind === "google-read";
     const proposalKey = kind.replace("-", "_");
     const proposeGoogle = googleRead ? this.opts.onOwnerGoogleReadCredentialProposal : undefined;
-    const propose = kind === "github-write" ? this.opts.onOwnerGitHubWriteCredentialProposal
-      : kind === "telegram-bot" ? this.opts.onOwnerTelegramBotCredentialProposal : undefined;
-    if (!this.opts.owner_token || !(proposeGoogle || propose)) {
+    const proposeGitHub = kind === "github-write" ? this.opts.onOwnerGitHubWriteCredentialProposal : undefined;
+    const proposeTelegram = kind === "telegram-bot" ? this.opts.onOwnerTelegramBotCredentialProposal : undefined;
+    if (!this.opts.owner_token || !(proposeGoogle || proposeGitHub || proposeTelegram)) {
       res.writeHead(404);
       res.end(JSON.stringify({ error: `owner_${proposalKey}_credential_proposal_not_configured` }));
       return;
@@ -4823,13 +4839,17 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     const scope = googleRead ? SettingsWriteGoogleReadCredentialScopeSchema.safeParse(body?.scope) : undefined;
     const hasGoal = Object.hasOwn(body ?? {}, "goal_ref") || Object.hasOwn(body ?? {}, "purpose_version");
-    const fields = [...(googleRead ? ["scope"] : []), ...(hasGoal ? ["goal_ref", "purpose_version"] : [])];
+    const initialGrant = kind === "telegram-bot" && Object.hasOwn(body ?? {}, "initial_inbound_grant")
+      ? TelegramInboundGrantSchema.safeParse(body?.initial_inbound_grant) : undefined;
+    const fields = [...(googleRead ? ["scope"] : []), ...(hasGoal ? ["goal_ref", "purpose_version"] : []),
+      ...(initialGrant ? ["initial_inbound_grant"] : [])];
     const goal_ref = body?.goal_ref;
     const purpose_version = body?.purpose_version;
     const goal = typeof goal_ref === "string" && /^goal_[a-f0-9]{16,64}$/.test(goal_ref) &&
       typeof purpose_version === "number" && Number.isSafeInteger(purpose_version) && purpose_version > 0
       ? { goal_ref, purpose_version } : undefined;
-    if (!body || Array.isArray(body) || !hasExactKeys(body, fields) || (scope && !scope.success) || (hasGoal && !goal)) {
+    if (!body || Array.isArray(body) || !hasExactKeys(body, fields) || (scope && !scope.success) || (hasGoal && !goal) ||
+        (initialGrant && !initialGrant.success)) {
       res.writeHead(400);
       res.end(JSON.stringify({ error: `invalid_owner_${proposalKey}_credential_proposal` }));
       return;
@@ -4837,8 +4857,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const input = { ...goal, actor: OWNER_TOKEN_ACTOR };
     if (scope?.success && proposeGoogle) {
       await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGoogle({ scope: scope.data, ...input }));
-    } else if (propose) {
-      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => propose(input));
+    } else if (proposeGitHub) {
+      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeGitHub(input));
+    } else if (proposeTelegram) {
+      await this.respondToOwnerSettingsProposal(res, Boolean(goal), () => proposeTelegram({ ...input,
+        ...(initialGrant?.success ? { initial_inbound_grant: initialGrant.data } : {}) }));
     }
   }
 

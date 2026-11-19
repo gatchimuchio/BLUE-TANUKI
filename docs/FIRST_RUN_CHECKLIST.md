@@ -121,15 +121,11 @@ curl -H "Authorization: Bearer $WEBCHAT_TOKEN" \
 
 Telegram は v1.0 RC first-party channel だが、WebChat の初回成功とは分けて確認する。
 
-設置先でGatewayが読み込む `.env` に受信許可リストを設定する。
+1. 設置先PCのControl Centerの設定画面で所有者として認証し、チャネル画面でTelegramの登録可否を確認する。
+2. 初回は許可する送信者ID、チャットID、トピックIDを1組指定する。トピックを使わない場合は空欄にする。Telegramからの受信にはこの組の完全一致が必要で、ユーザー名や表示名は使えない。
+3. L3審査画面でIDと設定変更を確認して承認し、端末の伏字入力画面にBotFatherで受け取ったトークンを入力する。OS保護ストアの `TELEGRAM_BOT_TOKEN_REF` と受信許可 `TELEGRAM_INBOUND_GRANTS_JSON` が設定ファイルに保存される。Gatewayを再起動して適用する。
 
-```dotenv
-TELEGRAM_INBOUND_GRANTS_JSON='[{"user_id":"12345","chat_id":"12345","message_thread_id":null}]'
-```
-
-`TELEGRAM_INBOUND_GRANTS_JSON` はownerが実際の数値IDへ置き換えて設定する。`user_id`・`chat_id`・`message_thread_id`の完全一致が必要で、省略時はTelegram inboundをすべて拒否する。topicを使わない入口は`message_thread_id: null`、topic入口はそのtopic IDを指定する。ユーザー名や表示名はgrantに使わない。
-
-設置先PCのControl Centerで所有者として認証し、チャネル画面からBotトークンの登録を申請する。設定先と保存内容をL3審査で確認し、端末の伏字入力画面にBotFatherで受け取ったトークンを入力する。設定ファイルにはOS保護ストアの `TELEGRAM_BOT_TOKEN_REF` が保存される。Gatewayを再起動して適用する。従来の `TELEGRAM_BOT_TOKEN` だけで稼働中の設置先は、引き続き使用できる。
+受信許可リストが保存済みの場合は、同じ画面からBotトークンだけを初回登録できる。従来の `TELEGRAM_BOT_TOKEN` だけで稼働中の設置先は、引き続き使用できる。
 
 grantはTelegramからGatewayへ入れる入口の限定であり、本人確認・owner承認・HDS判断・操作許可ではない。HDS-J／Approval Gate／L3 final reviewは引き続き各操作で独立に適用する。BotFatherで作ったbotに `/start` を送り、許可したchatからのBot API long pollingを確認する。outbound targetはTelegram `chat_id`。
 

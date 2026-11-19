@@ -172,8 +172,12 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       marker: "owner_settings_github_write_registration" },
     { field: "telegram", registration: true, scope: "telegram.bot", refKey: "TELEGRAM_BOT_TOKEN_REF",
       marker: "owner_settings_telegram_bot_registration" },
-  ] as const)("requires structured owner input and a separate L3 approval for $scope credential registration",
-    ({ field, registration, scope, refKey, marker }) => {
+    { field: "telegram", registration: true, scope: "telegram.bot", refKey: "TELEGRAM_BOT_TOKEN_REF",
+      marker: "owner_settings_telegram_bot_registration", initialGrantDigest: "e".repeat(64) },
+  ] as const)("requires structured owner input and a separate L3 approval for $scope credential registration ($initialGrantDigest)",
+    (fixture) => {
+    const { field, registration, scope, refKey, marker } = fixture;
+    const initialGrantDigest = "initialGrantDigest" in fixture ? fixture.initialGrantDigest : undefined;
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-credential-settings-"));
     let saved: OperationPlanCheckpoint | undefined;
     let recoveryHolds: unknown;
@@ -184,7 +188,8 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
     const controller = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
       operation_plan_state: planState });
     const origin = ownerOrigin(`settings-${field}`, "prepare initial protected credential registration");
-    const credentialArgs = { patch: { [field]: { register_credential: registration } } };
+    const credentialArgs = { patch: { [field]: { register_credential: registration,
+      ...(initialGrantDigest ? { initial_inbound_grant_digest: initialGrantDigest } : {}) } } };
     const ownerInputError = `plan_settings_${marker.slice("owner_settings_".length)}_requires_owner_input`;
     try {
       expect(() => controller.prepareSettingsWritePlan({ ...origin }, credentialArgs)).toThrow("settings_plan_owner_origin_required");
@@ -194,8 +199,9 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       const candidate = controller.prepareSettingsWritePlan(origin, credentialArgs);
       expect(saved?.plans[0]?.[marker]).toBe(true);
       const plan = saved!.plans[0]!.revisions[0]!.plan;
+      const changedKeys = initialGrantDigest ? [refKey, "TELEGRAM_INBOUND_GRANTS_JSON"] : [refKey];
       expect(plan.steps[0]).toMatchObject({ target: { id: "gateway.runtime-config", scope },
-        preparation: { validation: [{ expected: { changed_keys: [refKey], restart_required: true } }] } });
+        preparation: { validation: [{ expected: { changed_keys: changedKeys, restart_required: true } }] } });
 
       const genericLedger = new OperationPlanLedger();
       expect(() => genericLedger.retainCandidate(plan, origin)).toThrow(ownerInputError);

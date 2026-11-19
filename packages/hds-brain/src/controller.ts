@@ -5109,8 +5109,12 @@ ${planControl.question}`,
       scope: "telegram.bot",
       stepId: "telegram-bot-credentials",
       checkId: "telegram-bot-credential-saved",
-      content: "Telegram Bot資格の保護参照を初回登録する",
-      changedKeys: ["TELEGRAM_BOT_TOKEN_REF"],
+      content: patch.telegram.initial_inbound_grant_digest
+        ? "Telegramの初回受信許可とBot資格の保護参照を登録する"
+        : "Telegram Bot資格の保護参照を初回登録する",
+      changedKeys: patch.telegram.initial_inbound_grant_digest
+        ? ["TELEGRAM_BOT_TOKEN_REF", "TELEGRAM_INBOUND_GRANTS_JSON"]
+        : ["TELEGRAM_BOT_TOKEN_REF"],
     } : undefined;
     const changedKeys = credentialRegistration?.changedKeys ??
       (patch.llm && expected_llm_provider !== undefined ? llmSettingsWriteEnvKeys(patch.llm, expected_llm_provider) : null);

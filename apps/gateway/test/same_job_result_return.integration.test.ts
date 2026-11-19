@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, 
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { createHash, createHmac } from "node:crypto";
 import WebSocket from "ws";
@@ -499,7 +500,7 @@ describe("served Telegram result return and request-bound media ingress", () => 
     }
   }, 45_000);
 
-  it.runIf(process.platform === "win32")("登録したTelegram保護参照で再起動後に受信と返信を行い、不正な参照では外部に送信しない", async () => {
+  it.runIf(process.platform === "win32")("初回Telegram受信許可と保護参照を同じ承認で保存し、再起動後に許可した相手にだけ返信する", async () => {
     const root = mkdtempSync(join(tmpdir(), "bt-telegram-protected-registration-"));
     const runtimeRoot = join(root, "runtime");
     const envFile = join(runtimeRoot, "blue-tanuki.env");
@@ -513,14 +514,21 @@ describe("served Telegram result return and request-bound media ingress", () => 
     const settingsToken = "synthetic-telegram-native-settings-token";
     const grant = { user_id: "804192715", chat_id: "-9984048831", message_thread_id: 20414197 };
     const grants = JSON.stringify([grant]);
-    const baseConfig = `# Telegram隔離試験\r\nTELEGRAM_INBOUND_GRANTS_JSON=${JSON.stringify(grants)}\r\n`;
+    const baseConfig = "# Telegram隔離試験\r\nUNRELATED_FIXTURE_SETTING=preserved\r\n";
+    const grantLine = `TELEGRAM_INBOUND_GRANTS_JSON=${JSON.stringify(grants)}\r\n`;
     const requestText = "合成試験用の青い花について一行で説明してください。";
+    const wrongUserText = "許可範囲外の送信者の合成依頼";
+    const wrongChatText = "許可範囲外のチャットの合成依頼";
     const wrongThreadText = "許可範囲外のスレッドの合成依頼";
     const replyText = "合成試験の回答は青い花です。";
     const message = { message_thread_id: grant.message_thread_id,
       chat: { id: Number(grant.chat_id), type: "supergroup" },
       from: { id: Number(grant.user_id), first_name: "Synthetic", is_bot: false } };
     const updates = [
+      { update_id: 770, message: { ...message, message_id: 770,
+        from: { ...message.from, id: Number(grant.user_id) + 1 }, text: wrongUserText } },
+      { update_id: 771, message: { ...message, message_id: 771,
+        chat: { ...message.chat, id: Number(grant.chat_id) - 1 }, text: wrongChatText } },
       { update_id: 772, message: { ...message, message_id: 772, message_thread_id: grant.message_thread_id + 1, text: wrongThreadText } },
       { update_id: 773, message: { ...message, message_id: 773, text: requestText } },
     ];
@@ -601,47 +609,99 @@ require("node:module").syncBuiltinESMExports();
       expect(app.headers.get("cache-control")).toBe("no-store");
       const html = await app.text();
       expect(html).toContain('id="prepare-telegram-bot-credential"');
+      expect(html).toContain('id="telegram-inbound-user-id"');
+      expect(html).toContain('id="telegram-inbound-chat-id"');
+      expect(html).toContain('id="telegram-inbound-thread-id"');
       assertHidden(html);
       assertGrantHidden(html);
       expect((await request("/settings/config", WEBCHAT_TOKEN)).response.status).toBe(401);
       const settings = await request("/settings/config", settingsToken);
       expect(settings.response.status).toBe(200);
-      expect(settings.data.telegram_bot_credential_registration_available).toBe(true);
+      expect(settings.data.telegram_bot_initial_grant_registration_available).toBe(true);
+      expect(settings.data.telegram_bot_credential_registration_available).not.toBe(true);
       const proposalRoute = "/owner/telegram-bot-credential-proposal";
-      expect((await request(proposalRoute, resumeToken, {})).response.status).toBe(401);
-      expect((await request(proposalRoute, OWNER_TOKEN, {}, "http://untrusted.invalid")).response.status).toBe(403);
+      const proposalBody = { initial_inbound_grant: grant };
+      expect((await request(proposalRoute, resumeToken, proposalBody)).response.status).toBe(401);
+      expect((await request(proposalRoute, OWNER_TOKEN, proposalBody, "http://untrusted.invalid")).response.status).toBe(403);
       expect((await request(proposalRoute, OWNER_TOKEN, { token: "fixture-invalid-body-token" })).response.status).toBe(400);
-      writeFileSync(envFile, baseConfig.replace(JSON.stringify(grants), JSON.stringify("[]")), "utf8");
+      const wildcard = await request(proposalRoute, OWNER_TOKEN, { initial_inbound_grant: { ...grant, chat_id: "*" } });
+      expect(wildcard.response.status).toBe(400);
+      assertGrantHidden(wildcard.data);
       const unscoped = await request(proposalRoute, OWNER_TOKEN, {});
       expect(unscoped.response.status).toBe(409);
       expect(unscoped.data).toMatchObject({ accepted: false, status: "settings_proposal_unavailable" });
+
+      // A preconfigured grant still supports the existing token-only registration, but cannot be replaced by first use.
+      const configured = baseConfig + grantLine;
+      writeFileSync(envFile, configured, "utf8");
+      const manualSettings = await request("/settings/config", settingsToken);
+      expect(manualSettings.response.status).toBe(200);
+      expect(manualSettings.data.telegram_bot_credential_registration_available).toBe(true);
+      expect(manualSettings.data.telegram_bot_initial_grant_registration_available).not.toBe(true);
+      assertGrantHidden(manualSettings.data);
+      const occupied = await request(proposalRoute, OWNER_TOKEN, proposalBody);
+      expect(occupied.response.status).toBe(409);
+      expect(occupied.data).toMatchObject({ accepted: false, status: "settings_proposal_unavailable" });
+      assertGrantHidden(occupied.data);
+      expect(readFileSync(envFile, "utf8")).toBe(configured);
       writeFileSync(envFile, baseConfig, "utf8");
-      const proposed = await request(proposalRoute, OWNER_TOKEN, {});
-      expect(proposed.response.status).toBe(202);
-      expect(proposed.data).toMatchObject({ accepted: true, status: "approval_required", command_id: expect.any(String) });
-      const queue = await request("/approval", resumeToken);
-      expect(queue.response.status).toBe(200);
-      const pending = (queue.data.pending_approvals as Record<string, unknown>[])
-        .find(item => item.command_id === proposed.data.command_id);
-      expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
-      const approval = `/approval/${encodeURIComponent(requiredString(proposed.data.command_id, "command_id"))}`;
-      const review = await request(`${approval}/content`, resumeToken, {});
-      expect(review.response.status).toBe(200);
-      expect(review.response.headers.get("cache-control")).toBe("no-store");
-      expect(review.data).toMatchObject({ kind: "settings_write", operation: "settings.write", no_store: true,
-        telegram_bot_registration: { api_host: "api.telegram.org", protected_reference_configured: false },
-        changes: [{ key: "telegram.credential_reference", before: "unconfigured", after: "register_on_restart" }],
-        review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
-      const verdict = { verdict: "approve", approval_token: pending?.approval_token, content_review_digest: review.data.review_digest };
-      const nativeApproval = `${approval}/native-credential`;
-      expect((await request(approval, resumeToken, verdict)).response.status).toBe(409);
-      expect((await request(nativeApproval, resumeToken, verdict, "http://untrusted.invalid")).response.status).toBe(403);
-      expect((await request(nativeApproval, resumeToken, { ...verdict, content_review_digest: "0".repeat(64) })).response.status).toBe(409);
+
+      const prepare = async () => {
+        const proposed = await request(proposalRoute, OWNER_TOKEN, proposalBody);
+        expect(proposed.response.status, JSON.stringify(proposed.data)).toBe(202);
+        expect(proposed.data).toMatchObject({ accepted: true, status: "approval_required", command_id: expect.any(String) });
+        assertGrantHidden(proposed.data);
+        const queue = await request("/approval", resumeToken);
+        expect(queue.response.status).toBe(200);
+        assertGrantHidden(queue.data);
+        const pending = (queue.data.pending_approvals as Record<string, unknown>[])
+          .find(item => item.command_id === proposed.data.command_id);
+        expect(pending).toMatchObject({ operation: "settings.write", approval_level: "L3_final_review", approval_token: expect.any(String) });
+        const approval = `/approval/${encodeURIComponent(requiredString(proposed.data.command_id, "command_id"))}`;
+        const review = await request(`${approval}/content`, resumeToken, {});
+        expect(review.response.status, JSON.stringify(review.data)).toBe(200);
+        expect(review.response.headers.get("cache-control")).toBe("no-store");
+        expect(review.data).toMatchObject({ kind: "settings_write", operation: "settings.write", no_store: true,
+          changes: [
+            { key: "telegram.credential_reference", before: "unconfigured", after: "register_on_restart" },
+            { key: "telegram.inbound_grants", before: "unconfigured", after: "one_exact_grant_on_restart" },
+          ],
+          review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+        expect(review.data.telegram_bot_registration).toEqual({
+          api_host: "api.telegram.org", protected_reference_configured: false,
+          initial_inbound_grant_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), initial_inbound_grant: grant,
+        });
+        return { approval, nativeApproval: `${approval}/native-credential`,
+          verdict: { verdict: "approve", approval_token: pending?.approval_token, content_review_digest: review.data.review_digest } };
+      };
+      const first = await prepare();
+      expect((await request(first.approval, resumeToken, first.verdict)).response.status).toBe(409);
+      expect((await request(first.nativeApproval, resumeToken, first.verdict, "http://untrusted.invalid")).response.status).toBe(403);
+      expect((await request(first.nativeApproval, resumeToken,
+        { ...first.verdict, content_review_digest: "0".repeat(64) })).response.status).toBe(409);
       expect(readCaptureText(promptLog)).toBeUndefined();
       expect(readFileSync(envFile, "utf8")).toBe(baseConfig);
       expect(readCaptureEvents(capture)).toEqual([]);
 
-      const saved = await request(nativeApproval, resumeToken, verdict);
+      const changedConfig = baseConfig + "# review対象の変更\r\n";
+      writeFileSync(envFile, changedConfig, "utf8");
+      const stale = await request(first.nativeApproval, resumeToken, first.verdict);
+      expect(stale.response.status, JSON.stringify(stale.data)).toBe(409);
+      assertGrantHidden(stale.data);
+      expect(readCaptureText(promptLog)).toBeUndefined();
+      expect(readdirSync(runtimeRoot)).not.toContain("secrets");
+      expect(readFileSync(envFile, "utf8")).toBe(changedConfig);
+
+      writeFileSync(envFile, baseConfig, "utf8");
+      const { nativeApproval, verdict } = await prepare();
+      let saved = await request(nativeApproval, resumeToken, verdict);
+      if (saved.response.status === 429 && saved.data.error === "rate_limited" &&
+          typeof saved.data.retry_after_ms === "number" && saved.data.retry_after_ms > 0 && saved.data.retry_after_ms <= 5_000) {
+        expect(readCaptureText(promptLog)).toBeUndefined();
+        expect(readFileSync(envFile, "utf8")).toBe(baseConfig);
+        await delay(saved.data.retry_after_ms + 25);
+        saved = await request(nativeApproval, resumeToken, verdict);
+      }
       expect(saved.response.status, JSON.stringify(saved.data)).toBe(200);
       expect(saved.data).toMatchObject({ ok: true, result: { approval: "approve", executed: true, status: "success" } });
       const config = readFileSync(envFile, "utf8");
@@ -649,7 +709,10 @@ require("node:module").syncBuiltinESMExports();
       const reference = requiredString(values.TELEGRAM_BOT_TOKEN_REF, "Telegram protected reference");
       expect(values.TELEGRAM_BOT_TOKEN).toBeUndefined();
       expect(values.TELEGRAM_INBOUND_GRANTS_JSON).toBe(grants);
-      expect(config).toBe(baseConfig + `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(reference)}\r\n`);
+      expect(config.slice(0, baseConfig.length)).toBe(baseConfig);
+      expect(config.slice(baseConfig.length).split("\r\n").filter(Boolean).sort()).toEqual([
+        `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(reference)}`, grantLine.trimEnd(),
+      ].sort());
       const secretPath = dpapiSecretPathFromReference(reference);
       expect(dirname(secretPath)).toBe(join(runtimeRoot, "secrets"));
       expect(readdirSync(dirname(secretPath))).toEqual([basename(secretPath)]);
@@ -657,7 +720,7 @@ require("node:module").syncBuiltinESMExports();
       expect(ciphertext.length).toBeGreaterThan(0);
       assertHidden(ciphertext);
       protectedValues.push(reference, secretPath, ciphertext);
-      for (const item of [settings, proposed, queue, review, saved]) {
+      for (const item of [settings, saved]) {
         assertHidden(JSON.stringify(item.data));
         assertGrantHidden(item.data);
       }
@@ -667,7 +730,10 @@ require("node:module").syncBuiltinESMExports();
       expect(readCaptureEvents(capture)).toEqual([]);
 
       await stopChild(gateway);
-      assertHidden(gateway.stdout.concat(gateway.stderr).join(""));
+      const setupOutput = gateway.stdout.concat(gateway.stderr).join("");
+      assertHidden(setupOutput);
+      assertGrantHidden(setupOutput);
+      assertGrantHidden(readTreeBytes(runtimeRoot, envFile).toString("utf8"));
       env.BT_F1003_TELEGRAM_UPDATES = JSON.stringify(updates);
       gateway = spawnGateway(env, networkPreload, envFile);
       await waitForHealth(gatewayPort, gateway, 40_000);
@@ -680,11 +746,11 @@ require("node:module").syncBuiltinESMExports();
       expect(sent).toMatchObject({ method: "sendMessage", chat_id: grant.chat_id,
         message_thread_id: grant.message_thread_id, text: expect.stringContaining(replyText) });
       const events = readCaptureEvents(capture);
-      expect(events).toContainEqual(expect.objectContaining({ method: "getUpdates", update_ids: [772, 773] }));
+      expect(events).toContainEqual(expect.objectContaining({ method: "getUpdates", update_ids: [770, 771, 772, 773] }));
       expect(events.filter(event => event.method === "sendMessage")).toHaveLength(1);
       expect(providerBodies).toHaveLength(1);
       expect(providerBodies[0]).toContain(requestText);
-      expect(providerBodies[0]).not.toContain(wrongThreadText);
+      for (const denied of [wrongUserText, wrongChatText, wrongThreadText]) expect(providerBodies[0]).not.toContain(denied);
       providerBodies.forEach(assertHidden);
       await stopChild(gateway);
       assertHidden(gateway.stdout.concat(gateway.stderr).join(""));
@@ -714,7 +780,7 @@ require("node:module").syncBuiltinESMExports();
 
       const foreign = storeBlueTanukiSecret("OPENAI_API_KEY", foreignToken, { envFilePath: envFile, env: {} });
       protectedValues.push(foreign.ref, dpapiSecretPathFromReference(foreign.ref));
-      writeFileSync(envFile, baseConfig + `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(foreign.ref)}\r\n`, "utf8");
+      writeFileSync(envFile, configured + `TELEGRAM_BOT_TOKEN_REF=${JSON.stringify(foreign.ref)}\r\n`, "utf8");
       await rejectStartup("foreign", "telegram_bot_token_reference_unavailable");
 
       renameSync(secretPath, `${secretPath}.held`);
@@ -2462,11 +2528,12 @@ async function readRequestBytes(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-function readTreeBytes(root: string): Buffer {
+function readTreeBytes(root: string, excludedFile?: string): Buffer {
   const contents: Buffer[] = [];
   for (const name of readdirSync(root)) {
     const path = join(root, name);
-    if (statSync(path).isDirectory()) contents.push(readTreeBytes(path));
+    if (path === excludedFile) continue;
+    if (statSync(path).isDirectory()) contents.push(readTreeBytes(path, excludedFile));
     else contents.push(readFileSync(path));
   }
   return Buffer.concat(contents);

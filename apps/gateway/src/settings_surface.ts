@@ -6,7 +6,8 @@ import type { WebChatSettingsSurface } from "@blue-tanuki/channel-webchat";
 import { parseEnvFile, writeEnvFileAtomic } from "./env_file.js";
 import { llmSettingsWriteEnvPatch, settingsWriteRequiresNativeCredentialEntry,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS, SettingsWriteGoogleReadCredentialScopeSchema,
-  type SettingsWriteGoogleReadCredentialScope, type SettingsWriteLlmProvider, type SettingsWritePatch } from "@blue-tanuki/protocol";
+  type SettingsWriteGoogleReadCredentialScope, type SettingsWriteLlmProvider, type SettingsWritePatch,
+  type TelegramInboundGrant } from "@blue-tanuki/protocol";
 import {
   setupConfigFromEnv,
   type SetupProviderKind,
@@ -43,6 +44,7 @@ export interface SettingsSurfaceOptions {
   inspectGoogleReadCredentialRegistration?: (scope: SettingsWriteGoogleReadCredentialScope) => Promise<boolean>;
   inspectGitHubWriteCredentialRegistration?: () => Promise<boolean>;
   inspectTelegramBotCredentialRegistration?: () => Promise<boolean>;
+  inspectTelegramBotInitialGrantRegistration?: () => Promise<boolean>;
 }
 
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
@@ -76,6 +78,7 @@ export interface SettingsSnapshot {
   google_read_credential_registration_available?: SettingsWriteGoogleReadCredentialScope[];
   github_write_credential_registration_available?: true;
   telegram_bot_credential_registration_available?: true;
+  telegram_bot_initial_grant_registration_available?: true;
   approval: {
     mode: ReturnType<typeof setupConfigFromEnv>["approval"]["mode"];
     final_review_remains_required: true;
@@ -216,6 +219,7 @@ type NativeCredentialRegistration = {
   requestGoogleRead?(scope: SettingsWriteGoogleReadCredentialScope, signal: AbortSignal): Promise<Buffer | null>;
   requestGitHubWrite?(signal: AbortSignal): Promise<Buffer | null>;
   requestTelegramBot?(signal: AbortSignal): Promise<Buffer | null>;
+  readTelegramInitialInboundGrant?(digest: string): Readonly<TelegramInboundGrant> | undefined;
   assertCurrent(commandDigest: string): void;
 };
 
@@ -270,7 +274,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     "BLUE_TANUKI_LLM_FALLBACK_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"));
   const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider,
     llmPatch?: NonNullable<SettingsWritePatch["llm"]>, googleScope?: SettingsWriteGoogleReadCredentialScope,
-    githubWriteRegistration?: true, telegramBotRegistration?: true) => {
+    githubWriteRegistration?: true, telegramBotRegistration?: true | string, telegramInitialReadiness?: true) => {
     const target = envFilePath(env);
     if (!target) throw new Error("settings_write_env_file_unavailable");
     const before = await fs.lstat(target).catch(() => undefined);
@@ -309,7 +313,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       if (!nativeRegistration?.available()) throw new Error("llm_credential_registration_unavailable");
       await assertLocalCredentialTarget(target, after, env);
     }
-    const firstRegistration = telegramBotRegistration ? {
+    const telegramRegistrationRequested = Boolean(telegramBotRegistration || telegramInitialReadiness);
+    const firstRegistration = telegramRegistrationRequested ? {
       key: "TELEGRAM_BOT_TOKEN" as const, prefix: "telegram_bot_credential_registration",
     } : githubWriteRegistration ? {
       key: "GITHUB_TOKEN" as const, prefix: "github_write_credential_registration",
@@ -317,9 +322,10 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       key: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[SettingsWriteGoogleReadCredentialScopeSchema.parse(googleScope)].key,
       prefix: "google_read_credential_registration",
     } : undefined;
+    let initialTelegramInboundGrant: Readonly<TelegramInboundGrant> | undefined;
     if (firstRegistration) {
       const { key, prefix } = firstRegistration;
-      const prompt = telegramBotRegistration ? nativeRegistration?.requestTelegramBot :
+      const prompt = telegramRegistrationRequested ? nativeRegistration?.requestTelegramBot :
         githubWriteRegistration ? nativeRegistration?.requestGitHubWrite : nativeRegistration?.requestGoogleRead;
       if (env.BLUE_TANUKI_SAFE_MODE === "1" || !prompt || !nativeRegistration?.available()) {
         throw new Error(`${prefix}_unavailable`);
@@ -331,9 +337,22 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       const occupied = [...Object.keys(parsed.values), ...Object.keys(env), ...inheritedEnvKeys]
         .some((name) => name.toUpperCase() === key || name.toUpperCase() === referenceKey);
       if (occupied) throw new Error(`${prefix}_slot_configured`);
-      if (telegramBotRegistration && (inheritedEnvKeys.some(name => name.toUpperCase() === "TELEGRAM_INBOUND_GRANTS_JSON") ||
-          parseTelegramInboundGrants(parsed.values.TELEGRAM_INBOUND_GRANTS_JSON).length === 0)) {
-        throw new Error("telegram_bot_credential_registration_saved_grants_required");
+      if (telegramRegistrationRequested) {
+        const grantsKey = "TELEGRAM_INBOUND_GRANTS_JSON";
+        if (inheritedEnvKeys.some(name => name.toUpperCase() === grantsKey) ||
+            Object.keys(parsed.values).some(name => name !== grantsKey && name.toUpperCase() === grantsKey)) {
+          throw new Error("telegram_bot_credential_registration_grants_conflict");
+        }
+        const grants = parseTelegramInboundGrants(parsed.values[grantsKey]);
+        if (telegramBotRegistration === true) {
+          if (grants.length === 0) throw new Error("telegram_bot_credential_registration_saved_grants_required");
+        } else {
+          if (grants.length > 0) throw new Error("telegram_bot_credential_registration_grants_configured");
+          if (typeof telegramBotRegistration === "string") {
+            initialTelegramInboundGrant = nativeRegistration?.readTelegramInitialInboundGrant?.(telegramBotRegistration);
+            if (!initialTelegramInboundGrant) throw new Error("telegram_bot_credential_registration_grant_unavailable");
+          }
+        }
       }
       await assertLocalCredentialTarget(target, after, env);
     }
@@ -356,6 +375,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       activationUpdates,
       credentialRotation,
       firstRegistration,
+      initialTelegramInboundGrant,
       values: {
         model: boundModel ?? null,
         temperature: config.llm.temperature ?? null,
@@ -375,10 +395,11 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     };
   };
   return {
-    inspect: async (expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration) => {
+    inspect: async (expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration,
+      telegramInitialReadiness) => {
       const { target_state_digest, llm_provider, managed_llm_settings, values, activationUpdates, credentialRotation,
         firstRegistration } = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration,
-        telegramBotRegistration);
+        telegramBotRegistration, telegramInitialReadiness);
       return { target_state_digest, llm_provider, managed_llm_settings, values,
         ...(activationUpdates ? { provider_activation_ready: true as const } : {}),
         ...(credentialRotation ? { credential_rotation_ready: true as const } : {}),
@@ -391,7 +412,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       const activation = llmPatch?.activation;
       const googleScope = patch.google_read?.register_credential;
       const githubWriteRegistration = patch.github_write?.register_credential;
-      const telegramBotRegistration = patch.telegram?.register_credential;
+      const telegramBotRegistration = patch.telegram?.initial_inbound_grant_digest ?? patch.telegram?.register_credential;
       const state = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
           state.target_state_digest !== expectedTargetStateDigest) {
@@ -487,6 +508,9 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         if (state.credentialRotation) {
           if (!stored) throw new Error("llm_credential_rotation_storage_binding_mismatch");
           content = replaceCredentialRefLine(state.raw, state.credentialRotation.referenceKey, stored.ref);
+        } else if (state.initialTelegramInboundGrant && stored) {
+          updates.TELEGRAM_INBOUND_GRANTS_JSON = JSON.stringify([state.initialTelegramInboundGrant]);
+          content = patchEnvDocument(state.raw, updates);
         } else if (state.firstRegistration && stored) {
           const newline = state.raw.includes("\r\n") ? "\r\n" : "\n";
           const separator = state.raw && !state.raw.endsWith("\n") ? newline : "";
@@ -830,6 +854,8 @@ export function createWebChatSettingsSurface(
       }
       if (snapshot.llm.native_credential_prompt_available && await opts.inspectTelegramBotCredentialRegistration?.()) {
         snapshot.telegram_bot_credential_registration_available = true;
+      } else if (snapshot.llm.native_credential_prompt_available && await opts.inspectTelegramBotInitialGrantRegistration?.()) {
+        snapshot.telegram_bot_initial_grant_registration_available = true;
       }
       return snapshot;
     },

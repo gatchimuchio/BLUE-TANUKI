@@ -9,6 +9,7 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
+  SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
   SettingsWriteLlmProviderSchema,
 } from "@blue-tanuki/protocol";
 
@@ -26,6 +27,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE)};
       const SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE)};
       const SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW)};
+      const SETTINGS_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE)};
       const SETTINGS_GOOGLE_READ_API_HOSTS = ${JSON.stringify(Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
         .map(([scope, target]) => [scope, target.api_hosts])))};
       const GOOGLE_READ_CREDENTIAL_LABELS = { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" };
@@ -77,6 +79,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         githubWriteCredentialAvailable: false,
         githubWriteCredentialNextScreen: null,
         telegramBotCredentialAvailable: false,
+        telegramBotInitialGrantAvailable: false,
         telegramBotCredentialNextScreen: null,
         settingsCredentialSubmitting: false,
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
@@ -4468,7 +4471,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("prepare-github-write-credential").disabled = state.settingsCredentialSubmitting ||
           state.githubWriteCredentialAvailable !== true;
         byId("prepare-telegram-bot-credential").disabled = state.settingsCredentialSubmitting ||
-          state.telegramBotCredentialAvailable !== true;
+          (state.telegramBotCredentialAvailable !== true && state.telegramBotInitialGrantAvailable !== true);
+        byId("telegram-initial-inbound-grant").disabled = state.settingsCredentialSubmitting || state.telegramBotInitialGrantAvailable !== true;
       }
 
       function renderGoogleReadCredentialAvailability(scopes) {
@@ -4503,19 +4507,43 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           : available !== true ? "現在、この端末から新規登録できません。" : "");
       }
 
-      function renderTelegramBotCredentialAvailability(available) {
+      function isCanonicalTelegramId(value, allowNegative) {
+        const pattern = allowNegative ? /^-?[1-9][0-9]{0,15}$/u : /^[1-9][0-9]{0,15}$/u;
+        return typeof value === "string" && value === value.trim() && pattern.test(value) && Number.isSafeInteger(Number(value));
+      }
+
+      function isExactTelegramInboundGrant(grant) {
+        return isObject(grant) && Object.keys(grant).length === 3 &&
+          ["user_id", "chat_id", "message_thread_id"].every(function (key) { return Object.hasOwn(grant, key); }) &&
+          isCanonicalTelegramId(grant.user_id, false) && isCanonicalTelegramId(grant.chat_id, true) &&
+          (grant.message_thread_id === null || (Number.isSafeInteger(grant.message_thread_id) && grant.message_thread_id > 0));
+      }
+
+      function clearTelegramInitialInboundGrant() {
+        byId("telegram-inbound-user-id").value = "";
+        byId("telegram-inbound-chat-id").value = "";
+        byId("telegram-inbound-thread-id").value = "";
+      }
+
+      function renderTelegramBotCredentialAvailability(available, firstGrantAvailable) {
         const local = isLocalCredentialControlCenter();
-        state.telegramBotCredentialAvailable = local && available === true;
+        state.telegramBotCredentialAvailable = local && available === true && firstGrantAvailable !== true;
+        state.telegramBotInitialGrantAvailable = local && firstGrantAvailable === true && available !== true;
+        byId("telegram-initial-inbound-grant").hidden = !state.telegramBotInitialGrantAvailable;
+        if (!state.telegramBotInitialGrantAvailable) clearTelegramInitialInboundGrant();
         updateSettingsCredentialButtons();
         setText("telegram-bot-credential-status", !local ? "設置先のControl Centerを開いて登録してください。"
-          : available === undefined ? "登録可否を確認してください。"
-          : available !== true ? "新規登録できません。受信許可リストと既存の資格情報を確認してください。" : "登録を申請できます。");
+          : available === undefined && firstGrantAvailable === undefined ? "登録可否を確認してください。"
+          : state.telegramBotCredentialAvailable ? "設定済みの受信許可リストでBotの登録を申請できます。"
+          : state.telegramBotInitialGrantAvailable ? "初回の受信許可を入力してBotの登録を申請できます。"
+          : "新規登録できません。設置先の設定と既存の資格情報を確認してください。");
       }
 
       function renderSettingsSnapshot(snapshot) {
         renderGoogleReadCredentialAvailability(snapshot.google_read_credential_registration_available ?? []);
         renderGitHubWriteCredentialAvailability(snapshot.github_write_credential_registration_available === true);
-        renderTelegramBotCredentialAvailability(snapshot.telegram_bot_credential_registration_available === true);
+        renderTelegramBotCredentialAvailability(snapshot.telegram_bot_credential_registration_available === true,
+          snapshot.telegram_bot_initial_grant_registration_available === true);
         const llm = snapshot.llm || {};
         const routeModel = llm.command_route && llm.command_route.model;
         const model = typeof routeModel === "string" && routeModel !== "(provider default)" ? routeModel : String(llm.model ?? "");
@@ -6354,9 +6382,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const tokenInput = byId("settings-owner-token");
         const token = tokenInput.value.trim();
         const scope = googleRead ? byId("google-read-credential-scope").value : undefined;
+        const needsInitialGrant = telegramBot && state.telegramBotInitialGrantAvailable === true;
         const available = googleRead ? state.googleReadCredentialScopes.includes(scope)
-          : telegramBot ? state.telegramBotCredentialAvailable : state.githubWriteCredentialAvailable;
+          : telegramBot ? state.telegramBotCredentialAvailable || needsInitialGrant : state.githubWriteCredentialAvailable;
         let goal;
+        let initialGrant;
         try {
           if (!isLocalCredentialControlCenter() || !available) {
             throw new Error(googleRead ? "この端末で設定を読み込み、登録先を選んでください。"
@@ -6365,6 +6395,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!token) throw new Error(telegramBot ? "設定画面で変更申請用のowner tokenを入力してください。"
             : "変更申請用のowner tokenを入力してください。");
           goal = settingsProposalGoal();
+          if (needsInitialGrant) {
+            const thread = byId("telegram-inbound-thread-id").value.trim();
+            initialGrant = {
+              user_id: byId("telegram-inbound-user-id").value.trim(),
+              chat_id: byId("telegram-inbound-chat-id").value.trim(),
+              message_thread_id: thread === "" ? null : Number(thread),
+            };
+            if ((thread !== "" && !isCanonicalTelegramId(thread, false)) || !isExactTelegramInboundGrant(initialGrant)) {
+              throw new Error("受信を許可するユーザー・チャット・トピックのIDを確認してください。");
+            }
+            clearTelegramInitialInboundGrant();
+          }
         } catch (error) {
           setText(status, error.message);
           return;
@@ -6376,7 +6418,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const response = await fetch("/owner/" + kind + "-credential-proposal", {
             method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "origin",
             headers: { "content-type": "application/json", ...authHeaders(token) },
-            body: JSON.stringify({ ...(googleRead ? { scope } : {}), ...goal })
+            body: JSON.stringify({ ...(googleRead ? { scope } : {}), ...goal,
+              ...(initialGrant ? { initial_inbound_grant: initialGrant } : {}) })
           });
           const result = response.status === 202 && hasNoStore(response) ? await response.json() : null;
           const isId = function (value) { return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value); };
@@ -7327,7 +7370,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             : nativeCredentialMode === "github-write"
               ? "資格情報をこの端末の保護ストアに登録しました。製品を再起動してください。GitHubとの接続とトークンの権限は未確認です。"
             : nativeCredentialMode === "telegram-bot"
-              ? "Botトークンをこの端末の保護ストアに登録しました。Gatewayを再起動してください。Telegramとの接続は未確認です。"
+              ? "Telegramの登録設定を保存しました。Gatewayを再起動してください。Telegramとの接続は未確認です。"
             : nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
             : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
           setText("native-credential-approval-status", confirmed ? saved
@@ -7804,6 +7847,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (googleRead || githubWrite || telegramBot) {
             const registration = googleRead ? review.google_read_registration
               : githubWrite ? review.github_write_registration : review.telegram_bot_registration;
+            const initialGrantReview = telegramBot && registration &&
+              (Object.hasOwn(registration, "initial_inbound_grant") || Object.hasOwn(registration, "initial_inbound_grant_digest"));
+            const initialGrant = initialGrantReview ? registration.initial_inbound_grant : null;
             const scope = googleRead ? registration?.scope : undefined;
             const expectedRegistration = telegramBot ? SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW : SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW;
             const hosts = googleRead
@@ -7815,9 +7861,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               ? Object.keys(registration).length === 3 && registration.protected_reference_configured === false &&
                 Array.isArray(registration.api_hosts) && registration.api_hosts.length === hosts.length &&
                 hosts.every(function (host, index) { return registration.api_hosts[index] === host; })
-              : Object.keys(registration).length === 2 && registration.api_host === expectedRegistration.api_host &&
-                registration.protected_reference_configured === expectedRegistration.protected_reference_configured);
-            const change = Array.isArray(review.changes) && review.changes.length === 1 ? review.changes[0] : null;
+              : Object.keys(registration).length === (initialGrantReview ? 4 : 2) && registration.api_host === expectedRegistration.api_host &&
+                registration.protected_reference_configured === expectedRegistration.protected_reference_configured &&
+                (!initialGrantReview || isDigest(registration.initial_inbound_grant_digest) && isExactTelegramInboundGrant(initialGrant)));
+            const exactChange = function (change, expected) {
+              return change && Object.keys(change).length === 3 && change.key === expected.key &&
+                change.before === expected.before && change.after === expected.after;
+            };
+            const changesValid = Array.isArray(review.changes) && review.changes.length === (initialGrantReview ? 2 : 1) &&
+              exactChange(review.changes[0], expectedChange) &&
+              (!initialGrantReview || exactChange(review.changes[1], SETTINGS_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE));
             if ([googleRead, githubWrite, telegramBot].filter(Boolean).length !== 1 ||
                 !isLocalCredentialControlCenter() || !hasNoStore(response) || !card.isConnected ||
                 token !== byId("approval-token").value.trim() || Object.keys(review).length !== 13 ||
@@ -7825,26 +7878,34 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                 review.used_for_authority !== false || review.may_execute !== false ||
                 ![review.command_digest, review.review_digest, review.request_payload_digest, review.target_version_digest,
                   review.operation_plan_binding_digest].every(isDigest) ||
-                !registrationValid || !change || Object.keys(change).length !== 3 || change.key !== expectedChange.key ||
-                change.before !== expectedChange.before || change.after !== expectedChange.after) {
+                !registrationValid || !changesValid) {
               throw new Error("資格情報の登録内容がこのL3承認要求に結び付いていません");
             }
             view.replaceChildren();
             const heading = document.createElement("strong");
             heading.textContent = googleRead ? GOOGLE_READ_CREDENTIAL_LABELS[scope] + "の資格情報を登録"
-              : githubWrite ? "GitHub書き込み用の資格情報を登録" : "Telegram Botの資格情報を登録";
+              : githubWrite ? "GitHub書き込み用の資格情報を登録"
+              : initialGrantReview ? "Telegram Botと初回の受信許可を登録" : "Telegram Botの資格情報を登録";
             const destination = document.createElement("p");
             destination.textContent = "対象APIホスト " + hosts.join("、");
+            view.append(heading, destination);
+            if (initialGrantReview) {
+              const access = document.createElement("p");
+              access.textContent = "受信を許可する1組。ユーザーID " + initialGrant.user_id +
+                "、チャットID " + initialGrant.chat_id + "、トピックID " + (initialGrant.message_thread_id ?? "なし");
+              view.append(access);
+            }
             const note = document.createElement("p");
             note.className = "muted";
             note.textContent = googleRead
               ? "承認後に、この端末の専用入力画面で読み取り専用スコープのOAuthアクセストークンを登録します。反映後はGatewayを再起動してください。Googleとの接続とトークンのスコープはこの操作では確認しません。"
               : githubWrite
                 ? "承認後に、この端末の専用入力画面で書き込み用アクセストークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。GitHubとの接続とトークンの権限はこの操作では確認しません。"
-                : "設定済みの受信許可リストを使います。承認後、この端末の専用入力画面でBotトークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。";
+                : (initialGrantReview ? "表示した1組だけを受信許可に設定します。" : "設定済みの受信許可リストを使います。") +
+                  "承認後、この端末の専用入力画面でBotトークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。";
             const digests = document.createElement("small");
             digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
-            view.append(heading, destination, note, digests);
+            view.append(note, digests);
             state.approvalContentDigests[commandId] = review.review_digest;
             approve.setAttribute("data-native-credential-entry", googleRead ? "google-read" : githubWrite ? "github-write" : "telegram-bot");
             approve.textContent = "承認して入力画面を開く";

@@ -33,6 +33,18 @@ export const SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE = Object.freeze({
 export const SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW = Object.freeze({
   api_host: "api.telegram.org", protected_reference_configured: false,
 } as const);
+export const SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE = Object.freeze({
+  key: "telegram.inbound_grants", before: "unconfigured", after: "one_exact_grant_on_restart",
+} as const);
+
+const TelegramIdSchema = z.string().regex(/^-?[1-9][0-9]{0,15}$/u)
+  .refine(value => value === value.trim() && Number.isSafeInteger(Number(value)));
+export const TelegramInboundGrantSchema = z.object({
+  user_id: TelegramIdSchema.refine(value => !value.startsWith("-")),
+  chat_id: TelegramIdSchema,
+  message_thread_id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable(),
+}).strict();
+export type TelegramInboundGrant = z.infer<typeof TelegramInboundGrantSchema>;
 export const SettingsWriteGoogleReadCredentialScopeSchema = z.enum(["gmail", "calendar", "drive", "shared"]);
 export type SettingsWriteGoogleReadCredentialScope = z.infer<typeof SettingsWriteGoogleReadCredentialScopeSchema>;
 export const SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS = Object.freeze({
@@ -90,7 +102,10 @@ export const SettingsWritePatchSchema = z.object({
     "disconnect resets dry_run and live_execution and cannot be combined with explicit values").optional(),
   google_read: z.object({ register_credential: SettingsWriteGoogleReadCredentialScopeSchema }).strict().optional(),
   github_write: z.object({ register_credential: z.literal(true) }).strict().optional(),
-  telegram: z.object({ register_credential: z.literal(true) }).strict().optional(),
+  telegram: z.object({
+    register_credential: z.literal(true),
+    initial_inbound_grant_digest: DigestSchema.optional(),
+  }).strict().optional(),
 }).strict().refine((patch) => Number(patch.llm !== undefined) + Number(patch.composio !== undefined) +
   Number(patch.google_read !== undefined) + Number(patch.github_write !== undefined) + Number(patch.telegram !== undefined) === 1,
   "exactly one settings domain must be changed per request");
@@ -129,7 +144,9 @@ export type SettingsWriteNativeLlmProvider = z.infer<typeof SettingsWriteNativeL
 export type SettingsWriteCredentialRotationReview = ReturnType<typeof settingsWriteCredentialRotationReview>;
 export type SettingsWriteGoogleReadCredentialReview = ReturnType<typeof settingsWriteGoogleReadCredentialReview>;
 export type SettingsWriteGitHubWriteCredentialReview = typeof SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW;
-export type SettingsWriteTelegramBotCredentialReview = typeof SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW;
+export type SettingsWriteTelegramBotCredentialReview = typeof SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW & {
+  initial_inbound_grant_digest?: string;
+};
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
 
@@ -145,6 +162,16 @@ export function settingsWriteCredentialRotationReview(provider: SettingsWriteNat
 export function settingsWriteGoogleReadCredentialReview(scope: SettingsWriteGoogleReadCredentialScope) {
   return { scope, api_hosts: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[scope].api_hosts,
     protected_reference_configured: false as const };
+}
+
+export function settingsWriteTelegramBotCredentialReview(initialGrantDigest?: string): SettingsWriteTelegramBotCredentialReview {
+  return initialGrantDigest === undefined ? SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW
+    : { ...SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW, initial_inbound_grant_digest: initialGrantDigest };
+}
+
+export function settingsWriteTelegramBotCredentialChanges(initialGrantDigest?: string) {
+  return initialGrantDigest === undefined ? [SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE]
+    : [SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE, SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE];
 }
 
 export function settingsWriteTargetIdentityDigest(): string {

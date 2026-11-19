@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE, SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW, SettingsWriteArgumentsSchema,
+  SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE, SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
   llmSettingsWriteEnvKeys } from "@blue-tanuki/protocol";
 import { createSettingsWriteTool } from "../src/tools/settings_write.js";
 
@@ -312,4 +313,27 @@ describe("settings.write GitHub write credential registration", () => {
       command_digest: observe.command_digest, signal, assert_current: assertCurrent,
     });
   });
+});
+
+it("binds the initial Telegram grant and Bot credential review to an opaque owner input", async () => {
+  const digest = "e".repeat(64);
+  const args = { patch: { telegram: { register_credential: true, initial_inbound_grant_digest: digest } } };
+  expect(SettingsWriteArgumentsSchema.safeParse(args).success).toBe(true);
+  expect(SettingsWriteArgumentsSchema.safeParse({ patch: { telegram: {
+    ...args.patch.telegram, initial_inbound_grant: { user_id: "98765", chat_id: "-12345", message_thread_id: null },
+  } } }).success).toBe(false);
+  const target = await port().inspect();
+  const inspect = vi.fn(async () => ({ ...target, telegram_bot_registration_ready: true as const }));
+  const tool = createSettingsWriteTool({ ...port(), inspect });
+  const observe = { command_digest: "b".repeat(64), operation_plan_binding_digest: "d".repeat(64) };
+  const review = await tool.inspect_content_review!(args, observe);
+  expect(inspect).toHaveBeenCalledWith(undefined, undefined, undefined, undefined, digest);
+  expect(review.telegram_bot_registration).toEqual({ api_host: "api.telegram.org",
+    protected_reference_configured: false, initial_inbound_grant_digest: digest });
+  expect(review.changes).toEqual([SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
+    SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE]);
+  const different = await tool.inspect_content_review!({ patch: { telegram: {
+    ...args.patch.telegram, initial_inbound_grant_digest: "f".repeat(64),
+  } } }, observe);
+  expect(different.review_digest).not.toBe(review.review_digest);
 });
