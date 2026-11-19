@@ -89,7 +89,7 @@ public final class PairingResponseParserTest {
     @Test
     public void terminalLeaveRequiresExactRequestAndRevokedProjection() throws Exception {
         String accepted = "{\"request_id\":\"" + NONCE + "\",\"operation\":\"端末離脱\"," +
-                "\"status\":\"accepted\",\"evidence_source\":\"LIVE_RUNTIME\"," +
+                "\"status\":\"accepted\",\"evidence_source\":\"INTERNAL_STATE\"," +
                 "\"audit_event_id\":\"event-3\",\"error\":null,\"health\":null," +
                 "\"body\":{\"状態\":\"失効\"},\"shutdown_requested\":false}";
         PairingResponseParser.requireDisconnectedResponse(accepted, NONCE);
@@ -101,10 +101,13 @@ public final class PairingResponseParserTest {
                         "2".repeat(32)));
         assertThrows(PairingResponseParser.PairingUnknownException.class,
                 () -> PairingResponseParser.requireDisconnectedResponse(
-                        accepted.replace("LIVE_RUNTIME", "FIXTURE"), NONCE));
+                        accepted.replace("INTERNAL_STATE", "FIXTURE"), NONCE));
+        assertThrows(PairingResponseParser.PairingUnknownException.class,
+                () -> PairingResponseParser.requireDisconnectedResponse(
+                        accepted.replace("INTERNAL_STATE", "LIVE_RUNTIME"), NONCE));
 
         String rejected = "{\"request_id\":\"" + NONCE + "\",\"operation\":\"端末離脱\"," +
-                "\"status\":\"rejected\",\"evidence_source\":\"LIVE_RUNTIME\"," +
+                "\"status\":\"rejected\",\"evidence_source\":\"INTERNAL_STATE\"," +
                 "\"audit_event_id\":\"event-4\",\"error\":{\"code\":\"拒否\"," +
                 "\"message\":\"Desktop拒否\",\"recoverable\":false," +
                 "\"audit_event_required\":true,\"fail_closed\":true}," +

@@ -78,7 +78,7 @@ final class PairingResponseParser {
             if ("rejected".equals(status) || "suspended".equals(status)) {
                 throw new PairingRejectedException();
             }
-            if (!"LIVE_RUNTIME".equals(StrictJson.string(envelope, "evidence_source"))) {
+            if (!"INTERNAL_STATE".equals(StrictJson.string(envelope, "evidence_source"))) {
                 throw new PairingUnknownException();
             }
             Map<String, Object> body = StrictJson.object(envelope.get("body"));

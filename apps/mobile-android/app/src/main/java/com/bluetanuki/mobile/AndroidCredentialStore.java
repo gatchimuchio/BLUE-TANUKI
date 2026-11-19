@@ -18,7 +18,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-final class AndroidCredentialStore {
+final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     private static final String KEY_ALIAS = "blue-tanuki-device-link-aes-v1";
     private static final String PREFS_NAME = "device_link_encrypted_v1";
     private static final String DEVICE_ID_KEY = "device_id";
@@ -30,14 +30,23 @@ final class AndroidCredentialStore {
     private static final String TASK_PENDING_DIGEST_KEY = "pending_task_session_sha256";
     private static final String TASK_MUTATION_KEY = "pending_task_mutation";
     private static final String TASK_MUTATION_DIGEST_KEY = "pending_task_mutation_sha256";
+    private static final String REVOCATION_KEY = "pending_desktop_revocation";
+    private static final String REVOCATION_DIGEST_KEY = "pending_desktop_revocation_sha256";
     private static final String AAD = "com.bluetanuki.mobile/device-link/v1";
     private static final String RECOVERY_AUDIT_AAD = "com.bluetanuki.mobile/device-link/recovery-audit/v1";
     private static final String TASK_PENDING_AAD = "com.bluetanuki.mobile/device-link/task-pending/v1";
     private static final String TASK_MUTATION_AAD = "com.bluetanuki.mobile/device-link/task-mutation/v1";
+    private static final String REVOCATION_AAD = "com.bluetanuki.mobile/device-link/desktop-revocation/v1";
 
+    private static AndroidCredentialStore instance;
     private final SharedPreferences preferences;
 
-    AndroidCredentialStore(Context context) {
+    static synchronized AndroidCredentialStore forApplication(Context context) {
+        if (instance == null) instance = new AndroidCredentialStore(context.getApplicationContext());
+        return instance;
+    }
+
+    private AndroidCredentialStore(Context context) {
         preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
@@ -55,7 +64,7 @@ final class AndroidCredentialStore {
             }
             return persistDeviceId(credential.deviceId);
         }
-        if (hasPendingTaskCheckpoint()) {
+        if (hasPendingTaskCheckpoint() || hasPendingDesktopRevocation()) {
             throw new CredentialStoreException();
         }
         return persistDeviceId(DeviceInvitation.newDeviceId());
@@ -69,7 +78,7 @@ final class AndroidCredentialStore {
     }
 
     synchronized boolean canRotateDeviceId() {
-        return !contains() && !hasPendingTaskCheckpoint();
+        return !contains() && !hasPendingTaskCheckpoint() && !hasPendingDesktopRevocation();
     }
 
     synchronized boolean hasPendingTaskCheckpoint() {
@@ -79,6 +88,27 @@ final class AndroidCredentialStore {
 
     synchronized boolean hasPendingTaskMutation() {
         return preferences.contains(TASK_MUTATION_KEY) || preferences.contains(TASK_MUTATION_DIGEST_KEY);
+    }
+
+    synchronized boolean hasPendingDesktopRevocation() {
+        return preferences.contains(REVOCATION_KEY) || preferences.contains(REVOCATION_DIGEST_KEY);
+    }
+
+    synchronized DeviceCredential readForDeviceLink() throws CredentialStoreException {
+        return hasPendingDesktopRevocation() ? null : read();
+    }
+
+    synchronized boolean canUseCredentialForDeviceLink(DeviceCredential expected) {
+        try {
+            return expected.sameValue(readForDeviceLink());
+        } catch (CredentialStoreException exception) {
+            return false;
+        }
+    }
+
+    synchronized boolean canPair(String expectedDeviceId) {
+        return expectedDeviceId.equals(preferences.getString(DEVICE_ID_KEY, null)) &&
+                !contains() && !hasPendingDesktopRevocation();
     }
 
     private String persistDeviceId(String deviceId) throws CredentialStoreException {
@@ -148,7 +178,7 @@ final class AndroidCredentialStore {
 
     synchronized void saveAndVerify(DeviceCredential credential) throws CredentialStoreException {
         if (credential == null || credential.deviceId == null ||
-                !credential.deviceId.equals(loadOrCreateDeviceId()) || contains()) {
+                !credential.deviceId.equals(loadOrCreateDeviceId()) || contains() || hasPendingDesktopRevocation()) {
             throw new CredentialStoreException();
         }
 
@@ -209,19 +239,43 @@ final class AndroidCredentialStore {
         }
     }
 
-    /** Revoke the Desktop credential first, then remove and read back its local copy. */
-    synchronized void clearRevokedCredential() throws CredentialStoreException {
-        if (read() == null) throw new CredentialStoreException();
-        if (!preferences.edit().remove(VALUE_KEY).remove(ACTIVE_DIGEST_KEY).commit()) {
+    @Override
+    public synchronized String begin(DeviceCredential expected) throws CredentialStoreException {
+        if (hasPendingDesktopRevocation() || !expected.sameValue(read())) throw new CredentialStoreException();
+        String activeDigest = preferences.getString(ACTIVE_DIGEST_KEY, null);
+        String checkpoint = encryptTaskCheckpoint(activeDigest, REVOCATION_AAD);
+        if (!preferences.edit().putString(REVOCATION_KEY, checkpoint)
+                .putString(REVOCATION_DIGEST_KEY, digest(checkpoint)).commit() ||
+                !isCurrent(expected, checkpoint)) {
             throw new CredentialStoreException();
         }
-        if (read() != null || contains()) throw new CredentialStoreException();
+        return checkpoint;
+    }
+
+    @Override
+    public synchronized boolean isCurrent(DeviceCredential expected, String checkpoint) throws CredentialStoreException {
+        if (!checkpoint.equals(preferences.getString(REVOCATION_KEY, null)) ||
+                !digest(checkpoint).equals(preferences.getString(REVOCATION_DIGEST_KEY, null)) ||
+                !expected.sameValue(read())) return false;
+        return decryptTaskCheckpoint(checkpoint, REVOCATION_AAD)
+                .equals(preferences.getString(ACTIVE_DIGEST_KEY, null));
+    }
+
+    @Override
+    public synchronized void finish(DeviceCredential expected, String checkpoint, boolean revoked) throws CredentialStoreException {
+        if (!isCurrent(expected, checkpoint)) throw new CredentialStoreException();
+        SharedPreferences.Editor editor = preferences.edit().remove(REVOCATION_KEY).remove(REVOCATION_DIGEST_KEY);
+        if (revoked) editor.remove(VALUE_KEY).remove(ACTIVE_DIGEST_KEY);
+        if (!editor.commit() || hasPendingDesktopRevocation() ||
+                (revoked ? contains() || read() != null : !expected.sameValue(read()))) {
+            throw new CredentialStoreException();
+        }
     }
 
     /** Remove only the local credential and atomically append a non-authority recovery record. */
-    synchronized DeviceLinkLocalRecoveryAudit.Event deleteCredentialLocally()
+    synchronized DeviceLinkLocalRecoveryAudit.Event deleteCredentialLocally(DeviceCredential expected)
             throws CredentialStoreException {
-        if (read() == null) return null;
+        if (!expected.sameValue(read())) throw new CredentialStoreException();
         List<DeviceLinkLocalRecoveryAudit.Event> existing = readLocalRecoveryAudit();
         DeviceLinkLocalRecoveryAudit.Event event = DeviceLinkLocalRecoveryAudit.create();
         List<DeviceLinkLocalRecoveryAudit.Event> updated;
@@ -236,10 +290,14 @@ final class AndroidCredentialStore {
         boolean committed = preferences.edit()
                 .remove(VALUE_KEY)
                 .remove(ACTIVE_DIGEST_KEY)
+                .remove(REVOCATION_KEY)
+                .remove(REVOCATION_DIGEST_KEY)
                 .putString(RECOVERY_AUDIT_KEY, encryptedAudit)
                 .putString(RECOVERY_AUDIT_DIGEST_KEY, auditDigest)
                 .commit();
-        if (!committed || contains() || read() != null) throw new CredentialStoreException();
+        if (!committed || contains() || read() != null || hasPendingDesktopRevocation()) {
+            throw new CredentialStoreException();
+        }
         List<DeviceLinkLocalRecoveryAudit.Event> readBack = readLocalRecoveryAudit();
         if (!DeviceLinkLocalRecoveryAudit.contains(readBack, event.eventId)) {
             throw new CredentialStoreException();
