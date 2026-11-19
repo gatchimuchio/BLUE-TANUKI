@@ -4127,6 +4127,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return status;
       }
 
+      function isLocalCredentialControlCenter() {
+        return window.top === window.self && window.location.protocol === "http:" &&
+          ["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname);
+      }
+
       function renderSettingsSnapshot(snapshot) {
         const llm = snapshot.llm || {};
         const routeModel = llm.command_route && llm.command_route.model;
@@ -4136,7 +4141,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           model,
           temperature: String(llm.temperature ?? ""),
           max_tokens: String(llm.max_tokens ?? ""),
-          timeout_ms: String(llm.timeout_ms ?? "")
+          timeout_ms: String(llm.timeout_ms ?? ""),
+          nativeCredentialPromptAvailable: llm.native_credential_prompt_available === true && isLocalCredentialControlCenter()
         } : null;
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
@@ -4145,6 +4151,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const revoked = Array.isArray(composio.revoked_actions) ? composio.revoked_actions : [];
         byId("settings-provider-choice").value = "";
         byId("settings-activation-budget").hidden = true;
+        byId("settings-native-credential-option").hidden = true;
+        byId("settings-register-credential").checked = false;
         byId("settings-cost-per-attempt").value = "";
         byId("settings-cost-per-24h").value = "";
         byId("settings-model").value = model;
@@ -5839,7 +5847,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (max_cost_per_attempt_micros > max_cost_per_24h_micros) {
             throw new Error("1回の試行あたりの上限はUTC日ごとの上限以下にしてください。");
           }
-          llm.activation = { provider, currency: "USD", max_cost_per_attempt_micros, max_cost_per_24h_micros };
+          const register = byId("settings-register-credential").checked;
+          if (register && (!current.nativeCredentialPromptAvailable || !isLocalCredentialControlCenter())) {
+            throw new Error("資格情報の新規登録は、このWindows端末のControl Centerで実行してください。");
+          }
+          llm.activation = { provider, currency: "USD", max_cost_per_attempt_micros, max_cost_per_24h_micros,
+            ...(register ? { register_credential: true } : {}) };
         }
         const model = byId("settings-model").value.trim();
         if (provider || model !== current.model) {
@@ -6722,15 +6735,25 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           .find(function (item) { return item.getAttribute("data-command") === commandId; });
         const adoptionCard = card?.getAttribute("data-goal-purpose-adoption") != null;
         const repairCard = card?.getAttribute("data-goal-purpose-repair") != null;
+        const approve = card?.querySelector?.('[data-verdict="approve"]');
+        const nativeCredential = verdict === "approve" && approve?.getAttribute?.("data-native-credential-registration") === "true";
+        if (nativeCredential) {
+          if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
+            throw new Error("このWindows端末のControl Centerで登録先を確認してから承認してください。");
+          }
+          approve.disabled = true;
+          setText("native-credential-approval-status", "Windowsの資格情報入力画面で入力を完了するか、キャンセルしてください。");
+        }
         const reviewedRepair = repairCard ? state.goalPurposeRepairReviews[commandId] : null;
         if (repairCard) {
           clearGoalPurposeRepairHandoff();
           if (verdict === "approve" && !reviewedRepair) throw new Error("復旧範囲を確認してから承認してください。");
         }
         const handoffGeneration = state.goalPurposeRepairHandoffGeneration;
-        const response = await fetch("/approval/" + encodeURIComponent(commandId), {
+        const response = await fetch("/approval/" + encodeURIComponent(commandId) + (nativeCredential ? "/native-credential" : ""), {
           method: "POST",
           cache: "no-store",
+          ...(nativeCredential ? { mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer" } : {}),
           headers: {
             "content-type": "application/json",
             ...authHeaders(token)
@@ -6742,7 +6765,20 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               ? { content_review_digest: state.approvalContentDigests[commandId] }
               : {})
           })
+        }).catch(function (error) {
+          if (!nativeCredential) throw error;
+          return null;
         });
+        if (nativeCredential) {
+          const responseBody = response?.ok && hasNoStore(response) ? await response.json().catch(function () { return null; }) : null;
+          const result = responseBody?.result;
+          setText("native-credential-approval-status",
+            responseBody?.ok === true && result?.approval === "approve" && result.executed === true && result.status === "success"
+              ? "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。"
+              : "資格情報の登録と設定保存を確認できませんでした。再申請の前に設定と承認状態を確認してください。");
+          await loadApprovals();
+          return;
+        }
         if (!response.ok) {
           if (repairCard) throw new Error("復旧の承認を確認できません。承認画面を再読み込みしてください。");
           const text = await response.text();
@@ -6799,6 +6835,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (!view || !approve) throw new Error("content review panel is unavailable");
         view.textContent = "Refreshing exact content…";
         approve.disabled = true;
+        if (approve.hasAttribute?.("data-native-credential-registration")) {
+          approve.removeAttribute("data-native-credential-registration");
+          approve.textContent = "Approve";
+        }
         const response = await fetch("/approval/" + encodeURIComponent(commandId) + "/content", {
           method: "POST",
           cache: "no-store",
@@ -7154,14 +7194,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const provider = review.expected_llm_provider;
           const providerValid = provider === undefined || (llmChange && SETTINGS_LLM_PROVIDERS.includes(provider));
           const activation = review.activation;
+          const registersCredential = activation?.protected_reference_configured === false &&
+            activation.credential_registration_required === true;
+          const usesProtectedReference = activation?.protected_reference_configured === true &&
+            !Object.hasOwn(activation, "credential_registration_required");
           const transition = llmChange ? review.changes.filter(function (change) { return change.key === "llm.provider"; }) : [];
           const validCost = function (value) { return Number.isSafeInteger(value) && value >= 1 && value <= 1000000000; };
           const activationValid = activation === undefined ? transition.length === 0
             : activation && llmChange && provider !== undefined && transition.length === 1 &&
               transition[0].before === provider && transition[0].after === activation.provider && activation.provider !== provider &&
-              Object.keys(activation).length === 6 && Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, activation.provider) &&
+              ((registersCredential && Object.keys(activation).length === 7) || (usesProtectedReference && Object.keys(activation).length === 6)) &&
+              Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, activation.provider) &&
               activation.destination === SETTINGS_LLM_ACTIVATION_DESTINATIONS[activation.provider] &&
-              activation.protected_reference_configured === true && activation.currency === "USD" &&
+              activation.currency === "USD" &&
               validCost(activation.max_cost_per_attempt_micros) && validCost(activation.max_cost_per_24h_micros) &&
               activation.max_cost_per_attempt_micros <= activation.max_cost_per_24h_micros &&
               ["llm.model", "llm.max_tokens", "llm.timeout_ms"].every(function (key) {
@@ -7199,7 +7244,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (activation) {
             for (const [labelText, valueText] of [
               ["切り替え先の送信先", activation.destination],
-              ["保護保管された資格情報", "設定済み"],
+              ["保護保管された資格情報", registersCredential ? "Windowsの入力画面で新規登録" : "設定済み"],
               ["計算予算台帳の1試行あたりの上限", String(activation.max_cost_per_attempt_micros / 1000000) + " USD"],
               ["計算予算台帳のUTC日ごとの上限", String(activation.max_cost_per_24h_micros / 1000000) + " USD"]
             ]) {
@@ -7216,14 +7261,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           note.className = "muted";
           note.textContent = "承認後に対象版を再照合して設定へ反映します。反映後はGatewayを再起動してください。" +
             (activation ? " 費用上限はシステム全体、親成果、個別タスクの各範囲に適用し、既存のトークン数と時間の予算を維持します。" : "") +
+            (registersCredential ? " 承認後にこのWindows端末の資格情報入力画面を開きます。" : "") +
             (composioChange ? " API keyの切断はdry-run=true／live=falseへ戻します。" : "");
           view.appendChild(note);
           const digests = document.createElement("small");
           digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
           view.appendChild(digests);
+          button.textContent = "設定差分を再確認";
+          if (registersCredential) {
+            if (!isLocalCredentialControlCenter()) {
+              note.textContent += " この登録の承認は設置先のControl Centerを開いて行ってください。";
+              return;
+            }
+            approve.setAttribute("data-native-credential-registration", "true");
+            approve.textContent = "承認してWindowsで入力";
+          }
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
-          button.textContent = "設定差分を再確認";
           return;
         }
         if (review.kind === "browser_form_input") {
@@ -10645,6 +10699,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const current = state.settingsRuntimeSnapshot;
         const activating = Boolean(provider && provider !== current?.provider);
         byId("settings-activation-budget").hidden = !activating;
+        byId("settings-native-credential-option").hidden = !activating || current?.nativeCredentialPromptAvailable !== true;
+        byId("settings-register-credential").checked = false;
         byId("settings-model").value = activating ? "" : (current?.model || "");
         byId("settings-cost-per-attempt").value = "";
         byId("settings-cost-per-24h").value = "";

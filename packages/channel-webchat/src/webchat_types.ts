@@ -123,6 +123,8 @@ export interface WebChatResumeContext {
   actor: string;
   token_kind: "resume";
   content_review_digest?: string;
+  /** Available only for an explicitly reviewed credential enrollment on the local browser route. */
+  native_credential_prompt?: true;
   approval?: WebChatResumeApprovalOptions;
 }
 
@@ -961,7 +963,10 @@ export interface WebChatSettingsWriteContentReview {
   review_digest: string;
   operation: "settings.write";
   expected_llm_provider?: SettingsWriteLlmProvider;
-  activation?: SettingsWriteActivation & { destination: string; protected_reference_configured: true };
+  activation?: Omit<SettingsWriteActivation, "register_credential"> & { destination: string } & (
+    { protected_reference_configured: true; credential_registration_required?: never } |
+    { protected_reference_configured: false; credential_registration_required: true }
+  );
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
@@ -1591,6 +1596,8 @@ export interface WebChatApprovalSurface {
   list: () => Promise<readonly WebChatApprovalQueueItem[]>;
   /** Route approvals that require the dedicated review endpoint away from legacy /resume. */
   requiresApprovalEndpoint?: (approval_id: string) => boolean;
+  /** Credential registration approvals require the local browser route before any one-shot token is consumed. */
+  requiresNativeCredentialApproval?: (approval_id: string) => boolean;
   /** Return redacted metadata for currently executing commands. */
   activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
   /** Request cancellation by exact active command identity; null means no current match. */

@@ -13,6 +13,7 @@ import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
 import { CompleteHistoryStore, operationPlanDigest, operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { OperationPlanCheckpointSchema } from "@blue-tanuki/protocol";
 import { createCronEventIdentity, GatewayCronEventStore } from "../src/cron_event_store.js";
+import { parseEnvFile } from "../src/env_file.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { recoveryStoreRestoreAttemptHistoryEvidence } from "../src/recovery_surface.js";
 import { inspectRuntimeRecoveryFence } from "../src/runtime_owner_lease.js";
@@ -35,12 +36,15 @@ afterEach(async () => {
 });
 
 describe("First-use Gateway settings", () => {
-  it.runIf(process.platform === "win32")("activates a protected native provider only after L3 and reserves the approved budget after restart", async () => {
+  it.runIf(process.platform === "win32").each(["existing protected reference", "fresh native registration"] as const)(
+    "activates a native provider through %s only after L3 and reserves the approved budget after restart", async (mode) => {
+    const register = mode === "fresh native registration";
     const root = mkdtempSync(join(realpathSync(tmpdir()), "bt-native-activation-"));
     temporaryRoots.push(root);
     const envFile = join(root, "product.env");
     const preload = join(root, "capture-provider.cjs");
     const attemptsFile = join(root, "captured-provider-attempts.jsonl");
+    const promptsFile = join(root, "native-prompt.log");
     const fixtureSecret = "synthetic-anthropic-credential-for-dpapi-fixture";
     const model = "fixture-native-text-model";
     const endpoint = "https://api.anthropic.com/v1/messages";
@@ -51,6 +55,22 @@ describe("First-use Gateway settings", () => {
       BLUE_TANUKI_OWNER_TOKEN: ownerToken, BLUE_TANUKI_SETTINGS_TOKEN: settingsToken };
     delete (env as NodeJS.ProcessEnv).LLM_BACKEND;
     writeFileSync(preload, `const { appendFileSync } = require("node:fs");
+const cp = require("node:child_process");
+const realSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  const script = args?.at(-2) === "-EncodedCommand" ? Buffer.from(args.at(-1), "base64").toString("utf16le") : "";
+  if (!script.includes("UseSystemPasswordChar")) return realSpawn(command, args, options);
+  appendFileSync(${JSON.stringify(promptsFile)}, "native-prompt\\n");
+  const child = new (require("node:events").EventEmitter)();
+  child.stdout = new (require("node:stream").PassThrough)();
+  child.kill = () => true;
+  setTimeout(() => {
+    child.stdout.end(Buffer.from(${JSON.stringify(fixtureSecret)}));
+    child.emit("close", 0);
+  }, 16_000);
+  return child;
+};
+require("node:module").syncBuiltinESMExports();
 const attempts = ${JSON.stringify(attemptsFile)};
 globalThis.fetch = async (url, init) => {
   if (process.env.BT_ACTIVATION_FIXTURE_COMPUTE !== "1" || url !== ${JSON.stringify(endpoint)} || init?.method !== "POST") {
@@ -70,12 +90,14 @@ globalThis.fetch = async (url, init) => {
 
     const activation = { provider: "anthropic", currency: "USD", max_cost_per_attempt_micros: 12_000,
       max_cost_per_24h_micros: 50_000 };
-    const submit = () => requestJson(port, "/owner/llm-settings-proposal", { method: "POST", token: ownerToken,
-      body: { expected_provider: "stub", patch: { llm: { model, max_tokens: 384, timeout_ms: 4_000, activation } } },
+    const submit = (registerCredential = register) => requestJson(port, "/owner/llm-settings-proposal", { method: "POST", token: ownerToken,
+      body: { expected_provider: "stub", patch: { llm: { model, max_tokens: 384, timeout_ms: 4_000,
+        activation: { ...activation, ...(registerCredential ? { register_credential: true } : {}) } } } },
+      ...(registerCredential ? { origin: `http://127.0.0.1:${port}` } : {}),
       signal: AbortSignal.timeout(10_000) });
-    expect((await submit()).status).toBe(409);
-    const stored = storeLlmApiKeySecret("ANTHROPIC_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
-    const eligible = base + `${stored.ref_key}=${JSON.stringify(stored.ref)}\n`;
+    expect((await submit(false)).status).toBe(409);
+    const stored = register ? undefined : storeLlmApiKeySecret("ANTHROPIC_API_KEY", fixtureSecret, { envFilePath: envFile, env: {} });
+    const eligible = stored ? base + `${stored.ref_key}=${JSON.stringify(stored.ref)}\n` : base;
     writeFileSync(envFile, eligible + 'anthropic_endpoint="https://example.invalid/v1/messages"\n');
     expect((await submit()).status).toBe(409);
     writeFileSync(envFile, eligible + 'ANTHROPIC_ENDPOINT="https://example.invalid/v1/messages"\n');
@@ -86,6 +108,8 @@ globalThis.fetch = async (url, init) => {
     expect(proposal.body).toMatchObject({ status: "approval_required", accepted: true, command_id: expect.any(String) });
     expect(readFileSync(envFile, "utf8")).toBe(eligible);
     expect(existsSync(attemptsFile)).toBe(false);
+    expect(existsSync(promptsFile)).toBe(false);
+    if (register) expect(existsSync(join(root, "secrets"))).toBe(false);
 
     const commandId = String(proposal.body.command_id);
     const approvalRoute = `/approval/${encodeURIComponent(commandId)}`;
@@ -98,23 +122,48 @@ globalThis.fetch = async (url, init) => {
     expect(review.headers.get("cache-control")).toBe("no-store");
     const reviewText = await review.text();
     expect(reviewText).not.toContain(fixtureSecret);
-    expect(reviewText).not.toContain(stored.ref);
+    if (stored) expect(reviewText).not.toContain(stored.ref);
     const evidence = JSON.parse(reviewText);
     expect(evidence).toMatchObject({ expected_llm_provider: "stub", activation: {
-      ...activation, destination: endpoint, protected_reference_configured: true,
+      ...activation, destination: endpoint, protected_reference_configured: !register,
+      ...(register ? { credential_registration_required: true } : {}),
     }, changes: expect.arrayContaining([{ key: "llm.provider", before: "stub", after: "anthropic" }]) });
-
-    const applied = await requestJson(port, approvalRoute, { method: "POST", token: resumeToken,
-      body: { verdict: "approve", approval_token: pending!.approval_token, content_review_digest: evidence.review_digest },
-      signal: AbortSignal.timeout(10_000) });
-    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    const approvalBody = { verdict: "approve", approval_token: pending!.approval_token, content_review_digest: evidence.review_digest };
+    const nativeApproval = (origin: string) => requestJson(port, `${approvalRoute}/native-credential`, { method: "POST", token: resumeToken,
+      body: approvalBody, origin, signal: AbortSignal.timeout(50_000) });
+    const ordinaryApproval = () => requestJson(port, approvalRoute, { method: "POST", token: resumeToken,
+      body: approvalBody, signal: AbortSignal.timeout(10_000) });
+    if (register) {
+      expect((await ordinaryApproval()).status).toBe(409);
+      expect((await nativeApproval("https://example.invalid")).status).toBe(403);
+      expect(existsSync(promptsFile)).toBe(false);
+      expect(readFileSync(envFile, "utf8")).toBe(eligible);
+    }
+    const applied = await (register ? nativeApproval(`http://127.0.0.1:${port}`) : ordinaryApproval());
+    const history = readFileSync(join(root, "complete-history.jsonl"), "utf8");
+    const diagnostic = `${JSON.stringify(applied.body)}; native prompt started: ${existsSync(promptsFile)}; ` +
+      [...new Set(history.match(/\b(?:llm_credential_|settings_write_)[a-z_]+/gu))].join(", ");
+    expect(applied.status, diagnostic).toBe(200);
     expect(applied.body).toMatchObject({ result: { approval: "approve", status: "success" } });
     const saved = readFileSync(envFile, "utf8");
     expect(saved).toContain('LLM_BACKEND="anthropic"');
     expect(saved).toContain('UNRELATED_SETTING=kept');
-    expect(saved).toContain(stored.ref);
+    if (stored) expect(saved).toContain(stored.ref);
+    const savedRef = parseEnvFile(saved).values.ANTHROPIC_API_KEY_REF;
+    expect(savedRef).toMatch(/^win32-dpapi-current-user:file:/u);
+    expect(JSON.stringify(applied.body)).not.toContain(savedRef!);
+    expect(JSON.stringify(applied.body)).not.toContain(fixtureSecret);
     expect(saved).not.toContain(fixtureSecret);
     expect(existsSync(attemptsFile)).toBe(false);
+    expect(gateway.output.join("")).not.toContain(fixtureSecret);
+    expect(history).not.toContain(fixtureSecret);
+    expect(history).not.toContain(savedRef!);
+    if (register) {
+      expect((await nativeApproval(`http://127.0.0.1:${port}`)).status).toBe(409);
+      expect((await submit()).status).toBe(409);
+      expect(readFileSync(promptsFile, "utf8")).toBe("native-prompt\n");
+      expect(readdirSync(join(root, "secrets"))).toHaveLength(1);
+    }
 
     await stopChild(gateway.child);
     gateway = spawnGateway({ ...env, BT_ACTIVATION_FIXTURE_COMPUTE: "1" }, preload);
@@ -2268,7 +2317,7 @@ async function reserveLoopbackPort(): Promise<number> {
 async function requestJson(
   port: number,
   route: string,
-  options: { method?: string; token?: string; body?: Record<string, unknown>; signal?: AbortSignal } = {},
+  options: { method?: string; token?: string; body?: Record<string, unknown>; signal?: AbortSignal; origin?: string } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await fetch(`http://127.0.0.1:${port}${route}`, {
     method: options.method ?? "GET",
@@ -2276,6 +2325,7 @@ async function requestJson(
     headers: {
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
       ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(options.origin ? { origin: options.origin } : {}),
     },
     ...(options.body ? { body: JSON.stringify(options.body) } : {}),
   });

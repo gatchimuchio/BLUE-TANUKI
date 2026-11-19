@@ -701,7 +701,10 @@ export interface SettingsWriteContentReview {
   kind: "settings_write";
   operation: "settings.write";
   expected_llm_provider?: SettingsWriteLlmProvider;
-  activation?: SettingsWriteActivation & { destination: string; protected_reference_configured: true };
+  activation?: Omit<SettingsWriteActivation, "register_credential"> & { destination: string } & (
+    | { protected_reference_configured: true; credential_registration_required?: never }
+    | { protected_reference_configured: false; credential_registration_required: true }
+  );
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" |
       "composio.user_id" | "composio.allowed_toolkits" | "composio.allowed_actions" |
@@ -1006,6 +1009,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Gateway-controlled one-shot gate immediately before a guarded browser form GET. */
   before_browser_form_submit?: () => void;
+  /** Rechecks the consumed ticket and current authority after protected local input. */
+  assert_current_settings_write?: () => void;
   /** Local worker lifecycle only; the observer cannot authorize or complete a command. */
   on_execution_lifecycle?: (event: ToolExecutionLifecycleObservation) => void;
 }

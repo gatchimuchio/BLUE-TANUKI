@@ -20,7 +20,8 @@ import {
   verifyLlmConfiguration,
 } from "./control_center/setup/api_settings.js";
 import { LLM_VERIFY_ROUTE } from "./control_center/setup/setup_page.js";
-import { connectorSecretStorageStatus, llmSecretStorageStatus } from "./secret_store.js";
+import { connectorSecretStorageStatus, llmApiKeyForProvider, llmSecretStorageStatus, storeLlmApiKeySecret,
+  type LlmSecretStoreResult } from "./secret_store.js";
 import { prepareLlmProviderActivation } from "./llm_provider_activation.js";
 import { parseSlackInboundGrants } from "./slack_inbound_grants.js";
 import { inspectMcpCatalogFromSettings, type McpCatalogProjection } from "./mcp_connection_client.js";
@@ -34,6 +35,7 @@ export interface SettingsSurfaceOptions {
   env?: NodeJS.ProcessEnv;
   plugins: PluginRuntime;
   mcpRuntimeObservations?: McpRuntimeObservationStore;
+  nativeCredentialPromptAvailable?: true;
 }
 
 function describeMcpRuntimeObservation(observation: McpRuntimeObservationSnapshot): string {
@@ -74,6 +76,7 @@ export interface SettingsSnapshot {
     model: string | null;
     endpoint: string | null;
     api_key_set: boolean;
+    native_credential_prompt_available?: true;
     secret_storage: ReturnType<typeof llmSecretStorageStatus>;
     temperature: number | null;
     max_tokens: number | null;
@@ -196,8 +199,33 @@ function envFilePath(env: Env): string | undefined {
   return raw && raw.trim().length > 0 ? path.resolve(raw) : undefined;
 }
 
+type NativeLlmCredentialRegistration = {
+  request(provider: "anthropic" | "openai" | "openrouter", signal: AbortSignal): Promise<Buffer | null>;
+  assertCurrent(commandDigest: string): void;
+};
+
+async function assertLocalCredentialTarget(target: string, env: Env): Promise<void> {
+  const parent = path.dirname(path.resolve(target));
+  const physicalParent = await fs.realpath(parent);
+  if (physicalParent.toLowerCase() !== parent.toLowerCase() || !/^[A-Za-z]:\\/u.test(physicalParent)) {
+    throw new Error("llm_credential_registration_target_unavailable");
+  }
+  const syncedRoots = [env.OneDrive, env.OneDriveConsumer, env.OneDriveCommercial];
+  if (syncedRoots.some((root) => {
+    if (!root) return false;
+    const relative = path.relative(path.resolve(root).toLowerCase(), physicalParent.toLowerCase());
+    return !relative || (!relative.startsWith("..\\") && relative !== ".." && !path.isAbsolute(relative));
+  })) throw new Error("llm_credential_registration_target_unavailable");
+  try {
+    const directory = await fs.lstat(path.join(physicalParent, "secrets"));
+    if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("llm_credential_registration_target_unavailable");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
 export function createGatewaySettingsWritePort(env: Env = process.env,
-  inheritedEnvKeys: readonly string[] = []): SettingsWritePort {
+  inheritedEnvKeys: readonly string[] = [], nativeRegistration?: NativeLlmCredentialRegistration): SettingsWritePort {
   const bindingKey = randomBytes(32);
   let writeTail: Promise<void> = Promise.resolve();
   const serializeWrite = async <T>(write: () => Promise<T>): Promise<T> => {
@@ -249,6 +277,10 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     const managedLlmSettings = env.BLUE_TANUKI_SAFE_MODE !== "1" && !hasInheritedLlmSettings &&
       !hasAlternateLlmRoute(env) && !hasAlternateLlmRoute(configuredEnv) &&
       defaultLlmProvider(env) === config.llm.provider && defaultLlmProvider(configuredEnv) === config.llm.provider;
+    if (activationPatch?.activation?.register_credential && expectedLlmProvider === config.llm.provider && managedLlmSettings) {
+      if (!nativeRegistration) throw new Error("llm_credential_registration_unavailable");
+      await assertLocalCredentialTarget(target, env);
+    }
     const activationUpdates = activationPatch?.activation && expectedLlmProvider === config.llm.provider && managedLlmSettings
       ? prepareLlmProviderActivation(activationPatch, expectedLlmProvider, parsed.values, configuredEnv, inheritedEnvKeys)
       : undefined;
@@ -284,7 +316,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       return { target_state_digest, llm_provider, managed_llm_settings, values,
         ...(activationUpdates ? { provider_activation_ready: true as const } : {}) };
     },
-    apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider) => serializeWrite(async () => {
+    apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider, context) => serializeWrite(async () => {
       const activationPatch = patch.llm?.activation ? patch.llm : undefined;
       const state = await inspectCurrent(expectedLlmProvider, activationPatch);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
@@ -316,23 +348,77 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         }
       }
       if (Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
-      const content = patchEnvDocument(state.raw, updates);
-      const latest = await inspectCurrent(expectedLlmProvider, activationPatch);
-      if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
-        throw new Error("settings_write_target_changed_before_persist");
+      const recheckTarget = async () => {
+        const latest = await inspectCurrent(expectedLlmProvider, activationPatch);
+        if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
+          throw new Error("settings_write_target_changed_before_persist");
+        }
+        if (expectedLlmProvider !== undefined &&
+            (latest.llm_provider !== expectedLlmProvider || !latest.managed_llm_settings)) {
+          throw new Error("settings_write_bound_llm_target_unavailable");
+        }
+        if (activationPatch && !latest.activationUpdates) throw new Error("llm_activation_not_ready");
+      };
+      const activation = activationPatch?.activation;
+      let stored: LlmSecretStoreResult | undefined;
+      let replacementAttempted = false;
+      const recheckRegistration = () => {
+        if (!nativeRegistration || !context?.signal || context.signal.aborted) {
+          throw new Error("llm_credential_registration_not_authorized");
+        }
+        nativeRegistration.assertCurrent(context.command_digest);
+        context.assert_current();
+      };
+      try {
+        if (activation?.register_credential) {
+          if (!nativeRegistration || !context?.signal) throw new Error("llm_credential_registration_not_authorized");
+          recheckRegistration();
+          const credential = await nativeRegistration.request(activation.provider, context.signal);
+          if (!credential) throw new Error("llm_credential_registration_cancelled");
+          try {
+            await recheckTarget();
+            recheckRegistration();
+            const key = llmApiKeyForProvider(activation.provider);
+            if (!key) throw new Error("llm_credential_registration_not_authorized");
+            try {
+              stored = storeLlmApiKeySecret(key, credential.toString("utf8"), { envFilePath: state.target });
+            } catch {
+              throw new Error("llm_credential_registration_storage_failed");
+            }
+            updates[stored.ref_key] = stored.ref;
+          } finally { credential.fill(0); }
+        }
+        const content = patchEnvDocument(state.raw, updates);
+        await recheckTarget();
+        await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write",
+          ...(stored ? { before_replace: async () => {
+            await recheckTarget();
+            recheckRegistration();
+            replacementAttempted = true;
+          } } : {}) });
+      } catch (error) {
+        if (stored) {
+          const current = replacementAttempted ? await inspectCurrent(expectedLlmProvider).catch(() => undefined) : undefined;
+          if ((replacementAttempted && current?.target_state_digest !== expectedTargetStateDigest) || !stored.discard_uncommitted()) {
+            throw new Error("llm_credential_registration_outcome_unknown");
+          }
+        }
+        if (activation?.register_credential) {
+          const message = error instanceof Error ? error.message : "";
+          throw new Error(/^(?:llm_credential_(?:prompt|registration)_[a-z_]+|settings_write_target_changed_before_persist)$/u.test(message)
+            ? message : "llm_credential_registration_failed");
+        }
+        throw error;
       }
-      if (expectedLlmProvider !== undefined &&
-          (latest.llm_provider !== expectedLlmProvider || !latest.managed_llm_settings)) {
-        throw new Error("settings_write_bound_llm_target_unavailable");
-      }
-      if (activationPatch && !latest.activationUpdates) throw new Error("llm_activation_not_ready");
-      await writeEnvFileAtomic(state.target, content, { mode: 0o600, backup: true, backup_label: "settings-write" });
-      const saved = await inspectCurrent(expectedLlmProvider);
+      const saved = await inspectCurrent(expectedLlmProvider).catch((error: unknown) => {
+        if (stored) throw new Error("llm_credential_registration_outcome_unknown");
+        throw error;
+      });
       if (activationPatch) {
         const observed = parseEnvFile(saved.raw);
         if (saved.llm_provider !== activationPatch.activation?.provider ||
             Object.entries(updates).some(([key, value]) => observed.values[key] !== value)) {
-          throw new Error("llm_activation_readback_mismatch");
+          throw new Error(stored ? "llm_credential_registration_outcome_unknown" : "llm_activation_readback_mismatch");
         }
       }
       const expectedValues = {
@@ -354,7 +440,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         },
       };
       if (JSON.stringify(saved.values) !== JSON.stringify(expectedValues)) {
-        throw new Error("settings_write_readback_mismatch");
+        throw new Error(stored ? "llm_credential_registration_outcome_unknown" : "settings_write_readback_mismatch");
       }
       return { changed_keys: Object.keys(updates).sort(), restart_required: true as const };
     }),
@@ -603,7 +689,9 @@ export function createWebChatSettingsSurface(
     html: renderSettingsHtml,
     getSnapshot: async () => {
       const persistedEnv = await readEnvFileEnv(envFilePath(env));
-      return buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
+      const snapshot = buildSettingsSnapshot({ ...env, ...persistedEnv }, opts.plugins, mcpObservations);
+      if (opts.nativeCredentialPromptAvailable) snapshot.llm.native_credential_prompt_available = true;
+      return snapshot;
     },
     verifyLlm: async (body) => verifyLlmConfiguration(body, env, opts.plugins),
     inspectMcpEndpoint: async (endpointInput) => {

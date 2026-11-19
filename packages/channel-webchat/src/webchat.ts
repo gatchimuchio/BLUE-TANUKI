@@ -180,10 +180,18 @@ function loopbackRequestOrigin(req: IncomingMessage, requireOrigin: boolean): bo
   if (typeof origin !== "string") return false;
   try {
     const originUrl = new URL(origin);
-    return originUrl.origin === hostUrl.origin && originUrl.username === "" && originUrl.password === "";
+    return originUrl.origin === hostUrl.origin && originUrl.username === "" && originUrl.password === "" &&
+      originUrl.pathname === "/" && !originUrl.search && !originUrl.hash;
   } catch {
     return false;
   }
+}
+
+function isLocalControlCenterBrowserRequest(req: IncomingMessage): boolean {
+  const fetchSite = req.headers["sec-fetch-site"];
+  return isLoopbackClientAddress(req.socket.remoteAddress) && loopbackRequestOrigin(req, true) &&
+    (fetchSite === undefined || fetchSite === "same-origin") &&
+    !Object.keys(req.headers).some(name => name === "forwarded" || name.startsWith("x-forwarded-"));
 }
 
 function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record<string, unknown>): void {
@@ -276,9 +284,13 @@ function validSettingsActivationReview(review: WebChatSettingsWriteContentReview
     "activation", "changes", "request_payload_digest", "target_version_digest", "operation_plan_binding_digest",
     "no_store", "used_for_authority", "may_execute",
   ])) return false;
-  const { destination, protected_reference_configured, ...selection } = review.activation;
-  const parsed = SettingsWriteActivationSchema.safeParse(selection);
-  if (!parsed.success || protected_reference_configured !== true ||
+  const { destination, protected_reference_configured, credential_registration_required, ...selection } = review.activation;
+  const registersCredential = protected_reference_configured === false && credential_registration_required === true;
+  const usesProtectedReference = protected_reference_configured === true &&
+    !Object.hasOwn(review.activation, "credential_registration_required");
+  if ((!registersCredential && !usesProtectedReference) || Object.hasOwn(selection, "register_credential")) return false;
+  const parsed = SettingsWriteActivationSchema.safeParse({ ...selection, ...(registersCredential ? { register_credential: true } : {}) });
+  if (!parsed.success ||
       destination !== SETTINGS_WRITE_ACTIVATION_DESTINATIONS[parsed.data.provider]) return false;
   const fields = new Map<string, unknown>();
   for (const change of review.changes) {
@@ -1174,6 +1186,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
       });
       res.end(renderControlCenterHtml());
       return;
@@ -2576,7 +2590,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const actor = RESUME_TOKEN_ACTOR;
       if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
         return;
-      if (this.opts.approval?.requiresApprovalEndpoint?.(request_id)) {
+      if (this.opts.approval?.requiresApprovalEndpoint?.(request_id) ||
+          (verdict === "approve" && this.opts.approval?.requiresNativeCredentialApproval?.(request_id))) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_endpoint_required" }));
         return;
@@ -2890,6 +2905,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res: ServerResponse,
     url: URL,
   ): Promise<void> {
+    const nativeCredentialMatch = /^\/approval\/([^/]+)\/native-credential$/.exec(url.pathname);
+    if (nativeCredentialMatch) {
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-content-type-options", "nosniff");
+    }
     if (!this.checkAuth(req, "resume")) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
@@ -3184,15 +3204,55 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "approval_not_configured" }));
       return;
     }
-    const approval_id = decodeURIComponent(url.pathname.slice(prefix.length));
+    if (nativeCredentialMatch) {
+      if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+        return;
+      }
+      if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        res.writeHead(415, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "application_json_required" }));
+        return;
+      }
+      if (!this.resumeApprovalTokenStore || !this.opts.approval?.validateContentReview || !this.opts.approval.reviewContent) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "credential_registration_unavailable" }));
+        return;
+      }
+    }
+    let approval_id: string;
+    try {
+      approval_id = decodeURIComponent(nativeCredentialMatch?.[1] ?? url.pathname.slice(prefix.length));
+    } catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "approval_id_invalid" }));
+      return;
+    }
     if (!approval_id) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "approval id required" }));
       return;
     }
 
-    const body = await readJson(req);
+    let body: Record<string, unknown> | null;
+    try {
+      body = nativeCredentialMatch ? await readJson(req, 1_024, true) : await readJson(req);
+    } catch (error) {
+      if (!nativeCredentialMatch || !(error instanceof Error) || error.message !== "body_too_large") throw error;
+      res.writeHead(413, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "request_body_too_large" }));
+      return;
+    }
     const verdict = body?.verdict;
+    if (nativeCredentialMatch && (!body || !hasExactKeys(body, ["verdict", "approval_token", "content_review_digest"]) ||
+        verdict !== "approve" || !/^[a-zA-Z0-9_-]{1,128}$/.test(approval_id) ||
+        typeof body.approval_token !== "string" || !body.approval_token ||
+        typeof body.content_review_digest !== "string" || !/^[a-f0-9]{64}$/.test(body.content_review_digest))) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid_credential_registration_approval" }));
+      return;
+    }
     if (verdict !== "approve" && verdict !== "reject" && verdict !== "block") {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "verdict (approve|reject|block) required" }));
@@ -3203,7 +3263,24 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const content_review_digest = typeof body?.content_review_digest === "string"
       ? body.content_review_digest
       : undefined;
+    const requiresNativeCredentialApproval = this.opts.approval?.requiresNativeCredentialApproval?.(approval_id) === true;
+    if (verdict === "approve" && requiresNativeCredentialApproval !== Boolean(nativeCredentialMatch)) {
+      res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: requiresNativeCredentialApproval ? "native_credential_approval_required" : "credential_registration_unavailable" }));
+      return;
+    }
     const requiresApprovalEndpoint = this.opts.approval?.requiresApprovalEndpoint?.(approval_id) === true;
+    if (nativeCredentialMatch) {
+      const reviewed = await this.opts.approval?.reviewContent?.(approval_id).catch(() => null);
+      if (reviewed?.kind !== "settings_write" || !validSettingsActivationReview(reviewed) ||
+          reviewed.activation?.credential_registration_required !== true || reviewed.command_id !== approval_id ||
+          reviewed.review_digest !== content_review_digest || reviewed.no_store !== true ||
+          reviewed.used_for_authority !== false || reviewed.may_execute !== false) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+        return;
+      }
+    }
     let contentReviewValidated = false;
     if (verdict === "approve" && this.opts.approval?.validateContentReview) {
       let review: WebChatApprovalContentReviewValidation;
@@ -3217,7 +3294,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (review !== "valid" && review !== "not_required") {
+      if (review !== "valid" && (nativeCredentialMatch || review !== "not_required")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
         return;
@@ -3234,8 +3311,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         actor,
         token_kind: "resume",
         ...(content_review_digest ? { content_review_digest } : {}),
-        approval: readResumeApprovalOptions(body),
+        ...(nativeCredentialMatch ? { native_credential_prompt: true } : { approval: readResumeApprovalOptions(body) }),
       });
+      if (nativeCredentialMatch) {
+        const candidate = result as Record<string, unknown> | undefined;
+        if (candidate?.approval !== "approve" || candidate.executed !== true || candidate.status !== "success") {
+          res.writeHead(409, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "credential_registration_unconfirmed" }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, result: { approval: "approve", executed: true, status: "success" } }));
+        return;
+      }
       if (result !== null && typeof result === "object" &&
           ("handoff_code" in result || ("status" in result && result.status === "offline_goal_purpose_repair_prepared"))) {
         const candidate = result as Record<string, unknown>;
@@ -3263,8 +3351,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, result }));
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      res.writeHead(400, { "content-type": "application/json" });
+      const msg = nativeCredentialMatch ? "credential_registration_unconfirmed" : e instanceof Error ? e.message : String(e);
+      res.writeHead(nativeCredentialMatch ? 409 : 400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: msg }));
     }
   }
@@ -4087,6 +4175,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (!body || !hasExactKeys(body, fields) || !provider.success || !parsed.success || !parsed.data.patch.llm || (hasGoal && !goal)) {
       res.writeHead(400);
       res.end(JSON.stringify({ error: "invalid_owner_llm_settings_proposal" }));
+      return;
+    }
+    if (parsed.data.patch.llm.activation?.register_credential === true && !isLocalControlCenterBrowserRequest(req)) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
       return;
     }
     const projection = { used_for_authority: false, may_execute: false } as const;

@@ -13,6 +13,9 @@ export const SETTINGS_WRITE_ACTIVATION_DESTINATIONS = Object.freeze({
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
 } as const);
 
+export const SETTINGS_WRITE_NATIVE_CREDENTIAL_ENTRY_WINDOW_MS = 120_000;
+export const SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS = 150_000;
+
 const ActivationCostMicrosSchema = z.number().int().min(1).max(1_000_000_000);
 
 export const SettingsWriteActivationSchema = z.object({
@@ -20,6 +23,7 @@ export const SettingsWriteActivationSchema = z.object({
   currency: z.literal("USD"),
   max_cost_per_attempt_micros: ActivationCostMicrosSchema,
   max_cost_per_24h_micros: ActivationCostMicrosSchema,
+  register_credential: z.literal(true).optional(),
 }).strict().refine((activation) => activation.max_cost_per_attempt_micros <= activation.max_cost_per_24h_micros,
   "per-attempt cost must not exceed the 24-hour budget");
 
@@ -123,6 +127,7 @@ export function llmSettingsWriteEnvKeys(patch: NonNullable<SettingsWritePatch["l
   const keys = Object.keys(llmSettingsWriteEnvPatch(patch, patch.activation?.provider ?? currentProvider));
   if (patch.activation) {
     keys.push("LLM_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON", "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON");
+    if (patch.activation.register_credential) keys.push(`${patch.activation.provider.toUpperCase()}_API_KEY_REF`);
   }
   return keys.sort();
 }

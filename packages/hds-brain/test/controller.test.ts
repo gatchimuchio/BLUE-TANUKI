@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   createGatewayInternalInboundRequest,
   meaningUpdateCandidateDigest,
+  SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   type ExecuteCommand,
   type ExecuteFeedback,
   type InboundRequest,
@@ -134,7 +135,8 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       })}`);
       expect(controller.decide({ ...review }).command).toBeNull();
       const reviewed = controller.decide(review);
-      expect(reviewed.command).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: args } });
+      expect(reviewed.command).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: args },
+        constraints: { timeout_ms: 15_000 } });
       expect(evaluateApproval(reviewed.command!, [], { actor: origin.user, default_mode: "full_access" }))
         .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write" } });
     } finally {
@@ -163,7 +165,7 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
     }
   });
 
-  it("binds native activation and its exact restart receipt to authenticated structured input", () => {
+  it.each([false, true])("binds native activation and its exact restart receipt to authenticated structured input (register credential: %s)", (registerCredential) => {
     const root = mkdtempSync(join(tmpdir(), "blue-tanuki-owner-settings-activation-"));
     let saved: OperationPlanCheckpoint | undefined;
     let recoveryHolds: unknown;
@@ -175,7 +177,7 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       operation_plan_state: planState });
     const llm = { model: "fixture-openai-model", max_tokens: 256, timeout_ms: 1_000,
       activation: { provider: "openai", currency: "USD", max_cost_per_attempt_micros: 5_000,
-        max_cost_per_24h_micros: 20_000 } };
+        max_cost_per_24h_micros: 20_000, ...(registerCredential ? { register_credential: true as const } : {}) } };
     const activationArgs = { expected_llm_provider: "stub", patch: { llm } };
     try {
       const origin = ownerOrigin("settings-activation", "prepare owner settings activation");
@@ -185,6 +187,7 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
         { ...activationArgs, patch: { llm: { ...llm, model: undefined } } },
         ...[
           { provider: "openai-compatible" }, { currency: "JPY" }, { credential_ref: "fixture-ref" },
+          { register_credential: false }, { register_credential: "true" }, { api_key: "fixture-never-accepted" },
           { max_cost_per_attempt_micros: 0 }, { max_cost_per_attempt_micros: 20_001 },
           { max_cost_per_attempt_micros: 5_000.5 }, { max_cost_per_24h_micros: 1_000_000_001 },
         ].map((field) => ({ ...activationArgs, patch: { llm: { ...llm, activation: { ...llm.activation, ...field } } } })),
@@ -197,7 +200,7 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       expect(plan.steps[0]?.preparation?.validation[0]?.expected).toEqual({
         changed_keys: ["BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON", "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON",
           "BLUE_TANUKI_LLM_MAX_TOKENS", "BLUE_TANUKI_LLM_MODEL", "BLUE_TANUKI_LLM_TIMEOUT_MS", "LLM_BACKEND",
-          "LLM_MODEL", "OPENAI_MODEL"],
+          "LLM_MODEL", ...(registerCredential ? ["OPENAI_API_KEY_REF"] : []), "OPENAI_MODEL"],
         restart_required: true,
       });
 
@@ -214,7 +217,8 @@ describe("HDSUpperController.prepareSettingsWritePlan()", () => {
       })}`);
       expect(controller.decide({ ...review }).command).toBeNull();
       const selected = controller.decide(review).command;
-      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: activationArgs } });
+      expect(selected).toMatchObject({ type: "tool_call", payload: { tool_name: "settings.write", arguments: activationArgs },
+        constraints: { timeout_ms: registerCredential ? SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS : 15_000 } });
       expect(evaluateApproval(selected!, [], { actor: origin.user, default_mode: "full_access" }))
         .toMatchObject({ decision: "ask", final_review_required: true, context: { operation: "settings.write" } });
     } finally {

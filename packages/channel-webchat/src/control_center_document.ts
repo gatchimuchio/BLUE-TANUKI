@@ -388,7 +388,11 @@ ${CONTROL_CENTER_STYLE}    </style>
               <label>1回の試行あたり（USD）<input id="settings-cost-per-attempt" type="number" min="0.000001" max="1000" step="0.000001" autocomplete="off" /></label>
               <label>UTC日ごとの合計（USD）<input id="settings-cost-per-24h" type="number" min="0.000001" max="1000" step="0.000001" autocomplete="off" /></label>
             </div>
-            <p class="muted">OSの保護ストアに登録済みの資格情報が必要です。設定した上限は計算予算台帳でシステム全体、親成果、個別タスクに適用します。請求額はプロバイダー側で確定します。</p>
+            <div id="settings-native-credential-option" hidden>
+              <label><input id="settings-register-credential" type="checkbox" autocomplete="off" />Windowsの保護ストアに資格情報を新規登録する</label>
+              <p class="muted">承認後にWindowsの資格情報入力画面が開きます。</p>
+            </div>
+            <p class="muted">切り替えには切り替え先の資格情報が必要です。設定した上限は計算予算台帳でシステム全体、親成果、個別タスクに適用します。請求額はプロバイダー側で確定します。</p>
           </fieldset>
           <p id="settings-compute-readiness" class="badge warn" role="status">通常Computeの設定は未確認です。</p>
           <div class="action-row">
@@ -714,6 +718,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="clear-emergency-stop" type="button">Clear Stop</button>
           </div>
           <p id="owner-task-adoption-review-status" class="muted" role="status"></p>
+          <p id="native-credential-approval-status" class="muted" role="status"></p>
           <h3>Active executions</h3>
           <p class="muted">Cancel requests signal the matching command only. Request acceptance, executor settlement, local process-tree evidence, and external-provider stop are separate observations.</p>
           <div class="status-grid">

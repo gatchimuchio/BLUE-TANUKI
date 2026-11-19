@@ -14,7 +14,7 @@ type Env = NodeJS.ProcessEnv;
 
 const COST_PROFILES_KEY = "BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON";
 const COMPUTE_BUDGET_KEY = "BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON";
-const ACTIVATION_ENV_KEY = /^(?:LLM_|ANTHROPIC_|OPENAI_|OPENROUTER_|BLUE_TANUKI_LLM_|BLUE_TANUKI_COMPUTE_BUDGET_POLICY_JSON$)/u;
+const ACTIVATION_ENV_KEY = /^(?:LLM_|ANTHROPIC_|OPENAI_|OPENROUTER_|BLUE_TANUKI_LLM_|BLUE_TANUKI_(?:COMPUTE_BUDGET_POLICY_JSON|SECRET_DIR)$)/u;
 const ENDPOINT_KEYS = {
   anthropic: ["ANTHROPIC_ENDPOINT"],
   openai: ["OPENAI_COMPAT_ENDPOINT", "OPENAI_ENDPOINT", "LLM_ENDPOINT"],
@@ -43,9 +43,16 @@ export function prepareLlmProviderActivation(
   const referenceKey = secretRefKey(credentialKey);
   const reference = fileEnv[referenceKey];
   const inherited = new Set(inheritedEnvKeys.map((key) => key.toUpperCase()));
-  if (!reference || configuredEnv[referenceKey] !== reference || !llmSecretStorageStatus(configuredEnv, provider).os_protected ||
-      [credentialKey, referenceKey, COST_PROFILES_KEY, COMPUTE_BUDGET_KEY, ...ENDPOINT_KEYS[provider]].some((key) => inherited.has(key)) ||
+  if ([credentialKey, referenceKey, COST_PROFILES_KEY, COMPUTE_BUDGET_KEY, ...ENDPOINT_KEYS[provider]].some((key) => inherited.has(key)) ||
       ENDPOINT_KEYS[provider].some((key) => configuredEnv[key]?.trim() && configuredEnv[key]?.trim() !== destination)) {
+    throw new Error("llm_activation_protected_route_unavailable");
+  }
+  if (activation.register_credential) {
+    if (configuredEnv[credentialKey] !== undefined || configuredEnv[referenceKey] !== undefined ||
+        configuredEnv.BLUE_TANUKI_SECRET_DIR !== undefined || inherited.has("BLUE_TANUKI_SECRET_DIR")) {
+      throw new Error("llm_credential_registration_target_unavailable");
+    }
+  } else if (!reference || configuredEnv[referenceKey] !== reference || !llmSecretStorageStatus(configuredEnv, provider).os_protected) {
     throw new Error("llm_activation_protected_route_unavailable");
   }
   const unsupportedOverrides = provider === "openai"
@@ -80,7 +87,9 @@ export function prepareLlmProviderActivation(
   profiles[canonicalProvider] = { capabilities: ["llm.text.generate"], max_cost_per_attempt: attemptCost };
   const updates = { ...llmSettingsWriteEnvPatch(patch, provider), LLM_BACKEND: provider,
     [COST_PROFILES_KEY]: JSON.stringify(profiles), [COMPUTE_BUDGET_KEY]: JSON.stringify(budget) };
-  const readiness = assessLlmComputeReadiness({ ...configuredEnv, ...updates });
+  // Only the configuration-only pricing check assumes a future credential. The reference is created after L3.
+  const readiness = assessLlmComputeReadiness({ ...configuredEnv, ...updates,
+    ...(activation.register_credential ? { [referenceKey]: "configured-after-native-registration" } : {}) });
   if (readiness.status !== "ready" || readiness.currency !== activation.currency ||
       readiness.maximum_provider_attempts !== 1 || readiness.max_cost_amount !== attemptCost.amount ||
       readiness.max_tokens !== patch.max_tokens || readiness.max_compute_ms !== patch.timeout_ms) {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { resolve as resolvePath } from "node:path";
@@ -187,6 +188,7 @@ import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_c
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
+import { promptForLlmCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -1274,7 +1276,17 @@ async function serveWithOwnerLease(
   const memoryStore = buildHDSMemoryStore(process.env);
   const tools = new ToolRegistry();
   tools.register(createMemoryPersonalizationStopTool(memoryStore));
-  const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys);
+  const nativeCredentialApproval = new AsyncLocalStorage<{ commandDigest: string; assertCurrent: () => void }>();
+  const nativeCredentialPromptAvailable = process.platform === "win32" && process.env.BLUE_TANUKI_SAFE_MODE !== "1";
+  const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys,
+    nativeCredentialPromptAvailable ? {
+      request: promptForLlmCredential,
+      assertCurrent: (commandDigest) => {
+        const approval = nativeCredentialApproval.getStore();
+        if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
+        approval.assertCurrent();
+      },
+    } : undefined);
   tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
   let recoveryExecutionStore: GatewayExecutionIntentStore | undefined;
@@ -3957,12 +3969,26 @@ async function serveWithOwnerLease(
       requiresToolContentReview;
   }
 
+  function requiresNativeCredentialApproval(command: ExecuteCommand | undefined): boolean {
+    if (command?.type !== "tool_call" || command.payload.tool_name !== "settings.write") return false;
+    const args = SettingsWriteArgumentsSchema.safeParse(command.payload.arguments);
+    return args.success && args.data.patch.llm?.activation?.register_credential === true;
+  }
+
   async function resumePendingApproval(
     command_id: string,
     verdict: "approve" | "reject" | "block",
     ctx: WebChatResumeContext,
   ): Promise<unknown> {
     const pending = pendingApprovals.get(command_id);
+    const requiresNativePrompt = requiresNativeCredentialApproval(pending?.command);
+    const requestNativePrompt = ctx.native_credential_prompt === true;
+    if (requestNativePrompt && (!nativeCredentialPromptAvailable || !requiresNativePrompt || verdict !== "approve")) {
+      return { executed: false, pending: true, status: "llm_credential_registration_not_authorized" };
+    }
+    if (verdict === "approve" && requiresNativePrompt && !requestNativePrompt) {
+      return { executed: false, pending: true, status: "llm_credential_registration_native_approval_required" };
+    }
     const trackFinalization = !pending || !isRecoveryToolCommand(pending.command);
     if (verdict !== "approve" || !pending || !pendingApprovalNeedsContentReview(pending.command)) {
       let resolveFinalization!: () => void;
@@ -3991,6 +4017,15 @@ async function serveWithOwnerLease(
     const finalization = new Promise<void>((resolve) => { resolveFinalization = resolve; });
     if (trackFinalization) activeCommandFinalizations.add(finalization);
     try {
+      if (requestNativePrompt) {
+        return await nativeCredentialApproval.run({ commandDigest: operationPlanDigest(pending.command), assertCurrent: () => {
+          ownerLease.assertActive();
+          if (emergencyStop.active || gatewayShuttingDown || !pending.approval_token_expires_at_ms ||
+              Date.now() >= pending.approval_token_expires_at_ms || !hds.getAudit().isPersistent() || !hds.getAudit().verify()) {
+            throw new Error("llm_credential_registration_authority_changed");
+          }
+        } }, () => resumePendingApprovalCore(command_id, verdict, ctx, executionController));
+      }
       return await resumePendingApprovalCore(command_id, verdict, ctx, executionController);
     } finally {
       recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(command_id));
@@ -5089,6 +5124,7 @@ async function serveWithOwnerLease(
         env: process.env,
         plugins,
         mcpRuntimeObservations,
+        ...(nativeCredentialPromptAvailable ? { nativeCredentialPromptAvailable: true as const } : {}),
       }),
       runtime: {
         getSnapshot: async () => {
@@ -5145,6 +5181,7 @@ async function serveWithOwnerLease(
         list: async () => pendingApprovalSnapshot(),
         requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption ||
           pendingApprovals.get(id)?.goal_purpose_repair),
+        requiresNativeCredentialApproval: (id: string) => requiresNativeCredentialApproval(pendingApprovals.get(id)?.command),
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
           requestTaskExecutionCancellation(command_id, ctx),

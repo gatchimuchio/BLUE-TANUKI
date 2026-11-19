@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SettingsWriteArgumentsSchema } from "@blue-tanuki/protocol";
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, SettingsWriteArgumentsSchema, llmSettingsWriteEnvKeys } from "@blue-tanuki/protocol";
 import { createSettingsWriteTool } from "../src/tools/settings_write.js";
 
 const secret = "composio-secret-fixture-never-display";
@@ -141,6 +141,46 @@ describe("settings.write provider activation", () => {
 
     await expect(tool.inspect_target_version!(args, options)).rejects.toThrow("settings_write_provider_activation_unavailable");
     expect(gateway.apply).not.toHaveBeenCalled();
+  });
+
+  it("binds native registration in the no-store review and forwards the exact command and cancellation on invoke", async () => {
+    const gateway = await activationPort();
+    const tool = createSettingsWriteTool(gateway);
+    const llm = { ...args.patch.llm, activation: { ...args.patch.llm.activation, register_credential: true as const } };
+    const registerArgs = { ...args, patch: { llm } };
+    const review = await tool.inspect_content_review!(registerArgs, options);
+    const regularReview = await tool.inspect_content_review!(args, options);
+    expect(review.activation).toEqual({
+      ...args.patch.llm.activation,
+      destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+      protected_reference_configured: false,
+      credential_registration_required: true,
+    });
+    expect(review).toMatchObject({ no_store: true, used_for_authority: false, may_execute: false });
+    expect(review.request_payload_digest).not.toBe(regularReview.request_payload_digest);
+    expect(review.review_digest).not.toBe(regularReview.review_digest);
+    expect(gateway.apply).not.toHaveBeenCalled();
+
+    const target = await tool.inspect_target_version!(registerArgs, options);
+    const signal = new AbortController().signal;
+    const context = { command_id: "fixture", upstream_commit_hash: "d".repeat(64), signal,
+      operation_plan_command_digest: options.command_digest, target_version_observation: target };
+    await expect(tool.invoke(args, context)).rejects.toThrow("settings_write_approved_target_mismatch");
+    await expect(tool.invoke(registerArgs, { ...context, signal: AbortSignal.abort() })).rejects.toThrow("cancelled");
+    await expect(tool.invoke(registerArgs, context)).rejects.toThrow("llm_credential_registration_not_authorized");
+    expect(gateway.apply).not.toHaveBeenCalled();
+
+    const changed_keys = llmSettingsWriteEnvKeys(llm, "stub");
+    expect(changed_keys).toContain("OPENAI_API_KEY_REF");
+    expect(changed_keys).not.toContain("OPENAI_API_KEY");
+    gateway.apply.mockResolvedValue({ changed_keys, restart_required: true });
+    const assertCurrent = vi.fn();
+    await expect(tool.invoke(registerArgs, { ...context, assert_current_settings_write: assertCurrent }))
+      .resolves.toEqual({ changed_keys, restart_required: true });
+    expect(gateway.apply).toHaveBeenCalledTimes(1);
+    expect(gateway.apply).toHaveBeenCalledWith(registerArgs.patch, gateway.target.target_state_digest, "stub", {
+      command_digest: options.command_digest, signal, assert_current: assertCurrent,
+    });
   });
 
   it("rejects changed protected target state during review", async () => {

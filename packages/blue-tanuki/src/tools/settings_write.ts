@@ -38,7 +38,8 @@ export interface SettingsWritePort {
       };
     };
   }>;
-  apply(patch: SettingsWritePatch, expected_target_state_digest: string, expectedLlmProvider?: SettingsWriteLlmProvider): Promise<{
+  apply(patch: SettingsWritePatch, expected_target_state_digest: string, expectedLlmProvider?: SettingsWriteLlmProvider,
+    credentialRegistration?: { command_digest: string; signal?: AbortSignal; assert_current: () => void }): Promise<{
     changed_keys: readonly string[];
     restart_required: true;
   }>;
@@ -126,6 +127,14 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         throw new Error("settings_write_approved_target_mismatch");
       }
       assertToolExecutionNotCancelled(context.signal, "settings.write");
+      if (args.patch.llm?.activation?.register_credential) {
+        if (!context.assert_current_settings_write) throw new Error("llm_credential_registration_not_authorized");
+        return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider, {
+          command_digest: context.operation_plan_command_digest,
+          assert_current: context.assert_current_settings_write,
+          ...(context.signal ? { signal: context.signal } : {}),
+        });
+      }
       return port.apply(args.patch, observation.target_state_digest, args.expected_llm_provider);
     },
   };
@@ -145,10 +154,12 @@ function parseArgs(value: Record<string, unknown>): SettingsWriteArguments {
 
 export function settingsWriteActivationReview(activation: SettingsWriteActivation):
   NonNullable<SettingsWriteContentReview["activation"]> {
+  const { register_credential, ...approvedConfiguration } = activation;
   return {
-    ...activation,
+    ...approvedConfiguration,
     destination: SETTINGS_WRITE_ACTIVATION_DESTINATIONS[activation.provider],
-    protected_reference_configured: true,
+    ...(register_credential ? { protected_reference_configured: false, credential_registration_required: true }
+      : { protected_reference_configured: true }),
   };
 }
 

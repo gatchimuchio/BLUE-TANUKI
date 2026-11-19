@@ -45,6 +45,7 @@ import {
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
+  SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   llmSettingsWriteEnvKeys,
   settingsWriteRequestBinding,
   SettingsWriteTargetVersionObservationSchema,
@@ -220,7 +221,7 @@ import {
 } from "./failure-memory/review.js";
 import { FailureMemoryStore } from "./failure-memory/store.js";
 import { routeAction } from "./action_router.js";
-import { resolveActor } from "./process.js";
+import { resolveActor, resolveProcess } from "./process.js";
 import type { ApprovalEvaluation } from "./approval_policy.js";
 import {
   buildGatewayStatusOutputAuditLog,
@@ -1507,6 +1508,7 @@ export class HDSUpperController {
     }
     let req = boundary.request;
     let planControl: OperationPlanControl | undefined;
+    let selectedNativeCredentialRegistration = false;
     let planControlFailure: string | undefined;
     let failureReviewControlFailure: string | undefined;
     let failureReviewProjection: FailureReviewProjection | undefined;
@@ -1675,6 +1677,11 @@ ${planControl.question}`,
         const selection = this.operationPlans.inspectControl(planControl, req);
         if (selection.step) {
           const descriptor = getOperationDescriptor(selection.step.operation)!;
+          if (descriptor.tool_name === "settings.write") {
+            const settings = SettingsWriteArgumentsSchema.safeParse(selection.step.parameters);
+            selectedNativeCredentialRegistration = settings.success &&
+              settings.data.patch.llm?.activation?.register_credential === true;
+          }
           const resourceUseReview = selection.resource_use_review?.resource_use;
           const resourceUseNote = resourceUseReview
             ? `資源消費記録（待機再開時、計画候補はJ台帳へ保存されず）: ${JSON.stringify({
@@ -1964,8 +1971,14 @@ ${planControl.question}`,
         }
       : input;
     const goalGovernanceProjection = this.goal_governance?.project(this.nowMs());
+    const registrationProcess = selectedNativeCredentialRegistration ? resolveProcess(frameRequest, resolveActor(frameRequest)) : undefined;
+    if (registrationProcess?.process_kind === "tool" && registrationProcess.execution_policy.allowed_tools.includes("settings.write")) {
+      registrationProcess.execution_policy = { ...registrationProcess.execution_policy, allowed_tools: ["settings.write"],
+        timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS };
+    }
     const initialFrame = frame(frameRequest, {
       default_policy: this.policy,
+      ...(registrationProcess ? { process: registrationProcess } : {}),
       ...(isolatedContextReason || transientAudioTranscript ? {} : { memory_reader: this.memory }),
       original_content: req.content,
       ...(this.goal_relation_tree ? { goal_relation_tree: this.goal_relation_tree } : {}),
@@ -2067,6 +2080,9 @@ ${planControl.question}`,
           source_citation_request_id: planComputeCitationRequestId,
           ...(planComputeParentContext ? { parent_context: planComputeParentContext } : {}),
           ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined);
+      if (selectedNativeCredentialRegistration && candidate.type === "tool_call" && candidate.payload.tool_name === "settings.write") {
+        candidate.constraints = { ...candidate.constraints, timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS };
+      }
       const commandViolation = commandExecutionPolicyViolation(candidate, f.process);
       if (commandViolation) {
         c = securityCommit("process_execution_policy_denied", commandViolation, {

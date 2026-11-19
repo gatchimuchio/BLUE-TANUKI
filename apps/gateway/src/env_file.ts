@@ -23,6 +23,7 @@ export interface WriteEnvFileOptions {
   mode?: number;
   backup?: boolean;
   backup_label?: string;
+  before_replace?: () => Promise<void>;
 }
 
 export interface WriteEnvFileResult {
@@ -143,6 +144,7 @@ export async function writeEnvFileAtomic(
     await tmpHandle.sync();
     await tmpHandle.close();
     tmpHandle = undefined;
+    if (options.before_replace) await options.before_replace();
     await fs.rename(tmpPath, resolved);
     renamed = true;
     return backupPath

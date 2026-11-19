@@ -3016,6 +3016,13 @@ export class Executor {
         assertCurrentHdsGoalVersion(command);
         before_browser_form_submit();
       } : undefined;
+      const assertCurrentSettingsWrite = payload.tool_name === "settings.write" ? (): void => {
+        if (controller.signal.aborted) throw new Error("llm_credential_registration_cancelled");
+        assertTicketCurrent(record);
+        record.runtime.assert_execution_owner?.();
+        assertCurrentHdsGoalVersion(command);
+        before_action_dispatch?.();
+      } : undefined;
       const invocation = Promise.resolve().then(() => {
         if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
         before_action_dispatch?.();
@@ -3029,6 +3036,7 @@ export class Executor {
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
           ...(guardedBrowserFormSubmit ? { before_browser_form_submit: guardedBrowserFormSubmit } : {}),
+          ...(assertCurrentSettingsWrite ? { assert_current_settings_write: assertCurrentSettingsWrite } : {}),
           on_execution_lifecycle: observeLifecycle,
         });
       });

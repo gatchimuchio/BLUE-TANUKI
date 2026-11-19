@@ -155,7 +155,7 @@ function setSubmissionState(
 async function setup(
   opts: Partial<
     Ctx & {
-      onResume?: (id: string, v: string, ctx: { actor: string; token_kind: "resume" }) => Promise<unknown>;
+      onResume?: WebChatOptions["onResume"];
       onGoalPurposeAdoption?: (input: { purpose_text: string; actor: string }) => Promise<Record<string, unknown>>;
       onOwnerLlmSettingsProposal?: WebChatOptions["onOwnerLlmSettingsProposal"];
       onGoalPurposeChangeProposal?: (input: { goal_ref: string; purpose_text: string; actor: string; source_command_id?: string }) => Promise<{
@@ -934,6 +934,7 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(html).toContain('id="settings-provider-choice"');
     expect(html).toContain('id="settings-cost-per-attempt"');
     expect(html).toContain('id="settings-cost-per-24h"');
+    expect(html).toContain('id="settings-register-credential" type="checkbox"');
     expect(html).not.toContain('id="settings-api-key"');
     expect(new Script(CONTROL_CENTER_SCRIPT)).toBeInstanceOf(Script);
     const section = (startText: string, endText: string) => {
@@ -946,13 +947,13 @@ describe("WebChatChannel — Control Center shell", () => {
     const node = (id: string) => {
       if (!nodes.has(id)) {
         const events = new Map<string, () => unknown>();
-        nodes.set(id, { value: "", textContent: "", className: "", placeholder: "", disabled: false, hidden: false,
+        nodes.set(id, { value: "", textContent: "", className: "", placeholder: "", disabled: false, hidden: false, checked: false,
           selectedOptions: [], events, addEventListener: (name: string, handler: () => unknown) => events.set(name, handler) });
       }
       return nodes.get(id)!;
     };
     const nodes = new Map<string, {
-      value: string; textContent: string; className: string; placeholder: string; disabled: boolean; hidden: boolean;
+      value: string; textContent: string; className: string; placeholder: string; disabled: boolean; hidden: boolean; checked: boolean;
       selectedOptions: Array<{ dataset: { purposeVersion?: string } }>; events: Map<string, () => unknown>;
       addEventListener: (name: string, handler: () => unknown) => void;
     }>();
@@ -968,6 +969,8 @@ describe("WebChatChannel — Control Center shell", () => {
     const projection = { accepted: true, request_id: "settings-proposal-request", used_for_authority: false, may_execute: false };
     let receipt: Record<string, unknown> = { ...projection, status: "approval_required", command_id: "test-command" };
     let noStore = true;
+    const browserIdentity = {};
+    const browser = { top: browserIdentity, self: browserIdentity, location: { protocol: "http:", hostname: "127.0.0.1" } };
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
       section("function resetSettingsProposalGoals(", "function connectorsPayload("),
@@ -975,7 +978,7 @@ describe("WebChatChannel — Control Center shell", () => {
       section('byId("verify-llm-settings").addEventListener', 'byId("connect-chat").addEventListener'),
       "({ renderSettingsSnapshot, verifyLlmSettings })",
     ].join("\n")).runInNewContext({
-      byId: node, state: {}, sessionStorage: { setItem: () => {} },
+      byId: node, state: {}, sessionStorage: { setItem: () => {} }, window: browser,
       SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
       isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
       setText: (id: string, value: string) => { node(id).textContent = value; },
@@ -1060,6 +1063,7 @@ describe("WebChatChannel — Control Center shell", () => {
     provider.value = "openai";
     provider.events.get("change")!();
     expect(settingsBudget.hidden).toBe(false);
+    expect(node("settings-native-credential-option").hidden).toBe(true);
     expect(node("settings-model").value).toBe("");
     const priorCallCount = calls.length;
     node("settings-owner-token").value = OWNER_TOKEN;
@@ -1080,6 +1084,27 @@ describe("WebChatChannel — Control Center shell", () => {
       goal_ref: goal.value, purpose_version: 2,
       patch: { llm: { activation: LLM_ACTIVATION, model: "fixture-openai-model", max_tokens: 128, timeout_ms: 5000 } },
     } });
+
+    const nativeSnapshot = { ...snapshot, llm: { ...snapshot.llm, native_credential_prompt_available: true } };
+    api.renderSettingsSnapshot(nativeSnapshot);
+    provider.value = "openai";
+    provider.events.get("change")!();
+    expect(node("settings-native-credential-option").hidden).toBe(false);
+    node("settings-register-credential").checked = true;
+    node("settings-cost-per-attempt").value = ".001501";
+    node("settings-cost-per-24h").value = "5.000000";
+    node("settings-model").value = "fixture-openai-model";
+    node("settings-owner-token").value = OWNER_TOKEN;
+    await preparePlan();
+    expect(calls[priorCallCount + 1]).toMatchObject({ body: { patch: { llm: {
+      activation: { ...LLM_ACTIVATION, register_credential: true },
+    } } } });
+    browser.location.hostname = "external.example.test";
+    api.renderSettingsSnapshot(nativeSnapshot);
+    provider.value = "openai";
+    provider.events.get("change")!();
+    expect(node("settings-native-credential-option").hidden).toBe(true);
+    expect(node("settings-register-credential").checked).toBe(false);
   });
 
   it("correlates owner task status with same-task completion and projected M receipts", async () => {
@@ -2132,28 +2157,51 @@ describe("WebChatChannel — Control Center shell", () => {
       appendChild(child: Record<string, unknown>) { this.children.push(child); },
     });
     const view = makeNode("section");
-    const approve = { disabled: true };
+    const attributes = new Map<string, string>();
+    const approve = { disabled: true, textContent: "Approve",
+      hasAttribute: (name: string) => attributes.has(name), getAttribute: (name: string) => attributes.get(name) ?? null,
+      setAttribute: (name: string, value: string) => attributes.set(name, value), removeAttribute: (name: string) => attributes.delete(name) };
     const card = {
       isConnected: true,
       getAttribute: (name: string) => name === "data-command" ? commandId : null,
       querySelector: (selector: string) => selector === "[data-content-review-view]" ? view : selector === '[data-verdict="approve"]' ? approve : null,
     };
     const state = { approvalContentDigests: Object.create(null) as Record<string, string> };
+    const localStart = CONTROL_CENTER_SCRIPT.indexOf("function isLocalCredentialControlCenter(");
+    const localEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderSettingsSnapshot(", localStart + 1);
+    const submitStart = CONTROL_CENTER_SCRIPT.indexOf("async function submitApproval(");
+    const submitEnd = CONTROL_CENTER_SCRIPT.indexOf("\n      async function requestTaskCancellation(", submitStart + 1);
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function reviewApprovalContent(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      async function revokeApprovalGrant(", start + 1);
+    const posts: Array<{ path: string; options: RequestInit }> = [];
+    const outputs: Record<string, string> = {};
     const render = new Script(`
       function byId() { return { value: "resume-token" }; }
       function authHeaders(value) { return { authorization: "Bearer " + value }; }
       function hasNoStore(response) { return response.headers.get("cache-control") === "no-store"; }
       const document = { querySelectorAll: () => [card], createElement: makeNode };
-      const fetch = async () => ({ ok: true, headers: { get: () => cacheControl }, json: async () => review });
+      const fetch = async (path, options) => {
+        if (!path.endsWith("/content")) posts.push({ path, options });
+        return { ok: true, headers: { get: () => cacheControl },
+          json: async () => path.endsWith("/content") ? review : { ok: true, result: { approval: "approve", executed: true, status: "success" } }
+        };
+      };
+      ${CONTROL_CENTER_SCRIPT.slice(localStart, localEnd)}
+      ${CONTROL_CENTER_SCRIPT.slice(submitStart, submitEnd)}
       ${CONTROL_CENTER_SCRIPT.slice(start, end)}
-      reviewApprovalContent(commandId, { textContent: "設定差分を確認" });
+      reviewApprovalContent(commandId, { textContent: "設定差分を確認" }).then(function () {
+        if (submit) return submitApproval(commandId, "approve", "fixture-single-use-token");
+      });
     `);
-    const evaluate = (reviewData: unknown, cacheControl = "no-store") => render.runInNewContext({
-      state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub"],
-      SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
-    });
+    const evaluate = (reviewData: unknown, cacheControl = "no-store", hostname = "127.0.0.1", submit = false) => {
+      const windowIdentity = {};
+      return render.runInNewContext({
+        state, card, makeNode, commandId, review: reviewData, cacheControl, SETTINGS_LLM_PROVIDERS: ["stub"],
+        SETTINGS_LLM_ACTIVATION_DESTINATIONS: SETTINGS_WRITE_ACTIVATION_DESTINATIONS, posts, submit,
+        window: { top: windowIdentity, self: windowIdentity, location: { protocol: "http:", hostname } },
+        setText: (id: string, value: string) => { outputs[id] = value; }, loadApprovals: async () => {},
+      });
+    };
     await evaluate(review);
     expect(view.children.some(child => child.textContent === "対象Provider stub")).toBe(true);
     expect(JSON.stringify(view.children)).toContain("before-model → after-model");
@@ -2185,6 +2233,26 @@ describe("WebChatChannel — Control Center shell", () => {
       destination: "https://unlisted.example.test" } })).rejects.toThrow();
     expect(approve.disabled).toBe(true);
     expect(state.approvalContentDigests[commandId]).toBeUndefined();
+
+    const nativeReview = { ...activationReview, activation: { ...activationReview.activation,
+      protected_reference_configured: false, credential_registration_required: true } };
+    await evaluate(nativeReview, "no-store", "external.example.test");
+    expect(approve.disabled).toBe(true);
+    expect(state.approvalContentDigests[commandId]).toBeUndefined();
+    await evaluate(nativeReview, "no-store", "127.0.0.1");
+    expect(JSON.stringify(view.children)).toContain("Windowsの入力画面で新規登録");
+    expect(approve.disabled).toBe(false);
+    expect(approve.textContent).toBe("承認してWindowsで入力");
+    await evaluate(nativeReview, "no-store", "127.0.0.1", true);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ path: `/approval/${commandId}/native-credential`, options: {
+      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error", referrerPolicy: "no-referrer",
+    } });
+    expect(JSON.parse(String(posts[0]!.options.body))).toEqual({ verdict: "approve",
+      approval_token: "fixture-single-use-token", content_review_digest: nativeReview.review_digest });
+    expect(outputs["native-credential-approval-status"]).toContain("製品を通常再起動");
+    await evaluate(activationReview);
+    expect(attributes.has("data-native-credential-registration")).toBe(false);
   });
 
   it("shows the held Google Daily Brief beside independently running schedules", () => {
@@ -5852,9 +5920,17 @@ describe("WebChatChannel — HTTP inbound", () => {
       const activation = await postJson(context.port, route, activationProposal, owner);
       expect(activation.status).toBe(202);
       expect(activation.headers.get("cache-control")).toBe("no-store");
+      const freshActivation = { ...activationProposal, patch: { llm: { ...activationLlm,
+        activation: { ...LLM_ACTIVATION, register_credential: true } } } };
+      expect((await postJson(context.port, route, freshActivation, owner)).status).toBe(403);
+      const local = { ...owner, origin: `http://127.0.0.1:${context.port}`, "sec-fetch-site": "same-origin" };
+      const fresh = await postJson(context.port, route, freshActivation, local);
+      expect(fresh.status).toBe(202);
+      expect(fresh.body).toEqual({ ...receipt, status: "approval_required", command_id: "settings-fixture-command" });
       expect(proposals).toEqual([{ ...proposal, actor: "webchat-owner-token-holder" },
         { ...proposal, ...goal, actor: "webchat-owner-token-holder" },
-        { ...activationProposal, actor: "webchat-owner-token-holder" }]);
+        { ...activationProposal, actor: "webchat-owner-token-holder" },
+        { ...freshActivation, actor: "webchat-owner-token-holder" }]);
       expect(context.received).toHaveLength(0);
     } finally {
       await context.teardown();
@@ -7184,7 +7260,15 @@ describe("WebChatChannel — approval API", () => {
       no_store: true, used_for_authority: false, may_execute: false,
     } satisfies WebChatSettingsWriteContentReview;
     let review: WebChatSettingsWriteContentReview = safeReview;
-    const ctx = await setup({ approval: { list: async () => [], reviewContent: async () => review } });
+    const resumes: unknown[] = [];
+    const ctx = await setup({ approval: {
+      list: async () => [], reviewContent: async () => review,
+      requiresNativeCredentialApproval: id => id === commandId && review.activation?.credential_registration_required === true,
+      validateContentReview: async (id, digest) => id === commandId && digest === safeReview.review_digest ? "valid" : "stale",
+    }, onResume: async (id, verdict, context) => {
+      resumes.push([id, verdict, context]);
+      return { approval: "approve", status: "success", executed: true, extra: "untrusted-fixture-detail" };
+    } });
     await ctx.ch.start(async () => {});
     try {
       const authorized = { authorization: "Bearer " + RESUME_TOKEN };
@@ -7205,6 +7289,45 @@ describe("WebChatChannel — approval API", () => {
         expect(denied.headers.get("cache-control")).toBe("no-store");
         expect(denied.body).toEqual({ error: "approval_content_review_unavailable" });
       }
+
+      const nativeReview = { ...safeReview, activation: { ...safeReview.activation,
+        protected_reference_configured: false, credential_registration_required: true } } as const;
+      review = nativeReview;
+      const projectedNative = await postJson(ctx.port, route, {}, authorized);
+      expect(projectedNative.status).toBe(200);
+      expect(projectedNative.headers.get("cache-control")).toBe("no-store");
+      expect(projectedNative.body).toEqual(nativeReview);
+      const issued = await ctx.ch.issueResumeApprovalToken(commandId);
+      expect(issued?.token).toBeTruthy();
+      const decision = { verdict: "approve", approval_token: issued!.token, content_review_digest: nativeReview.review_digest };
+      const approvalPath = "/approval/" + commandId;
+      const nativePath = approvalPath + "/native-credential";
+      const origin = `http://127.0.0.1:${ctx.port}`;
+      const local = { ...authorized, origin, "sec-fetch-site": "same-origin" };
+      expect((await getRaw(ctx.port, "/app")).headers.get("x-frame-options")).toBe("DENY");
+      expect((await getRaw(ctx.port, nativePath, local)).status).toBe(405);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, authorization: "Bearer " + OWNER_TOKEN })).status).toBe(401);
+      expect((await postJson(ctx.port, nativePath, decision, authorized)).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, origin: "http://other.example.test" })).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, origin: origin + "/unexpected" })).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, "sec-fetch-site": "cross-site" })).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, "x-forwarded-host": "other.example.test" })).status).toBe(403);
+      expect((await postJson(ctx.port, nativePath, decision, { ...local, "content-type": "text/plain" })).status).toBe(415);
+      expect((await postJson(ctx.port, nativePath, { ...decision, verdict: "reject" }, local)).status).toBe(400);
+      expect((await postJson(ctx.port, nativePath, { ...decision, remember: true }, local)).status).toBe(400);
+      expect((await postJson(ctx.port, nativePath, { ...decision, mode: "full_access" }, local)).status).toBe(400);
+      expect((await postJson(ctx.port, nativePath, { ...decision, content_review_digest: "f".repeat(64) }, local)).status).toBe(409);
+      expect((await postJson(ctx.port, approvalPath, decision, local)).status).toBe(409);
+      expect((await postJson(ctx.port, "/resume", { request_id: commandId, ...decision }, local)).status).toBe(409);
+      expect(resumes).toEqual([]);
+      const credentialApproval = await postJson(ctx.port, nativePath, decision, local);
+      expect(credentialApproval.status).toBe(200);
+      expect(credentialApproval.headers.get("cache-control")).toBe("no-store");
+      expect(credentialApproval.body).toEqual({ ok: true, result: { approval: "approve", status: "success", executed: true } });
+      expect(resumes).toEqual([[commandId, "approve", { actor: "webchat-resume-token-holder", token_kind: "resume",
+        content_review_digest: nativeReview.review_digest, native_credential_prompt: true }]]);
+      expect((await postJson(ctx.port, nativePath, decision, local)).status).toBe(403);
+      expect(resumes).toHaveLength(1);
     } finally {
       await ctx.teardown();
     }
