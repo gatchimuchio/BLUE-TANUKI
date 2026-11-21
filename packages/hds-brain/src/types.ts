@@ -362,9 +362,9 @@ export interface DecisionLog {
   readonly goal_purpose_binding?: GoalPurposeBindingReference;
   /** Separate from admission and bound to this decision's request, purpose, and commit. */
   readonly owner_task_compute_cancellation_binding?: OwnerTaskComputeCancellationBinding;
-  memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_github_write" | "failure_review";
-  memory_capture_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_github_write" | "failure_review";
-  session_history_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_github_write" | "failure_review";
+  memory_retrieval_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "transient_audio_transcription" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_wait_resource_review" | "operation_plan_github_write" | "failure_review";
+  memory_capture_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_wait_resource_review" | "operation_plan_github_write" | "failure_review";
+  session_history_suppressed_for?: "transient_document_organization" | "transient_google_drive_document_organization" | "operation_result_reflection" | "operation_plan_compute" | "operation_plan_receipt_reconciliation" | "operation_plan_goal_completion_status" | "operation_plan_wait_resume" | "operation_plan_wait_resource_review" | "operation_plan_github_write" | "failure_review";
 }
 
 

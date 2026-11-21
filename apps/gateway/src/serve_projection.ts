@@ -16,6 +16,7 @@ import {
   OperationCoreExecutionProjectionSchema,
   OperationCorePlannerExecutionProjectionSchema,
   OperationPlanSchema,
+  OperationPlanWaitResourceReviewSchema,
   OperationPlanComputeSourceObservationSchema,
   ComputeResourceUseSchema,
   prepareOperationPlan,
@@ -28,6 +29,7 @@ import {
   type OperationCommandExecutionResult,
   type OperationPlanComputeSourceObservation,
   type ComputeResourceUse,
+  type OperationPlanWaitResourceReview,
 } from "@blue-tanuki/protocol";
 import { commandFailurePatterns, operationPlanDigest } from "@blue-tanuki/hds-brain";
 
@@ -287,6 +289,7 @@ export interface OperationPlanStatusProjection {
     compute_resource_use?: Pick<ComputeResourceUse,
       "charged_compute_ms" | "charged_tokens" | "tokens_usage_status" | "cost_status" |
       "charged_cost_amount" | "currency" | "charge_basis" | "used_for_authority" | "may_execute">;
+    resource_review?: OperationPlanWaitResourceReview;
     resource_review_required: boolean;
     used_for_authority: false;
     may_execute: false;
@@ -422,7 +425,8 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const allowedKeys = new Set(["wait_id", "plan_id", "revision_digest", "task_identity_digest", "owner_authentication_required",
       "owner_reauthentication_binding", "state", "deadline_at_ms", "cancelled_at_ms",
       "recovery_hold_reason", "resumed_at_ms", "wake_reason", "compute_outcome", "compute_result_digest", "candidate_plan_id",
-      "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "used_for_authority", "may_execute"]);
+      "compute_completed_at_ms", "compute_interrupted_at_ms", "compute_resource_use", "resource_review",
+      "used_for_authority", "may_execute"]);
     const state = wait.state;
     const outcome = wait.compute_outcome;
     const resumed = state === "resumed";
@@ -435,6 +439,9 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     const parsedResourceUse = wait.compute_resource_use === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(wait.compute_resource_use);
     const resourceUse = parsedResourceUse?.success ? parsedResourceUse.data : undefined;
+    const parsedResourceReview = wait.resource_review === undefined
+      ? undefined : OperationPlanWaitResourceReviewSchema.safeParse(wait.resource_review);
+    const resourceReview = parsedResourceReview?.success ? parsedResourceReview.data : undefined;
     const ownerReauthenticationBinding = wait.owner_reauthentication_binding;
     if (Object.keys(wait).some((key) => !allowedKeys.has(key)) || !isDigest(wait.wait_id) || !isDigest(wait.plan_id) ||
         (wait.revision_digest !== undefined && !isDigest(wait.revision_digest)) || !isDigest(wait.task_identity_digest) ||
@@ -470,9 +477,14 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         (wait.compute_resource_use !== undefined && (!resourceUse || completedAt === undefined))) {
       return invalidOperationPlanStatusProjection();
     }
-    const resourceReviewRequired = Boolean(resourceUse &&
+    const resourceReviewEligible = Boolean(resourceUse &&
       (outcome === "candidate_rejected" || outcome === "failed") &&
       (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
+    const resourceReviewRequired = resourceReviewEligible && !resourceReview;
+    if (wait.resource_review !== undefined && (!resourceReview || !resourceReviewEligible ||
+        resourceReview.requested_at_ms < (completedAt as number))) {
+      return invalidOperationPlanStatusProjection();
+    }
     waits.push({ wait_id: wait.wait_id as string, plan_id: wait.plan_id as string,
       ...(typeof wait.revision_digest === "string" ? { revision_digest: wait.revision_digest } : {}),
       task_identity_digest: wait.task_identity_digest as string, state,
@@ -504,6 +516,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         used_for_authority: false as const,
         may_execute: false as const,
       } } : {}),
+      ...(resourceReview ? { resource_review: resourceReview } : {}),
       resource_review_required: resourceReviewRequired,
       used_for_authority: false, may_execute: false });
   }

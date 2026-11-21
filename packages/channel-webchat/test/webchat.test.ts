@@ -1867,6 +1867,40 @@ describe("WebChatChannel — Control Center shell", () => {
       ["accepted", "request-wait-recovery-1"]]);
   });
 
+  it("requests a candidate-only J review after charged no-progress and clears a cross-entry owner token", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeWaitResourceReview(");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const helper = CONTROL_CENTER_SCRIPT.slice(start, end).trim();
+    const calls: Array<{ path: string; token: string; body: unknown }> = [];
+    const messages: Array<[string, string]> = [];
+    const binding = { owner_identity_digest: "f".repeat(64), channel_identity_digest: "e".repeat(64) };
+    const nodes = { "chat-token": { value: "webchat-token" }, "chat-user": { value: "owner-session" },
+      "owner-task-token": { value: "owner-token" } };
+    await new Script(`${helper}\ninvokeWaitResourceReview(waitId, true, bindingText)`)
+      .runInNewContext({ state: {}, waitId: "a".repeat(64), bindingText: JSON.stringify(binding),
+        byId: (id: keyof typeof nodes) => nodes[id],
+        isObject: (value: unknown) => !!value && typeof value === "object" && !Array.isArray(value),
+        postJson: async (path: string, token: string, body: unknown) => {
+          calls.push({ path, token, body }); return { request_id: "request-resource-review-1" };
+        },
+        appendChat: (kind: string, content: string) => messages.push([kind, content]),
+      });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/operators/developer/invoke", token: "owner-token" });
+    const body = calls[0]!.body as { user: string; content: string };
+    expect(body.user).toBe("owner-session");
+    expect(body.content.startsWith("plan:resource_review ")).toBe(true);
+    expect(JSON.parse(body.content.slice("plan:resource_review ".length))).toEqual({
+      wait_id: "a".repeat(64), owner_reauthentication: binding,
+    });
+    expect(nodes["owner-task-token"].value).toBe("");
+    expect(messages).toEqual([["owner", "無進捗消費のJ再検討を依頼しました。"],
+      ["accepted", "request-resource-review-1"]]);
+  });
+
   it("re-authenticates an owner before resuming an interrupted wait from another entry", async () => {
     const start = CONTROL_CENTER_SCRIPT.indexOf("async function invokeInterruptedOperationPlanWait(");
     const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function syncInputs(", start + 1);
@@ -2079,6 +2113,15 @@ describe("WebChatChannel — Control Center shell", () => {
           owner_authentication_required: true,
           owner_reauthentication_binding: { owner_identity_digest: "b".repeat(64), channel_identity_digest: "c".repeat(64) },
           resource_review_required: false, used_for_authority: false, may_execute: false },
+        { wait_id: "3".repeat(64), plan_id: "4".repeat(64), revision_digest: "5".repeat(64),
+          task_identity_digest: "6".repeat(64), owner_authentication_required: true,
+          state: "resumed", deadline_at_ms: nowMs + 180_000, resumed_at_ms: nowMs, wake_reason: "deadline",
+          compute_outcome: "failed", compute_result_digest: "7".repeat(64), compute_completed_at_ms: nowMs + 1,
+          compute_resource_use: { schema_version: "blue-tanuki.compute-resource-use.v1", request_digest: "8".repeat(64),
+            charged_compute_ms: 2_000, charged_tokens: 128, tokens_usage_status: "unknown", cost_status: "unknown",
+            charged_cost_amount: 0.25, currency: "USD", charge_basis: "reserved_upper_bound",
+            used_for_authority: false, may_execute: false },
+          resource_review_required: true, used_for_authority: false, may_execute: false },
       ],
       goal_purpose_options: [{ goal_ref: "goal_0123456789abcdef", goal_kind: "delegated", purpose_version: 2,
         purpose_digest: "c".repeat(64), parent_alignment_status: "not_applicable" }],
@@ -2186,6 +2229,10 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("C結果digest");
     expect(rendered).toContain("保存候補digest");
     expect(rendered).toContain('data-operation-plan-wait-reply="true"');
+    expect(rendered).toContain('data-operation-plan-resource-review="true"');
+    expect(rendered).toContain('data-wait-id="' + "3".repeat(64) + '"');
+    expect(rendered).toContain("Jに一度だけ資源再検討を依頼");
+    expect(rendered).toContain("費用を進捗扱いせず、観測・別手段・条件変更のある有限候補だけを計算します。");
     expect(rendered).toContain('data-wait-id="' + "4".repeat(64) + '"');
     expect(rendered.match(/data-operation-plan-wait="true"/g) ?? []).toHaveLength(0);
     expect(rendered).toContain("J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。");

@@ -2764,6 +2764,40 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         appendChat("accepted", result.request_id || "interrupted wait recovery request accepted", result.request_id);
       }
 
+      async function invokeWaitResourceReview(waitId, ownerAuthenticationRequired, rawOwnerReauthenticationBinding) {
+        state.chatToken = byId("chat-token").value.trim();
+        state.chatUser = byId("chat-user").value.trim() || "owner";
+        const ownerTokenInput = ownerAuthenticationRequired ? byId("owner-task-token") : null;
+        const authToken = ownerAuthenticationRequired ? ownerTokenInput.value.trim() : state.chatToken;
+        if (!authToken) throw new Error(ownerAuthenticationRequired
+          ? "資源再検討にはowner tokenを入力してください"
+          : "webchat token is required");
+        if (typeof waitId !== "string" || !/^[a-f0-9]{64}$/.test(waitId)) {
+          throw new Error("資源再検討のwait identityを確認できません");
+        }
+        const control = { wait_id: waitId };
+        if (rawOwnerReauthenticationBinding) {
+          let binding;
+          try { binding = JSON.parse(rawOwnerReauthenticationBinding); }
+          catch (_) { throw new Error("owner reauthentication binding is invalid"); }
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          if (!isObject(binding) || !isDigest(binding.owner_identity_digest) || !isDigest(binding.channel_identity_digest)) {
+            throw new Error("owner reauthentication binding is invalid");
+          }
+          control.owner_reauthentication = { owner_identity_digest: binding.owner_identity_digest,
+            channel_identity_digest: binding.channel_identity_digest };
+        }
+        const content = "plan:resource_review " + JSON.stringify(control);
+        let result;
+        try {
+          result = await postJson("/operators/developer/invoke", authToken, { user: state.chatUser, content });
+        } finally {
+          if (ownerTokenInput) ownerTokenInput.value = "";
+        }
+        appendChat("owner", "無進捗消費のJ再検討を依頼しました。");
+        appendChat("accepted", result.request_id || "候補限定の再検討要求を受け付けました。候補は実行されません。", result.request_id);
+      }
+
       function syncInputs() {
         byId("runtime-token").value = state.runtimeToken;
         byId("approval-token").value = state.approvalToken;
@@ -3982,6 +4016,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const resultDigest = wait.compute_result_digest;
           const candidateDigest = wait.candidate_plan_id;
           const resourceUse = wait.compute_resource_use;
+          const resourceReview = wait.resource_review;
+          const resourceReviewStatusLabels = {
+            pending: "J再検討中",
+            candidate_retained: "新候補を保存・owner確認待ち",
+            candidate_rejected: "新候補なし・保留",
+            failed: "再検討計算失敗・保留",
+            interrupted: "再検討中断・保留",
+          };
           const approvalTerminated = wait.compute_outcome === "approval_cancelled" || wait.compute_outcome === "approval_rejected";
           if ((resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
               (candidateDigest !== undefined && !/^[a-f0-9]{64}$/.test(candidateDigest)) ||
@@ -3992,6 +4034,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               (wait.compute_outcome === "interrupted" && !Number.isSafeInteger(wait.compute_interrupted_at_ms)) ||
               (wait.compute_outcome !== "interrupted" && wait.compute_interrupted_at_ms !== undefined) ||
               typeof wait.resource_review_required !== "boolean" ||
+              (resourceReview !== undefined && (!isObject(resourceReview) ||
+                !/^[a-f0-9]{64}$/.test(resourceReview.request_id_digest || "") ||
+                !/^[a-f0-9]{64}$/.test(resourceReview.command_id_digest || "") ||
+                !Object.prototype.hasOwnProperty.call(resourceReviewStatusLabels, resourceReview.status) ||
+                !Number.isSafeInteger(resourceReview.requested_at_ms) || resourceReview.requested_at_ms < 0 ||
+                (resourceReview.status === "pending" ? Number.isSafeInteger(resourceReview.completed_at_ms)
+                  : !Number.isSafeInteger(resourceReview.completed_at_ms)) ||
+                (resourceReview.status === "candidate_retained"
+                  ? !/^[a-f0-9]{64}$/.test(resourceReview.candidate_plan_id_digest || "") ||
+                    !/^[a-f0-9]{64}$/.test(resourceReview.result_digest || "") || !isObject(resourceReview.compute_resource_use)
+                  : resourceReview.candidate_plan_id_digest !== undefined) ||
+                resourceReview.used_for_authority !== false || resourceReview.may_execute !== false)) ||
+              (resourceReview !== undefined && wait.resource_review_required) ||
               (resourceUse !== undefined && (!isObject(resourceUse) ||
                 !Number.isSafeInteger(resourceUse.charged_compute_ms) || resourceUse.charged_compute_ms < 0 ||
                 !Number.isSafeInteger(resourceUse.charged_tokens) || resourceUse.charged_tokens < 0 ||
@@ -4020,6 +4075,14 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               '<p class="muted">以前の返信本文は保存されていません。ownerの新しい入力だけで候補計算を行います。' +
               (isObject(wait.owner_reauthentication_binding) ? '別入口のwaitはowner tokenを再入力し、元owner・channelを照合します。' : '') + '</p>'
             : '';
+          const resourceReviewAction = wait.resource_review_required && !resourceReview && !recoveryHold
+            ? '<button type="button" class="secondary" data-operation-plan-resource-review="true" data-wait-id="' +
+              escapeHtml(wait.wait_id) + '" data-owner-authentication-required="' +
+              String(wait.owner_authentication_required === true) + '" data-owner-reauthentication-binding="' +
+              escapeHtml(isObject(wait.owner_reauthentication_binding) ? JSON.stringify(wait.owner_reauthentication_binding) : '') +
+              '">Jに一度だけ資源再検討を依頼</button>' +
+              '<p class="muted">費用を進捗扱いせず、観測・別手段・条件変更のある有限候補だけを計算します。候補は保存後も実行されません。</p>'
+            : '';
           const replyInput = wait.state === "waiting" && !recoveryHold && wait.owner_authentication_required === true &&
             !isObject(wait.owner_reauthentication_binding)
             ? '<label>同じ仕事への返信<textarea data-operation-plan-wait-reply-input="true" maxlength="200000"></textarea></label>' +
@@ -4042,12 +4105,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               resourceUse.cost_status + ', ' + resourceUse.charge_basis + ')') + '</dd>' : '') +
             (resultDigest ? '<dt>C結果digest</dt><dd class="mono">' + escapeHtml(shortDigest(resultDigest)) + '</dd>' : '') +
             (candidateDigest ? '<dt>保存候補digest</dt><dd class="mono">' + escapeHtml(shortDigest(candidateDigest)) + '</dd>' : '') +
+            (resourceReview ? '<dt>資源再検討</dt><dd>' + escapeHtml(resourceReviewStatusLabels[resourceReview.status]) + '</dd>' : '') +
+            (resourceReview && resourceReview.compute_resource_use ? '<dt>再検討C資源消費</dt><dd>' +
+              escapeHtml(String(resourceReview.compute_resource_use.charged_compute_ms) + ' ms / ' +
+                String(resourceReview.compute_resource_use.charged_tokens) + ' tokens / ' +
+                String(resourceReview.compute_resource_use.charged_cost_amount) + ' ' +
+                resourceReview.compute_resource_use.currency) + '</dd>' : '') +
             '</dl><p class="muted">' + (recoveryHold
               ? '復元hold中のため、このwaitからの期限起動と候補計算を停止しています。状態表示は権限ではありません。' +
                 '残差を確認し、続ける場合は新しい依頼から新規計画を作成してください。'
               : wait.resource_review_required
-              ? '計画候補の保存に至らず資源消費がありました。次のJ再検討で進捗を確認します。'
-              : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p>' + replyInput + recoveryInput + '</article>';
+              ? '候補保存に至らない資源消費があります。同じ操作の費用だけを追加する進行は禁止です。'
+              : resourceReview
+              ? 'Jの再検討状態です。保存候補があってもownerの審査が必要で、作用の実行許可を意味しません。'
+              : 'J状態の観測です。計画の採用、M更新、作用の実行許可を意味しません。') + '</p>' +
+            replyInput + recoveryInput + resourceReviewAction + '</article>';
         }).join("");
         if (projection.plans.length === 0) {
           setHtml("operation-plan-state-list", refreshNotice + goalPurposeGuide + waitCards +
@@ -12055,6 +12127,18 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             await invokeInterruptedOperationPlanWait(target.dataset.waitId || "", responseInput?.value || "",
               target.dataset.ownerAuthenticationRequired === "true", target.dataset.ownerReauthenticationBinding || "");
             if (responseInput) responseInput.value = "";
+          } catch (error) {
+            appendChat("error", error.message);
+          } finally {
+            target.disabled = false;
+          }
+          return;
+        }
+        if (target.dataset.operationPlanResourceReview === "true") {
+          target.disabled = true;
+          try {
+            await invokeWaitResourceReview(target.dataset.waitId || "",
+              target.dataset.ownerAuthenticationRequired === "true", target.dataset.ownerReauthenticationBinding || "");
           } catch (error) {
             appendChat("error", error.message);
           } finally {

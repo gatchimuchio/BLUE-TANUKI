@@ -540,9 +540,11 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       owner_token: "synthetic-owner-token-123456",
       operators: { developer: { getSnapshot: async () => ({ surface: "developer" }) } } });
     let deliverDecision: ((decision: ReturnType<HDSUpperController["decide"]>) => void) | undefined;
+    let lastProcessKind: unknown;
     await channel.start(async (incoming) => {
       const boundary = planGatewayInboundBoundary(incoming);
       if (!boundary.boundary_ok) return;
+      lastProcessKind = boundary.request.metadata?.["blue_tanuki.process_kind"];
       const decision = hds.decide(boundary.request);
       deliverDecision?.(decision);
       deliverDecision = undefined;
@@ -580,6 +582,14 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(accepted.decision.command?.type, accepted.decision.log.commit.reason).toBe("tool_call");
       expect(hds.operationPlanCommandIsCurrent(accepted.decision.command!)).toBe(true);
       expect(JSON.stringify(hds.getAudit().list())).not.toContain(owner);
+
+      const resourceReview = await requestDecision({ user: "webchat-owner-session", content:
+        `plan:resource_review ${JSON.stringify({ wait_id: "f".repeat(64), owner_reauthentication: sourceBinding })}` });
+      expect(resourceReview.response.status).toBe(202);
+      expect(resourceReview.decision.command).toBeNull();
+      expect(resourceReview.decision.log.commit.reason).toContain("plan_control_denied:");
+      expect(resourceReview.decision.log.commit.reason).not.toContain("plan_owner_or_identity_mismatch");
+      expect(lastProcessKind).toBe("chat");
     } finally {
       await channel.stop();
       hds.close();
@@ -3050,18 +3060,104 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
           charged_compute_ms: 2_000, charged_tokens: 128, cost_status: "unknown", currency: "USD",
           used_for_authority: false, may_execute: false,
         } });
-      const nextReview = review(hds, next, "search");
-      expect(nextReview.log.frame.goal).toContain("資源消費記録");
-      expect(nextReview.log.frame.goal).toContain("charged_compute_ms");
-      expect(nextReview.command?.type).toBe("tool_call");
+      const staleReview = review(hds, next, "search");
+      expect(staleReview.command?.type).not.toBe("tool_call");
+      const resourceReviewRequest = request(`plan:resource_review ${JSON.stringify({ wait_id: deadlineWait!.wait_id })}`,
+        "fixture-owner", undefined, completionRules);
+      const reopened = hds.decide(resourceReviewRequest);
+      expect(reopened.command?.type).toBe("llm_call");
+      expect(reopened.command?.type === "llm_call" && reopened.command.payload.compute_context?.local_p_version)
+        .toBe("blue-tanuki.plan-compute-resource-review.v1");
+      expect(reopened.command?.type === "llm_call" && reopened.command.payload.messages.at(-1)?.content)
+        .toContain("条件変更を根拠にした有限の再試行");
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+        .toMatchObject({ resource_review: { status: "pending", used_for_authority: false, may_execute: false } });
+
+      const replay = hds.decide(request(`plan:resource_review ${JSON.stringify({ wait_id: deadlineWait!.wait_id })}`,
+        "fixture-owner", undefined, completionRules));
+      expect(replay.command?.type).not.toBe("llm_call");
+
+      const reconsidered = plan(resourceReviewRequest.id, "synthetic-root");
+      reconsidered.steps.forEach((step, index) => {
+        step.parameters = { ...step.parameters, query: `blue-observation-${index}` };
+      });
+      hds.onFeedback({ command_id: reopened.command!.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: reconsidered } },
+        compute_resource_use: {
+          schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+            .update(reopened.command!.id).digest("hex"),
+          charged_compute_ms: 700, charged_tokens: 64, tokens_usage_status: "provider_reported",
+          cost_status: "actual", charged_cost_amount: 0, currency: "USD",
+          charge_basis: "provider_reported", used_for_authority: false, may_execute: false,
+        }, metrics: { duration_ms: 1 } });
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+        .toMatchObject({ resource_review: { status: "candidate_retained",
+          candidate_plan_id_digest: operationPlanDigest(reconsidered.plan_id),
+          compute_resource_use: { charged_compute_ms: 700, charged_tokens: 64, used_for_authority: false,
+            may_execute: false }, used_for_authority: false, may_execute: false } });
+      expect(projectOperationPlanStatus(hds.getRuntimeSnapshot().operation_plans).waits
+        .find((candidate) => candidate.wait_id === deadlineWait!.wait_id))
+        .toMatchObject({ resource_review: { status: "candidate_retained",
+          candidate_plan_id_digest: operationPlanDigest(reconsidered.plan_id),
+          compute_resource_use: { charged_compute_ms: 700, charged_tokens: 64,
+            used_for_authority: false, may_execute: false } },
+          resource_review_required: false, used_for_authority: false, may_execute: false });
       expect(hds.getAudit().verify()).toBe(true);
       expect(hds.decide(duplicateDeadline).command).toBeNull();
+
+      const interruptedOrigin = request("plan:compute a separate synthetic restart-interruption task",
+        "restart-owner", undefined, completionRules);
+      const interruptedPlan = plan(interruptedOrigin.id, "synthetic-root");
+      await rig(hds, interruptedPlan).run(hds.decide(interruptedOrigin).command!);
+      const interruptedDeadlineAt = Date.now() + 60_000;
+      const interruptedWaitRegistration = hds.decide(request(`plan:wait ${JSON.stringify({
+        plan_id: interruptedPlan.plan_id, revision_digest: operationPlanDigest(interruptedPlan),
+        deadline_at_ms: interruptedDeadlineAt,
+      })}`, "restart-owner"));
+      expect(interruptedWaitRegistration.command?.type, interruptedWaitRegistration.log.commit.reason).toBe("noop");
+      const interruptedReviewWait = hds.listOperationPlanWaits().find((candidate) =>
+        candidate.state === "waiting" && candidate.wait_id !== deadlineWait!.wait_id);
+      expect(interruptedReviewWait).toBeDefined();
+      const interruptedReply = hds.decide(request("A synthetic owner reply for restart interruption", "restart-owner",
+        undefined, completionRules));
+      expect(interruptedReply.command?.type).toBe("llm_call");
+      hds.onFeedback({ command_id: interruptedReply.command!.id, status: "failed", error: "synthetic no-progress",
+        compute_resource_use: {
+          schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+            .update(interruptedReply.command!.id).digest("hex"),
+          charged_compute_ms: 250, charged_tokens: 32, tokens_usage_status: "unknown", cost_status: "unknown",
+          charged_cost_amount: 0.05, currency: "USD", charge_basis: "reserved_upper_bound",
+          used_for_authority: false, may_execute: false,
+        }, metrics: { duration_ms: 1 } });
+      const interruptedResourceReview = hds.decide(request(
+        `plan:resource_review ${JSON.stringify({ wait_id: interruptedReviewWait!.wait_id })}`, "restart-owner",
+        undefined, completionRules));
+      expect(interruptedResourceReview.command?.type).toBe("llm_call");
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === interruptedReviewWait!.wait_id))
+        .toMatchObject({ resource_review: { status: "pending", used_for_authority: false, may_execute: false } });
+      hds.close();
+      store.close();
+      store = new OperationPlanStateStore(databasePath);
+      hds = new HDSUpperController({ operation_plan_state: store });
+      hds.reconcileOperationPlanWaitComputations();
+      expect(hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === interruptedReviewWait!.wait_id))
+        .toMatchObject({ resource_review: { status: "interrupted", used_for_authority: false, may_execute: false } });
+      const interruptedReplay = hds.decide(request(
+        `plan:resource_review ${JSON.stringify({ wait_id: interruptedReviewWait!.wait_id })}`, "restart-owner",
+        undefined, completionRules));
+      expect(interruptedReplay.command).toBeNull();
+      expect(interruptedReplay.log.commit.reason)
+        .toContain("plan_control_denied:plan_wait_resource_review_already_started");
+      const approvedCandidate = review(hds, reconsidered, "search");
+      expect(approvedCandidate.command?.type).toBe("tool_call");
     } finally {
       hds.close();
       store.close();
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("再起動後に結果未記録waitを中断へ分類し、ownerの新しい返信でのみC計算を再開する", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-wait-interrupted-"));

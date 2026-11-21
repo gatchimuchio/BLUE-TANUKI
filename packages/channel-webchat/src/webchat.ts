@@ -616,18 +616,18 @@ function readTransientAudioInput(value: unknown): TransientAudioReadResult {
 }
 
 function ownerOperationPlanControlAction(content: string): {
-  readonly action: "review" | "result" | "resume_wait" | "wait";
+  readonly action: "review" | "result" | "resume_wait" | "resource_review" | "wait";
   readonly plan_id?: string;
   readonly revision_digest?: string;
 } | null {
-  const match = /^plan:(review|result|resume_wait|wait)\s+(\{[\s\S]*\})$/.exec(content);
+  const match = /^plan:(review|result|resume_wait|resource_review|wait)\s+(\{[\s\S]*\})$/.exec(content);
   if (!match) return null;
   let value: unknown;
   try { value = JSON.parse(match[2] ?? ""); } catch { return null; }
   if (typeof value !== "object" || value === null || Array.isArray(value) || Object.hasOwn(value, "action")) return null;
   const parsed = OperationPlanControlSchema.safeParse({ ...(value as Record<string, unknown>), action: match[1] });
   return parsed.success && (parsed.data.action === "review" || parsed.data.action === "result" ||
-    parsed.data.action === "resume_wait" || parsed.data.action === "wait")
+    parsed.data.action === "resume_wait" || parsed.data.action === "resource_review" || parsed.data.action === "wait")
     ? { action: parsed.data.action,
         ...(parsed.data.action === "wait" ? {
           plan_id: parsed.data.plan_id,
@@ -4376,7 +4376,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             "blue_tanuki.trust_level": "owner",
           } : {}),
           ...(ownerAuthenticated && ownerOperationPlanAction
-            ? { "blue_tanuki.process_kind": ownerOperationPlanAction.action === "resume_wait" ? "chat" : "tool" } : {}),
+            ? { "blue_tanuki.process_kind": ownerOperationPlanAction.action === "resume_wait" ||
+              ownerOperationPlanAction.action === "resource_review" ? "chat" : "tool" } : {}),
           "blue_tanuki.operator_surface": surfaceName,
           "blue_tanuki.operation_core.version": "operation-core.v1",
           "blue_tanuki.operation_core.request_id": `operation-request:${requestId}`,

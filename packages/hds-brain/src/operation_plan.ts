@@ -8,7 +8,8 @@ import {
   type OperationPlanCheckpoint, type OperationPlanControl, type OperationPlanGoalPurposeBinding,
   type OperationPlanGoalCompletionPolicy, OperationPlanGoalCompletionPolicySchema,
   OperationPlanGoalCompletionAssessmentSchema,
-  type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitState,
+  type OperationPlanResultReturnControl, type OperationPlanWaitResumeControl, type OperationPlanWaitResourceReviewControl,
+  type OperationPlanWaitResourceReview, type OperationPlanWaitState,
   type OperationPlanComputeParent,
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   type OperationPlanGatewayReceiptRecheckEvidence, OperationPlanGatewayReceiptRecheckEvidenceSchema,
@@ -63,6 +64,7 @@ import {
   OperationPlanGoalRelationAdoptionAssessmentSchema,
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   OperationPlanMemoryInterpretationDependencySchema,
+  OperationPlanWaitResourceReviewSchema,
   OperationPlanWaitStateSchema,
   OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION, type OperationPlanReflectionControl,
   type OperationPlanMemoryInterpretationDependency,
@@ -397,6 +399,16 @@ export function operationPlanTaskIdentityDigest(plan: PlanState): string {
   const first = plan.revisions[0]!.plan;
   return operationPlanTaskIdentityDigestFor(plan.owner, plan.channel, plan.goal, first);
 }
+
+function hasChargedComputeResourceUse(resourceUse: ComputeResourceUse | undefined): resourceUse is ComputeResourceUse {
+  return resourceUse !== undefined && (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 ||
+    resourceUse.charged_cost_amount > 0);
+}
+
+function operationPlanResourceReviewStepDigest(step: OperationPlan["steps"][number]): string {
+  return operationPlanDigest({ operation: step.operation, target: step.target, parameters: step.parameters });
+}
+
 function operationPlanTaskIdentityDigestFor(owner: string, channel: string, goal: string, first: OperationPlan): string {
   return operationPlanDigest({
     schema_version: "blue-tanuki.operation-plan-task-identity.v1",
@@ -3480,6 +3492,130 @@ export class OperationPlanLedger {
     return structuredClone(updated);
   }
 
+  /** Validate one bounded J re-open after a charged failed wait computation. */
+  inspectWaitResourceReview(control: OperationPlanWaitResourceReviewControl, caller: InboundRequest): {
+    readonly wait_id: string;
+    readonly task_identity_digest: string;
+    readonly goal: string;
+    readonly plan_id_digest: string;
+    readonly revision_digest: string;
+    readonly previous_outcome: "candidate_rejected" | "failed";
+    readonly previous_result_digest?: string;
+    readonly resource_use: ComputeResourceUse;
+    readonly goal_purpose_binding?: OperationPlanGoalPurposeBinding;
+    readonly goal_completion_rules_reference?: Omit<GoalEvaluationRulesReference, "status">;
+  } {
+    if (this.recoveryRefreshPending || !this.port) throw new Error("plan_wait_state_not_durable");
+    if (!this.reconcileMemory() || operationPlanDigest(this.port.load()) !== this.savedDigest) {
+      throw new Error("plan_memory_commit_pending");
+    }
+    const matches = (this.state.waits ?? []).filter((wait) => wait.wait_id === control.wait_id);
+    const wait = matches.length === 1 ? matches[0] : undefined;
+    if (!wait || wait.state !== "resumed" ||
+        (wait.compute_outcome !== "candidate_rejected" && wait.compute_outcome !== "failed") ||
+        !hasChargedComputeResourceUse(wait.compute_resource_use)) {
+      throw new Error("plan_wait_resource_review_stale");
+    }
+    if (wait.resource_review) throw new Error("plan_wait_resource_review_already_started");
+    if (this.latestChargedFailedWaitForTask(wait.task_identity_digest)?.wait_id !== wait.wait_id) {
+      throw new Error("plan_wait_resource_review_stale");
+    }
+    const parentPlans = this.state.plans.filter((plan) =>
+      operationPlanDigest(plan.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
+    const parent = parentPlans.length === 1 ? parentPlans[0] : undefined;
+    if (!parent || parent.revisions.at(-1)?.digest !== wait.revision_digest ||
+        operationPlanTaskIdentityDigest(parent) !== wait.task_identity_digest ||
+        operationPlanDigest(parent.owner) !== wait.owner_digest || operationPlanDigest(parent.channel) !== wait.channel_digest) {
+      throw new Error("plan_wait_resource_review_stale");
+    }
+    this.ownedPlanForOwnerReauthentication(parent.revisions[0]!.plan.plan_id,
+      control.owner_reauthentication, caller, "chat");
+    if (this.taskGoalIsAchieved(wait.task_identity_digest)) throw new Error("plan_task_goal_already_achieved");
+    if (this.recoveryHolds.has(wait.plan_id_digest)) throw new Error("plan_wait_resource_review_recovery_hold");
+    if (!this.goalPurposeBindingIsCurrent(parent.goal_purpose_binding)) throw new Error("plan_wait_resource_review_stale");
+    const goalCompletionRulesReference = this.goalCompletionRulesReferenceForPlan(parent, wait.task_identity_digest);
+    if (goalCompletionRulesReference === null) throw new Error("plan_wait_resource_review_stale");
+    return { wait_id: wait.wait_id, task_identity_digest: wait.task_identity_digest, goal: parent.goal,
+      plan_id_digest: wait.plan_id_digest, revision_digest: wait.revision_digest,
+      previous_outcome: wait.compute_outcome,
+      ...(wait.compute_result_digest ? { previous_result_digest: wait.compute_result_digest } : {}),
+      resource_use: structuredClone(wait.compute_resource_use!),
+      ...(parent.goal_purpose_binding ? { goal_purpose_binding: structuredClone(parent.goal_purpose_binding) } : {}),
+      ...(goalCompletionRulesReference ? { goal_completion_rules_reference: goalCompletionRulesReference } : {}) };
+  }
+
+  /** Durably consume the single review opportunity before returning its candidate-compute command. */
+  beginWaitResourceReview(control: OperationPlanWaitResourceReviewControl, caller: InboundRequest,
+    requestId: string, commandId: string, nowMs = this.nowMs()): OperationPlanWaitState {
+    if (!requestId.trim() || requestId !== caller.id || !commandId.trim() || !Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new Error("plan_wait_resource_review_invalid");
+    }
+    this.inspectWaitResourceReview(control, caller);
+    const current = (this.state.waits ?? []).find((wait) => wait.wait_id === control.wait_id);
+    if (!current || current.resource_review) throw new Error("plan_wait_resource_review_state_changed");
+    const resourceReview: OperationPlanWaitResourceReview = OperationPlanWaitResourceReviewSchema.parse({
+      request_id_digest: operationPlanDigest(requestId), command_id_digest: operationPlanDigest(commandId),
+      status: "pending", requested_at_ms: Math.max(nowMs, current.compute_completed_at_ms ?? nowMs),
+      used_for_authority: false, may_execute: false,
+    });
+    const updated = OperationPlanWaitStateSchema.parse({ ...current, resource_review: resourceReview });
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex((wait) => wait.wait_id === control.wait_id && !wait.resource_review &&
+        wait.compute_completed_at_ms === current.compute_completed_at_ms);
+      if (index < 0) throw new Error("plan_wait_resource_review_state_changed");
+      waits[index] = updated;
+      state.waits = waits;
+    });
+    return structuredClone(updated);
+  }
+
+  /** Preserve the original failed compute while appending the bounded re-open result and its own cost. */
+  recordWaitResourceReviewOutcome(waitId: string, requestId: string, commandId: string,
+    outcome: "candidate_rejected" | "failed", resultDigest?: string,
+    computeResourceUse?: ComputeResourceUse, nowMs = this.nowMs()): OperationPlanWaitState {
+    if (!/^[a-f0-9]{64}$/.test(waitId) || !requestId.trim() || !commandId.trim() ||
+        (resultDigest !== undefined && !/^[a-f0-9]{64}$/.test(resultDigest)) ||
+        !Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("plan_wait_resource_review_invalid");
+    const current = (this.state.waits ?? []).find((wait) => wait.wait_id === waitId);
+    const review = current?.resource_review;
+    if (!current || !review || review.status !== "pending" ||
+        review.request_id_digest !== operationPlanDigest(requestId) ||
+        review.command_id_digest !== operationPlanDigest(commandId)) {
+      throw new Error("plan_wait_resource_review_binding_mismatch");
+    }
+    if (computeResourceUse && computeResourceUse.request_digest !== createHash("sha256")
+        .update("blue-tanuki.compute-resource-use.request.v1\0").update(commandId).digest("hex")) {
+      throw new Error("plan_wait_resource_review_resource_binding_mismatch");
+    }
+    const completedAt = Math.max(nowMs, review.requested_at_ms);
+    const updatedReview = OperationPlanWaitResourceReviewSchema.parse({ ...review, status: outcome,
+      ...(resultDigest ? { result_digest: resultDigest } : {}),
+      completed_at_ms: completedAt,
+      ...(computeResourceUse ? { compute_resource_use: structuredClone(computeResourceUse) } : {}),
+    });
+    const updated = OperationPlanWaitStateSchema.parse({ ...current, resource_review: updatedReview });
+    this.change((state) => {
+      const waits = state.waits ?? [];
+      const index = waits.findIndex((wait) => wait.wait_id === waitId && wait.resource_review?.status === "pending" &&
+        wait.resource_review.request_id_digest === review.request_id_digest &&
+        wait.resource_review.command_id_digest === review.command_id_digest);
+      if (index < 0) throw new Error("plan_wait_resource_review_state_changed");
+      waits[index] = updated;
+      state.waits = waits;
+    });
+    return structuredClone(updated);
+  }
+
+  pendingWaitResourceReview(waitId: string, requestId: string, commandId: string): OperationPlanWaitState | null {
+    const requestDigest = operationPlanDigest(requestId);
+    const commandDigest = operationPlanDigest(commandId);
+    const matches = (this.state.waits ?? []).filter((wait) => wait.wait_id === waitId && wait.state === "resumed" &&
+      wait.resource_review?.status === "pending" && wait.resource_review.request_id_digest === requestDigest &&
+      wait.resource_review.command_id_digest === commandDigest);
+    return matches.length === 1 ? structuredClone(matches[0]!) : null;
+  }
+
   pendingWaitCompute(waitId: string, eventId: string, commandId: string): OperationPlanWaitState | null {
     const commandDigest = operationPlanDigest(commandId);
     const wakeDigest = operationPlanDigest({ schema_version: "operation-plan-wait-event.v1", event_id: eventId });
@@ -3492,12 +3628,14 @@ export class OperationPlanLedger {
   reconcilePendingWaitComputations(nowMs = this.nowMs(),
     inspectApprovalStop?: (wait: OperationPlanWaitState) => WaitComputeApprovalStopObservation | undefined): readonly (
       { readonly disposition: "candidate_reconciled" | "interrupted"; readonly wait: OperationPlanWaitState } |
+      { readonly disposition: "resource_review_reconciled" | "resource_review_interrupted"; readonly wait: OperationPlanWaitState } |
       { readonly disposition: "approval_stop_reconciled"; readonly wait: OperationPlanWaitState;
         readonly stop: WaitComputeApprovalStopObservation })[] {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("plan_wait_compute_recovery_time_invalid");
     const unresolved = (this.state.waits ?? []).filter(wait => wait.state === "resumed" &&
       (wait.compute_outcome === "pending" || (inspectApprovalStop && wait.compute_outcome === "interrupted")));
-    if (!this.port || unresolved.length === 0) return [];
+    const unresolvedResourceReviews = (this.state.waits ?? []).filter((wait) => wait.resource_review?.status === "pending");
+    if (!this.port || unresolved.length === 0 && unresolvedResourceReviews.length === 0) return [];
     if (this.recoveryRefreshPending || this.activePlanAttempts.size > 0 || !this.savedDigest ||
         operationPlanDigest(this.port.load()) !== this.savedDigest) throw new Error("plan_wait_compute_recovery_state_unavailable");
     const updates = unresolved.map((wait) => {
@@ -3533,17 +3671,45 @@ export class OperationPlanLedger {
       return { disposition: "interrupted" as const, wait: OperationPlanWaitStateSchema.parse(updated),
         original_outcome: wait.compute_outcome };
     }).filter(update => update !== null);
-    if (updates.length === 0) return [];
-    this.change((state) => {
-      for (const update of updates) {
-        const index = (state.waits ?? []).findIndex((wait) => wait.wait_id === update.wait.wait_id &&
-          wait.state === "resumed" && wait.compute_outcome === update.original_outcome &&
-          wait.resume_command_id_digest === update.wait.resume_command_id_digest);
-        if (index < 0) throw new Error("plan_wait_compute_recovery_state_changed");
-        state.waits![index] = update.wait;
-      }
+    if (updates.length > 0) {
+      this.change((state) => {
+        for (const update of updates) {
+          const index = (state.waits ?? []).findIndex((wait) => wait.wait_id === update.wait.wait_id &&
+            wait.state === "resumed" && wait.compute_outcome === update.original_outcome &&
+            wait.resume_command_id_digest === update.wait.resume_command_id_digest);
+          if (index < 0) throw new Error("plan_wait_compute_recovery_state_changed");
+          state.waits![index] = update.wait;
+        }
+      });
+    }
+    const resourceReviewUpdates = unresolvedResourceReviews.map((wait) => {
+      const review = wait.resource_review!;
+      const completedAt = Math.max(nowMs, review.requested_at_ms);
+      // Candidate and its exact resource receipt are committed atomically. A pending review
+      // after restart therefore cannot be promoted from a candidate-shaped record alone.
+      const updatedReview = OperationPlanWaitResourceReviewSchema.parse({ ...review,
+        status: "interrupted", completed_at_ms: completedAt });
+      return { disposition: "resource_review_interrupted" as const,
+        wait: OperationPlanWaitStateSchema.parse({ ...wait, resource_review: updatedReview }),
+        original_request_id_digest: review.request_id_digest, original_command_id_digest: review.command_id_digest };
     });
-    return updates.map(({ original_outcome: _originalOutcome, ...update }) => ({ ...update, wait: structuredClone(update.wait) }));
+    if (resourceReviewUpdates.length > 0) {
+      this.change((state) => {
+        for (const update of resourceReviewUpdates) {
+          const index = (state.waits ?? []).findIndex((wait) => wait.wait_id === update.wait.wait_id &&
+            wait.resource_review?.status === "pending" &&
+            wait.resource_review.request_id_digest === update.original_request_id_digest &&
+            wait.resource_review.command_id_digest === update.original_command_id_digest);
+          if (index < 0) throw new Error("plan_wait_resource_review_recovery_state_changed");
+          state.waits![index] = update.wait;
+        }
+      });
+    }
+    return [
+      ...updates.map(({ original_outcome: _originalOutcome, ...update }) => ({ ...update, wait: structuredClone(update.wait) })),
+      ...resourceReviewUpdates.map(({ original_request_id_digest: _requestId, original_command_id_digest: _commandId, ...update }) =>
+        ({ ...update, wait: structuredClone(update.wait) })),
+    ];
   }
 
   inspectInterruptedWaitForResume(control: OperationPlanWaitResumeControl, caller: InboundRequest): {
@@ -3705,7 +3871,10 @@ export class OperationPlanLedger {
   /** Read only the exact current purpose version bound to this durable wait. */
   computePurposeForWait(waitId: string): { readonly binding: OperationPlanGoalPurposeBinding; readonly purpose_text: string } | null {
     const wait = (this.state.waits ?? []).find((candidate) => candidate.wait_id === waitId &&
-      ((candidate.state === "waiting") || (candidate.state === "resumed" && candidate.compute_outcome === "interrupted")));
+      (candidate.state === "waiting" || (candidate.state === "resumed" && candidate.compute_outcome === "interrupted") ||
+       (candidate.state === "resumed" && !candidate.resource_review &&
+        (candidate.compute_outcome === "candidate_rejected" || candidate.compute_outcome === "failed") &&
+        hasChargedComputeResourceUse(candidate.compute_resource_use))));
     if (!wait || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     const binding = plan?.goal_purpose_binding;
@@ -4403,7 +4572,12 @@ export class OperationPlanLedger {
     computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
     memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[],
     parentPlanReference?: OperationPlanComputeParent, ownerInput?: "settings" | "runtime_schedule_delete" |
-      "runtime_schedule_create" | "runtime_schedule_update"): string {
+      "runtime_schedule_create" | "runtime_schedule_update", resourceReviewCompletion?: {
+        readonly wait_id: string;
+        readonly command_id: string;
+        readonly result_digest: string;
+        readonly compute_resource_use: ComputeResourceUse;
+      }): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     let plan = candidatePlan(value);
     const ownerSettingsInput = plan.steps.map(stepOwnerSettingsInput).find(Boolean);
@@ -4423,6 +4597,10 @@ export class OperationPlanLedger {
       throw new Error("plan_source_binding_mismatch");
     }
     const parentWaitId = origin.metadata?.["blue_tanuki.operation_core.parent_wait_id"];
+    const parentResourceReviewWaitId = origin.metadata?.["blue_tanuki.operation_core.parent_resource_review_wait_id"];
+    if (parentWaitId !== undefined && parentResourceReviewWaitId !== undefined) {
+      throw new Error("plan_compute_parent_conflicts_with_wait_resume");
+    }
     let parentTaskIdentityDigest: string | undefined;
     let retainedTaskGoal = origin.content;
     let inheritedGoalCompletionPolicy: OperationPlanGoalCompletionPolicy | undefined;
@@ -4451,6 +4629,42 @@ export class OperationPlanLedger {
       if (this.taskGoalIsAchieved(parentTaskIdentityDigest)) throw new Error("plan_task_goal_already_achieved");
       const recoveryHold = this.recoveryHolds.get(parentWait.plan_id_digest);
       if (recoveryHold) throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
+      retainedTaskGoal = parentPlan.goal;
+      inheritedGoalCompletionPolicy = parentPlan.goal_completion_policy
+        ? structuredClone(parentPlan.goal_completion_policy) : undefined;
+    }
+    if (parentResourceReviewWaitId !== undefined) {
+      if (!isGatewayInternalInboundRequest(origin) || typeof parentResourceReviewWaitId !== "string") {
+        throw new Error("plan_wait_resource_review_origin_invalid");
+      }
+      const parentWait = (this.state.waits ?? []).find((wait) => wait.wait_id === parentResourceReviewWaitId &&
+        wait.state === "resumed" && wait.resource_review?.status === "pending" &&
+        wait.resource_review.request_id_digest === operationPlanDigest(origin.id));
+      const parentPlans = parentWait ? this.state.plans.filter((candidate) =>
+        operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === parentWait.plan_id_digest) : [];
+      const parentPlan = parentPlans.length === 1 ? parentPlans[0] : undefined;
+      if (!parentWait || !parentPlan || parentPlan.revisions.at(-1)?.digest !== parentWait.revision_digest ||
+          operationPlanTaskIdentityDigest(parentPlan) !== parentWait.task_identity_digest ||
+          operationPlanDigest(parentPlan.owner) !== parentWait.owner_digest ||
+          operationPlanDigest(parentPlan.channel) !== parentWait.channel_digest ||
+          origin.user !== parentPlan.owner || origin.channel !== parentPlan.channel ||
+          this.latestChargedFailedWaitForTask(parentWait.task_identity_digest)?.wait_id !== parentWait.wait_id) {
+        throw new Error("plan_wait_resource_review_binding_invalid");
+      }
+      if (this.taskGoalIsAchieved(parentWait.task_identity_digest)) throw new Error("plan_task_goal_already_achieved");
+      if (this.recoveryHolds.has(parentWait.plan_id_digest)) throw new Error("plan_recovery_refresh_hold");
+      const priorActions = new Set(parentPlan.revisions.at(-1)!.plan.steps.map(operationPlanResourceReviewStepDigest));
+      if (plan.steps.some((step) => priorActions.has(operationPlanResourceReviewStepDigest(step)))) {
+        throw new Error("plan_resource_review_candidate_repeats_action");
+      }
+      if (!resourceReviewCompletion || resourceReviewCompletion.wait_id !== parentWait.wait_id ||
+          parentWait.resource_review?.command_id_digest !== operationPlanDigest(resourceReviewCompletion.command_id) ||
+          !/^[a-f0-9]{64}$/.test(resourceReviewCompletion.result_digest) ||
+          resourceReviewCompletion.compute_resource_use.request_digest !== createHash("sha256")
+            .update("blue-tanuki.compute-resource-use.request.v1\0").update(resourceReviewCompletion.command_id).digest("hex")) {
+        throw new Error("plan_wait_resource_review_receipt_unavailable");
+      }
+      parentTaskIdentityDigest = parentWait.task_identity_digest;
       retainedTaskGoal = parentPlan.goal;
       inheritedGoalCompletionPolicy = parentPlan.goal_completion_policy
         ? structuredClone(parentPlan.goal_completion_policy) : undefined;
@@ -4628,25 +4842,42 @@ export class OperationPlanLedger {
       ? createGoalCompletionPolicy({ source_request_id: expected, task_identity_digest: candidateTaskIdentityDigest,
         goal: retainedTaskGoal, rules: incomingGoalCompletionRules })
       : undefined);
-    this.change((state) => state.plans.push({ owner: origin.user, channel: origin.channel, goal: retainedTaskGoal,
-      ...(parentTaskIdentityDigest || goalCompletionPolicy
-        ? { task_identity_digest: goalCompletionPolicy?.task_identity_digest ?? parentTaskIdentityDigest } : {}),
-      ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
-      ...(goalCompletionPolicy ? { goal_completion_policy: goalCompletionPolicy } : {}),
-      ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
-      ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations
-        .map(durableComputeSourceObservation) } : {}),
-      ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
-      request_goal_criteria: requestGoalCriteria,
-      ...(ownerSettingsInput === "activation" ? { owner_settings_activation: true } : {}),
-      ...(ownerSettingsInput === "credential_rotation" ? { owner_settings_credential_rotation: true } : {}),
-      ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
-      ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
-      ...(ownerSettingsInput === "telegram_bot_registration" ? { owner_settings_telegram_bot_registration: true } : {}),
-      ...(scheduleCreation ? { owner_runtime_schedule_create: true } : {}),
-      ...(scheduleDeletion ? { owner_runtime_schedule_delete: true } : {}),
-      ...(scheduleUpdate ? { owner_runtime_schedule_update: true } : {}),
-      revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
+    this.change((state) => {
+      state.plans.push({ owner: origin.user, channel: origin.channel, goal: retainedTaskGoal,
+        ...(parentTaskIdentityDigest || goalCompletionPolicy
+          ? { task_identity_digest: goalCompletionPolicy?.task_identity_digest ?? parentTaskIdentityDigest } : {}),
+        ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}),
+        ...(goalCompletionPolicy ? { goal_completion_policy: goalCompletionPolicy } : {}),
+        ...(goalPurposeRelation ? { goal_purpose_relation: goalPurposeRelation } : {}),
+        ...(verifiedComputeSourceObservations ? { compute_source_observations: verifiedComputeSourceObservations
+          .map(durableComputeSourceObservation) } : {}),
+        ...(parsedMemoryDependencies?.length ? { memory_interpretation_dependencies: parsedMemoryDependencies } : {}),
+        request_goal_criteria: requestGoalCriteria,
+        ...(ownerSettingsInput === "activation" ? { owner_settings_activation: true } : {}),
+        ...(ownerSettingsInput === "credential_rotation" ? { owner_settings_credential_rotation: true } : {}),
+        ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
+        ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
+        ...(ownerSettingsInput === "telegram_bot_registration" ? { owner_settings_telegram_bot_registration: true } : {}),
+        ...(scheduleCreation ? { owner_runtime_schedule_create: true } : {}),
+        ...(scheduleDeletion ? { owner_runtime_schedule_delete: true } : {}),
+        ...(scheduleUpdate ? { owner_runtime_schedule_update: true } : {}),
+        revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] });
+      if (resourceReviewCompletion) {
+        const waitIndex = (state.waits ?? []).findIndex((wait) => wait.wait_id === resourceReviewCompletion.wait_id &&
+          wait.resource_review?.status === "pending" &&
+          wait.resource_review.request_id_digest === operationPlanDigest(origin.id) &&
+          wait.resource_review.command_id_digest === operationPlanDigest(resourceReviewCompletion.command_id));
+        if (waitIndex < 0) throw new Error("plan_wait_resource_review_state_changed");
+        const wait = state.waits![waitIndex]!;
+        const review = wait.resource_review!;
+        const completedAt = Math.max(this.nowMs(), review.requested_at_ms);
+        const completedReview = OperationPlanWaitResourceReviewSchema.parse({ ...review,
+          status: "candidate_retained", result_digest: resourceReviewCompletion.result_digest,
+          candidate_plan_id_digest: operationPlanDigest(plan.plan_id), completed_at_ms: completedAt,
+          compute_resource_use: structuredClone(resourceReviewCompletion.compute_resource_use) });
+        state.waits![waitIndex] = OperationPlanWaitStateSchema.parse({ ...wait, resource_review: completedReview });
+      }
+    });
     return operationPlanDigest(plan.plan_id);
   }
 
@@ -4761,10 +4992,31 @@ export class OperationPlanLedger {
     return true;
   }
 
+  private latestChargedFailedWaitForTask(taskIdentityDigest: string): OperationPlanWaitState | undefined {
+    return (this.state.waits ?? []).filter((wait) => wait.task_identity_digest === taskIdentityDigest &&
+      (wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
+      hasChargedComputeResourceUse(wait.compute_resource_use))
+      .sort((left, right) => (right.compute_completed_at_ms ?? 0) - (left.compute_completed_at_ms ?? 0) ||
+        right.wait_id.localeCompare(left.wait_id))[0];
+  }
+
+  private assertWaitResourceReviewAllowsPlan(plan: PlanState): void {
+    const latest = this.latestChargedFailedWaitForTask(operationPlanTaskIdentityDigest(plan));
+    if (!latest) return;
+    const linkedPlanId = latest.resource_review?.candidate_plan_id_digest;
+    if (latest.resource_review?.status === "candidate_retained" &&
+        linkedPlanId === operationPlanDigest(plan.revisions[0]!.plan.plan_id) &&
+        latest.resource_review.result_digest && latest.resource_review.compute_resource_use) return;
+    if (!latest.resource_review) throw new Error("plan_resource_review_required");
+    if (latest.resource_review.status === "pending") throw new Error("plan_resource_review_pending");
+    if (latest.resource_review.status === "candidate_retained") throw new Error("plan_resource_review_superseded");
+    if (latest.resource_review.status === "interrupted") throw new Error("plan_resource_review_interrupted");
+    throw new Error("plan_resource_review_held");
+  }
+
   inspectControl(control: Extract<OperationPlanControl, { action: "review" | "revise" }>, caller: InboundRequest): {
     plan_id: string; revision_digest: string; step?: OperationStep; goal: string; recovery_hold_released: boolean;
     goal_purpose_binding?: OperationPlanGoalPurposeBinding;
-    resource_use_review?: { wait_id: string; resource_use: ComputeResourceUse };
   } {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     const p = control.action === "review"
@@ -4779,6 +5031,7 @@ export class OperationPlanLedger {
     const current = p.revisions.at(-1)!;
     const expected = control.action === "review" ? control.revision_digest : control.expected_revision_digest;
     if (expected !== current.digest) throw new Error("plan_revision_changed");
+    this.assertWaitResourceReviewAllowsPlan(p);
     if (control.action === "review" && !this.computeSourceObservationsAreCurrent(p, this.nowMs())) {
       throw new Error("plan_compute_source_observation_expired");
     }
@@ -4833,22 +5086,8 @@ export class OperationPlanLedger {
       throw new Error(`plan_recovery_${recoveryHold.reason.slice("held_".length)}_hold`);
     }
     recoveryHoldReleased = recoveryHold !== undefined;
-    const planIdDigest = operationPlanDigest(current.plan.plan_id);
-    const failedResourceWaits = (this.state.waits ?? []).filter((wait) =>
-      wait.plan_id_digest === planIdDigest && wait.revision_digest === current.digest &&
-      (wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
-      wait.compute_resource_use !== undefined &&
-      (wait.compute_resource_use.charged_compute_ms > 0 || wait.compute_resource_use.charged_tokens > 0 ||
-        wait.compute_resource_use.charged_cost_amount > 0));
-    const currentTaskIdentityDigest = failedResourceWaits.length > 0 ? operationPlanTaskIdentityDigest(p) : undefined;
-    const resourceUseReview = failedResourceWaits.filter((wait) =>
-      wait.task_identity_digest === currentTaskIdentityDigest)
-      .sort((a, b) => (b.compute_completed_at_ms ?? 0) - (a.compute_completed_at_ms ?? 0))[0];
     return { plan_id: current.plan.plan_id, revision_digest: expected, step, goal: p.goal,
       recovery_hold_released: recoveryHoldReleased,
-      ...(resourceUseReview?.compute_resource_use
-        ? { resource_use_review: { wait_id: resourceUseReview.wait_id,
-          resource_use: structuredClone(resourceUseReview.compute_resource_use) } } : {}),
       ...(goalPurposeBinding ? { goal_purpose_binding: goalPurposeBinding } : {}) };
   }
 
@@ -7921,6 +8160,7 @@ export class OperationPlanLedger {
         ...(wait.compute_completed_at_ms !== undefined ? { compute_completed_at_ms: wait.compute_completed_at_ms } : {}),
         ...(wait.compute_interrupted_at_ms !== undefined ? { compute_interrupted_at_ms: wait.compute_interrupted_at_ms } : {}),
         ...(wait.compute_resource_use ? { compute_resource_use: structuredClone(wait.compute_resource_use) } : {}),
+        ...(wait.resource_review ? { resource_review: structuredClone(wait.resource_review) } : {}),
         used_for_authority: false as const, may_execute: false as const,
       })),
       plans: this.state.plans.map((p) => {

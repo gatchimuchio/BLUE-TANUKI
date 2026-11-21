@@ -727,6 +727,33 @@ export const OperationPlanReceiptMemoryDeliverySchema = z.object({
 });
 export type OperationPlanReceiptMemoryDelivery = z.infer<typeof OperationPlanReceiptMemoryDeliverySchema>;
 
+/** One bounded, candidate-only J re-open after a failed wait compute consumed resources. */
+export const OperationPlanWaitResourceReviewSchema = z.object({
+  request_id_digest: Digest,
+  command_id_digest: Digest,
+  status: z.enum(["pending", "candidate_retained", "candidate_rejected", "failed", "interrupted"]),
+  requested_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  result_digest: Digest.optional(),
+  candidate_plan_id_digest: Digest.optional(),
+  completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  compute_resource_use: ComputeResourceUseSchema.optional(),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((review, context) => {
+  const pending = review.status === "pending";
+  if (pending !== (review.completed_at_ms === undefined) ||
+      (pending && (review.result_digest !== undefined || review.candidate_plan_id_digest !== undefined ||
+        review.compute_resource_use !== undefined)) ||
+      (!pending && review.completed_at_ms! < review.requested_at_ms) ||
+      ((review.status === "candidate_retained") !== (review.candidate_plan_id_digest !== undefined)) ||
+      (review.status === "candidate_retained" && (review.result_digest === undefined ||
+        review.compute_resource_use === undefined)) ||
+      (!pending && review.compute_resource_use !== undefined && review.completed_at_ms === undefined)) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_resource_review_fields_mismatch" });
+  }
+});
+export type OperationPlanWaitResourceReview = z.infer<typeof OperationPlanWaitResourceReviewSchema>;
+
 /** J-owned durable wait linkage. It correlates one plan task with a reply or deadline and grants no authority. */
 export const OperationPlanWaitStateSchema = z.object({
   wait_id: Digest,
@@ -751,6 +778,7 @@ export const OperationPlanWaitStateSchema = z.object({
   compute_completed_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   compute_interrupted_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   compute_resource_use: ComputeResourceUseSchema.optional(),
+  resource_review: OperationPlanWaitResourceReviewSchema.optional(),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict().superRefine((wait, context) => {
@@ -796,6 +824,16 @@ export const OperationPlanWaitStateSchema = z.object({
       (wait.resumed_at_ms === undefined || wait.compute_interrupted_at_ms < wait.resumed_at_ms)) {
     context.addIssue({ code: "custom", message: "operation_plan_wait_compute_interruption_precedes_resume" });
   }
+  if (wait.resource_review !== undefined &&
+      ((wait.compute_outcome !== "candidate_rejected" && wait.compute_outcome !== "failed") ||
+       !wait.compute_resource_use ||
+       (wait.compute_resource_use.charged_compute_ms <= 0 && wait.compute_resource_use.charged_tokens <= 0 &&
+        wait.compute_resource_use.charged_cost_amount <= 0) ||
+       wait.resource_review.requested_at_ms < (wait.compute_completed_at_ms ?? Number.MAX_SAFE_INTEGER) ||
+       (wait.resource_review.compute_resource_use !== undefined &&
+        wait.resource_review.completed_at_ms === undefined))) {
+    context.addIssue({ code: "custom", message: "operation_plan_wait_resource_review_requires_charged_failure" });
+  }
 });
 export type OperationPlanWaitState = z.infer<typeof OperationPlanWaitStateSchema>;
 
@@ -809,6 +847,8 @@ export const OperationPlanControlSchema = z.discriminatedUnion("action", [
     deadline_at_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ action: z.literal("resume_wait"), wait_id: Digest, response: z.string().trim().min(1).max(200_000),
     owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
+  z.object({ action: z.literal("resource_review"), wait_id: Digest,
+    owner_reauthentication: z.object({ owner_identity_digest: Digest, channel_identity_digest: Digest }).strict().optional() }).strict(),
   z.object({ action: z.literal("reflect"), plan_id: Id, revision_digest: Digest,
     step_ids: z.array(Id).min(1).max(8), question: z.string().trim().min(1).max(4000) }).strict(),
   z.object({ action: z.literal("result"), plan_id: Id, revision_digest: Digest, step_id: Id,
@@ -821,6 +861,7 @@ export type OperationPlanReceiptReconciliationControl = Extract<OperationPlanCon
 export type OperationPlanResultReturnControl = Extract<OperationPlanControl, { action: "result" }>;
 export type OperationPlanGoalCompletionStatusControl = Extract<OperationPlanControl, { action: "status" }>;
 export type OperationPlanWaitResumeControl = Extract<OperationPlanControl, { action: "resume_wait" }>;
+export type OperationPlanWaitResourceReviewControl = Extract<OperationPlanControl, { action: "resource_review" }>;
 export const OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION = "blue-tanuki.result-reflection.v2";
 /** Cの解釈候補。形状・引用一致は意味採用や実行許可を表さない。 */
 export const OperationPlanReflectionCandidateSchema = z.object({

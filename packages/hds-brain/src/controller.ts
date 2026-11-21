@@ -1279,6 +1279,7 @@ export class HDSUpperController {
     compute_source_observations?: OperationPlanComputeSourceObservation[];
     compute_parent_plan?: OperationPlanComputeParent;
     compute_memory_interpretation_dependencies?: OperationPlanMemoryInterpretationDependency[];
+    resource_review?: { readonly wait_id: string; readonly task_identity_digest: string };
     wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
       readonly reason: "reply" | "deadline" | "recovery" };
   }>();
@@ -1547,6 +1548,7 @@ export class HDSUpperController {
     let planComputeRequested = false;
     let planComputeWaitResume: { readonly wait_id: string; readonly task_identity_digest: string;
       readonly reason: "reply" | "deadline" | "recovery" } | undefined;
+    let planComputeResourceReview: ReturnType<OperationPlanLedger["inspectWaitResourceReview"]> | undefined;
     let planWaitId: string | undefined;
     let resumeGoalCompletionRulesReference: {
       readonly rules_digest: string; readonly rule_count: number; readonly source_ref: string;
@@ -1653,6 +1655,38 @@ ${planControl.question}`,
           this.inspectOperationPlanReceiptReconciliationForControl(planControl, req);
           req = createGatewayInternalInboundRequest({ ...req, content: "plan:reconcile",
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1" } });
+        } else if (planControl.action === "resource_review") {
+          const resourceReview = this.operationPlans.inspectWaitResourceReview(planControl, controlCaller);
+          const resumedPurpose = resourceReview.goal_purpose_binding
+            ? this.operationPlans.computePurposeForWait(resourceReview.wait_id) : null;
+          if (resourceReview.goal_purpose_binding && !resumedPurpose) throw new Error("plan_compute_purpose_unavailable");
+          planComputeResourceReview = resourceReview;
+          planComputePurpose = resumedPurpose ?? undefined;
+          resumeGoalCompletionRulesReference = resourceReview.goal_completion_rules_reference;
+          planComputeRequested = true;
+          const receipt = {
+            charged_compute_ms: resourceReview.resource_use.charged_compute_ms,
+            charged_tokens: resourceReview.resource_use.charged_tokens,
+            tokens_usage_status: resourceReview.resource_use.tokens_usage_status,
+            charged_cost_amount: resourceReview.resource_use.charged_cost_amount,
+            currency: resourceReview.resource_use.currency,
+            cost_status: resourceReview.resource_use.cost_status,
+            charge_basis: resourceReview.resource_use.charge_basis,
+          };
+          req = createGatewayInternalInboundRequest({ ...controlCaller,
+            content: `元の仕事:\n${resourceReview.goal}\n\n直前の待機再開計算:\n結果=${resourceReview.previous_outcome}` +
+              `${resourceReview.previous_result_digest ? ` / result_digest=${resourceReview.previous_result_digest}` : ""}` +
+              `\n記録済み資源receipt=${JSON.stringify(receipt)}\n\nこの再検討は一度限りの候補計算です。費用の追加を進捗と見なさないでください。` +
+              `観測で不確実性を減らす手段、異なる手段、または条件変更を根拠にした有限の再試行だけを未実行候補として返してください。` +
+              `条件変更を示せない同一操作を再提示せず、安全な次手がなければ候補を返さず保留にしてください。` +
+              `tool、下流呼出し、再委任、保存、送信、実行、承認を行わないでください。`,
+            metadata: { ...controlCaller.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
+              "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
+              "blue_tanuki.operation_core.parent_resource_review_wait_id": resourceReview.wait_id,
+              "blue_tanuki.operation_core.parent_task_identity_digest": resourceReview.task_identity_digest,
+              ...(resourceReview.goal_purpose_binding
+                ? { "blue_tanuki.operation_core.goal_purpose_binding": resourceReview.goal_purpose_binding } : {}),
+              "blue_tanuki.operation_core.used_for_authority": false } });
         } else if (planControl.action === "wait") {
           const wait = this.operationPlans.inspectWait(planControl, req);
           planWaitId = wait.wait_id;
@@ -1704,20 +1738,8 @@ ${planControl.question}`,
             const settings = SettingsWriteArgumentsSchema.safeParse(selection.step.parameters);
             selectedNativeCredentialEntry = settings.success && settingsWriteRequiresNativeCredentialEntry(settings.data.patch);
           }
-          const resourceUseReview = selection.resource_use_review?.resource_use;
-          const resourceUseNote = resourceUseReview
-            ? `資源消費記録（待機再開時、計画候補はJ台帳へ保存されず）: ${JSON.stringify({
-                charged_compute_ms: resourceUseReview.charged_compute_ms,
-                charged_tokens: resourceUseReview.charged_tokens,
-                tokens_usage_status: resourceUseReview.tokens_usage_status,
-                charged_cost_amount: resourceUseReview.charged_cost_amount,
-                currency: resourceUseReview.currency,
-                cost_status: resourceUseReview.cost_status,
-                charge_basis: resourceUseReview.charge_basis,
-              })}。これは観測であり、再計算や作用の指示・許可ではない。今回のJ再検討で進捗を評価し、必要なら独立観測、別方式、保留を判断する。`
-            : "";
           req = createGatewayInternalInboundRequest({ ...req,
-            content: `${resourceUseNote}${resourceUseNote ? "\n" : ""}${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
+            content: `${selection.goal}\n今回選択した作用候補: ${JSON.stringify({ operation: descriptor.operation_id, target: selection.step.target, parameters: selection.step.parameters })}`,
             metadata: { ...req.metadata, "blue_tanuki.authority_context": "gateway_internal_v1",
               // HDS has revalidated the owner-bound plan/revision/step. Only this
               // exact selected operation enters the tool process policy; the
@@ -1755,13 +1777,22 @@ ${planControl.question}`,
           "plan_receipt_reconciliation_capacity_reached", "plan_state_changed", "plan_wait_state_not_durable",
           "plan_wait_deadline_invalid", "plan_wait_execution_unresolved", "plan_wait_already_active",
           "plan_wait_resume_input_too_large", "plan_wait_resume_invalid", "plan_wait_resume_stale",
-          "plan_wait_compute_recovery_state_unavailable"].includes(reason) || reason.startsWith("plan_saved_result_")
+          "plan_wait_compute_recovery_state_unavailable", "plan_wait_resource_review_invalid",
+          "plan_wait_resource_review_stale", "plan_wait_resource_review_already_started",
+          "plan_wait_resource_review_state_changed", "plan_wait_resource_review_state_not_durable",
+          "plan_wait_resource_review_recovery_hold", "plan_wait_resource_review_binding_mismatch",
+          "plan_wait_resource_review_resource_binding_mismatch", "plan_wait_resource_review_candidate_binding_invalid",
+          "plan_wait_resource_review_candidate_requires_atomic_retention", "plan_wait_resource_review_receipt_unavailable",
+          "plan_wait_resource_review_origin_invalid", "plan_wait_resource_review_binding_invalid",
+          "plan_resource_review_required", "plan_resource_review_pending", "plan_resource_review_superseded",
+          "plan_resource_review_interrupted", "plan_resource_review_held", "plan_resource_review_candidate_repeats_action",
+          "plan_resource_review_candidate_unchanged"].includes(reason) || reason.startsWith("plan_saved_result_")
           ? reason : "plan_control_rejected";
-        if (planPrefix?.[1]?.toLowerCase() === "resume_wait") {
+        if (planPrefix?.[1]?.toLowerCase() === "resume_wait" || planPrefix?.[1]?.toLowerCase() === "resource_review") {
           req = isGatewayInternalInboundRequest(req)
-            ? createGatewayInternalInboundRequest({ ...req, content: "plan:resume_wait",
+            ? createGatewayInternalInboundRequest({ ...req, content: `plan:${planPrefix[1].toLowerCase()}`,
               metadata: req.metadata as GatewayInternalAuthorityMetadata })
-            : { ...req, content: "plan:resume_wait" };
+            : { ...req, content: `plan:${planPrefix[1].toLowerCase()}` };
         }
       }
     } else if (planPrefix?.[1]?.toLowerCase() === "compute") {
@@ -1967,6 +1998,7 @@ ${planControl.question}`,
       : planPrefix?.[1]?.toLowerCase() === "reconcile" ? "operation_plan_receipt_reconciliation" as const
       : planPrefix?.[1]?.toLowerCase() === "status" ? "operation_plan_goal_completion_status" as const
       : planPrefix?.[1]?.toLowerCase() === "resume_wait" ? "operation_plan_wait_resume" as const
+      : planPrefix?.[1]?.toLowerCase() === "resource_review" ? "operation_plan_wait_resource_review" as const
       : planComputeWaitResume || scopedOwnerWaitReply ? "operation_plan_wait_resume" as const
       : failureReviewControlRequested ? "failure_review" as const : undefined;
     const input = normalizeForDetection(req.content);
@@ -2099,6 +2131,10 @@ ${planControl.question}`,
           mcp_catalog_context: planComputeMcpCatalogContext,
           memory_interpretation_dependencies: planComputeMemoryInterpretationDependencies,
           source_citation_request_id: planComputeCitationRequestId,
+          ...(planComputeResourceReview ? { resource_review: {
+            wait_id: planComputeResourceReview.wait_id,
+            task_identity_digest: planComputeResourceReview.task_identity_digest,
+          } } : {}),
           ...(planComputeParentContext ? { parent_context: planComputeParentContext } : {}),
           ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined);
       if (selectedNativeCredentialEntry && candidate.type === "tool_call" && candidate.payload.tool_name === "settings.write") {
@@ -2146,6 +2182,24 @@ ${planControl.question}`,
       }
     }
 
+    if (command && planControl?.action === "resource_review") {
+      try {
+        if (command.type !== "llm_call" || !planComputeResourceReview || !isGatewayInternalInboundRequest(req) ||
+            req.metadata?.["blue_tanuki.operation_core.parent_resource_review_wait_id"] !== planComputeResourceReview.wait_id ||
+            req.metadata?.["blue_tanuki.operation_core.parent_task_identity_digest"] !== planComputeResourceReview.task_identity_digest) {
+          throw new Error("plan_wait_resource_review_command_binding_failed");
+        }
+        const pending = this.operationPlans.beginWaitResourceReview(planControl, controlCaller, req.id, command.id);
+        this.audit.append({ kind: "operation_plan", event: "wait_resource_review_requested", request_id: req.id,
+          command_id: command.id, projection_digest: operationPlanDigest(pending),
+          candidate_digest: pending.task_identity_digest, target_digest: pending.wait_id,
+          reason: "candidate_only", used_for_authority: false, timestamp: this.nowMs() });
+      } catch {
+        c = securityCommit("plan_control_denied", "plan_wait_resource_review_command_binding_failed", { request_id: req.id });
+        log = { ...log, commit: c }; command = null;
+      }
+    }
+
     if (command && planControl) {
       try {
         if (planControl.action === "wait") {
@@ -2184,6 +2238,10 @@ ${planControl.question}`,
         } else if (planControl.action === "resume_wait") {
           if (command.type !== "llm_call" || planComputeWaitResume?.reason !== "recovery") {
             throw new Error("plan_wait_resume_command_invalid");
+          }
+        } else if (planControl.action === "resource_review") {
+          if (command.type !== "llm_call" || !planComputeResourceReview) {
+            throw new Error("plan_wait_resource_review_command_binding_failed");
           }
         } else {
           this.operationPlans.bindReflection(planControl, controlCaller, command, reflection!);
@@ -2227,6 +2285,10 @@ ${planControl.question}`,
           this.issuedLLM.set(command.id, { command: structuredClone(command),
             origin: retainedOrigin,
             ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}),
+            ...(planComputeResourceReview ? { resource_review: {
+              wait_id: planComputeResourceReview.wait_id,
+              task_identity_digest: planComputeResourceReview.task_identity_digest,
+            } } : {}),
             ...(planComputeWaitResume ? { wait_resume: structuredClone(planComputeWaitResume) } : {}),
             ...(planComputeSourceObservations?.length
               ? { compute_source_observations: structuredClone(planComputeSourceObservations) } : {}),
@@ -3395,7 +3457,8 @@ ${planControl.question}`,
     const sourceLog = this.inflight.get(command_id);
     const approvalStop = phase === "approval_rejected" || phase === "approval_cancelled" ? phase : undefined;
     const issued = approvalStop ? this.issuedLLM.get(command_id) : undefined;
-    const exactCommand = issued?.wait_resume ? this.issuedExecutionCommandsById.get(command_id)?.command : undefined;
+    const exactCommand = issued?.wait_resume || issued?.resource_review
+      ? this.issuedExecutionCommandsById.get(command_id)?.command : undefined;
     const pendingWait = issued?.wait_resume && exactCommand && sourceLog?.commit.decision === "ASSERT" &&
       this.issuedExecutionCommands.get(exactCommand) === sourceLog && exactCommand.type === "llm_call" &&
       issued.origin.id === sourceLog.request_id && issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
@@ -3405,6 +3468,15 @@ ${planControl.question}`,
       !HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.has(exactCommand) && this.audit.isPersistent() && this.audit.verify() &&
       !this.audit.list().some(({ log }) => "kind" in log && log.kind === "executor_feedback" && log.command_id === command_id)
       ? this.operationPlans.pendingWaitCompute(issued.wait_resume.wait_id, sourceLog.request_id, command_id) : null;
+    const pendingResourceReview = issued?.resource_review && exactCommand && sourceLog?.commit.decision === "ASSERT" &&
+      this.issuedExecutionCommands.get(exactCommand) === sourceLog && exactCommand.type === "llm_call" &&
+      issued.origin.id === sourceLog.request_id && issued.command.upstream_decision.commit_hash === sourceLog.commit.hash &&
+      sourceLog.request_id === exactCommand.upstream_decision.request_id &&
+      sourceLog.request_id === (opts.request_id ?? sourceLog.request_id) &&
+      sourceLog.commit.hash === exactCommand.upstream_decision.commit_hash &&
+      !HDS_CURRENT_EXECUTION_AUTHORITY_BINDINGS.has(exactCommand) && this.audit.isPersistent() && this.audit.verify() &&
+      !this.audit.list().some(({ log }) => "kind" in log && log.kind === "executor_feedback" && log.command_id === command_id)
+      ? this.operationPlans.pendingWaitResourceReview(issued.resource_review.wait_id, issued.origin.id, command_id) : null;
     const lifecycleLog: CommandLifecycleLog = {
       kind: "command_lifecycle",
       phase,
@@ -3423,6 +3495,15 @@ ${planControl.question}`,
       try {
         if (pendingWait) this.operationPlans.recordWaitComputeOutcome(pendingWait.wait_id, command_id, approvalStop,
           undefined, undefined, undefined, Math.max(lifecycleLog.timestamp, pendingWait.resumed_at_ms!));
+        if (pendingResourceReview) {
+          const recorded = this.operationPlans.recordWaitResourceReviewOutcome(pendingResourceReview.wait_id,
+            issued!.origin.id, command_id, "failed", undefined, undefined,
+            Math.max(lifecycleLog.timestamp, pendingResourceReview.resource_review!.requested_at_ms));
+          this.audit.append({ kind: "operation_plan", event: "wait_resource_review_lifecycle_stopped",
+            request_id: issued!.origin.id, command_id, projection_digest: operationPlanDigest(recorded),
+            candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
+            reason: phase, used_for_authority: false, timestamp: lifecycleLog.timestamp });
+        }
       } finally {
         this.operationPlans.abandon(command_id);
         this.operationPlans.forgetReflection(command_id);
@@ -3772,6 +3853,9 @@ ${planControl.question}`,
     let waitComputeOutcome: "candidate_retained" | "candidate_rejected" | "failed" | undefined = issued?.wait_resume
       ? fb.status === "success" ? "candidate_rejected" : "failed"
       : undefined;
+    let resourceReviewOutcome: "candidate_retained" | "candidate_rejected" | "failed" | undefined = issued?.resource_review
+      ? fb.status === "success" ? "candidate_rejected" : "failed"
+      : undefined;
     let waitCandidatePlanIdDigest: string | undefined;
     let planCandidateEvent: "candidate_retained" | "candidate_rejected" | undefined;
     let planCandidateRejectionReason: string | undefined;
@@ -4105,8 +4189,20 @@ ${planControl.question}`,
             !this.verifyCurrentMemoryCitationJudgment(dependency))) {
             throw new Error("plan_memory_interpretation_dependency_invalid");
           }
+          const resourceReviewCompletion = issued.resource_review
+            ? computeResourceUse && resultAudit.digest ? {
+              wait_id: issued.resource_review.wait_id,
+              command_id: fb.command_id,
+              result_digest: resultAudit.digest,
+              compute_resource_use: computeResourceUse,
+            } : undefined
+            : undefined;
+          if (issued.resource_review && !resourceReviewCompletion) {
+            throw new Error("plan_wait_resource_review_receipt_unavailable");
+          }
           retainedPlanIdDigest = this.operationPlans.retainCandidate(planner.plan, issued.origin, planner.goal_purpose_relation,
-            issued.compute_source_observations, memoryInterpretationDependencies, issued.compute_parent_plan);
+            issued.compute_source_observations, memoryInterpretationDependencies, issued.compute_parent_plan, undefined,
+            resourceReviewCompletion);
         } catch (error) {
           const code = error instanceof Error ? error.message : "";
           if (/^(?:plan_[a-z0-9_]{1,112}|owner_gateway_receipt_recheck_[a-z0-9_]{1,96})$/.test(code)) {
@@ -4134,10 +4230,12 @@ ${planControl.question}`,
         }
         if (retainedPlanIdDigest) {
           waitComputeOutcome = issued.wait_resume ? "candidate_retained" : waitComputeOutcome;
+          resourceReviewOutcome = issued.resource_review ? "candidate_retained" : resourceReviewOutcome;
           waitCandidatePlanIdDigest = retainedPlanIdDigest;
           planCandidateEvent = "candidate_retained";
         } else {
           waitComputeOutcome = issued.wait_resume ? "candidate_rejected" : waitComputeOutcome;
+          resourceReviewOutcome = issued.resource_review ? "candidate_rejected" : resourceReviewOutcome;
           planCandidateEvent = "candidate_rejected";
           planCandidateRejectionReason = rejectionReason;
         }
@@ -4160,6 +4258,29 @@ ${planControl.question}`,
           projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
           candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
           reason: waitComputeOutcome, used_for_authority: false, timestamp: this.nowMs() });
+      }
+    }
+    if (issued?.resource_review && resourceReviewOutcome) {
+      const recorded = resourceReviewOutcome === "candidate_retained"
+        ? this.operationPlans.listWaits().find((wait) => wait.wait_id === issued.resource_review!.wait_id &&
+          wait.resource_review?.status === "candidate_retained" &&
+          wait.resource_review.candidate_plan_id_digest === waitCandidatePlanIdDigest)
+        : this.operationPlans.recordWaitResourceReviewOutcome(issued.resource_review.wait_id, issued.origin.id,
+          fb.command_id, resourceReviewOutcome, resultAudit.digest, computeResourceUse);
+      if (!recorded) throw new Error("plan_wait_resource_review_atomic_result_unavailable");
+      this.audit.append({ kind: "operation_plan", event: "wait_resource_review_outcome_recorded",
+        request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
+        projection_digest: operationPlanDigest(recorded), proposal_digest: recorded.resource_review?.result_digest,
+        candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
+        reason: resourceReviewOutcome, used_for_authority: false, timestamp: this.nowMs() });
+      if (computeResourceUse && resourceReviewOutcome !== "candidate_retained" &&
+          (computeResourceUse.charged_compute_ms > 0 || computeResourceUse.charged_tokens > 0 ||
+            computeResourceUse.charged_cost_amount > 0)) {
+        this.audit.append({ kind: "operation_plan", event: "wait_resource_review_consumed_without_progress",
+          request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
+          projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
+          candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
+          reason: resourceReviewOutcome, used_for_authority: false, timestamp: this.nowMs() });
       }
     }
     if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id, planCandidateRejectionReason);
@@ -5584,6 +5705,17 @@ ${planControl.question}`,
           target_digest: update.wait.wait_id, reason: update.stop.outcome, used_for_authority: false, timestamp: this.nowMs() });
         continue;
       }
+      if (update.disposition === "resource_review_reconciled" || update.disposition === "resource_review_interrupted") {
+        const review = update.wait.resource_review;
+        this.audit.append({ kind: "operation_plan",
+          event: update.disposition === "resource_review_reconciled"
+            ? "wait_resource_review_candidate_reconciled" : "wait_resource_review_interrupted",
+          request_id: null, command_id: review?.command_id_digest ?? update.wait.resume_command_id_digest!,
+          projection_digest: operationPlanDigest(update.wait), proposal_digest: review?.result_digest,
+          candidate_digest: update.wait.task_identity_digest, target_digest: update.wait.wait_id,
+          reason: update.disposition, used_for_authority: false, timestamp: this.nowMs() });
+        continue;
+      }
       this.audit.append({ kind: "operation_plan",
         event: update.disposition === "candidate_reconciled" ? "wait_compute_candidate_reconciled" : "wait_compute_interrupted",
         request_id: null, command_id: update.wait.resume_command_id_digest!,
@@ -6153,6 +6285,7 @@ ${planControl.question}`,
       readonly selected_result_reflection?: OperationPlanSelectedResultReflection;
       readonly memory_interpretation_dependencies?: readonly OperationPlanMemoryInterpretationDependency[];
       readonly source_citation_request_id?: string;
+      readonly resource_review?: { readonly wait_id: string; readonly task_identity_digest: string };
       readonly wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
         readonly reason: "reply" | "deadline" | "recovery" } },
   ): ExecuteCommand {
@@ -6267,7 +6400,7 @@ ${planControl.question}`,
     // S7 action routing: explicit safe tool requests may become tool_call.
     // Unknown explicit tool requests become noop instead of being passed to
     // the LLM as ordinary text.
-    const action = planCompute?.wait_resume ? undefined : routeAction(req);
+    const action = planCompute?.wait_resume || planCompute?.resource_review ? undefined : routeAction(req);
     if (action?.type === "tool_call") {
       return {
         id: randomUUID(),
@@ -6463,6 +6596,11 @@ ${planControl.question}`,
         used_for_authority: false, may_execute: false,
       })}`,
     } : undefined;
+    const planComputeResourceReviewMessage: LLMCallPayload["messages"][number] | undefined =
+      planCompute?.resource_review ? {
+        role: "system",
+        content: "これは資源消費により無進捗だった待機再開をJが一度だけ再検討する候補計算です。直前の費用は進捗ではありません。元の目的と提示されたJ記録を維持し、tool実行・下流LLM呼出し・再委任・保存・送信・承認を行わず、未実行OperationPlan候補を最大一つ返してください。前の候補に含まれるoperation/target/parametersと完全に同じstepを含めてはいけません。同じ操作を再試行する提案は、owner taskの根拠と観測から前提または条件の変更が明示できる場合に限ります。安全または有用な次手を根拠付きで構成できない場合は候補を作らず保留相当として返してください。返却候補の妥当性・目的適合・実行許可は証明されず、Jとownerの後続審査まで実行できません。",
+      } : undefined;
     const planningMaxTokens = this.llm_route.max_tokens ?? 1024;
     const planningTimeoutMs = this.llm_route.timeout_ms ?? 30_000;
     const delegationRoles: AgentDelegationContract["roles"] = ["division", "independent_comparison", "audit", "redundancy"];
@@ -6471,7 +6609,7 @@ ${planControl.question}`,
     const planningBudgetScope = planCompute?.requested && isGatewayInternalInboundRequest(req) &&
       req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? computeBudgetScope(req) : undefined;
     const agentDelegation: AgentDelegationContract | undefined = planningBudgetScope && planCompute?.requested
-      && !planComputeBrowserReadMessage
+      && !planComputeBrowserReadMessage && !planCompute.resource_review
       ? {
           schema_version: "blue-tanuki.agent-delegation.v1",
           parent_goal_digest: createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
@@ -6505,6 +6643,7 @@ ${planControl.question}`,
         content: "この要求では、一般のplan:compute指示にあるresolver一覧へmcp.callを一つだけ追加できます。Owner taskがMCP操作を明示的に求め、task内の値だけで安全に構成できる場合に限り、未実行の単一stepをoperation=mcp.call、adapter=external_api、adapter_is_authority=false、command_generated_by_adapter_only=false、target={kind:external_service,id='mcp:'+context.connection_digest,display_name:'MCP server (identity withheld)'}として返します。tool_callは一覧toolとそのinput_schema_sha256を複写し、toolのJSON schemaに適合するargumentsを作り、parametersへrequest_kind='tool_call'を含めます。resource_readはresourcesの固定entryだけを選び、request_kind='resource_read'、tool_name='resource:'+uri_sha256、resource_uri_sha256、input_schema_sha256=read_request_sha256をcontextから複写し、arguments={}にします。prompt_getは一覧promptだけを選び、request_kind='prompt_get'、tool_nameをそのまま、input_schema_sha256=arguments_sha256で複写し、宣言済み引数だけにOwner task明記値を入れ、必須引数をすべて満たします。secret-like値は拒否します。resource_templatesはcontext entryのread_request_sha256がdigestでvariable_namesがある場合だけresource_readとして扱います。tool_name=resource-template:<uri_template_sha256>、resource_template_name/name、resource_template_sha256/uri_template_sha256、input_schema_sha256/read_request_sha256、arguments/宣言変数へOwner taskに明示された文字列値を設定し、resource_uri_sha256は設定しません。template URIをCへ渡さず、Executorの現行catalog展開とdigest再観測、High/L3最終確認へ渡します。read_request_sha256がnullなら未対応構文として候補化しません。parametersはprofile='native-live', connection_digest, catalog_digest, request_kind, tool_name, input_schema_sha256, argumentsを含め、固定resource_readだけresource_uri_sha256を含め、resource-templateはresource_template_nameとresource_template_sha256を含めます。effectsはbrowser_action/credential_access/delete/external_send/process_spawn/read/schedule_change/settings_change/writeの全て、permissionはrisk=high・approval_level=L3_final_review・final_review_required=true・hds_brain_authority_required=true・approval_gate_required=trueです。preparationはdepends_on/bindings/preconditionsを空、mcp_call_result_matches validationを一件だけとし、validation.targetはtargetと同一、compensation={available:false,reason:'MCP server effects are not assumed reversible'}にします。validation.expectedはschema_version='blue-tanuki.mcp-call-result-validation.v1'、parametersと同じconnection_digest/catalog_digest/request_kind/tool_name/input_schema_sha256、固定resource_readなら同じresource_uri_sha256、resource-templateなら同じresource_template_nameとresource_template_sha256、arguments_sha256='__computed_by_operation_core__'としてください。Operation Coreが引数からcanonical digestを補い、別値は通常検証で拒否します。未掲載tool/resource/prompt、推測した引数やsecret-like値は候補化せず、一覧不完全のため能力不存在も断定しません。この例外はcandidate形式を広げるだけで、実行許可ではありません。"
       } : undefined;
     const computeContextMessages = [...memoryMessages, ...(planPurposeMessage ? [planPurposeMessage] : []),
+      ...(planComputeResourceReviewMessage ? [planComputeResourceReviewMessage] : []),
       ...(planComputeMcpCatalogSystemMessage ? [planComputeMcpCatalogSystemMessage] : []),
       ...(planComputeMcpCapabilitiesSystemMessage ? [planComputeMcpCapabilitiesSystemMessage] : []),
       ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
@@ -6525,6 +6664,7 @@ ${planControl.question}`,
       messages: [
         ...memoryMessages,
         ...(planPurposeMessage ? [planPurposeMessage] : []),
+        ...(planComputeResourceReviewMessage ? [planComputeResourceReviewMessage] : []),
         ...(planComputeMcpCatalogSystemMessage ? [planComputeMcpCatalogSystemMessage] : []),
         ...(planComputeMcpCapabilitiesSystemMessage ? [planComputeMcpCapabilitiesSystemMessage] : []),
         ...(planComputeMemoryCitationMessage ? [planComputeMemoryCitationMessage] : []),
@@ -6567,6 +6707,8 @@ ${planControl.question}`,
           ? OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION
           : planCompute?.mcp_catalog_context
           ? OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION
+          : planCompute?.resource_review
+          ? "blue-tanuki.plan-compute-resource-review.v1"
           : planCompute?.source_observations?.length && planCompute.memory_interpretation_dependencies?.length
           ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION
           : planCompute?.source_observations?.length
