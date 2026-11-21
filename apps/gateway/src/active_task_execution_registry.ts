@@ -31,6 +31,9 @@ export interface ActiveTaskExecutionSnapshot {
   cancel_requested_at_ms: number | null;
   execution_signal_aborted: boolean;
   executor_state: "running" | "cancel_requested";
+  parent_execution_finished: boolean;
+  executor_settled: boolean;
+  executor_status: ExecuteFeedback["status"] | "unknown";
   local_worker_stop: LocalWorkerStopObservation;
   agent_workers: readonly ActiveAgentWorkerSnapshot[];
   external_processing_stop: "unknown";
@@ -64,6 +67,8 @@ interface ActiveTaskExecution {
   cancel_token_kind: TaskExecutionCancellationTokenKind | null;
   executor_settled: boolean;
   executor_status: ExecuteFeedback["status"] | "unknown";
+  parent_execution_finished: boolean;
+  cancellation_settlement_recorded: boolean;
   local_worker_state: LocalWorkerStopObservation;
   local_worker_observed_at_ms: number;
   agent_workers: Map<string, ActiveAgentWorkerSnapshot>;
@@ -94,6 +99,8 @@ export class ActiveTaskExecutionRegistry {
       cancel_token_kind: null,
       executor_settled: false,
       executor_status: "unknown",
+      parent_execution_finished: false,
+      cancellation_settlement_recorded: false,
       local_worker_state: "not_observed",
       local_worker_observed_at_ms: 0,
       agent_workers: new Map(),
@@ -122,7 +129,7 @@ export class ActiveTaskExecutionRegistry {
     token_kind: TaskExecutionCancellationTokenKind = "resume",
   ): TaskExecutionCancellationResult | null {
     const execution = this.active.get(command_id);
-    if (!execution || execution.executor_settled) return null;
+    if (!execution || execution.executor_settled || execution.parent_execution_finished) return null;
     if (!actor || !Number.isSafeInteger(requested_at_ms) || requested_at_ms <= 0) {
       throw new Error("active_task_execution_cancel_context_invalid");
     }
@@ -176,6 +183,9 @@ export class ActiveTaskExecutionRegistry {
       used_for_authority: false,
       may_execute: false,
     });
+    if (execution.parent_execution_finished && !hasPendingAgentWorker(execution)) {
+      this.active.delete(event.parent_command_id);
+    }
   }
 
   markExecutorSettled(command_id: string, status: ExecuteFeedback["status"] | "unknown"): void {
@@ -183,13 +193,17 @@ export class ActiveTaskExecutionRegistry {
     if (!execution) return;
     execution.executor_settled = true;
     execution.executor_status = status;
+    if (execution.parent_execution_finished && !hasPendingAgentWorker(execution)) this.active.delete(command_id);
   }
 
   finish(command_id: string): FinishedTaskExecutionCancellation | null {
     const execution = this.active.get(command_id);
     if (!execution) return null;
-    this.active.delete(command_id);
-    if (!execution.cancel_requested_by || execution.cancel_requested_at_ms === null) return null;
+    execution.parent_execution_finished = true;
+    if (!hasPendingAgentWorker(execution)) this.active.delete(command_id);
+    if (!execution.cancel_requested_by || execution.cancel_requested_at_ms === null ||
+        execution.cancellation_settlement_recorded) return null;
+    execution.cancellation_settlement_recorded = true;
     return {
       command_id,
       cancel_requested_by: execution.cancel_requested_by,
@@ -213,6 +227,9 @@ export class ActiveTaskExecutionRegistry {
       cancel_requested_at_ms: execution.cancel_requested_at_ms,
       execution_signal_aborted: execution.controller.signal.aborted,
       executor_state: execution.cancel_requested_at_ms === null ? "running" : "cancel_requested",
+      parent_execution_finished: execution.parent_execution_finished,
+      executor_settled: execution.executor_settled,
+      executor_status: execution.executor_status,
       local_worker_stop: execution.local_worker_state,
       agent_workers: [...execution.agent_workers.values()]
         .sort((left, right) => left.role.localeCompare(right.role) || left.child_task_digest.localeCompare(right.child_task_digest))
@@ -221,4 +238,9 @@ export class ActiveTaskExecutionRegistry {
       used_for_authority: false,
     };
   }
+}
+
+function hasPendingAgentWorker(execution: ActiveTaskExecution): boolean {
+  return [...execution.agent_workers.values()].some((worker) =>
+    !["cancelled_before_dispatch", "settled", "settled_after_abort", "late_result_discarded"].includes(worker.state));
 }

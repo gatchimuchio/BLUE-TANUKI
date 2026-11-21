@@ -4869,17 +4869,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             Number.isSafeInteger(item.started_at_ms) &&
             (item.cancel_requested_at_ms === null || Number.isSafeInteger(item.cancel_requested_at_ms)) &&
             typeof item.execution_signal_aborted === "boolean" &&
+            typeof item.parent_execution_finished === "boolean" &&
+            typeof item.executor_settled === "boolean" &&
+            typeof item.executor_status === "string" && item.executor_status.length <= 64 &&
             (item.executor_state === "running" || item.executor_state === "cancel_requested") &&
             ["not_observed", "worker_exit_observed", "process_tree_empty_confirmed", "provider_state_unknown"]
               .includes(item.local_worker_stop) &&
             item.external_processing_stop === "unknown" && item.used_for_authority === false;
         });
         if (visible.length === 0) {
-          setHtml("active-executions-list", '<div class="queue-item muted">no active executions</div>');
+          setHtml("active-executions-list", '<div class="queue-item muted">no active executions or residual Agent workers</div>');
           return;
         }
         setHtml("active-executions-list", visible.map(function (item) {
           const cancelRequested = item.cancel_requested_at_ms !== null;
+          const parentFinished = item.parent_execution_finished === true;
+          const parentSettled = item.executor_settled === true;
           const signalState = item.execution_signal_aborted ? "aborted" : "active";
           const agentWorkers = Array.isArray(item.agent_workers) ? item.agent_workers.filter(function (worker) {
             return isObject(worker) && /^[a-f0-9]{64}$/.test(worker.child_task_digest || "") &&
@@ -4889,6 +4894,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               Number.isSafeInteger(worker.observed_at_ms) && worker.used_for_authority === false &&
               worker.may_execute === false;
           }) : [];
+          const childStillPending = agentWorkers.some(function (worker) {
+            return ["started", "cancel_requested", "residual_worker_observed"].includes(worker.state);
+          });
           const workerSummary = agentWorkers.length === 0 ? "" :
             '<dt>Agent child workers</dt><dd>' + agentWorkers.map(function (worker) {
               const state = worker.state === "residual_worker_observed"
@@ -4898,17 +4906,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             }).join("<br>") + '</dd>';
           return '<article class="queue-item" data-active-command="' + escapeHtml(item.command_id) + '">' +
             '<div class="row"><h3>Command ' + escapeHtml(item.command_id) + '</h3>' +
-            badge(cancelRequested ? "Cancel requested" : "Running", cancelRequested ? "warn" : "good") + '</div>' +
+            badge(parentSettled && childStillPending ? "Parent settled; child remains" :
+              parentFinished && !parentSettled ? "Parent finished; settlement unknown" :
+                parentSettled ? "Parent settled" : cancelRequested ? "Cancel requested" : "Running",
+              (parentSettled && childStillPending) || (parentFinished && !parentSettled) || cancelRequested ? "warn" : "good") + '</div>' +
             '<dl class="kv">' +
             '<dt>started</dt><dd>' + escapeHtml(formatDate(item.started_at_ms)) + '</dd>' +
-            '<dt>Executor</dt><dd>' + escapeHtml(item.executor_state) + '</dd>' +
+            '<dt>Executor</dt><dd>' + escapeHtml(parentSettled ? "settled (" + item.executor_status + ")" :
+              parentFinished ? "settlement not observed" : item.executor_state) + '</dd>' +
             '<dt>execution signal</dt><dd>' + escapeHtml(signalState) + '</dd>' +
             '<dt>local worker</dt><dd>' + escapeHtml(item.local_worker_stop) + '</dd>' +
             workerSummary +
             '<dt>external processing stop</dt><dd>unknown</dd>' +
             '</dl>' +
             '<button class="danger" data-cancel-execution="' + escapeHtml(item.command_id) + '"' +
-              (cancelRequested ? ' disabled' : '') + '>Cancel task</button>' +
+              (cancelRequested || parentFinished || parentSettled ? ' disabled' : '') + '>Cancel task</button>' +
             '</article>';
         }).join(""));
       }

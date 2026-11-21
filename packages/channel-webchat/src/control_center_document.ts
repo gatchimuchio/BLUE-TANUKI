@@ -784,10 +784,10 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <p id="owner-task-adoption-review-status" class="muted" role="status"></p>
           <p id="native-credential-approval-status" class="muted" role="status"></p>
-          <h3>Active executions</h3>
+          <h3>Active executions and residual child workers</h3>
           <p class="muted">Cancel requests signal the matching command only. Request acceptance, executor settlement, local process-tree evidence, and external-provider stop are separate observations.</p>
           <div class="status-grid">
-            <div class="metric"><span>Executing</span><span id="active-execution-count">not loaded</span></div>
+            <div class="metric"><span>Active / residual</span><span id="active-execution-count">not loaded</span></div>
           </div>
           <div id="execution-cancel-status" class="badge warn" aria-live="polite">No task cancellation requested.</div>
           <div id="active-executions-list" class="queue-list"></div>

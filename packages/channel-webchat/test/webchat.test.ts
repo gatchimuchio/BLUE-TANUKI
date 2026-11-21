@@ -8475,6 +8475,9 @@ describe("WebChatChannel — approval API", () => {
       cancel_requested_at_ms: null,
       execution_signal_aborted: false,
       executor_state: "running" as const,
+      parent_execution_finished: false,
+      executor_settled: false,
+      executor_status: "unknown" as const,
       local_worker_stop: "not_observed" as const,
       agent_workers: [{
         child_task_digest: "a".repeat(64),
@@ -8487,10 +8490,28 @@ describe("WebChatChannel — approval API", () => {
       external_processing_stop: "unknown" as const,
       used_for_authority: false as const,
     };
+    const residualExecution = {
+      ...activeExecution,
+      command_id: "cmd-task-residual",
+      cancel_requested_at_ms: 120,
+      execution_signal_aborted: true,
+      executor_state: "cancel_requested" as const,
+      parent_execution_finished: true,
+      executor_settled: true,
+      executor_status: "failed" as const,
+      agent_workers: [{
+        child_task_digest: "b".repeat(64),
+        role: "audit" as const,
+        state: "residual_worker_observed" as const,
+        observed_at_ms: 150,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      }],
+    };
     const ctx = await setup({
       approval: {
         list: async () => [],
-        activeExecutions: async () => [activeExecution],
+        activeExecutions: async () => [activeExecution, residualExecution],
         cancelExecution: async (command_id, context) => {
           calls.push({ command_id, actor: context.actor, token_kind: context.token_kind });
           if (command_id !== activeExecution.command_id) return null;
@@ -8513,6 +8534,8 @@ describe("WebChatChannel — approval API", () => {
 
       const app = await getRaw(ctx.port, "/app");
       expect(app.text).toContain("active-executions-list");
+      expect(app.text).toContain("Parent settled; child remains");
+      expect(app.text).toContain('parentSettled ? "settled (" + item.executor_status');
       expect(app.text).toContain("/approval/executions/");
       expect(app.text).toContain("Agent child workers");
       expect(app.text).toContain("compute request still pending, provider stop unknown");
@@ -8521,7 +8544,7 @@ describe("WebChatChannel — approval API", () => {
         authorization: `Bearer ${RESUME_TOKEN}`,
       });
       expect(snapshot.status).toBe(200);
-      expect(JSON.parse(snapshot.text).active_executions).toEqual([activeExecution]);
+      expect(JSON.parse(snapshot.text).active_executions).toEqual([activeExecution, residualExecution]);
 
       const wrongTarget = await postJson(ctx.port, "/approval/executions/cmd-other/cancel", {}, {
         authorization: `Bearer ${RESUME_TOKEN}`,

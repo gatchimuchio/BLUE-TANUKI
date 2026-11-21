@@ -142,4 +142,85 @@ describe("ActiveTaskExecutionRegistry", () => {
       }],
     });
   });
+
+  it("keeps a settled parent visible while a child remains and closes it after a terminal child observation", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const commandId = "command-agent-residual";
+    const parentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(commandId).digest("hex");
+    const childTaskDigest = "b".repeat(64);
+    registry.register(commandId, new AbortController(), 100);
+    const observe = (state: "started" | "cancel_requested" | "residual_worker_observed" | "late_result_discarded",
+      observed_at_ms: number) => registry.observeAgentWorkerLifecycle({
+      schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+      parent_command_id: commandId,
+      parent_command_digest: parentCommandDigest,
+      child_task_digest: childTaskDigest,
+      role: "audit",
+      state,
+      observed_at_ms,
+      used_for_authority: false,
+      may_execute: false,
+    });
+
+    observe("started", 200);
+    registry.requestCancel(commandId, "webchat-resume-token-holder", 300);
+    observe("cancel_requested", 301);
+    registry.markExecutorSettled(commandId, "failed");
+    expect(registry.finish(commandId)).toMatchObject({
+      command_id: commandId,
+      executor_settled: true,
+      executor_status: "failed",
+      external_processing_stop: "unknown",
+    });
+    expect(registry.finish(commandId)).toBeNull();
+    expect(registry.requestCancel(commandId, "webchat-resume-token-holder", 400)).toBeNull();
+    expect(registry.snapshot()[0]).toMatchObject({
+      command_id: commandId,
+      parent_execution_finished: true,
+      executor_settled: true,
+      executor_status: "failed",
+      executor_state: "cancel_requested",
+      agent_workers: [{ child_task_digest: childTaskDigest, state: "cancel_requested" }],
+      external_processing_stop: "unknown",
+    });
+
+    observe("residual_worker_observed", 1_301);
+    expect(registry.snapshot()[0]?.agent_workers[0]).toMatchObject({ state: "residual_worker_observed" });
+    observe("late_result_discarded", 1_500);
+    expect(registry.snapshot()).toEqual([]);
+  });
+
+  it("does not infer executor settlement when only parent finalization is observed", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const commandId = "command-agent-unknown-settlement";
+    const parentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(commandId).digest("hex");
+    const childTaskDigest = "c".repeat(64);
+    registry.register(commandId, new AbortController(), 100);
+    const observe = (state: "started" | "late_result_discarded", observed_at_ms: number) =>
+      registry.observeAgentWorkerLifecycle({
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+        parent_command_id: commandId,
+        parent_command_digest: parentCommandDigest,
+        child_task_digest: childTaskDigest,
+        role: "audit",
+        state,
+        observed_at_ms,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+    observe("started", 200);
+    registry.requestCancel(commandId, "webchat-resume-token-holder", 300);
+    const cancellation = registry.finish(commandId);
+    expect(cancellation).toMatchObject({ executor_settled: false, executor_status: "unknown" });
+    expect(registry.snapshot()[0]).toMatchObject({
+      parent_execution_finished: true,
+      executor_settled: false,
+      executor_status: "unknown",
+    });
+    observe("late_result_discarded", 400);
+    expect(registry.snapshot()).toEqual([]);
+  });
 });
