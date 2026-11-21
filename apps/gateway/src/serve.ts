@@ -3194,13 +3194,14 @@ async function serveWithOwnerLease(
     let planAttemptRejection: string | undefined;
     if (executionController.signal.aborted) return cancelledBeforeExecutor("task_cancelled_before_executor");
     if (!hds.beginOperationPlanAttempt(cmd, admission, (reason) => { planAttemptRejection = reason; })) {
+      const rejectionReason = planAttemptRejection ?? "plan_attempt_not_admitted";
       gatewayLog.warn("operation-plan attempt was not admitted", {
         command_id_digest: digestString(cmd.id),
-        reason: planAttemptRejection ?? "plan_attempt_not_admitted",
+        reason: rejectionReason,
         used_for_authority: false,
       });
-      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "plan_attempt_not_admitted" });
-      return { status: "plan_binding_stale" };
+      hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: rejectionReason });
+      return { status: rejectionReason };
     }
     if (operationPlanRestore && !hds.beginOperationPlanRecoveryRefresh(cmd)) {
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: "operation_plan_recovery_refresh_busy" });

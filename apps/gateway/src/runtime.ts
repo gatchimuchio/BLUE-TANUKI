@@ -745,12 +745,13 @@ async function runCliWithExecutionStore(
     const admission = planBound ? executionAdmissionForCommand(command, executorApproval.receipt(approvedCommand)) : undefined;
     let planAttemptRejection: string | undefined;
     if (!hds.beginOperationPlanAttempt(command, admission, (reason) => { planAttemptRejection = reason; })) {
+      const rejectionReason = planAttemptRejection ?? "plan_attempt_not_admitted";
       hds.onCommandLifecycle(command.id, "approval_cancelled", {
         actor: inbound.user,
-        reason: "plan_attempt_not_admitted",
+        reason: rejectionReason,
       });
       gatewayLog.warn("CLI operation-plan attempt was not admitted", {
-        reason: planAttemptRejection ?? "plan_attempt_not_admitted",
+        reason: rejectionReason,
         used_for_authority: false,
       });
       auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });
