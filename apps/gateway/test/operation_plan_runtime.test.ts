@@ -15,9 +15,11 @@ import { TelegramChannel, type TelegramFetch } from "@blue-tanuki/channel-telegr
 import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { createGatewayInternalInboundRequest, FileDeleteTargetVersionObservationSchema, FileWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
+  AgentDelegationResultEvidenceSchema,
   OperationPlanCheckpointSchema,
   OperationPlanCheckpointEnvelopeSchema,
-  type ExecuteCommand, type ExecuteFeedback, type OperationParameters, type OperationPlan, type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
+  type AgentDelegationResultEvidence, type ExecuteCommand, type ExecuteFeedback, type OperationParameters, type OperationPlan,
+  type OperationStep, type InboundRequest } from "@blue-tanuki/protocol";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { planGatewayInboundBoundary } from "../src/serve.js";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
@@ -50,6 +52,32 @@ function request(content: string, user = "fixture-owner", goal_criteria?: Inboun
     ...(goal_completion_rules ? { goal_completion_rules } : {}),
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer",
       ...(goal_completion_rules ? { "blue_tanuki.actor_kind": "owner", "blue_tanuki.trust_level": "owner" } : {}) } });
+}
+function agentDelegationFeedbackEvidence(command: ExecuteCommand): Partial<ExecuteFeedback> {
+  if (command.type !== "llm_call" || !command.payload.agent_delegation) return {};
+  const contract = command.payload.agent_delegation;
+  const children = contract.roles.map((role) => ({
+    role,
+    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+    resource_use_digest: "f".repeat(64),
+    outcome: "candidate" as const,
+  }));
+  const evidence: AgentDelegationResultEvidence = AgentDelegationResultEvidenceSchema.parse({
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
+      .update(command.id).digest("hex"),
+    contract_digest: operationPlanDigest(contract),
+    parent_goal_digest: contract.parent_goal_digest,
+    parent_task_identity_digest: contract.parent_task_identity_digest,
+    parent_budget_identity_digest: contract.parent_budget_identity_digest,
+    criteria_digest: contract.criteria_digest,
+    termination_digest: contract.termination_digest,
+    children,
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { agent_delegation_result_evidence: evidence };
 }
 function operationPlanRestoreCommand(): ExecuteCommand {
   return {
@@ -767,6 +795,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         command_id: computeDecision.command.id, status: "success",
         result: { operation_core: { status: "valid_plan", plan: candidate,
           goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: task, purpose_quote: purposeText }] } } },
+        ...agentDelegationFeedbackEvidence(computeDecision.command),
         metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 },
       });
       expect(review(initialHds, candidate, "send", binding).log.commit.reason)
@@ -1428,7 +1457,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
 
       const delayedCandidate = plan(computeRequest.id, root);
       controller.onFeedback({ command_id: compute!.id, status: "success",
-        result: { operation_core: { status: "valid_plan", plan: delayedCandidate } }, metrics: { duration_ms: 1 } });
+        result: { operation_core: { status: "valid_plan", plan: delayedCandidate } },
+        ...agentDelegationFeedbackEvidence(compute!), metrics: { duration_ms: 1 } });
       expect(controller.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait.wait_id))
         .toMatchObject({ compute_outcome: "candidate_rejected", used_for_authority: false, may_execute: false });
       expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
@@ -3076,7 +3106,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
 
       const next = plan(reply.id, "synthetic-root");
       hds.onFeedback({ command_id: resumed.command!.id, status: "success",
-        result: { operation_core: { status: "valid_plan", plan: next } }, metrics: { duration_ms: 1 } });
+        result: { operation_core: { status: "valid_plan", plan: next } },
+        ...agentDelegationFeedbackEvidence(resumed.command!), metrics: { duration_ms: 1 } });
       expect(store.load()?.plans.find((candidate) => candidate.revisions[0]?.plan.plan_id === next.plan_id)
         ?.task_identity_digest).toBe(wait?.task_identity_digest);
       const replyWait = hds.listOperationPlanWaits().find((candidate) => candidate.wait_id === wait?.wait_id);
@@ -3157,6 +3188,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       });
       hds.onFeedback({ command_id: reopened.command!.id, status: "success",
         result: { operation_core: { status: "valid_plan", plan: reconsidered } },
+        ...agentDelegationFeedbackEvidence(reopened.command!),
         compute_resource_use: {
           schema_version: "blue-tanuki.compute-resource-use.v1",
           request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
@@ -3306,7 +3338,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
 
       const next = plan(resumeRequest.id, "synthetic-root");
       hds.onFeedback({ command_id: resumed.command!.id, status: "success",
-        result: { operation_core: { status: "valid_plan", plan: next } }, metrics: { duration_ms: 1 } });
+        result: { operation_core: { status: "valid_plan", plan: next } },
+        ...agentDelegationFeedbackEvidence(resumed.command!), metrics: { duration_ms: 1 } });
       expect(hds.listOperationPlanWaits().find((entry) => entry.wait_id === wait.wait_id))
         .toMatchObject({ compute_outcome: "candidate_retained", candidate_plan_id_digest: operationPlanDigest(next.plan_id),
           used_for_authority: false, may_execute: false });
@@ -3415,7 +3448,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const firstCompute = hds.decide(reply);
       const candidate = plan(reply.id, "synthetic-root");
       hds.onFeedback({ command_id: firstCompute.command!.id, status: "success",
-        result: { operation_core: { status: "valid_plan", plan: candidate } }, metrics: { duration_ms: 1 } });
+        result: { operation_core: { status: "valid_plan", plan: candidate } },
+        ...agentDelegationFeedbackEvidence(firstCompute.command!), metrics: { duration_ms: 1 } });
       const retained = store.load()!;
       const waitPending = structuredClone(retained);
       const pendingWait = waitPending.waits!.find((entry) => entry.wait_id === wait.wait_id)!;

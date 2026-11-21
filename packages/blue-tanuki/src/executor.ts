@@ -52,6 +52,7 @@ import {
   getToolOperationDescriptor,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   AgentDelegationContractSchema,
+  AgentDelegationResultEvidenceSchema,
   OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
@@ -67,6 +68,7 @@ import type {
   LLMCallFailure,
   LLMCallPayload,
   AgentDelegationContract,
+  AgentDelegationResultEvidence,
   AgentWorkerRole,
   ComputeResourceUse,
   ChannelSendPayload,
@@ -2879,6 +2881,7 @@ export class Executor {
     const requestedProvider = safeProviderLabel(payload.backend_hint ?? this.deps.llm.name);
     let resp: LLMResponse;
     let computeResourceUse: ComputeResourceUse | undefined;
+    let agentDelegationResultEvidence: AgentDelegationResultEvidence | undefined;
     try {
       resp = await withLLMCallGuard(
         requestedProvider,
@@ -2888,7 +2891,7 @@ export class Executor {
           if (this.deps.compute) {
             // Child candidates may compare only the owner intent and reference; keep raw Canvas bytes out of
             // delegated fan-out, then attach them once to the parent C request for normal J validation.
-            const delegatedProviderRequest = payload.agent_delegation
+            const delegated = payload.agent_delegation
               ? await withAgentDelegationCandidates({
                   compute: this.deps.compute,
                   command_id: id,
@@ -2904,7 +2907,9 @@ export class Executor {
                   session_history_applied: sessionHistoryApplied,
                   signal,
                 })
-              : providerRequest;
+              : undefined;
+            agentDelegationResultEvidence = delegated?.result_evidence;
+            const delegatedProviderRequest = delegated?.provider_request ?? providerRequest;
             const effectiveProviderRequest = ephemeralCanvasArtifact && payload.agent_delegation
               ? { ...delegatedProviderRequest,
                 messages: withTransientCanvasArtifactMessages(delegatedProviderRequest.messages, ephemeralCanvasArtifact) }
@@ -2931,10 +2936,13 @@ export class Executor {
         },
       );
     } catch (error) {
-      return buildLLMFailureFeedback(id,
+      const failed = buildLLMFailureFeedback(id,
         error instanceof LLMComputeResourceFailure ? error.original_error : error,
         requestedProvider, elapsedMilliseconds(start),
         error instanceof LLMComputeResourceFailure ? error.compute_resource_use : undefined);
+      return agentDelegationResultEvidence
+        ? { ...failed, agent_delegation_result_evidence: agentDelegationResultEvidence }
+        : failed;
     }
 
     // Provider adapters and custom backends may attach raw diagnostic payloads.
@@ -2974,7 +2982,10 @@ export class Executor {
       );
       if (toolCandidates) resp = { ...resp, tool_calls: toolCandidates };
     } catch (error) {
-      return buildLLMFailureFeedback(id, error, requestedProvider, elapsedMilliseconds(start), computeResourceUse);
+      const failed = buildLLMFailureFeedback(id, error, requestedProvider, elapsedMilliseconds(start), computeResourceUse);
+      return agentDelegationResultEvidence
+        ? { ...failed, agent_delegation_result_evidence: agentDelegationResultEvidence }
+        : failed;
     }
 
     const plannerInspection = inspectOperationCorePlannerOutput(resp.content);
@@ -2992,6 +3003,7 @@ export class Executor {
         },
         result: { operation_core: { status: "rejected", planner_output_used_for_authority: false } },
         ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
+        ...(agentDelegationResultEvidence ? { agent_delegation_result_evidence: agentDelegationResultEvidence } : {}),
         metrics: {
           duration_ms: elapsedMilliseconds(start),
           tokens_used: resp.tokens_used,
@@ -3030,6 +3042,7 @@ export class Executor {
       ...(skepticalReviewPresent ? { skeptical_review: skepticalReview } : {}),
       ...(meaningUpdateProposalPresent ? { meaning_update_proposal: meaningUpdateProposal } : {}),
       ...(computeResourceUse ? { compute_resource_use: computeResourceUse } : {}),
+      ...(agentDelegationResultEvidence ? { agent_delegation_result_evidence: agentDelegationResultEvidence } : {}),
       metrics: {
         duration_ms: elapsedMilliseconds(start),
         tokens_used: resp.tokens_used,
@@ -3804,7 +3817,7 @@ async function withAgentDelegationCandidates(input: {
   session_id?: string;
   session_history_applied: boolean;
   signal?: AbortSignal;
-}): Promise<LLMRequest> {
+}): Promise<{ provider_request: LLMRequest; result_evidence: AgentDelegationResultEvidence }> {
   if (input.compute.budget_reservations_enabled !== true) {
     throw new Error("agent_delegation_budget_reservations_unavailable");
   }
@@ -4005,7 +4018,29 @@ async function withAgentDelegationCandidates(input: {
       may_execute: false,
     })}`,
   };
-  return { ...input.provider_request,
-    timeout_ms: contract.parent_resource_limits.timeout_ms,
-    messages: [...input.provider_request.messages, candidateMessage] };
+  const resultEvidence = AgentDelegationResultEvidenceSchema.parse({
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    parent_command_digest: parentCommandDigest,
+    contract_digest: operationPlanDigest(contract),
+    parent_goal_digest: contract.parent_goal_digest,
+    parent_task_identity_digest: contract.parent_task_identity_digest,
+    parent_budget_identity_digest: contract.parent_budget_identity_digest,
+    criteria_digest: contract.criteria_digest,
+    termination_digest: contract.termination_digest,
+    children: childResults.map((result) => ({
+      role: result.role,
+      child_task_digest: result.child_task_digest,
+      ...(result.resource_use_digest ? { resource_use_digest: result.resource_use_digest } : {}),
+      outcome: result.outcome,
+      ...("reason" in result ? { reason: result.reason } : {}),
+    })),
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return {
+    provider_request: { ...input.provider_request,
+      timeout_ms: contract.parent_resource_limits.timeout_ms,
+      messages: [...input.provider_request.messages, candidateMessage] },
+    result_evidence: resultEvidence,
+  };
 }

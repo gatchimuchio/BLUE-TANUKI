@@ -24,8 +24,8 @@ import { createGatewayInternalInboundRequest, githubIssueCreateRequestPayloadDig
   githubCodePushRequestPayloadDigest, githubCodePushTargetIdentityDigest,
   githubReleaseDraftCreateRequestPayloadDigest, githubReleaseDraftCreateTargetIdentityDigest,
   githubReleasePublishRequestPayloadDigest, githubReleasePublishTargetIdentityDigest,
-  GitHubWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema, memoryCommitContentDigest,
-  type ExecuteCommand, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
+  AgentDelegationResultEvidenceSchema, GitHubWriteTargetVersionObservationSchema, GmailWriteTargetVersionObservationSchema, memoryCommitContentDigest,
+  type AgentDelegationResultEvidence, type ExecuteCommand, type ExecuteFeedback, type OperationPlan, type InboundRequest } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../src/execution_intent_store.js";
 import { OperationPlanStateStore } from "../src/operation_plan_store.js";
 import { createFileSearchWorker } from "../src/file_search_worker.js";
@@ -78,6 +78,32 @@ afterAll(() => {
 function request(content: string, user = "fixture-owner"): InboundRequest {
   return createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user, timestamp: Date.now(), content,
     metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.operator_surface": "developer" } });
+}
+function agentDelegationFeedbackEvidence(command: ExecuteCommand): Partial<ExecuteFeedback> {
+  if (command.type !== "llm_call" || !command.payload.agent_delegation) return {};
+  const contract = command.payload.agent_delegation;
+  const children = contract.roles.map((role) => ({
+    role,
+    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+    resource_use_digest: "f".repeat(64),
+    outcome: "candidate" as const,
+  }));
+  const evidence: AgentDelegationResultEvidence = AgentDelegationResultEvidenceSchema.parse({
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
+      .update(command.id).digest("hex"),
+    contract_digest: operationPlanDigest(contract),
+    parent_goal_digest: contract.parent_goal_digest,
+    parent_task_identity_digest: contract.parent_task_identity_digest,
+    parent_budget_identity_digest: contract.parent_budget_identity_digest,
+    criteria_digest: contract.criteria_digest,
+    termination_digest: contract.termination_digest,
+    children,
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { agent_delegation_result_evidence: evidence };
 }
 function recoveryCommandIdDigest(commandId: string): string { return createHash("sha256").update(commandId).digest("hex"); }
 function taskMemoryRestorePoints(state: OperationPlanStateStore,
@@ -1714,6 +1740,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -1799,6 +1826,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -1882,6 +1910,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     }
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -1938,6 +1967,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -2009,6 +2039,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -2092,6 +2123,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
 
     const nextCandidate = fileWriteCandidate(destinationRequestId, c.workspace);
     c.hds.onFeedback({ command_id: compute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(compute.command),
       result: { operation_core: { status: "valid_plan", plan: nextCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     const retained = c.hds.getRuntimeSnapshot().operation_plans.plans.find((entry) =>
@@ -2104,6 +2136,7 @@ describe("保存実結果→再起動J→依存stepの非作用調停", () => {
     const expiredCandidate = fileWriteCandidate(secondRequestId, c.workspace);
     c.advanceWallClockTo(sourceResult.expires_at_ms);
     c.hds.onFeedback({ command_id: secondCompute.command.id, status: "success",
+      ...agentDelegationFeedbackEvidence(secondCompute.command),
       result: { operation_core: { status: "valid_plan", plan: expiredCandidate } },
       metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
     expect(c.hds.getRuntimeSnapshot().operation_plans.plans.some((entry) =>

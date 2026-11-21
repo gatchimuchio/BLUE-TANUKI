@@ -7,6 +7,7 @@ import type {
   GoalGovernanceEvent,
   GoalPurposeAdoptionEvent,
   GoalCriteriaProjection,
+  AgentDelegationResultEvidence,
   OperationRequest,
 } from "@blue-tanuki/protocol";
 import type { GatewayStatusOutputAuditLog, HDSDecisionOutputAuditLog, OutputAuditLog, ProjectionOutputAuditLog } from "./output_audit.js";
@@ -413,6 +414,10 @@ export interface ExecutorFeedbackAuditTrace {
   };
   meaning_update_proposal_used_for_authority: false;
   meaning_update_proposal_applied: false;
+  /** Absent on append-only entries written before this feedback field was introduced. */
+  agent_delegation_result_evidence_contract_status?: "not_present" | "passed" | "failed";
+  agent_delegation_result_evidence_digest?: string;
+  agent_delegation_result_evidence?: AgentDelegationResultEvidence;
   metrics: ExecuteFeedback["metrics"];
 }
 

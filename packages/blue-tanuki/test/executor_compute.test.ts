@@ -474,6 +474,25 @@ describe("Executor compute boundary", () => {
     const result = await executor.execute(approved(planCommand));
 
     expect(result.status).toBe("success");
+    expect(result.agent_delegation_result_evidence).toMatchObject({
+      schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+      parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
+        .update(planCommand.id).digest("hex"),
+      parent_goal_digest: planCommand.payload.agent_delegation?.parent_goal_digest,
+      parent_task_identity_digest: taskDigest,
+      parent_budget_identity_digest: budgetDigest,
+      criteria_digest: planCommand.payload.agent_delegation?.criteria_digest,
+      termination_digest: planCommand.payload.agent_delegation?.termination_digest,
+      children: [
+        { role: "division", outcome: "candidate" },
+        { role: "independent_comparison", outcome: "candidate" },
+        { role: "audit", outcome: "candidate" },
+        { role: "redundancy", outcome: "candidate" },
+      ],
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(JSON.stringify(result.agent_delegation_result_evidence)).not.toContain("role candidate");
     expect(reservations).toHaveLength(5);
     const childReservations = reservations.slice(0, 4);
     expect(childReservations.every((reservation) =>
@@ -550,6 +569,13 @@ describe("Executor compute boundary", () => {
       { role: "audit", outcome: "unknown", reason: "compute_outcome_unknown" },
       { role: "redundancy", outcome: "candidate", content: "role candidate" },
     ]);
+    expect(result.agent_delegation_result_evidence?.children).toMatchObject([
+      { role: "division", outcome: "candidate" },
+      { role: "independent_comparison", outcome: "candidate" },
+      { role: "audit", outcome: "unknown", reason: "compute_outcome_unknown" },
+      { role: "redundancy", outcome: "candidate" },
+    ]);
+    expect(JSON.stringify(result.agent_delegation_result_evidence)).not.toContain("role candidate");
     for (const candidate of candidateSet.candidates) {
       const expectedChildDigest = createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
         .update(candidateSet.parent_task_identity_digest).update("\0").update(candidate.role).digest("hex");
@@ -560,6 +586,25 @@ describe("Executor compute boundary", () => {
     }
     expect(parentMessage).not.toContain("private provider failure detail");
     expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
+  });
+
+  it("returns completed child evidence when the parent compute outcome is unknown", async () => {
+    const compute: ComputeBackend<LLMRequest, LLMResponse> = {
+      budget_reservations_enabled: true,
+      async compute(request) {
+        if (request.request_id.includes(":agent:")) return computeResult(request, "private child candidate");
+        throw new LLMComputeResourceFailure(new Error("synthetic parent outcome unknown"), resourceUse(request.request_id));
+      },
+    };
+    const executor = new Executor({ approval_authority: authority, llm: new CapturingBackend(),
+      compute, tools: new ToolRegistry(), on_agent_worker_lifecycle: () => true });
+
+    const result = await executor.execute(approved(agentDelegationCommand("agent-parent-unknown-outcome")));
+
+    expect(result.status).toBe("failed");
+    expect(result.agent_delegation_result_evidence?.children.map((child) => child.outcome))
+      .toEqual(["candidate", "candidate", "candidate", "candidate"]);
+    expect(JSON.stringify(result.agent_delegation_result_evidence)).not.toContain("private child candidate");
   });
 
   it("cancels child computes, discards late results, and records a residual worker without starting later children", async () => {

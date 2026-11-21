@@ -4,7 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig, GoalGovernanceEvent, OperationPlan } from "@blue-tanuki/protocol";
+import type { AgentDelegationResultEvidence, ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig,
+  GoalGovernanceEvent, OperationPlan } from "@blue-tanuki/protocol";
 import { canonicalExecutorCommandBytes, createGatewayInternalInboundRequest,
   GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import { evaluateApproval, goalPurposeAdoptionReviewDigest } from "../src/approval_policy.js";
@@ -142,6 +143,32 @@ function purposeMemoryStorage(root: string) {
 
 function contentDigest(text: string): string {
   return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+}
+
+function agentDelegationResultEvidenceFor(command: Extract<ExecuteCommand, { type: "llm_call" }>): AgentDelegationResultEvidence {
+  const contract = command.payload.agent_delegation;
+  if (!contract) throw new Error("fixture command has no delegation contract");
+  const children = contract.roles.map((role) => ({
+    role,
+    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+    resource_use_digest: "f".repeat(64),
+    outcome: "candidate" as const,
+  })) as unknown as AgentDelegationResultEvidence["children"];
+  return {
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
+      .update(command.id).digest("hex"),
+    contract_digest: operationPlanDigest(contract),
+    parent_goal_digest: contract.parent_goal_digest,
+    parent_task_identity_digest: contract.parent_task_identity_digest,
+    parent_budget_identity_digest: contract.parent_budget_identity_digest,
+    criteria_digest: contract.criteria_digest,
+    termination_digest: contract.termination_digest,
+    children,
+    used_for_authority: false,
+    may_execute: false,
+  };
 }
 
 const request = {
@@ -757,15 +784,102 @@ describe("HDS goal governance consumer", () => {
         result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate("purpose-plan-request-1"),
           goal_purpose_relation: { outcome: "supports", evidence: [{ task_quote: task,
             purpose_quote: "Use only the delegated scope." }] } } },
+        agent_delegation_result_evidence: agentDelegationResultEvidenceFor(decision.command),
         metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 },
       });
       const plan = controller.getRuntimeSnapshot().operation_plans.plans[0];
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+      const acceptedFeedback = controller.getAudit().list().map(({ log }) => log).find((log) =>
+        "kind" in log && log.kind === "executor_feedback" && log.command_id === decision.command!.id);
+      expect(acceptedFeedback && "kind" in acceptedFeedback && acceptedFeedback.kind === "executor_feedback"
+        ? acceptedFeedback.feedback : undefined).toMatchObject({
+        agent_delegation_result_evidence_contract_status: "passed",
+        agent_delegation_result_evidence_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
       expect(plan).toMatchObject({ goal_purpose_binding: binding, goal_purpose_binding_status: "current",
         goal_purpose_relation: { status: "unverified", candidate_outcome: "supports", candidate_status: "present",
           evidence_status: "exact_spans_present", evidence_count: 1, semantic_assessment_status: "not_assessed",
           used_for_authority: false, may_execute: false } });
       expect(JSON.stringify(plan)).not.toContain(task);
       expect(JSON.stringify(plan)).not.toContain("Use only the delegated scope.");
+
+      const rejectedRequestId = "purpose-plan-missing-evidence-request";
+      const rejectedOperationRequestId = `${rejectedRequestId}-operation-request`;
+      const rejectedDecision = controller.decide(createGatewayInternalInboundRequest({
+        ...compute,
+        id: rejectedRequestId,
+        content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_250,
+        metadata: { ...compute.metadata, "blue_tanuki.operation_core.request_id": rejectedOperationRequestId },
+      }));
+      if (rejectedDecision.command?.type !== "llm_call" || !rejectedDecision.command.payload.agent_delegation) {
+        throw new Error(`fixture did not issue the second delegated plan command: ${rejectedDecision.log.commit.decision}/${rejectedDecision.log.commit.reason}`);
+      }
+      controller.onFeedback({ command_id: rejectedDecision.command.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate(rejectedOperationRequestId) } },
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+      const rejectedFeedback = controller.getAudit().list().map(({ log }) => log).find((log) =>
+        "kind" in log && log.kind === "executor_feedback" && log.command_id === rejectedDecision.command!.id);
+      expect(rejectedFeedback && "kind" in rejectedFeedback && rejectedFeedback.kind === "executor_feedback"
+        ? rejectedFeedback.feedback.agent_delegation_result_evidence_contract_status : undefined).toBe("not_present");
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+      expect(controller.getAudit().list().some(({ log }) => "kind" in log && log.kind === "operation_plan" &&
+        log.command_id === rejectedDecision.command!.id && log.event === "candidate_rejected" &&
+        log.reason === "plan_agent_delegation_result_evidence_unverified")).toBe(true);
+
+      const mismatchedRequestId = "purpose-plan-mismatched-evidence-request";
+      const mismatchedOperationRequestId = `${mismatchedRequestId}-operation-request`;
+      const mismatchedDecision = controller.decide(createGatewayInternalInboundRequest({
+        ...compute,
+        id: mismatchedRequestId,
+        content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_300,
+        metadata: { ...compute.metadata, "blue_tanuki.operation_core.request_id": mismatchedOperationRequestId },
+      }));
+      if (mismatchedDecision.command?.type !== "llm_call" || !mismatchedDecision.command.payload.agent_delegation) {
+        throw new Error(`fixture did not issue the third delegated plan command: ${mismatchedDecision.log.commit.decision}/${mismatchedDecision.log.commit.reason}`);
+      }
+      const mismatchedEvidence = agentDelegationResultEvidenceFor(mismatchedDecision.command);
+      const badChild = { ...mismatchedEvidence.children[0], child_task_digest: "0".repeat(64) };
+      const malformedEvidence = { ...mismatchedEvidence,
+        children: [badChild, ...mismatchedEvidence.children.slice(1)] } as unknown as AgentDelegationResultEvidence;
+      controller.onFeedback({ command_id: mismatchedDecision.command.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate(mismatchedOperationRequestId) } },
+        agent_delegation_result_evidence: malformedEvidence,
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+      const mismatchedFeedback = controller.getAudit().list().map(({ log }) => log).find((log) =>
+        "kind" in log && log.kind === "executor_feedback" && log.command_id === mismatchedDecision.command!.id);
+      expect(mismatchedFeedback && "kind" in mismatchedFeedback && mismatchedFeedback.kind === "executor_feedback"
+        ? mismatchedFeedback.feedback.agent_delegation_result_evidence_contract_status : undefined).toBe("failed");
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+
+      const rawEvidenceRequestId = "purpose-plan-raw-evidence-request";
+      const rawEvidenceOperationRequestId = `${rawEvidenceRequestId}-operation-request`;
+      const rawEvidenceDecision = controller.decide(createGatewayInternalInboundRequest({
+        ...compute,
+        id: rawEvidenceRequestId,
+        content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_350,
+        metadata: { ...compute.metadata, "blue_tanuki.operation_core.request_id": rawEvidenceOperationRequestId },
+      }));
+      if (rawEvidenceDecision.command?.type !== "llm_call" || !rawEvidenceDecision.command.payload.agent_delegation) {
+        throw new Error(`fixture did not issue the fourth delegated plan command: ${rawEvidenceDecision.log.commit.decision}/${rawEvidenceDecision.log.commit.reason}`);
+      }
+      const rawEvidence = agentDelegationResultEvidenceFor(rawEvidenceDecision.command);
+      const rawChild = { ...rawEvidence.children[0], content: "RAW_CHILD_AUDIT_SENTINEL" };
+      const extraFieldEvidence = { ...rawEvidence,
+        children: [rawChild, ...rawEvidence.children.slice(1)] } as unknown as AgentDelegationResultEvidence;
+      controller.onFeedback({ command_id: rawEvidenceDecision.command.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate(rawEvidenceOperationRequestId) } },
+        agent_delegation_result_evidence: extraFieldEvidence,
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+      const rawFeedback = controller.getAudit().list().map(({ log }) => log).find((log) =>
+        "kind" in log && log.kind === "executor_feedback" && log.command_id === rawEvidenceDecision.command!.id);
+      expect(rawFeedback && "kind" in rawFeedback && rawFeedback.kind === "executor_feedback"
+        ? rawFeedback.feedback.agent_delegation_result_evidence_contract_status : undefined).toBe("failed");
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+      expect(JSON.stringify(controller.getAudit().list())).not.toContain("RAW_CHILD_AUDIT_SENTINEL");
+
       const review = createGatewayInternalInboundRequest({
         id: "purpose-plan-review",
         channel: "webchat",

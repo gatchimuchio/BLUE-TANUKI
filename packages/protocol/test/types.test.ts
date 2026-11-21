@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentDelegationResultEvidenceSchema,
   ExecuteCommandSchema,
   ExecuteFeedbackSchema,
   LLMComputeContextSchema,
@@ -75,6 +76,49 @@ describe("C07.01 ExecuteFeedback proposal transport", () => {
     });
 
     expect(parsed.meaning_update_proposal).toEqual(proposal);
+  });
+});
+
+describe("E07 agent delegation result evidence", () => {
+  const roles = ["division", "independent_comparison", "audit", "redundancy"] as const;
+  const digest = "a".repeat(64);
+  const evidence = {
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    parent_command_digest: digest,
+    contract_digest: digest,
+    parent_goal_digest: digest,
+    parent_task_identity_digest: digest,
+    parent_budget_identity_digest: digest,
+    criteria_digest: digest,
+    termination_digest: digest,
+    children: roles.map((role, index) => ({
+      role,
+      child_task_digest: String(index + 1).repeat(64),
+      resource_use_digest: String(index + 2).repeat(64),
+      outcome: "candidate" as const,
+    })),
+    used_for_authority: false,
+    may_execute: false,
+  };
+
+  it("transports only the fixed, digest-only child summary", () => {
+    const parsed = ExecuteFeedbackSchema.parse({ command_id: "agent-result-evidence", status: "success",
+      agent_delegation_result_evidence: evidence, metrics: { duration_ms: 1 } });
+    expect(parsed.agent_delegation_result_evidence).toEqual(evidence);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...evidence,
+      children: evidence.children.map((child, index) => index === 0 ? { ...child, content: "RAW_CHILD_SENTINEL" } : child),
+    }).success).toBe(false);
+  });
+
+  it("rejects missing candidate receipts, reordered roles, and authority claims", () => {
+    const missingReceipt = { ...evidence,
+      children: evidence.children.map((child, index) => index === 0 ? { ...child, resource_use_digest: undefined } : child),
+    };
+    const reordered = { ...evidence, children: [evidence.children[1], evidence.children[0],
+      evidence.children[2], evidence.children[3]] };
+    expect(AgentDelegationResultEvidenceSchema.safeParse(missingReceipt).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse(reordered).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...evidence, may_execute: true }).success).toBe(false);
   });
 });
 

@@ -24,7 +24,8 @@ import type {
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
 } from "@blue-tanuki/protocol";
-import { ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema, getToolOperationDescriptor } from "@blue-tanuki/protocol";
+import { AgentDelegationResultEvidenceSchema, ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema,
+  getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
   canonicalExecutorCommandBytes,
@@ -3841,6 +3842,34 @@ ${planControl.question}`,
     const sourceLog = this.inflight.get(fb.command_id);
     const issued = this.issuedLLM.get(fb.command_id);
     const issuedExecution = this.issuedExecutionCommandsById.get(fb.command_id)?.command;
+    const rawAgentDelegationEvidence = fb.agent_delegation_result_evidence;
+    const agentDelegationEvidenceParse = rawAgentDelegationEvidence === undefined
+      ? undefined : AgentDelegationResultEvidenceSchema.safeParse(rawAgentDelegationEvidence);
+    const issuedAgentDelegation = issuedExecution?.type === "llm_call"
+      ? issuedExecution.payload.agent_delegation : undefined;
+    const parsedAgentDelegationEvidence = agentDelegationEvidenceParse?.success
+      ? agentDelegationEvidenceParse.data : undefined;
+    const expectedAgentParentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(fb.command_id).digest("hex");
+    const agentDelegationEvidenceMatches = parsedAgentDelegationEvidence !== undefined &&
+      issuedAgentDelegation !== undefined &&
+      parsedAgentDelegationEvidence.parent_command_digest === expectedAgentParentCommandDigest &&
+      parsedAgentDelegationEvidence.contract_digest === operationPlanDigest(issuedAgentDelegation) &&
+      parsedAgentDelegationEvidence.parent_goal_digest === issuedAgentDelegation.parent_goal_digest &&
+      parsedAgentDelegationEvidence.parent_task_identity_digest === issuedAgentDelegation.parent_task_identity_digest &&
+      parsedAgentDelegationEvidence.parent_budget_identity_digest === issuedAgentDelegation.parent_budget_identity_digest &&
+      parsedAgentDelegationEvidence.criteria_digest === issuedAgentDelegation.criteria_digest &&
+      parsedAgentDelegationEvidence.termination_digest === issuedAgentDelegation.termination_digest &&
+      parsedAgentDelegationEvidence.children.every((child, index) => {
+        const role = issuedAgentDelegation.roles[index];
+        const expectedChildTaskDigest = role === undefined ? undefined : createHash("sha256")
+          .update("blue-tanuki.agent.child-task.v1\0")
+          .update(issuedAgentDelegation.parent_task_identity_digest).update("\0").update(role).digest("hex");
+        return child.role === role && child.child_task_digest === expectedChildTaskDigest;
+      });
+    const agentDelegationEvidence = agentDelegationEvidenceMatches ? parsedAgentDelegationEvidence : undefined;
+    const agentDelegationEvidenceContractStatus = rawAgentDelegationEvidence === undefined
+      ? "not_present" as const : agentDelegationEvidence ? "passed" as const : "failed" as const;
     const rawResourceUse = fb.compute_resource_use;
     const resourceUseParse = rawResourceUse === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(rawResourceUse);
@@ -4115,6 +4144,11 @@ ${planControl.question}`,
         meaning_update_proposal_reference_review: meaningUpdateProposalReferenceReview,
         meaning_update_proposal_used_for_authority: false as const,
         meaning_update_proposal_applied: false as const,
+        agent_delegation_result_evidence_contract_status: agentDelegationEvidenceContractStatus,
+        ...(agentDelegationEvidence ? {
+          agent_delegation_result_evidence_digest: sha256(agentDelegationEvidence),
+          agent_delegation_result_evidence: agentDelegationEvidence,
+        } : {}),
         compute_resource_use_contract_status: computeResourceUseContractStatus,
         ...(computeResourceUse ? { compute_resource_use_digest: sha256(computeResourceUse) } : {}),
         metrics: fb.metrics,
@@ -4180,6 +4214,9 @@ ${planControl.question}`,
         let retainedPlanIdDigest: string | undefined;
         let rejectionReason = "plan_candidate_retention_failed";
         try {
+          if (issued.command.payload.agent_delegation && !agentDelegationEvidence) {
+            throw new Error("plan_agent_delegation_result_evidence_unverified");
+          }
           const citationReview = this.audit.list().map((entry) => entry.log)
             .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
               entry.request_id === sourceLog?.request_id &&

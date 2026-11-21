@@ -202,6 +202,58 @@ export const AgentDelegationContractSchema = z.object({
 }).strict();
 export type AgentDelegationContract = z.infer<typeof AgentDelegationContractSchema>;
 
+const AgentDelegationResultEvidenceDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const AgentDelegationChildResultEvidenceSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    outcome: z.literal("candidate"),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema.optional(),
+    outcome: z.literal("unknown"),
+    reason: z.enum(["compute_outcome_unknown", "child_deadline_elapsed"]),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    outcome: z.literal("rejected"),
+    reason: z.literal("invalid_child_output"),
+  }).strict(),
+]);
+
+/** Digest-only summary of the child results supplied to parent C; never authority or stored child content. */
+export const AgentDelegationResultEvidenceSchema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-delegation-result-evidence.v1"),
+  parent_command_digest: AgentDelegationResultEvidenceDigestSchema,
+  contract_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_goal_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_task_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_budget_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  criteria_digest: AgentDelegationResultEvidenceDigestSchema,
+  termination_digest: AgentDelegationResultEvidenceDigestSchema,
+  children: z.tuple([
+    AgentDelegationChildResultEvidenceSchema,
+    AgentDelegationChildResultEvidenceSchema,
+    AgentDelegationChildResultEvidenceSchema,
+    AgentDelegationChildResultEvidenceSchema,
+  ]).superRefine((children, context) => {
+    const expectedRoles: AgentWorkerRole[] = ["division", "independent_comparison", "audit", "redundancy"];
+    children.forEach((child, index) => {
+      if (child.role !== expectedRoles[index]) {
+        context.addIssue({ code: "custom", path: [index, "role"], message: "agent_delegation_result_role_order_mismatch" });
+      }
+    });
+  }),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type AgentDelegationResultEvidence = z.infer<typeof AgentDelegationResultEvidenceSchema>;
+
 export const LLMComputeContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-context.v1"),
   projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
@@ -682,6 +734,7 @@ export const ExecuteFeedbackSchema = z.object({
   error: z.string().optional(),
   llm_failure: LLMCallFailureSchema.optional(),
   compute_resource_use: ComputeResourceUseSchema.optional(),
+  agent_delegation_result_evidence: AgentDelegationResultEvidenceSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
   /** C output is deliberately unchecked until HDS applies the source-bound review contract. */
   skeptical_review: z.unknown().optional(),
