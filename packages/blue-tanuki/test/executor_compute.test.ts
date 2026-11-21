@@ -485,12 +485,57 @@ describe("Executor compute boundary", () => {
     expect(backend.seen).toHaveLength(5);
     expect(backend.seen.slice(0, 4).flatMap((request) => request.messages.map((message) => message.content))
       .join("\n")).toContain("C child role=");
-    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("blue-tanuki.agent-candidate-set.v1");
+    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("blue-tanuki.agent-candidate-set.v2");
     expect(backend.seen[4]?.messages.at(-1)?.content).toContain("role candidate");
     expect(JSON.stringify(result.result)).not.toContain("agent-candidate-set");
     expect(lifecycle.filter((event) => event.state === "started")).toHaveLength(4);
     expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
     expect(lifecycle.every((event) => event.used_for_authority === false && event.may_execute === false)).toBe(true);
+  });
+
+  it("keeps successful child candidates when a sibling compute outcome is unknown", async () => {
+    const requests: ComputeRequest<LLMRequest>[] = [];
+    const lifecycle: AgentWorkerLifecycleEvent[] = [];
+    const compute: ComputeBackend<LLMRequest, LLMResponse> = {
+      budget_reservations_enabled: true,
+      async compute(request) {
+        requests.push(request);
+        const roleMessage = request.input.messages.find((message) =>
+          message.role === "system" && message.content.startsWith("C child role="));
+        const role = /^C child role=([a-z_]+)/u.exec(roleMessage?.content ?? "")?.[1];
+        if (role === "audit") {
+          throw new LLMComputeResourceFailure(new Error("private provider failure detail"),
+            resourceUse(request.request_id));
+        }
+        return computeResult(request, role ? "role candidate" : "parent result");
+      },
+    };
+    const executor = new Executor({
+      approval_authority: authority,
+      llm: new CapturingBackend(),
+      compute,
+      tools: new ToolRegistry(),
+      on_agent_worker_lifecycle: (event) => { lifecycle.push(event); return true; },
+    });
+
+    const result = await executor.execute(approved(agentDelegationCommand("agent-partial-child-outcome")));
+
+    expect(result.status).toBe("success");
+    expect(requests).toHaveLength(5);
+    const parentMessage = requests[4]!.input.messages.at(-1)!.content;
+    const candidateSet = JSON.parse(parentMessage.slice(parentMessage.indexOf("\n") + 1)) as {
+      schema_version: string;
+      candidates: Array<{ role: string; outcome: string; content?: string; reason?: string }>;
+    };
+    expect(candidateSet.schema_version).toBe("blue-tanuki.agent-candidate-set.v2");
+    expect(candidateSet.candidates).toEqual([
+      { role: "division", outcome: "candidate", content: "role candidate" },
+      { role: "independent_comparison", outcome: "candidate", content: "role candidate" },
+      { role: "audit", outcome: "unknown", reason: "compute_outcome_unknown" },
+      { role: "redundancy", outcome: "candidate", content: "role candidate" },
+    ]);
+    expect(parentMessage).not.toContain("private provider failure detail");
+    expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
   });
 
   it("cancels child computes, discards late results, and records a residual worker without starting later children", async () => {

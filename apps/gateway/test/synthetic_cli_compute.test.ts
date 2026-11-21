@@ -12,13 +12,17 @@ import {
   SyntheticFileWritePlanBackend,
   SYNTHETIC_FILE_WRITE_PLAN_TASK,
   ToolRegistry,
+  type LLMBackend,
   type AgentWorkerLifecycleEvent,
   type ComputeBudgetPort,
 } from "@blue-tanuki/core";
 import { createCliInboundRequest } from "../src/cli_goal_completion_rules.js";
 
 describe("CLIから合成Cへの計画候補接続", () => {
-  it("HDSのplan:computeをworker比較後の未実行候補へ変換する", async () => {
+  it.each([
+    { label: "全役割候補", rejectedRole: undefined },
+    { label: "不正な子出力を除いた兄弟候補", rejectedRole: "audit" },
+  ])("$labelをworker結果から未実行候補へ変換する", async ({ rejectedRole }) => {
     const sandbox = await mkdtemp(join(tmpdir(), "blue-synthetic-cli-compute-"));
     const hds = new HDSUpperController();
     const lifecycle: AgentWorkerLifecycleEvent[] = [];
@@ -40,7 +44,24 @@ describe("CLIから合成Cへの計画候補接続", () => {
       expect(command.payload.messages.some((message) => message.role === "user" &&
         message.content === `plan:compute ${SYNTHETIC_FILE_WRITE_PLAN_TASK}`)).toBe(true);
 
-      const backend = new SyntheticFileWritePlanBackend({ BLUE_TANUKI_FILE_ROOT: sandbox });
+      const syntheticBackend = new SyntheticFileWritePlanBackend({ BLUE_TANUKI_FILE_ROOT: sandbox });
+      const candidateSetMessages: string[] = [];
+      const backend: LLMBackend = {
+        name: syntheticBackend.name,
+        capabilities: ["llm.text.generate"],
+        async call(providerRequest, signal) {
+          const childMessage = providerRequest.messages.find((message) =>
+            message.role === "system" && message.content.startsWith("C child role="));
+          const childRole = /^C child role=([a-z_]+)\./u.exec(childMessage?.content ?? "")?.[1];
+          if (childRole === rejectedRole && rejectedRole !== undefined) {
+            return { content: "", tokens_used: 0, model: "synthetic-file-write-plan-v1", provider: syntheticBackend.name };
+          }
+          const candidateSet = providerRequest.messages.find((message) =>
+            message.role === "user" && message.content.includes("blue-tanuki.agent-candidate-set.v2"));
+          if (candidateSet) candidateSetMessages.push(candidateSet.content);
+          return syntheticBackend.call(providerRequest, signal);
+        },
+      };
       const registry = new LLMRegistry({ defaultName: backend.name }).register(backend, [], {
         capabilities: ["llm_compute_candidate"],
         max_cost_per_attempt: { amount: 0, currency: "USD" },
@@ -72,7 +93,17 @@ describe("CLIから合成Cへの計画候補接続", () => {
         reason: "isolated synthetic CLI compute fixture",
       });
       const feedback = await executor.execute(approved);
-      expect(feedback.status).toBe("success");
+      expect(feedback.status, feedback.error ?? JSON.stringify(feedback.llm_failure)).toBe("success");
+      expect(candidateSetMessages).toHaveLength(1);
+      const candidateSet = JSON.parse(candidateSetMessages[0]!.slice(candidateSetMessages[0]!.indexOf("\n") + 1)) as {
+        candidates: Array<{ role: string; outcome: string }>;
+      };
+      expect(candidateSet.candidates.filter((candidate) => candidate.outcome === "candidate")).toHaveLength(
+        rejectedRole ? 3 : 4,
+      );
+      if (rejectedRole) {
+        expect(candidateSet.candidates.find((candidate) => candidate.role === rejectedRole)?.outcome).toBe("rejected");
+      }
       const responseContent = (feedback.result as { content?: unknown } | undefined)?.content;
       expect(typeof responseContent).toBe("string");
       if (typeof responseContent !== "string") throw new Error("Synthetic C returned no candidate content");
