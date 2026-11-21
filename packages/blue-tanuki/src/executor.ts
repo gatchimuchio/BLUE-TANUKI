@@ -109,7 +109,7 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
   assertGitHubPullRequestReviewSubmitTargetVersion,
   assertGitHubReleaseDraftCreateTargetVersion,
   assertGitHubReleasePublishTargetVersion,
-  brokerFileResourceLockDigest, fileDeleteTool, fileEditTool,
+  brokerFileResourceLockDigest, brokerFileWorkspaceResourceLockDigest, fileDeleteTool, fileEditTool,
   fileSearchTool, fileWriteTool, gmailWriteTool, googleCalendarWriteTool, googleDriveWriteTool, githubWriteTool,
   shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
@@ -329,7 +329,12 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
   observation: BrokerTargetVersionObservation | undefined): Promise<string | undefined> {
   const { tool_name, arguments: args } = command.payload;
   if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
-    return `file:${await brokerFileResourceLockDigest(tool_name, args)}`;
+    // Validate the exact target first; shell.exec has a root-wide write set, so both share one workspace mutex.
+    await brokerFileResourceLockDigest(tool_name, args);
+    return `filesystem-root:${await brokerFileWorkspaceResourceLockDigest()}`;
+  }
+  if (tool_name === "shell.exec" && observation?.schema_version === "blue-tanuki.shell-exec-target-version.v1") {
+    return `filesystem-root:${observation.root_identity_digest}`;
   }
   if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
       ["file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(args.operation))) {

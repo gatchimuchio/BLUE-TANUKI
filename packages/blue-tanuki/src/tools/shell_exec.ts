@@ -260,7 +260,7 @@ async function inspectShellExecTargetVersionCore(
   await assertSameFileWorkspaceWhenRequested(args, env, shellRoot);
   const cwd = await resolveShellCwd(stringArg(args, "cwd", false), shellRoot);
   const [rootIdentityDigest, cwdIdentityDigest] = await Promise.all([
-    directoryIdentityDigest(shellRoot), directoryIdentityDigest(cwd),
+    shellWorkspaceIdentityDigest(shellRoot), shellWorkspaceIdentityDigest(cwd),
   ]);
   if (requireProviderAvailability) {
     const providerAvailable = await (options.isolationProviderAvailable ?? (() => shellExecIsolationProviderAvailable(env)))();
@@ -281,7 +281,7 @@ async function inspectShellExecTargetVersionCore(
   });
 }
 
-async function directoryIdentityDigest(directory: string): Promise<string> {
+export async function shellWorkspaceIdentityDigest(directory: string): Promise<string> {
   const real = await fs.realpath(directory);
   const stat = await fs.stat(real, { bigint: true });
   if (!stat.isDirectory() || stat.ino <= 0n) {

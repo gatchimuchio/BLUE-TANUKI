@@ -118,7 +118,7 @@ import {
   sandboxRootFromEnv,
   walkFiles,
 } from "./file_safety.js";
-import { shellExecTool } from "./shell_exec.js";
+import { shellExecTool, shellWorkspaceIdentityDigest } from "./shell_exec.js";
 import {
   BROWSER_SEARCH_FORM_EDITABLE_INPUT_TYPES,
   browserFormStateDigest,
@@ -7641,6 +7641,17 @@ export async function brokerFileResourceLockDigest(
   } catch {
     // Do not leak filesystem paths through the Broker error projection.
     throw new Error("Broker file target resource could not be resolved");
+  }
+}
+
+/** Resolve the Broker lock identity shared by file mutations and shell.exec for one physical workspace root. */
+export async function brokerFileWorkspaceResourceLockDigest(env: Env = process.env): Promise<string> {
+  try {
+    const sandboxRoot = await sandboxRootFromEnv(env);
+    return await shellWorkspaceIdentityDigest(sandboxRoot);
+  } catch {
+    // Do not expose workspace paths through the Broker error projection.
+    throw new Error("Broker file workspace resource could not be resolved");
   }
 }
 
