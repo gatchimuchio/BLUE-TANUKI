@@ -5,19 +5,22 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, finalReviewRequired, HDSUpperController, operationPlanDigest,
   type HDSExecutionAuthorityBinding, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
-import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, requireToolOperationDescriptor,
-  type ExecuteCommand, type FileWriteTargetVersionObservation, type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, GoogleCalendarWriteTargetVersionObservationSchema,
+  OperationPlanCheckpointSchema, requireToolOperationDescriptor,
+  type ExecuteCommand } from "@blue-tanuki/protocol";
 import { createExecutorApprovalAuthority, Executor, executorCommandDigest } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
 import { inspectFileWriteMutationTargetVersion, registerBuiltinTools } from "../src/tools/builtin.js";
-import { ToolRegistry, type Tool } from "../src/tools/registry.js";
+import { ToolRegistry, type BrokerTargetVersionObservation, type Tool } from "../src/tools/registry.js";
+import { googleCalendarCreateEventId, googleCalendarWriteRequestPayloadDigest,
+  googleCalendarWriteTargetIdentityDigest } from "../src/tools/google_write.js";
 import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
 
 const upstream = { frame_goal: "fixture", model_abstraction: "fixture", commit_hash: "a".repeat(64),
   commit_decision: "ASSERT" as const };
 
 function approved(authority: ReturnType<typeof createExecutorApprovalAuthority>, command: ExecuteCommand,
-  targetVersionObservation?: ShellExecTargetVersionObservation | FileWriteTargetVersionObservation,
+  targetVersionObservation?: BrokerTargetVersionObservation,
   hdsBinding?: HDSExecutionAuthorityBinding) {
   const context = approvalContextFromCommand(command, { actor: "fixture-owner" });
   const finalReview = finalReviewRequired(context);
@@ -341,6 +344,200 @@ describe("Executor shared target resource lock", () => {
       if (previousRoot === undefined) delete process.env.BLUE_TANUKI_FILE_ROOT;
       else process.env.BLUE_TANUKI_FILE_ROOT = previousRoot;
       await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes Calendar mutations that resolve to the same event ID", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let notifyFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { notifyFirstStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const invoke = async (): Promise<unknown> => {
+      active += 1;
+      started += 1;
+      maxActive = Math.max(maxActive, active);
+      if (started === 1) {
+        notifyFirstStarted();
+        await firstGate;
+      }
+      active -= 1;
+      return { completed: true };
+    };
+    const descriptor = requireToolOperationDescriptor("google.calendar.write");
+    const tools = new ToolRegistry();
+    tools.register({ name: "google.calendar.write", adapter_version: descriptor.adapter_version,
+      description: "isolated Calendar target-lock fixture", required_capabilities: descriptor.required_capabilities, invoke });
+    const authority = createExecutorApprovalAuthority();
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    const eventObservation = {
+      schema_version: "blue-tanuki.google-calendar-event-target.v3" as const,
+      service: "calendar" as const,
+      view: "event" as const,
+      mode: "read_only" as const,
+      calendar_id: "primary",
+      calendar_id_original: "primary",
+      event_id: "shared-event-id",
+      event_state_digest: "a".repeat(64),
+      event_etag_digest: "b".repeat(64),
+      status: "confirmed",
+      summary: "before",
+      event_start: "2026-12-01T10:00:00Z",
+      event_end: "2026-12-01T10:30:00Z",
+      event_time_kind: "date_time" as const,
+      event_time_zone: null,
+      organizer_self: true,
+      other_attendee_count: 0,
+      attendee_inventory_complete: true as const,
+      recurrence_scope: "single_event" as const,
+      recurrence_rules: [],
+      recurring_event_id: null,
+      original_start: null,
+      observed_at: new Date().toISOString(),
+      observed_at_source: "client_response_received" as const,
+      result_complete: true as const,
+      mutation_sent: false as const,
+      trust_boundary: { provider_data_is_untrusted: true as const,
+        calendar_data_can_authorize_operation: false as const, used_for_authority: false as const },
+    };
+    const makeCommand = (id: string, summary: string): ExecuteCommand => ({
+      id,
+      type: "tool_call",
+      payload: { tool_name: "google.calendar.write", arguments: {
+        operation: "event.update", event_id: "shared-event-id", summary, event_observation: eventObservation,
+      } },
+      constraints: { allowed_tools: ["google.calendar.write"], allowed_capabilities: [...descriptor.required_capabilities] },
+      upstream_decision: upstream,
+    });
+    const makeApprovedCommand = (command: ExecuteCommand) => {
+      const args = command.type === "tool_call" ? command.payload.arguments : {};
+      const commandDigest = operationPlanDigest(command);
+      const targetVersion = GoogleCalendarWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
+        operation: "event.update",
+        target_scope: "single_event",
+        target_identity_digest: googleCalendarWriteTargetIdentityDigest(args),
+        request_payload_digest: googleCalendarWriteRequestPayloadDigest(args),
+        calendar_id: "primary",
+        event_id: "shared-event-id",
+        event_state_digest: eventObservation.event_state_digest,
+        event_etag_digest: eventObservation.event_etag_digest,
+        command_digest: commandDigest,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      return approved(authority, command, targetVersion);
+    };
+    const firstCommand = makeApprovedCommand(makeCommand("calendar-lock-1", "after-first"));
+    const secondCommand = makeApprovedCommand(makeCommand("calendar-lock-2", "after-second"));
+    let executions: Promise<unknown>[] = [];
+    try {
+      const firstExecution = executors[0]!.execute(firstCommand);
+      const secondExecution = executors[1]!.execute(secondCommand);
+      executions = [firstExecution, secondExecution];
+      await firstStarted;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(started).toBe(1);
+      releaseFirst();
+      const feedback = await Promise.all([firstExecution, secondExecution]);
+      expect(feedback.map((entry) => entry.status)).toEqual(["success", "success"]);
+      expect(maxActive).toBe(1);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(executions);
+    }
+  });
+
+  it("serializes duplicate Calendar creates by their stable provider event ID", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let notifyFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { notifyFirstStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const invoke = async (): Promise<unknown> => {
+      active += 1;
+      started += 1;
+      maxActive = Math.max(maxActive, active);
+      if (started === 1) {
+        notifyFirstStarted();
+        await firstGate;
+      }
+      active -= 1;
+      return { completed: true };
+    };
+    const descriptor = requireToolOperationDescriptor("google.calendar.write");
+    const tools = new ToolRegistry();
+    tools.register({ name: "google.calendar.write", adapter_version: descriptor.adapter_version,
+      description: "isolated Calendar create-lock fixture", required_capabilities: descriptor.required_capabilities, invoke });
+    const authority = createExecutorApprovalAuthority();
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    const now = Date.now();
+    const eventStart = new Date(now + 60 * 60_000).toISOString();
+    const eventEnd = new Date(now + 90 * 60_000).toISOString();
+    const windowStart = new Date(now + 55 * 60_000).toISOString();
+    const windowEnd = new Date(now + 95 * 60_000).toISOString();
+    const observedAt = new Date(now).toISOString();
+    const availabilityResultDigest = operationPlanDigest({ calendar_id: "primary", calendar_id_original: "primary",
+      time_min: windowStart, time_max: windowEnd, time_zone: "UTC", availability_status: "observed", busy: [],
+      provider_error_count: 0, result_complete: true, has_more_results: false });
+    const availabilityObservation = {
+      service: "calendar", view: "freebusy", mode: "read_only", calendar_id: "primary",
+      calendar_id_original: "primary", time_min: windowStart, time_max: windowEnd, time_zone: "UTC",
+      observed_at: observedAt, observed_at_source: "client_response_received", availability_status: "observed",
+      result_complete: true, has_more_results: false, provider_error_count: 0, truncated: false, mutation_sent: false,
+      busy: [], result_digest: availabilityResultDigest,
+      observation_digest: operationPlanDigest({ result_digest: availabilityResultDigest, observed_at: observedAt }),
+      trust_boundary: { provider_data_is_untrusted: true, availability_can_authorize_operation: false,
+        used_for_authority: false },
+    };
+    const args = { operation: "event.create", calendar_id: "primary", summary: "stable event",
+      start: eventStart, end: eventEnd, availability_observation: availabilityObservation };
+    const eventId = googleCalendarCreateEventId(args);
+    const makeCommand = (id: string): ExecuteCommand => ({ id, type: "tool_call",
+      payload: { tool_name: "google.calendar.write", arguments: args },
+      constraints: { allowed_tools: ["google.calendar.write"], allowed_capabilities: [...descriptor.required_capabilities] },
+      upstream_decision: upstream });
+    const makeApprovedCommand = (command: ExecuteCommand) => {
+      const commandDigest = operationPlanDigest(command);
+      const targetVersion = GoogleCalendarWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.google-calendar-write-target-version.v3",
+        operation: "event.create",
+        target_identity_digest: googleCalendarWriteTargetIdentityDigest(args),
+        request_payload_digest: googleCalendarWriteRequestPayloadDigest(args),
+        availability_observation_digest: availabilityObservation.observation_digest,
+        availability_result_digest: availabilityResultDigest,
+        availability_observed_at: observedAt,
+        availability_window_start: windowStart,
+        availability_window_end: windowEnd,
+        event_start: eventStart,
+        event_end: eventEnd,
+        command_digest: commandDigest,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      return approved(authority, command, targetVersion);
+    };
+    const commands = [makeApprovedCommand(makeCommand("calendar-create-lock-1")),
+      makeApprovedCommand(makeCommand("calendar-create-lock-2"))];
+    let executions: Promise<unknown>[] = [];
+    try {
+      const pending = commands.map((command, index) => executors[index]!.execute(command));
+      executions = pending;
+      await firstStarted;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(started).toBe(1);
+      releaseFirst();
+      const feedback = await Promise.all(pending);
+      expect(feedback.map((entry) => entry.status)).toEqual(["success", "success"]);
+      expect(eventId).toMatch(/^[a-f0-9]{64}$/);
+      expect(maxActive).toBe(1);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(executions);
     }
   });
 

@@ -115,7 +115,7 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
   shellExecTool } from "./tools/builtin.js";
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
-  assertGoogleDriveWriteTargetVersion } from "./tools/google_write.js";
+  assertGoogleDriveWriteTargetVersion, googleCalendarCreateEventId } from "./tools/google_write.js";
 import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
@@ -340,6 +340,19 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
   }
   if (tool_name === "shell.exec" && observation?.schema_version === "blue-tanuki.shell-exec-target-version.v2") {
     return `filesystem-root:${observation.root_identity_digest}`;
+  }
+  if (tool_name === "google.calendar.write" &&
+      observation?.schema_version === "blue-tanuki.google-calendar-write-target-version.v3") {
+    const calendarObservation = GoogleCalendarWriteTargetVersionObservationSchema.parse(observation);
+    const calendarId = calendarObservation.operation === "event.create"
+      ? typeof args.calendar_id === "string" ? args.calendar_id : "primary"
+      : calendarObservation.calendar_id;
+    const eventId = calendarObservation.operation === "event.create"
+      ? googleCalendarCreateEventId(args) : calendarObservation.event_id;
+    const resourceDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.google-calendar-event-resource-lock.v1", calendarId, eventId,
+    ]), "utf8").digest("hex");
+    return `google-calendar-event:${resourceDigest}`;
   }
   if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
       ["file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(args.operation))) {
