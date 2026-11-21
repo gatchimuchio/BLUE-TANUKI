@@ -475,7 +475,7 @@ describe("Executor compute boundary", () => {
 
     expect(result.status).toBe("success");
     expect(result.agent_delegation_result_evidence).toMatchObject({
-      schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+      schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
       parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
         .update(planCommand.id).digest("hex"),
       parent_goal_digest: planCommand.payload.agent_delegation?.parent_goal_digest,
@@ -484,14 +484,27 @@ describe("Executor compute boundary", () => {
       criteria_digest: planCommand.payload.agent_delegation?.criteria_digest,
       termination_digest: planCommand.payload.agent_delegation?.termination_digest,
       children: [
-        { role: "division", outcome: "candidate" },
-        { role: "independent_comparison", outcome: "candidate" },
-        { role: "audit", outcome: "candidate" },
-        { role: "redundancy", outcome: "candidate" },
+        { role: "division", outcome: "candidate", resource_use: { schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), used_for_authority: false, may_execute: false } },
+        { role: "independent_comparison", outcome: "candidate", resource_use: { schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), used_for_authority: false, may_execute: false } },
+        { role: "audit", outcome: "candidate", resource_use: { schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), used_for_authority: false, may_execute: false } },
+        { role: "redundancy", outcome: "candidate", resource_use: { schema_version: "blue-tanuki.compute-resource-use.v1",
+          request_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), used_for_authority: false, may_execute: false } },
       ],
       used_for_authority: false,
       may_execute: false,
     });
+    const delegationEvidence = result.agent_delegation_result_evidence;
+    if (!delegationEvidence || delegationEvidence.schema_version !== "blue-tanuki.agent-delegation-result-evidence.v2") {
+      throw new Error("delegated evidence did not use the metered v2 contract");
+    }
+    for (const child of delegationEvidence.children) {
+      if (!child.resource_use) throw new Error(`candidate receipt missing for ${child.role}`);
+      expect(Number.isSafeInteger(child.resource_use.charged_compute_ms)).toBe(true);
+      expect(Number.isSafeInteger(child.resource_use.charged_tokens)).toBe(true);
+    }
     expect(JSON.stringify(result.agent_delegation_result_evidence)).not.toContain("role candidate");
     expect(reservations).toHaveLength(5);
     const childReservations = reservations.slice(0, 4);
@@ -506,6 +519,7 @@ describe("Executor compute boundary", () => {
       .join("\n")).toContain("C child role=");
     const candidateSetMessage = backend.seen[4]?.messages.at(-1)?.content ?? "";
     expect(candidateSetMessage).toContain("blue-tanuki.agent-candidate-set.v3");
+    expect(candidateSetMessage).not.toContain("charged_tokens");
     const candidateSet = JSON.parse(candidateSetMessage.slice(candidateSetMessage.indexOf("\n") + 1)) as {
       schema_version: string;
       parent_task_identity_digest: string;

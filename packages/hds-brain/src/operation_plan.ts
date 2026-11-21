@@ -856,6 +856,14 @@ export function operationPlanDigest(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+/** Stable digest for a child compute receipt attached to E07 result evidence. */
+export function agentDelegationResourceUseDigest(resourceUse: ComputeResourceUse): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.agent-delegation-resource-use.v2",
+    resource_use: resourceUse,
+  });
+}
+
 /** Merge independently validated non-authority memory references without replacing earlier lineage. */
 export function mergeOperationPlanMemoryInterpretationDependencies(
   ...groups: (readonly unknown[] | undefined)[]

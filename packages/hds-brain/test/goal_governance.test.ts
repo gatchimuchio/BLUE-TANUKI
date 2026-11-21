@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentDelegationResultEvidence, ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig,
+import type { AgentDelegationResultEvidence, AgentDelegationResultEvidenceV2, ExecuteCommand, GoalGovernanceAuthorization, GoalGovernanceConfig,
   GoalGovernanceEvent, OperationPlan } from "@blue-tanuki/protocol";
 import { canonicalExecutorCommandBytes, createGatewayInternalInboundRequest,
   GOAL_GOVERNANCE_SCHEMA_VERSION } from "@blue-tanuki/protocol";
@@ -12,7 +12,7 @@ import { evaluateApproval, goalPurposeAdoptionReviewDigest } from "../src/approv
 import { AuditLog } from "../src/audit.js";
 import { HDSUpperController, inspectGoalPurposeRecovery } from "../src/controller.js";
 import { GoalGovernanceLedger, goalGovernanceEventDigest, purposeVersionForEventTime } from "../src/goal_governance.js";
-import { operationPlanDigest } from "../src/operation_plan.js";
+import { agentDelegationResourceUseDigest, operationPlanDigest } from "../src/operation_plan.js";
 
 const delegated = "goal_0000000000000001";
 const operational = "goal_0000000000000002";
@@ -145,18 +145,35 @@ function contentDigest(text: string): string {
   return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 }
 
-function agentDelegationResultEvidenceFor(command: Extract<ExecuteCommand, { type: "llm_call" }>): AgentDelegationResultEvidence {
+function agentDelegationResultEvidenceFor(command: Extract<ExecuteCommand, { type: "llm_call" }>): AgentDelegationResultEvidenceV2 {
   const contract = command.payload.agent_delegation;
   if (!contract) throw new Error("fixture command has no delegation contract");
-  const children = contract.roles.map((role) => ({
-    role,
-    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
-      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
-    resource_use_digest: "f".repeat(64),
-    outcome: "candidate" as const,
-  })) as unknown as AgentDelegationResultEvidence["children"];
+  const children = contract.roles.map((role) => {
+    const resource_use = {
+      schema_version: "blue-tanuki.compute-resource-use.v1" as const,
+      request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+        .update(`${command.id}:agent:${role}`).digest("hex"),
+      charged_compute_ms: 25,
+      charged_tokens: 100,
+      tokens_usage_status: "provider_reported" as const,
+      cost_status: "estimated" as const,
+      charged_cost_amount: 0,
+      currency: "USD",
+      charge_basis: "configured_estimate" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      role,
+      child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+        .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+      resource_use_digest: agentDelegationResourceUseDigest(resource_use),
+      resource_use,
+      outcome: "candidate" as const,
+    };
+  }) as unknown as AgentDelegationResultEvidenceV2["children"];
   return {
-    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
     parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
       .update(command.id).digest("hex"),
     contract_digest: operationPlanDigest(contract),
@@ -851,6 +868,35 @@ describe("HDS goal governance consumer", () => {
         "kind" in log && log.kind === "executor_feedback" && log.command_id === mismatchedDecision.command!.id);
       expect(mismatchedFeedback && "kind" in mismatchedFeedback && mismatchedFeedback.kind === "executor_feedback"
         ? mismatchedFeedback.feedback.agent_delegation_result_evidence_contract_status : undefined).toBe("failed");
+      expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
+
+      const resourceMismatchRequestId = "purpose-plan-resource-mismatch-request";
+      const resourceMismatchOperationRequestId = `${resourceMismatchRequestId}-operation-request`;
+      const resourceMismatchDecision = controller.decide(createGatewayInternalInboundRequest({
+        ...compute,
+        id: resourceMismatchRequestId,
+        content: `plan:compute ${JSON.stringify({ task, goal_purpose_binding: binding })}`,
+        timestamp: Date.now() + 1_325,
+        metadata: { ...compute.metadata, "blue_tanuki.operation_core.request_id": resourceMismatchOperationRequestId },
+      }));
+      if (resourceMismatchDecision.command?.type !== "llm_call" || !resourceMismatchDecision.command.payload.agent_delegation) {
+        throw new Error(`fixture did not issue the resource mismatch command: ${resourceMismatchDecision.log.commit.decision}/${resourceMismatchDecision.log.commit.reason}`);
+      }
+      const validResourceEvidence = agentDelegationResultEvidenceFor(resourceMismatchDecision.command);
+      const firstResourceUse = validResourceEvidence.children[0].resource_use;
+      if (!firstResourceUse) throw new Error("fixture candidate has no resource receipt");
+      const tamperedResourceChild = { ...validResourceEvidence.children[0],
+        resource_use: { ...firstResourceUse, charged_tokens: firstResourceUse.charged_tokens + 1 } };
+      const tamperedResourceEvidence = { ...validResourceEvidence,
+        children: [tamperedResourceChild, ...validResourceEvidence.children.slice(1)] } as unknown as AgentDelegationResultEvidence;
+      controller.onFeedback({ command_id: resourceMismatchDecision.command.id, status: "success",
+        result: { operation_core: { status: "valid_plan", plan: operationPlanCandidate(resourceMismatchOperationRequestId) } },
+        agent_delegation_result_evidence: tamperedResourceEvidence,
+        metrics: { duration_ms: 1, tokens_used: 1, tool_calls: 0 } });
+      const resourceMismatchFeedback = controller.getAudit().list().map(({ log }) => log).find((log) =>
+        "kind" in log && log.kind === "executor_feedback" && log.command_id === resourceMismatchDecision.command!.id);
+      expect(resourceMismatchFeedback && "kind" in resourceMismatchFeedback && resourceMismatchFeedback.kind === "executor_feedback"
+        ? resourceMismatchFeedback.feedback.agent_delegation_result_evidence_contract_status : undefined).toBe("failed");
       expect(controller.getRuntimeSnapshot().operation_plans.plans).toHaveLength(1);
 
       const rawEvidenceRequestId = "purpose-plan-raw-evidence-request";

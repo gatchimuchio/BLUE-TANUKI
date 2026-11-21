@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { AuditLog, CompleteHistoryStore, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
+  agentDelegationResourceUseDigest,
   operationPlanTaskIdentityDigest } from "@blue-tanuki/hds-brain";
 import { DEFAULT_COMPUTE_BUDGET_POLICY, Executor, ToolRegistry, createExecutorApprovalAuthority, fileDeleteTool, fileEditTool, fileSearchTool, fileWriteTool, invokeShellExec, shellExecTool,
   githubWriteTool, gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest, gmailWriteTool,
@@ -82,15 +83,32 @@ function request(content: string, user = "fixture-owner"): InboundRequest {
 function agentDelegationFeedbackEvidence(command: ExecuteCommand): Partial<ExecuteFeedback> {
   if (command.type !== "llm_call" || !command.payload.agent_delegation) return {};
   const contract = command.payload.agent_delegation;
-  const children = contract.roles.map((role) => ({
-    role,
-    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
-      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
-    resource_use_digest: "f".repeat(64),
-    outcome: "candidate" as const,
-  }));
+  const children = contract.roles.map((role) => {
+    const resource_use = {
+      schema_version: "blue-tanuki.compute-resource-use.v1" as const,
+      request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+        .update(`${command.id}:agent:${role}`).digest("hex"),
+      charged_compute_ms: 25,
+      charged_tokens: 100,
+      tokens_usage_status: "provider_reported" as const,
+      cost_status: "estimated" as const,
+      charged_cost_amount: 0,
+      currency: "USD",
+      charge_basis: "configured_estimate" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      role,
+      child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+        .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+      resource_use_digest: agentDelegationResourceUseDigest(resource_use),
+      resource_use,
+      outcome: "candidate" as const,
+    };
+  });
   const evidence: AgentDelegationResultEvidence = AgentDelegationResultEvidenceSchema.parse({
-    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
     parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
       .update(command.id).digest("hex"),
     contract_digest: operationPlanDigest(contract),

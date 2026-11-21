@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { AuditLog, HDSUpperController, evaluateApproval, goalGovernanceEventDigest, operationPlanDigest,
+  agentDelegationResourceUseDigest,
   goalCompletionRulesDigest, type OperationPlanBrokerRestoreDependencyEvidence } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, executorCommandDigest, gmailDraftSendRequestPayloadDigest,
   gmailWriteRequestPayloadDigest, gmailWriteTargetIdentityDigest,
@@ -56,15 +57,32 @@ function request(content: string, user = "fixture-owner", goal_criteria?: Inboun
 function agentDelegationFeedbackEvidence(command: ExecuteCommand): Partial<ExecuteFeedback> {
   if (command.type !== "llm_call" || !command.payload.agent_delegation) return {};
   const contract = command.payload.agent_delegation;
-  const children = contract.roles.map((role) => ({
-    role,
-    child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
-      .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
-    resource_use_digest: "f".repeat(64),
-    outcome: "candidate" as const,
-  }));
+  const children = contract.roles.map((role) => {
+    const resource_use = {
+      schema_version: "blue-tanuki.compute-resource-use.v1" as const,
+      request_digest: createHash("sha256").update("blue-tanuki.compute-resource-use.request.v1\0")
+        .update(`${command.id}:agent:${role}`).digest("hex"),
+      charged_compute_ms: 25,
+      charged_tokens: 100,
+      tokens_usage_status: "provider_reported" as const,
+      cost_status: "estimated" as const,
+      charged_cost_amount: 0,
+      currency: "USD",
+      charge_basis: "configured_estimate" as const,
+      used_for_authority: false as const,
+      may_execute: false as const,
+    };
+    return {
+      role,
+      child_task_digest: createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+        .update(contract.parent_task_identity_digest).update("\0").update(role).digest("hex"),
+      resource_use_digest: agentDelegationResourceUseDigest(resource_use),
+      resource_use,
+      outcome: "candidate" as const,
+    };
+  });
   const evidence: AgentDelegationResultEvidence = AgentDelegationResultEvidenceSchema.parse({
-    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
     parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
       .update(command.id).digest("hex"),
     contract_digest: operationPlanDigest(contract),

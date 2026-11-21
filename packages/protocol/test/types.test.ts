@@ -82,7 +82,7 @@ describe("C07.01 ExecuteFeedback proposal transport", () => {
 describe("E07 agent delegation result evidence", () => {
   const roles = ["division", "independent_comparison", "audit", "redundancy"] as const;
   const digest = "a".repeat(64);
-  const evidence = {
+  const legacyEvidence = {
     schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
     parent_command_digest: digest,
     contract_digest: digest,
@@ -101,24 +101,75 @@ describe("E07 agent delegation result evidence", () => {
     may_execute: false,
   };
 
-  it("transports only the fixed, digest-only child summary", () => {
+  it("keeps digest-only v1 audit records readable without accepting child content", () => {
     const parsed = ExecuteFeedbackSchema.parse({ command_id: "agent-result-evidence", status: "success",
-      agent_delegation_result_evidence: evidence, metrics: { duration_ms: 1 } });
-    expect(parsed.agent_delegation_result_evidence).toEqual(evidence);
-    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...evidence,
-      children: evidence.children.map((child, index) => index === 0 ? { ...child, content: "RAW_CHILD_SENTINEL" } : child),
+      agent_delegation_result_evidence: legacyEvidence, metrics: { duration_ms: 1 } });
+    expect(parsed.agent_delegation_result_evidence).toEqual(legacyEvidence);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...legacyEvidence,
+      children: legacyEvidence.children.map((child, index) => index === 0 ? { ...child, content: "RAW_CHILD_SENTINEL" } : child),
     }).success).toBe(false);
   });
 
-  it("rejects missing candidate receipts, reordered roles, and authority claims", () => {
-    const missingReceipt = { ...evidence,
-      children: evidence.children.map((child, index) => index === 0 ? { ...child, resource_use_digest: undefined } : child),
+  it("rejects malformed legacy candidate receipts and authority claims", () => {
+    const missingReceipt = { ...legacyEvidence,
+      children: legacyEvidence.children.map((child, index) => index === 0 ? { ...child, resource_use_digest: undefined } : child),
     };
-    const reordered = { ...evidence, children: [evidence.children[1], evidence.children[0],
-      evidence.children[2], evidence.children[3]] };
+    const reordered = { ...legacyEvidence, children: [legacyEvidence.children[1], legacyEvidence.children[0],
+      legacyEvidence.children[2], legacyEvidence.children[3]] };
     expect(AgentDelegationResultEvidenceSchema.safeParse(missingReceipt).success).toBe(false);
     expect(AgentDelegationResultEvidenceSchema.safeParse(reordered).success).toBe(false);
-    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...evidence, may_execute: true }).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...legacyEvidence, may_execute: true }).success).toBe(false);
+  });
+
+  const resourceUse = (index: number) => ({
+    schema_version: "blue-tanuki.compute-resource-use.v1",
+    request_digest: String(index + 1).repeat(64),
+    charged_compute_ms: 25 + index,
+    charged_tokens: 100 + index,
+    tokens_usage_status: "provider_reported",
+    cost_status: "estimated",
+    charged_cost_amount: 0,
+    currency: "USD",
+    charge_basis: "configured_estimate",
+    used_for_authority: false,
+    may_execute: false,
+  } as const);
+  const v2Evidence = {
+    ...legacyEvidence,
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
+    children: roles.map((role, index) => ({
+      role,
+      child_task_digest: String(index + 1).repeat(64),
+      resource_use_digest: String(index + 2).repeat(64),
+      resource_use: resourceUse(index),
+      outcome: "candidate" as const,
+    })),
+  };
+
+  it("transports typed, non-authority resource measurements while preserving v1 parsing", () => {
+    const parsed = ExecuteFeedbackSchema.parse({ command_id: "agent-result-evidence-v2", status: "success",
+      agent_delegation_result_evidence: v2Evidence, metrics: { duration_ms: 1 } });
+    expect(parsed.agent_delegation_result_evidence).toEqual(v2Evidence);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...v2Evidence,
+      children: v2Evidence.children.map((child, index) => index === 0 ? { ...child, content: "RAW_CHILD_SENTINEL" } : child),
+    }).success).toBe(false);
+  });
+
+  it("rejects missing resource evidence, digest/value asymmetry, reordered roles, and authority claims", () => {
+    const missingReceipt = { ...v2Evidence,
+      children: v2Evidence.children.map((child, index) => index === 0 ? { ...child, resource_use: undefined } : child),
+    };
+    const unknownWithDigestOnly = { ...v2Evidence,
+      children: v2Evidence.children.map((child, index) => index === 0
+        ? { role: child.role, child_task_digest: child.child_task_digest, resource_use_digest: child.resource_use_digest,
+          outcome: "unknown", reason: "compute_outcome_unknown" } : child),
+    };
+    const reordered = { ...v2Evidence, children: [v2Evidence.children[1], v2Evidence.children[0],
+      v2Evidence.children[2], v2Evidence.children[3]] };
+    expect(AgentDelegationResultEvidenceSchema.safeParse(missingReceipt).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse(unknownWithDigestOnly).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse(reordered).success).toBe(false);
+    expect(AgentDelegationResultEvidenceSchema.safeParse({ ...v2Evidence, used_for_authority: true }).success).toBe(false);
   });
 });
 

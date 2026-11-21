@@ -52,14 +52,14 @@ import {
   getToolOperationDescriptor,
   TRANSIENT_CANVAS_ARTIFACT_MAX_BYTES,
   AgentDelegationContractSchema,
-  AgentDelegationResultEvidenceSchema,
+  AgentDelegationResultEvidenceV2Schema,
   OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
 } from "@blue-tanuki/protocol";
 import { approvalContextFromCommand, consumeHdsExecutionAuthorityBinding, finalReviewRequired,
-  isHdsExecutionGoalVersionBindingCurrent, operationPlanDigest } from "@blue-tanuki/hds-brain";
+  isHdsExecutionGoalVersionBindingCurrent, operationPlanDigest, agentDelegationResourceUseDigest } from "@blue-tanuki/hds-brain";
 import type { ApprovalOperation, ApprovalRisk, HDSExecutionAuthorityBinding } from "@blue-tanuki/hds-brain";
 import type {
   ExecuteCommand,
@@ -68,7 +68,7 @@ import type {
   LLMCallFailure,
   LLMCallPayload,
   AgentDelegationContract,
-  AgentDelegationResultEvidence,
+  AgentDelegationResultEvidenceV2,
   AgentWorkerRole,
   ComputeResourceUse,
   ChannelSendPayload,
@@ -2881,7 +2881,7 @@ export class Executor {
     const requestedProvider = safeProviderLabel(payload.backend_hint ?? this.deps.llm.name);
     let resp: LLMResponse;
     let computeResourceUse: ComputeResourceUse | undefined;
-    let agentDelegationResultEvidence: AgentDelegationResultEvidence | undefined;
+    let agentDelegationResultEvidence: AgentDelegationResultEvidenceV2 | undefined;
     try {
       resp = await withLLMCallGuard(
         requestedProvider,
@@ -3799,10 +3799,10 @@ const AGENT_ROLE_INSTRUCTIONS: Readonly<Record<AgentWorkerRole, string>> = Objec
 });
 
 type AgentCandidateOutcome =
-  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; outcome: "candidate"; content: string }
-  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; outcome: "unknown";
+  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; resource_use: ComputeResourceUse; outcome: "candidate"; content: string }
+  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; resource_use?: ComputeResourceUse; outcome: "unknown";
       reason: "compute_outcome_unknown" | "child_deadline_elapsed" }
-  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; outcome: "rejected";
+  | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; resource_use: ComputeResourceUse; outcome: "rejected";
       reason: "invalid_child_output" };
 
 async function withAgentDelegationCandidates(input: {
@@ -3817,7 +3817,7 @@ async function withAgentDelegationCandidates(input: {
   session_id?: string;
   session_history_applied: boolean;
   signal?: AbortSignal;
-}): Promise<{ provider_request: LLMRequest; result_evidence: AgentDelegationResultEvidence }> {
+}): Promise<{ provider_request: LLMRequest; result_evidence: AgentDelegationResultEvidenceV2 }> {
   if (input.compute.budget_reservations_enabled !== true) {
     throw new Error("agent_delegation_budget_reservations_unavailable");
   }
@@ -3914,9 +3914,7 @@ async function withAgentDelegationCandidates(input: {
       let computeSettled = false;
       let residualTimer: ReturnType<typeof setTimeout> | undefined;
       const resourceUseDigest = (resourceUse: ComputeResourceUse | undefined): string | undefined => resourceUse
-        ? createHash("sha256").update("blue-tanuki.agent.worker-resource-use.v1\0")
-            .update(JSON.stringify(resourceUse)).digest("hex")
-        : undefined;
+        ? agentDelegationResourceUseDigest(resourceUse) : undefined;
       const onParentCancel = (): void => {
         if (computeSettled || childController.signal.aborted) return;
         reportLifecycle({ child_task_digest: childTaskDigest, role, state: "cancel_requested" });
@@ -3952,6 +3950,7 @@ async function withAgentDelegationCandidates(input: {
           if (!input.signal?.aborted) {
             return { role, child_task_digest: childTaskDigest,
               ...(usageDigest ? { resource_use_digest: usageDigest } : {}),
+              ...(result.compute_resource_use ? { resource_use: result.compute_resource_use } : {}),
               outcome: "unknown", reason: "child_deadline_elapsed" };
           }
           throw createLLMAbortError(provider, childSignal);
@@ -3966,10 +3965,12 @@ async function withAgentDelegationCandidates(input: {
         if (!content || content.length > 16_000) {
           return { role, child_task_digest: childTaskDigest,
             ...(usageDigest ? { resource_use_digest: usageDigest } : {}),
+            resource_use: result.compute_resource_use,
             outcome: "rejected", reason: "invalid_child_output" };
         }
         return { role, child_task_digest: childTaskDigest,
           ...(usageDigest ? { resource_use_digest: usageDigest } : {}),
+          resource_use: result.compute_resource_use,
           outcome: "candidate", content };
       } catch (error) {
         if (!computeSettled) {
@@ -3988,6 +3989,7 @@ async function withAgentDelegationCandidates(input: {
           const usageDigest = resourceUseDigest(error.compute_resource_use);
           return { role, child_task_digest: childTaskDigest,
             ...(usageDigest ? { resource_use_digest: usageDigest } : {}),
+            resource_use: error.compute_resource_use,
             outcome: "unknown", reason: "compute_outcome_unknown" };
         }
         throw error;
@@ -4013,13 +4015,13 @@ async function withAgentDelegationCandidates(input: {
       parent_task_identity_digest: contract.parent_task_identity_digest,
       criteria_digest: contract.criteria_digest,
       termination_digest: contract.termination_digest,
-      candidates: childResults,
+      candidates: childResults.map(({ resource_use: _resourceUse, ...candidate }) => candidate),
       used_for_authority: false,
       may_execute: false,
     })}`,
   };
-  const resultEvidence = AgentDelegationResultEvidenceSchema.parse({
-    schema_version: "blue-tanuki.agent-delegation-result-evidence.v1",
+  const resultEvidence = AgentDelegationResultEvidenceV2Schema.parse({
+    schema_version: "blue-tanuki.agent-delegation-result-evidence.v2",
     parent_command_digest: parentCommandDigest,
     contract_digest: operationPlanDigest(contract),
     parent_goal_digest: contract.parent_goal_digest,
@@ -4030,7 +4032,8 @@ async function withAgentDelegationCandidates(input: {
     children: childResults.map((result) => ({
       role: result.role,
       child_task_digest: result.child_task_digest,
-      ...(result.resource_use_digest ? { resource_use_digest: result.resource_use_digest } : {}),
+      ...(result.resource_use ? { resource_use_digest: agentDelegationResourceUseDigest(result.resource_use),
+        resource_use: result.resource_use } : {}),
       outcome: result.outcome,
       ...("reason" in result ? { reason: result.reason } : {}),
     })),

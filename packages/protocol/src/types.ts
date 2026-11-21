@@ -202,8 +202,30 @@ export const AgentDelegationContractSchema = z.object({
 }).strict();
 export type AgentDelegationContract = z.infer<typeof AgentDelegationContractSchema>;
 
+/** Measured C resource consumption. It is evidence for J review, never authority. */
+export const ComputeResourceUseSchema = z.object({
+  schema_version: z.literal("blue-tanuki.compute-resource-use.v1"),
+  request_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  charged_compute_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  charged_tokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  tokens_usage_status: z.enum(["provider_reported", "unknown"]),
+  cost_status: z.enum(["actual", "estimated", "unknown"]),
+  charged_cost_amount: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  charge_basis: z.enum(["provider_reported", "configured_estimate", "reserved_upper_bound"]),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((observation, context) => {
+  const expectedBasis = observation.cost_status === "actual" ? "provider_reported"
+    : observation.cost_status === "estimated" ? "configured_estimate" : "reserved_upper_bound";
+  if (observation.charge_basis !== expectedBasis) {
+    context.addIssue({ code: "custom", message: "compute_resource_use_charge_basis_mismatch" });
+  }
+});
+export type ComputeResourceUse = z.infer<typeof ComputeResourceUseSchema>;
+
 const AgentDelegationResultEvidenceDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
-const AgentDelegationChildResultEvidenceSchema = z.discriminatedUnion("outcome", [
+const AgentDelegationChildResultEvidenceV1Schema = z.discriminatedUnion("outcome", [
   z.object({
     role: AgentWorkerRoleSchema,
     child_task_digest: AgentDelegationResultEvidenceDigestSchema,
@@ -226,8 +248,8 @@ const AgentDelegationChildResultEvidenceSchema = z.discriminatedUnion("outcome",
   }).strict(),
 ]);
 
-/** Digest-only summary of the child results supplied to parent C; never authority or stored child content. */
-export const AgentDelegationResultEvidenceSchema = z.object({
+/** Digest-only legacy shape retained so append-only audit entries stay readable. */
+export const AgentDelegationResultEvidenceV1Schema = z.object({
   schema_version: z.literal("blue-tanuki.agent-delegation-result-evidence.v1"),
   parent_command_digest: AgentDelegationResultEvidenceDigestSchema,
   contract_digest: AgentDelegationResultEvidenceDigestSchema,
@@ -237,10 +259,10 @@ export const AgentDelegationResultEvidenceSchema = z.object({
   criteria_digest: AgentDelegationResultEvidenceDigestSchema,
   termination_digest: AgentDelegationResultEvidenceDigestSchema,
   children: z.tuple([
-    AgentDelegationChildResultEvidenceSchema,
-    AgentDelegationChildResultEvidenceSchema,
-    AgentDelegationChildResultEvidenceSchema,
-    AgentDelegationChildResultEvidenceSchema,
+    AgentDelegationChildResultEvidenceV1Schema,
+    AgentDelegationChildResultEvidenceV1Schema,
+    AgentDelegationChildResultEvidenceV1Schema,
+    AgentDelegationChildResultEvidenceV1Schema,
   ]).superRefine((children, context) => {
     const expectedRoles: AgentWorkerRole[] = ["division", "independent_comparison", "audit", "redundancy"];
     children.forEach((child, index) => {
@@ -252,6 +274,72 @@ export const AgentDelegationResultEvidenceSchema = z.object({
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict();
+export type AgentDelegationResultEvidenceV1 = z.infer<typeof AgentDelegationResultEvidenceV1Schema>;
+
+const AgentDelegationChildResultEvidenceV2UnionSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use: ComputeResourceUseSchema,
+    outcome: z.literal("candidate"),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema.optional(),
+    resource_use: ComputeResourceUseSchema.optional(),
+    outcome: z.literal("unknown"),
+    reason: z.enum(["compute_outcome_unknown", "child_deadline_elapsed"]),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use: ComputeResourceUseSchema,
+    outcome: z.literal("rejected"),
+    reason: z.literal("invalid_child_output"),
+  }).strict(),
+]);
+const AgentDelegationChildResultEvidenceV2Schema = AgentDelegationChildResultEvidenceV2UnionSchema.superRefine((child, context) => {
+  if (child.outcome === "unknown" &&
+      ((child.resource_use_digest === undefined) !== (child.resource_use === undefined))) {
+    context.addIssue({ code: "custom", message: "agent_delegation_resource_use_pair_mismatch" });
+  }
+});
+
+/** Digest-bound resource measurements only; child candidate text is never stored here. */
+export const AgentDelegationResultEvidenceV2Schema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-delegation-result-evidence.v2"),
+  parent_command_digest: AgentDelegationResultEvidenceDigestSchema,
+  contract_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_goal_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_task_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_budget_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  criteria_digest: AgentDelegationResultEvidenceDigestSchema,
+  termination_digest: AgentDelegationResultEvidenceDigestSchema,
+  children: z.tuple([
+    AgentDelegationChildResultEvidenceV2Schema,
+    AgentDelegationChildResultEvidenceV2Schema,
+    AgentDelegationChildResultEvidenceV2Schema,
+    AgentDelegationChildResultEvidenceV2Schema,
+  ]).superRefine((children, context) => {
+    const expectedRoles: AgentWorkerRole[] = ["division", "independent_comparison", "audit", "redundancy"];
+    children.forEach((child, index) => {
+      if (child.role !== expectedRoles[index]) {
+        context.addIssue({ code: "custom", path: [index, "role"], message: "agent_delegation_result_role_order_mismatch" });
+      }
+    });
+  }),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type AgentDelegationResultEvidenceV2 = z.infer<typeof AgentDelegationResultEvidenceV2Schema>;
+
+export const AgentDelegationResultEvidenceSchema = z.discriminatedUnion("schema_version", [
+  AgentDelegationResultEvidenceV1Schema,
+  AgentDelegationResultEvidenceV2Schema,
+]);
 export type AgentDelegationResultEvidence = z.infer<typeof AgentDelegationResultEvidenceSchema>;
 
 export const LLMComputeContextSchema = z.object({
@@ -704,28 +792,6 @@ export const FailureLearningDevelopmentHandoffSchema = z.object({
   may_execute: z.literal(false),
 }).strict();
 export type FailureLearningDevelopmentHandoff = z.infer<typeof FailureLearningDevelopmentHandoffSchema>;
-
-/** Measured C resource consumption. It is evidence for J review, never authority. */
-export const ComputeResourceUseSchema = z.object({
-  schema_version: z.literal("blue-tanuki.compute-resource-use.v1"),
-  request_digest: z.string().regex(/^[a-f0-9]{64}$/),
-  charged_compute_ms: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  charged_tokens: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  tokens_usage_status: z.enum(["provider_reported", "unknown"]),
-  cost_status: z.enum(["actual", "estimated", "unknown"]),
-  charged_cost_amount: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  currency: z.string().regex(/^[A-Z]{3}$/),
-  charge_basis: z.enum(["provider_reported", "configured_estimate", "reserved_upper_bound"]),
-  used_for_authority: z.literal(false),
-  may_execute: z.literal(false),
-}).strict().superRefine((observation, context) => {
-  const expectedBasis = observation.cost_status === "actual" ? "provider_reported"
-    : observation.cost_status === "estimated" ? "configured_estimate" : "reserved_upper_bound";
-  if (observation.charge_basis !== expectedBasis) {
-    context.addIssue({ code: "custom", message: "compute_resource_use_charge_basis_mismatch" });
-  }
-});
-export type ComputeResourceUse = z.infer<typeof ComputeResourceUseSchema>;
 
 export const ExecuteFeedbackSchema = z.object({
   command_id: z.string(),
