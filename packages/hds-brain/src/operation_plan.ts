@@ -5633,6 +5633,14 @@ export class OperationPlanLedger {
     }
     return { operation_plan_binding_digest, target_id, task_identity_digest, goal_version_binding };
   }
+  private delegatedPlanHasUnevaluatedChildAdoption(planId: string): boolean {
+    const planIdDigest = operationPlanDigest(planId);
+    return (this.state.agent_delegation_integrations ?? []).some((integration) =>
+      integration.parent_plan_decision === "candidate_retained" &&
+      integration.candidate_plan_id_digest === planIdDigest &&
+      integration.per_child_adoption === "not_evaluated");
+  }
+
   canExecute(command: ExecuteCommand): boolean {
     const reflectionCommand = this.reflections.has(command.id) || (command.type === "llm_call" &&
       command.payload.compute_context?.local_p_version === OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION);
@@ -5664,6 +5672,7 @@ export class OperationPlanLedger {
     if (!this.reconcileMemory()) return false;
     if (this.taskGoalIsAchieved(operationPlanTaskIdentityDigest(match.p))) return false;
     const { p, b } = match;
+    if (this.delegatedPlanHasUnevaluatedChildAdoption(p.revisions[0]!.plan.plan_id)) return false;
     if (taskScopedPlanRestore && !this.state.plans.some((plan) => operationPlanTaskIdentityDigest(plan) === taskScopeDigest)) return false;
     // J/M evidence may change while the selected command waits at its L3 gate.
     try { this.assertMemoryInterpretationDependenciesCurrent(p); }
@@ -5691,7 +5700,9 @@ export class OperationPlanLedger {
   }
   beginAttempt(command: ExecuteCommand, admission?: ExecutionAdmission, onRejected?: (reason: string) => void): boolean {
     if (!this.canExecute(command)) {
-      onRejected?.("plan_source_or_state_stale");
+      const plan = this.binding(command.id)?.p;
+      onRejected?.(plan && this.delegatedPlanHasUnevaluatedChildAdoption(plan.revisions[0]!.plan.plan_id)
+        ? "plan_agent_delegation_adoption_pending" : "plan_source_or_state_stale");
       return false;
     }
     if (!this.isBound(command.id)) return true;
