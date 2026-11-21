@@ -4,18 +4,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, finalReviewRequired, HDSUpperController, operationPlanDigest,
-  type HDSExecutionAuthorityBinding, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
+  AuditLog, type HDSExecutionAuthorityBinding, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, GoogleCalendarWriteTargetVersionObservationSchema,
   GoogleDriveWriteTargetVersionObservationSchema, googleDriveWriteRequestPayloadDigest,
   googleDriveWriteTargetIdentityDigest, OperationPlanCheckpointSchema, requireToolOperationDescriptor,
   type ExecuteCommand } from "@blue-tanuki/protocol";
 import { createExecutorApprovalAuthority, Executor, executorCommandDigest } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
+import { createMemoryPersonalizationStopTool } from "../src/tools/memory_personalization.js";
 import { inspectFileWriteMutationTargetVersion, registerBuiltinTools } from "../src/tools/builtin.js";
 import { ToolRegistry, type BrokerTargetVersionObservation, type Tool } from "../src/tools/registry.js";
 import { googleCalendarCreateEventId, googleCalendarWriteRequestPayloadDigest,
   googleCalendarWriteTargetIdentityDigest } from "../src/tools/google_write.js";
 import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
+import { createSettingsWriteTool } from "../src/tools/settings_write.js";
 
 const upstream = { frame_goal: "fixture", model_abstraction: "fixture", commit_hash: "a".repeat(64),
   commit_decision: "ASSERT" as const };
@@ -698,6 +700,249 @@ describe("Executor shared target resource lock", () => {
       releaseFirst();
       await Promise.allSettled(executions);
       activeHds.forEach((hds) => hds.close());
+    }
+  });
+
+  it("serializes settings.write operations that share the Gateway settings target", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-target-lock-"));
+    let targetStateDigest = "a".repeat(64);
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let notifyFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { notifyFirstStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const port = {
+      async inspect() {
+        return {
+          target_state_digest: targetStateDigest,
+          llm_provider: "stub" as const,
+          managed_llm_settings: true,
+          values: {
+            model: "fixture-model",
+            temperature: 0.25,
+            max_tokens: 512,
+            timeout_ms: 30_000,
+            composio: { api_key_configured: false, user_id: null, allowed_toolkits: null, allowed_actions: null,
+              revoked_actions: null, api_base_url: null, dry_run: true, live_execution: false },
+          },
+        };
+      },
+      async apply(_patch: unknown, expectedTargetStateDigest: string) {
+        active += 1;
+        started += 1;
+        maxActive = Math.max(maxActive, active);
+        if (started === 1) {
+          notifyFirstStarted();
+          await firstGate;
+        }
+        try {
+          if (expectedTargetStateDigest !== targetStateDigest) throw new Error("settings_target_version_changed");
+          targetStateDigest = "b".repeat(64);
+          return { changed_keys: ["llm.model"], restart_required: true as const };
+        } finally {
+          active -= 1;
+        }
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register(createSettingsWriteTool(port));
+    const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    const hdsInstances: HDSUpperController[] = [];
+    const executions: Promise<unknown>[] = [];
+    const args = { expected_llm_provider: "stub" as const, patch: { llm: { model: "fixture-model-next" } } };
+
+    const makeOwnerRequest = (id: string, content: string) => createGatewayInternalInboundRequest({
+      id,
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content,
+      timestamp: Date.now(),
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" },
+    });
+
+    try {
+      const reviewed = await Promise.all([0, 1].map(async (index) => {
+        const hds = new HDSUpperController({ audit: new AuditLog({ filepath: path.join(root, `audit-${index}.jsonl`) }) });
+        hdsInstances.push(hds);
+        const candidate = hds.prepareSettingsWritePlan(makeOwnerRequest(`settings-origin-${index}`, "prepare owner settings"), args);
+        const selection = hds.decide(makeOwnerRequest(`settings-review-${index}`, `plan:review ${JSON.stringify({
+          plan_id: candidate.plan_id_digest, revision_digest: candidate.revision_digest, step_id: candidate.step_id_digest,
+        })}`));
+        const command = selection.command;
+        if (command?.type !== "tool_call" || command.payload.tool_name !== "settings.write") {
+          throw new Error(`fixture HDS did not issue settings.write: ${selection.log.commit.reason}`);
+        }
+        const bindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+        if (!bindingDigest) throw new Error("fixture settings.write had no Operation Plan binding");
+        const observation = await executors[index]!.inspectCommandTargetVersion(command, process.env, bindingDigest);
+        if (!observation) throw new Error("Broker did not observe the Gateway settings target");
+        const hdsBinding = hds.createExecutionAuthorityBinding(command, observation);
+        return approved(authority, command, observation, hdsBinding);
+      }));
+
+      const pending = reviewed.map((command, index) => executors[index]!.execute(command));
+      executions.push(...pending);
+      await firstStarted;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(started).toBe(1);
+      releaseFirst();
+      const feedback = await Promise.all(pending);
+      expect(feedback.map((entry) => entry.status).sort()).toEqual(["failed", "success"]);
+      expect(maxActive).toBe(1);
+      expect(targetStateDigest).toBe("b".repeat(64));
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(executions);
+      hdsInstances.forEach((hds) => hds.close());
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes memory.personalization.stop operations that target the same retained entry", async () => {
+    const entryHash = "a".repeat(64);
+    const initialRevision = "b".repeat(64);
+    const result = { status: "excluded" as const, entry_hash: entryHash, exclusion_digest: "c".repeat(64),
+      exclusion_revision_digest: "d".repeat(64), historical_record_retained: true as const, physical_deletion: false as const,
+      used_for_authority: false as const, may_execute: false as const };
+    let targetAvailable = true;
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let notifyFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { notifyFirstStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const store = {
+      inspectPersonalizationTarget(requestId: string, requestedEntryHash: string) {
+        if (requestId !== "memory-17" || requestedEntryHash !== entryHash) throw new Error("unexpected memory fixture target");
+        return { status: targetAvailable ? "available" as const : "already_excluded" as const,
+          entry_hash: targetAvailable ? entryHash : null,
+          exclusion_revision_digest: targetAvailable ? initialRevision : result.exclusion_revision_digest };
+      },
+      stopPersonalizationUse(input: { expected_entry_hash: string; expected_exclusion_revision_digest: string }) {
+        if (!targetAvailable || input.expected_entry_hash !== entryHash ||
+            input.expected_exclusion_revision_digest !== initialRevision) throw new Error("memory_target_version_changed");
+        targetAvailable = false;
+        return result;
+      },
+    };
+    const tool = createMemoryPersonalizationStopTool(store);
+    const invoke = tool.invoke.bind(tool);
+    tool.invoke = async (rawArgs, context) => {
+      active += 1;
+      started += 1;
+      maxActive = Math.max(maxActive, active);
+      if (started === 1) {
+        notifyFirstStarted();
+        await firstGate;
+      }
+      try {
+        return await invoke(rawArgs, context);
+      } finally {
+        active -= 1;
+      }
+    };
+    const tools = new ToolRegistry();
+    tools.register(tool);
+    const authority = createExecutorApprovalAuthority({ require_hds_execution_binding: true });
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    const hdsInstances: HDSUpperController[] = [];
+    const executions: Promise<unknown>[] = [];
+    const planId = (index: number) => `memory-stop-plan-${index}`;
+    const stepId = (index: number) => `stop-personalization-${index}`;
+    const goal = "Stop future personalization use of the retained synthetic entry F:memory-17.";
+    const target = { kind: "settings" as const, id: "memory.personalization", scope: "F:memory-17" };
+
+    try {
+      const reviewed = await Promise.all([0, 1].map(async (index) => {
+        const requestId = `memory-stop-request-${index}`;
+        const plan = {
+          version: "operation-core.v1" as const,
+          plan_id: planId(index),
+          request_id: requestId,
+          state: "planned" as const,
+          steps: [{
+            step_id: stepId(index),
+            operation: "memory.personalization.stop",
+            target,
+            state: "planned" as const,
+            effects: ["settings_change" as const, "write" as const],
+            permission: { risk: "high" as const, approval_level: "L3_final_review" as const,
+              final_review_required: true, hds_brain_authority_required: true as const, approval_gate_required: true },
+            adapter: "internal_runtime" as const,
+            adapter_is_authority: false as const,
+            command_generated_by_adapter_only: false,
+            parameters: { reference: "F:memory-17", entry_hash: entryHash },
+            preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{ check_id: `stop-confirmed-${index}`,
+              method: "result_equals" as const, target, expected: result }],
+              compensation: { available: false as const, reason: "A renewed preference requires a separate owner-reviewed operation." } },
+          }],
+          rollback: { available: false },
+          raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
+          planner_output_used_for_authority: false,
+          hds_brain_authority_required: true,
+        };
+        const revisionDigest = operationPlanDigest(plan);
+        let checkpoint = OperationPlanCheckpointSchema.parse({
+          schema_version: "operation-plan-state.v1",
+          plans: [{ owner: "fixture-owner", channel: "webchat", goal,
+            request_goal_criteria: { status: "not_provided", request_id: requestId,
+              content_sha256: createHash("sha256").update(goal, "utf8").digest("hex"), criteria: [], used_for_authority: false },
+            revisions: [{ digest: revisionDigest, plan }], receipt_observations: [], bindings: [], results: [] }],
+        });
+        let savedDigest: string | null = operationPlanDigest(checkpoint);
+        const statePort: OperationPlanStatePort = {
+          load: () => checkpoint,
+          compareAndSet(expectedDigest, next) {
+            if (expectedDigest !== savedDigest) throw new Error("fixture Operation Plan revision changed");
+            checkpoint = OperationPlanCheckpointSchema.parse(next);
+            savedDigest = operationPlanDigest(checkpoint);
+          },
+          loadRecoveryHoldState: () => null,
+          compareAndSetRecoveryHoldState() { throw new Error("not used by memory target-lock fixture"); },
+        };
+        const hds = new HDSUpperController({ operation_plan_state: statePort });
+        hdsInstances.push(hds);
+        const selection = hds.decide(createGatewayInternalInboundRequest({
+          id: `memory-stop-review-${index}`,
+          channel: "webchat",
+          user: "fixture-owner",
+          content: `plan:review ${JSON.stringify({ plan_id: planId(index), revision_digest: revisionDigest, step_id: stepId(index) })}`,
+          timestamp: Date.now(),
+          metadata: { "blue_tanuki.operator_surface": "developer" },
+        }));
+        const command = selection.command;
+        if (command?.type !== "tool_call" || command.payload.tool_name !== "memory.personalization.stop") {
+          throw new Error(`fixture HDS did not issue memory.personalization.stop: ${selection.log.commit.reason}`);
+        }
+        const bindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+        if (!bindingDigest) throw new Error("fixture memory stop had no Operation Plan binding");
+        const observation = await executors[index]!.inspectCommandTargetVersion(command, process.env, bindingDigest);
+        if (!observation) throw new Error("Broker did not observe the retained memory entry");
+        const hdsBinding = hds.createExecutionAuthorityBinding(command, observation);
+        return approved(authority, command, observation, hdsBinding);
+      }));
+
+      const pending = reviewed.map((command, index) => executors[index]!.execute(command));
+      executions.push(...pending);
+      await firstStarted;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(started).toBe(1);
+      releaseFirst();
+      const feedback = await Promise.all(pending);
+      expect(feedback.map((entry) => entry.status).sort()).toEqual(["failed", "success"]);
+      expect(maxActive).toBe(1);
+      expect(targetAvailable).toBe(false);
+      expect(result.physical_deletion).toBe(false);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(executions);
+      hdsInstances.forEach((hds) => hds.close());
     }
   });
 

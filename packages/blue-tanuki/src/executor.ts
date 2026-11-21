@@ -364,6 +364,16 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
       ["file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(args.operation))) {
     return `google-drive:${createHash("sha256").update(args.file_id, "utf8").digest("hex")}`;
   }
+  if (tool_name === "memory.personalization.stop" &&
+      observation?.schema_version === "blue-tanuki.memory-personalization-target-version.v1") {
+    const memoryObservation = MemoryPersonalizationTargetVersionObservationSchema.parse(observation);
+    return `memory-personalization:${memoryObservation.target_identity_digest}`;
+  }
+  if (tool_name === "settings.write" &&
+      observation?.schema_version === "blue-tanuki.settings-write-target-version.v1") {
+    const settingsObservation = SettingsWriteTargetVersionObservationSchema.parse(observation);
+    return `gateway-settings:${settingsObservation.target_identity_digest}`;
+  }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
       ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(args.operation))) {
     return `gmail:${observation.target_identity_digest}`;
