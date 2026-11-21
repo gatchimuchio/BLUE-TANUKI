@@ -27,7 +27,6 @@ import {
   createCliInboundRequest,
   createCliGoalCompletionStatusRequest,
   cliGoalCompletionRulesRequested,
-  cliRequestNeedsOperationPlanState,
   CLI_GOAL_COMPLETION_RULES_STDIN_FLAG,
   CLI_ORGANIZE_STDIN_FLAG,
   CLI_TASK_STDIN_FLAG,
@@ -69,7 +68,7 @@ import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
-import { operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { resolveSecretMaterial, secretRefKey } from "./secret_store.js";
@@ -147,9 +146,9 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     }
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
-    if (cliRequestNeedsOperationPlanState(cleanArgs) || executionStore.pendingResults(1).length > 0) {
-      operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
-    }
+    // Every one-shot Gateway invocation shares the same durable J/M recovery
+    // boundary as serve. Open it before accepting ordinary CLI work too.
+    operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
     await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure,
@@ -170,7 +169,7 @@ async function runCliWithExecutionStore(
   computeBudget: GatewayComputeBudgetStore,
   resourceBackpressure: GatewayResourceBackpressure,
   mcpRuntimeObservations: McpRuntimeObservationStore,
-  operationPlanState: OperationPlanStateStore | undefined,
+  operationPlanState: OperationPlanStateStore,
   goalCompletionStatus: ReturnType<typeof parseCliGoalCompletionStatusArguments>,
 ): Promise<void> {
   const cleanArgs = stripEnvFileArgs([...argv]);
@@ -276,8 +275,10 @@ async function runCliWithExecutionStore(
     memory: memoryStore,
     llm_route: buildLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
-    ...(operationPlanState ? { operation_plan_state: operationPlanState,
-      operation_plan_memory: operationResultMemoryStorage(process.env) } : {}),
+    operation_plan_state: operationPlanState,
+    operation_plan_memory: operationResultMemoryStorage(process.env),
+    goal_purpose_memory: goalPurposeMemoryStorage(process.env),
+    meaning_update_memory: meaningUpdateMemoryStorage(process.env),
   });
   let emergencyStopStateStore: EmergencyStopStateStore | undefined;
   try {
@@ -826,6 +827,7 @@ async function runCliWithExecutionStore(
   } finally {
     emergencyStopStateStore?.close();
     hds.closeOperationPlanMemory();
+    hds.close();
   }
 }
 

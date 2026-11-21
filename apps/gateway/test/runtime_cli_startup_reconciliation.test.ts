@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +53,15 @@ describe("CLI startup execution recovery", () => {
     expect(startup.reconcile).toHaveBeenCalledTimes(1);
     expect(startup.loadPluginRuntime).toHaveBeenCalledTimes(1);
     expect(pluginRuntime.registerTools).not.toHaveBeenCalled();
+    const privateRoot = join(root, "state", "private-state");
+    for (const [directory, files] of [
+      ["operation-plans", ["j-state.sqlite"]],
+      ["result-memory", ["j-control.sqlite", "m-state.sqlite"]],
+      ["goal-purpose-memory", ["j-control.sqlite", "m-state.sqlite"]],
+      ["meaning-update-memory", ["j-control.sqlite", "m-state.sqlite"]],
+    ] as const) {
+      for (const file of files) expect(existsSync(join(privateRoot, directory, file))).toBe(true);
+    }
   });
 
   it("blocks one-shot CLI processing when the durable emergency stop is active", async () => {
