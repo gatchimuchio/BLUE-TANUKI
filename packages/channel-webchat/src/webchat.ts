@@ -29,6 +29,8 @@ import {
   RuntimeIntentStatusQuerySchema,
   RuntimeScheduleCreateProposalSchema,
   RuntimeScheduleCreateReviewSchema,
+  RuntimeScheduleUpdateProposalSchema,
+  RuntimeScheduleUpdateReviewSchema,
   RuntimeScheduleDeleteProposalSchema,
   RuntimeScheduleDeleteReviewSchema,
   RuntimeSessionInputSchema,
@@ -1541,6 +1543,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     if (url.pathname === "/owner/runtime-schedule-create-proposal") {
       await this.handleOwnerRuntimeScheduleCreateProposal(req, res, url);
+      return;
+    }
+    if (url.pathname === "/owner/runtime-schedule-update-proposal") {
+      await this.handleOwnerRuntimeScheduleUpdateProposal(req, res, url);
       return;
     }
     if (url.pathname === "/owner/google-read-credential-proposal" || url.pathname === "/owner/github-write-credential-proposal" ||
@@ -3427,12 +3433,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const dailyBriefReview = this.opts.approval.requiresLocalDailyBriefRead?.(command_id) === true;
       const scheduleCreateReview = this.opts.approval.requiresLocalRuntimeScheduleCreate?.(command_id) === true;
       const scheduleDeleteReview = this.opts.approval.requiresLocalRuntimeScheduleDelete?.(command_id) === true;
-      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview) && (url.search || !isLocalControlCenterBrowserRequest(req))) {
+      const scheduleUpdateReview = this.opts.approval.requiresLocalRuntimeScheduleUpdate?.(command_id) === true;
+      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview) &&
+          (url.search || !isLocalControlCenterBrowserRequest(req))) {
         res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
         return;
       }
-      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview) && !hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
+      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview) &&
+          !hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
         res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -3457,7 +3466,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       }
       if (scheduleCreateReview !== (content.kind === "schedule_create") ||
-          scheduleDeleteReview !== (content.kind === "schedule_delete")) {
+          scheduleDeleteReview !== (content.kind === "schedule_delete") ||
+          scheduleUpdateReview !== (content.kind === "schedule_update")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
@@ -3473,6 +3483,15 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (content.kind === "schedule_delete") {
         const parsed = RuntimeScheduleDeleteReviewSchema.safeParse(content);
+        if (!parsed.success || parsed.data.command_id !== command_id) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+          return;
+        }
+        content = parsed.data;
+      }
+      if (content.kind === "schedule_update") {
+        const parsed = RuntimeScheduleUpdateReviewSchema.safeParse(content);
         if (!parsed.success || parsed.data.command_id !== command_id) {
           res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
           res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
@@ -3775,7 +3794,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     const scheduleDeleteApproval = this.opts.approval?.requiresLocalRuntimeScheduleDelete?.(approval_id) === true;
     const scheduleCreateApproval = this.opts.approval?.requiresLocalRuntimeScheduleCreate?.(approval_id) === true;
-    if (scheduleDeleteApproval || scheduleCreateApproval) {
+    const scheduleUpdateApproval = this.opts.approval?.requiresLocalRuntimeScheduleUpdate?.(approval_id) === true;
+    if (scheduleDeleteApproval || scheduleCreateApproval || scheduleUpdateApproval) {
       res.setHeader("cache-control", "no-store");
       if (url.search || !isLocalControlCenterBrowserRequest(req)) {
         res.writeHead(403, { "content-type": "application/json" });
@@ -3794,7 +3814,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (!this.resumeApprovalTokenStore || !this.opts.approval?.validateContentReview || !this.opts.approval.reviewContent) {
         res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: scheduleCreateApproval ? "schedule_create_approval_unavailable" : "schedule_delete_approval_unavailable" }));
+        res.end(JSON.stringify({ error: scheduleCreateApproval ? "schedule_create_approval_unavailable" :
+          scheduleDeleteApproval ? "schedule_delete_approval_unavailable" : "schedule_update_approval_unavailable" }));
         return;
       }
     }
@@ -3818,9 +3839,11 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
 
     let body: Record<string, unknown> | null;
     try {
-      body = nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval ? await readJson(req, 1_024, true) : await readJson(req);
+      body = nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval || scheduleUpdateApproval
+        ? await readJson(req, 1_024, true) : await readJson(req);
     } catch (error) {
-      if ((!nativeCredentialMatch && !dailyBriefMatch && !scheduleDeleteApproval && !scheduleCreateApproval) || !(error instanceof Error) || error.message !== "body_too_large") throw error;
+      if ((!nativeCredentialMatch && !dailyBriefMatch && !scheduleDeleteApproval && !scheduleCreateApproval &&
+          !scheduleUpdateApproval) || !(error instanceof Error) || error.message !== "body_too_large") throw error;
       res.writeHead(413, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "request_body_too_large" }));
       return;
@@ -3839,13 +3862,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       res.end(JSON.stringify({ error: "verdict (approve|reject|block) required" }));
       return;
     }
-    if ((dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval) && (!body ||
+    if ((dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval || scheduleUpdateApproval) && (!body ||
         !hasExactKeys(body, verdict === "approve" ? ["verdict", "approval_token", "content_review_digest"] : ["verdict", "approval_token"]) ||
         !/^[a-zA-Z0-9_-]{1,128}$/.test(approval_id) || typeof body.approval_token !== "string" || !body.approval_token ||
         (verdict === "approve" && (typeof body.content_review_digest !== "string" || !/^[a-f0-9]{64}$/.test(body.content_review_digest))))) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: scheduleCreateApproval ? "invalid_schedule_create_approval" :
-        scheduleDeleteApproval ? "invalid_schedule_delete_approval" : "invalid_daily_brief_approval" }));
+        scheduleDeleteApproval ? "invalid_schedule_delete_approval" : scheduleUpdateApproval ? "invalid_schedule_update_approval" :
+          "invalid_daily_brief_approval" }));
       return;
     }
     if (!this.rateLimitOr429(this.buckets.resume, RESUME_GLOBAL_KEY, res))
@@ -3887,7 +3911,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
       }
-      if (review !== "valid" && (nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval || review !== "not_required")) {
+      if (review !== "valid" && (nativeCredentialMatch || dailyBriefMatch || scheduleDeleteApproval || scheduleCreateApproval ||
+          scheduleUpdateApproval || review !== "not_required")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: `approval_content_review_${review}` }));
         return;
@@ -4988,6 +5013,55 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     }
     await this.respondToOwnerPlanProposal(res, true, () => propose({ ...parsed.data, actor: OWNER_TOKEN_ACTOR }),
       "schedule_create_proposal_unavailable");
+  }
+
+  private async handleOwnerRuntimeScheduleUpdateProposal(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    res.setHeader("content-type", "application/json");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    if (req.method !== "POST") {
+      res.writeHead(405, { allow: "POST" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    if (url.search || !isLocalControlCenterBrowserRequest(req)) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
+      return;
+    }
+    if (!this.checkAuth(req, "owner")) {
+      res.writeHead(401);
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const propose = this.opts.onOwnerRuntimeScheduleUpdateProposal;
+    if (!propose) {
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "schedule_update_proposal_not_configured" }));
+      return;
+    }
+    if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      res.writeHead(415);
+      res.end(JSON.stringify({ error: "application_json_required" }));
+      return;
+    }
+    if (!this.rateLimitOr429(this.buckets.inbound, "owner-task-token-holder", res)) return;
+    let body: Record<string, unknown> | null;
+    try { body = await readJson(req, 150_000, true); }
+    catch (error) {
+      if (!(error instanceof Error) || error.message !== "body_too_large") throw error;
+      res.writeHead(413);
+      res.end(JSON.stringify({ error: "request_body_too_large" }));
+      return;
+    }
+    const parsed = RuntimeScheduleUpdateProposalSchema.safeParse(body);
+    if (!parsed.success) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "invalid_schedule_update_proposal" }));
+      return;
+    }
+    await this.respondToOwnerPlanProposal(res, true, () => propose({ ...parsed.data, actor: OWNER_TOKEN_ACTOR }),
+      "schedule_update_proposal_unavailable");
   }
 
   private async handleOwnerRuntimeScheduleDeleteProposal(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {

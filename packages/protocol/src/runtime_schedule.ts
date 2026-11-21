@@ -83,6 +83,61 @@ export const RuntimeScheduleCreateReviewSchema = z.object({
     (review.time === undefined && review.time_zone === undefined)));
 export type RuntimeScheduleCreateReview = z.infer<typeof RuntimeScheduleCreateReviewSchema>;
 
+const RuntimeScheduleUpdatePlanArgumentsBaseSchema = z.object({
+  id: ScheduleIdSchema,
+  expected_revision_digest: DigestSchema,
+  channel: ScheduleTextSchema(128),
+  target: ScheduleTextSchema(1_024),
+  content: ScheduleTextSchema(32_768),
+  time: ScheduleTimeSchema.optional(),
+  time_zone: ScheduleTimeZoneSchema.optional(),
+  interval_ms: z.number().int().positive().max(2_147_483_647).safe().optional(),
+}).strict();
+
+export const RuntimeScheduleUpdatePlanArgumentsSchema = RuntimeScheduleUpdatePlanArgumentsBaseSchema.refine(value =>
+  (value.time === undefined) !== (value.interval_ms === undefined) &&
+  ((value.time !== undefined && value.time_zone !== undefined) ||
+    (value.time === undefined && value.time_zone === undefined)), {
+  message: "A schedule update requires one explicit trigger and a revision-bound full replacement.",
+});
+export type RuntimeScheduleUpdatePlanArguments = z.infer<typeof RuntimeScheduleUpdatePlanArgumentsSchema>;
+
+export const RuntimeScheduleUpdateProposalSchema = RuntimeScheduleUpdatePlanArgumentsBaseSchema.extend({
+  goal_ref: GoalRefSchema,
+  purpose_version: PurposeVersionSchema,
+}).strict().refine(value => (value.time === undefined) !== (value.interval_ms === undefined) &&
+  ((value.time !== undefined && value.time_zone !== undefined) ||
+    (value.time === undefined && value.time_zone === undefined)));
+export type RuntimeScheduleUpdateProposal = z.infer<typeof RuntimeScheduleUpdateProposalSchema>;
+
+export const RuntimeScheduleUpdateReviewSchema = z.object({
+  kind: z.literal("schedule_update"),
+  operation: z.literal("schedule.update"),
+  command_id: z.string().min(1).max(128),
+  command_digest: DigestSchema,
+  review_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema,
+  schedule_id: ScheduleIdSchema,
+  expected_revision_digest: DigestSchema,
+  channel: ScheduleTextSchema(128),
+  target: ScheduleTextSchema(1_024),
+  content: ScheduleTextSchema(32_768),
+  time: ScheduleTimeSchema.optional(),
+  time_zone: ScheduleTimeZoneSchema.optional(),
+  interval_ms: z.number().int().positive().max(2_147_483_647).safe().optional(),
+  payload_hash: DigestSchema,
+  goal_ref: GoalRefSchema,
+  purpose_version: PurposeVersionSchema,
+  purpose_digest: DigestSchema,
+  purpose_text: z.string().min(1).max(32_768),
+  no_store: z.literal(true),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().refine(review => (review.time === undefined) !== (review.interval_ms === undefined) &&
+  ((review.time !== undefined && review.time_zone !== undefined) ||
+    (review.time === undefined && review.time_zone === undefined)));
+export type RuntimeScheduleUpdateReview = z.infer<typeof RuntimeScheduleUpdateReviewSchema>;
+
 export const RuntimeScheduleUpdateArgumentsSchema = z.object({
   id: ScheduleIdSchema,
   expected_revision_digest: DigestSchema,

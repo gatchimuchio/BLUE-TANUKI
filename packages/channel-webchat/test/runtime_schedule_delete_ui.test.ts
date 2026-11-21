@@ -328,3 +328,137 @@ describe("Control Center runtime schedule creation", () => {
     expect(byId("approval-token").value).toBe("");
   });
 });
+
+describe("Control Center runtime schedule update", () => {
+  it("submits only a full replacement bound to the selected current revision", async () => {
+    expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
+    const html = renderControlCenterDocument();
+    expect(html).toContain('id="prepare-runtime-schedule-update"');
+    expect(html).toContain('id="runtime-schedule-update-review-owner-token" type="password"');
+    const { byId, context, calls, responses } = harness();
+    const ui = new Script([
+      scriptBetween("function renderOwnerTaskGoalOptions(", "async function loadOwnerTaskGoals("),
+      scriptBetween("function isRuntimeScheduleDeleteDigest(", "function currentRuntimeScheduleDeleteRow("),
+      scriptBetween("function currentRuntimeScheduleUpdateRow(", "function runtimeScheduleCreateProposalFromForm("),
+      scriptBetween("function runtimeScheduleUpdateProposalFromForm(", "function renderRuntimeScheduleCreateAvailability("),
+      scriptBetween("function renderRuntimeScheduleUpdateAvailability(", "function clearRuntimeScheduleCreateReceipt("),
+      scriptBetween("function clearRuntimeScheduleUpdateForm(", "async function submitRuntimeScheduleCreateRequest("),
+      scriptBetween("async function submitRuntimeScheduleUpdateRequest(", "async function submitRuntimeScheduleDeleteRequest("),
+      "({ renderRuntimeScheduleUpdateOptions, selectRuntimeScheduleUpdateRow, runtimeScheduleUpdateProposalFromForm, renderRuntimeScheduleUpdateAvailability, submitRuntimeScheduleUpdateRequest })",
+    ].join("\n")).runInNewContext(context) as {
+      renderRuntimeScheduleUpdateOptions: (rows: Record<string, unknown>[]) => void;
+      selectRuntimeScheduleUpdateRow: () => void;
+      runtimeScheduleUpdateProposalFromForm: () => Record<string, unknown> | null;
+      renderRuntimeScheduleUpdateAvailability: () => void;
+      submitRuntimeScheduleUpdateRequest: (goalsOnly: boolean) => Promise<void>;
+    };
+    const row = { id: "morning-note", origin: "runtime", status: "active", enabled: true,
+      channel: "webchat", target: "owner", interval_ms: 120_000, revision_digest: revision,
+      content: "must not be projected into the form" };
+    ui.renderRuntimeScheduleUpdateOptions([row, { ...row, id: "pending", pending_operation: "update" },
+      { ...row, id: "boot", origin: "boot" }, { ...row, id: "unbound", revision_digest: undefined }]);
+    expect(byId("runtime-schedule-update-id").children.map((option) => option.value)).toEqual(["", row.id]);
+    byId("runtime-schedule-update-id").value = row.id;
+    ui.selectRuntimeScheduleUpdateRow();
+    expect(byId("runtime-schedule-update-channel").value).toBe("webchat");
+    expect(byId("runtime-schedule-update-target").value).toBe("owner");
+    expect(byId("runtime-schedule-update-content").value).toBe("");
+    expect(byId("runtime-schedule-update-content").value).not.toContain("must not be projected");
+
+    byId("runtime-schedule-update-content").value = "更新後の本文";
+    byId("runtime-schedule-update-owner-token").value = "owner-secret";
+    const goal = byId("runtime-schedule-update-goal");
+    goal.children.push(Object.assign(new UiOption("目的", goalRef), { dataset: { purposeVersion: "3" } }));
+    goal.value = goalRef;
+    ui.renderRuntimeScheduleUpdateAvailability();
+    expect(ui.runtimeScheduleUpdateProposalFromForm()).toMatchObject({ id: row.id, expected_revision_digest: revision,
+      channel: "webchat", target: "owner", content: "更新後の本文", interval_ms: 120_000,
+      goal_ref: goalRef, purpose_version: 3 });
+
+    responses.set("/owner/task-goals", respond({ goals: [{ goal_ref: goalRef, purpose_version: 3, purpose_preview: "毎朝確認する" }] }));
+    await ui.submitRuntimeScheduleUpdateRequest(true);
+    expect(byId("runtime-schedule-update-owner-token").value).toBe("");
+    goal.value = goalRef;
+    byId("runtime-schedule-update-owner-token").value = "owner-secret";
+    const candidate = { accepted: true, status: "candidate_ready", request_id: "bounded-update",
+      plan_id_digest: "b".repeat(64), used_for_authority: false, may_execute: false };
+    responses.set("/owner/runtime-schedule-update-proposal", respond(candidate, 202));
+    await ui.submitRuntimeScheduleUpdateRequest(false);
+    expect(calls.at(-1)).toMatchObject({ path: "/owner/runtime-schedule-update-proposal", options: {
+      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error",
+      headers: { Authorization: "Bearer owner-secret", "content-type": "application/json" },
+      body: JSON.stringify({ id: row.id, expected_revision_digest: revision, channel: "webchat", target: "owner",
+        content: "更新後の本文", goal_ref: goalRef, purpose_version: 3, interval_ms: 120_000 }),
+    } });
+    expect(byId("runtime-schedule-update-owner-token").value).toBe("");
+    expect(byId("runtime-schedule-update-content").value).toBe("");
+    expect(byId("open-runtime-schedule-update-plan").hidden).toBe(false);
+    expect(byId("runtime-schedule-update-status").textContent).toContain("新しい本文・宛先・発火条件・委任目的");
+  });
+
+  it("requires a no-store digest-bound update review before the ordinary L3 verdict", async () => {
+    const { byId, context, calls, responses } = harness();
+    const content = new UiElement();
+    const approve = new UiElement();
+    const reviewButton = new UiElement();
+    const commandId = "update-sched";
+    const card = {
+      isConnected: true,
+      getAttribute: (attribute: string) => attribute === "data-command" ? commandId
+        : attribute === "data-runtime-schedule-update" ? "" : null,
+      querySelector: (selector: string) => selector === "[data-content-review-view]" ? content : approve,
+    };
+    const purpose = "毎朝の確認事項を owner に案内する。";
+    const payload = { channel: "webchat", target: "<owner>", content: "<safe-text>更新後</safe-text>",
+      time: "07:00", interval_ms: 60_000 };
+    const payloadHash = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+    const body = { kind: "schedule_update", operation: "schedule.update", command_digest: "a".repeat(64),
+      operation_plan_binding_digest: "b".repeat(64), schedule_id: "morning-note", expected_revision_digest: revision,
+      channel: payload.channel, target: payload.target, content: payload.content, interval_ms: payload.interval_ms,
+      payload_hash: payloadHash, goal_ref: goalRef, purpose_version: 3,
+      purpose_digest: createHash("sha256").update(purpose, "utf8").digest("hex"), purpose_text: purpose,
+      no_store: true, used_for_authority: false, may_execute: false };
+    const keys = Object.keys(body).sort((a, b) => a.localeCompare(b));
+    const reviewDigest = createHash("sha256").update(JSON.stringify(body, keys)).digest("hex");
+    const review = { ...body, command_id: commandId, review_digest: reviewDigest };
+    const contentPath = "/approval/update-sched/content";
+    const verdictPath = "/approval/update-sched";
+    const ui = new Script([
+      scriptBetween("function isRuntimeScheduleDeleteDigest(", "function currentRuntimeScheduleDeleteRow("),
+      scriptBetween("function clearRuntimeScheduleUpdateReviews(", "async function submitApproval("),
+      scriptBetween("async function submitApproval(", "async function requestTaskCancellation("),
+      scriptBetween("async function renderRuntimeScheduleUpdateReview(", '        if ((card.getAttribute("data-goal-purpose-adoption")'),
+      "}",
+    ].join("\n") + "\n({ reviewApprovalContent, submitApproval, clearRuntimeScheduleUpdateReviews })").runInNewContext({
+      ...context, document: { querySelectorAll: () => [card], createElement: () => new UiElement() }, loadApprovals: () => {},
+    }) as {
+      reviewApprovalContent: (commandId: string, button: UiElement) => Promise<void>;
+      submitApproval: (commandId: string, verdict: string, token: string) => Promise<void>;
+      clearRuntimeScheduleUpdateReviews: () => void;
+    };
+    byId("approval-token").value = "resume-secret";
+    const owner = byId("runtime-schedule-update-review-owner-token");
+    await expect(ui.reviewApprovalContent(commandId, reviewButton)).rejects.toThrow("owner token");
+    expect(calls).toHaveLength(0);
+    owner.value = "owner-secret";
+    responses.set(contentPath, respond(review, 200, false));
+    await expect(ui.reviewApprovalContent(commandId, reviewButton)).rejects.toThrow("予定更新");
+    expect(approve.disabled).toBe(true);
+    responses.set(contentPath, respond({ ...review, content: "改変" }));
+    await expect(ui.reviewApprovalContent(commandId, reviewButton)).rejects.toThrow("審査");
+    expect(approve.disabled).toBe(true);
+    responses.set(contentPath, respond(review));
+    await ui.reviewApprovalContent(commandId, reviewButton);
+    expect(content.children.map((node) => node.textContent)).toContain("更新前の版　" + revision);
+    expect(content.children.map((node) => node.textContent)).toContain(payload.content);
+    expect(approve.disabled).toBe(false);
+    responses.set(verdictPath, respond({ ok: true, result: { approval: "approve", executed: true } }));
+    await ui.submitApproval(commandId, "approve", "one-use");
+    expect(calls.at(-1)).toMatchObject({ path: verdictPath, options: { mode: "same-origin", cache: "no-store",
+      headers: { Authorization: "Bearer resume-secret", "x-blue-tanuki-owner-token": "owner-secret" },
+      body: JSON.stringify({ verdict: "approve", approval_token: "one-use", content_review_digest: reviewDigest }) } });
+    expect(owner.value).toBe("");
+    expect(approve.disabled).toBe(true);
+    expect(Object.keys(context.state.approvalContentDigests)).toHaveLength(0);
+  });
+});

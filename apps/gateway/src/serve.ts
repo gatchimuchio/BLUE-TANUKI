@@ -135,12 +135,17 @@ import {
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   RuntimeScheduleCreateArgumentsSchema,
   RuntimeScheduleCreateReviewSchema,
+  RuntimeScheduleUpdatePlanArgumentsSchema,
+  RuntimeScheduleUpdateProposalSchema,
+  RuntimeScheduleUpdateReviewSchema,
   runtimeSchedulePayloadHash,
   RuntimeScheduleDeleteArgumentsSchema,
   RuntimeScheduleDeleteReviewSchema,
   RuntimeScheduleUpdateArgumentsSchema,
   type RuntimeScheduleCreateProposal,
   type RuntimeScheduleCreateReview,
+  type RuntimeScheduleUpdateProposal,
+  type RuntimeScheduleUpdateReview,
   type RuntimeScheduleDeleteProposal,
   type RuntimeScheduleDeleteReview,
   SettingsWriteArgumentsSchema,
@@ -805,6 +810,12 @@ function runtimeScheduleCreateArguments(command: ExecuteCommand | undefined) {
   return parsed.success ? parsed.data : undefined;
 }
 
+function runtimeScheduleOwnerUpdateArguments(command: ExecuteCommand | undefined) {
+  if (command?.type !== "tool_call" || command.payload.tool_name !== "schedule.update") return undefined;
+  const parsed = RuntimeScheduleUpdatePlanArgumentsSchema.safeParse(command.payload.arguments);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function isRuntimeScheduleCreateCommand(command: ExecuteCommand | undefined): boolean {
   return command?.type === "tool_call" && command.payload.tool_name === "schedule.create";
 }
@@ -813,6 +824,10 @@ function runtimeScheduleUpdateArguments(command: ExecuteCommand | undefined) {
   if (command?.type !== "tool_call" || command.payload.tool_name !== "schedule.update") return undefined;
   const parsed = RuntimeScheduleUpdateArgumentsSchema.safeParse(command.payload.arguments);
   return parsed.success ? parsed.data : undefined;
+}
+
+function isRuntimeScheduleUpdateCommand(command: ExecuteCommand | undefined): boolean {
+  return command?.type === "tool_call" && command.payload.tool_name === "schedule.update";
 }
 
 function isGoalPurposeAdoptionCommand(command: ExecuteCommand): boolean {
@@ -4164,7 +4179,8 @@ async function serveWithOwnerLease(
       (command.payload.tool_name === "github.write" &&
         ["issue.create", "issue.update", "pr.update", "issue.close", "issue.reopen", "issue.label", "issue.comment.create", "pr.comment.create", "pr.create", "pr.merge", "pr.review.submit", "code.push", "release.draft.create", "release.publish"].includes(String(command.payload.arguments.operation)))
     );
-    return isRuntimeScheduleCreateCommand(command) || Boolean(runtimeScheduleDeleteArguments(command)) ||
+    return isRuntimeScheduleCreateCommand(command) || isRuntimeScheduleUpdateCommand(command) ||
+      Boolean(runtimeScheduleDeleteArguments(command)) ||
       isGoalPurposeAdoptionCommand(command) || isOfflineGoalPurposeRepairCommand(command) ||
       isBrowserFormInputReviewCommand(command) || isBrowserFormGetReviewCommand(command) ||
       isBrowserLinkNavigationReviewCommand(command) || isGmailWriteContentReviewCommand(command) ||
@@ -5446,6 +5462,7 @@ async function serveWithOwnerLease(
         : {}),
       onOwnerLlmSettingsProposal: submitOwnerLlmSettingsProposal,
       onOwnerRuntimeScheduleCreateProposal: submitOwnerRuntimeScheduleCreateProposal,
+      onOwnerRuntimeScheduleUpdateProposal: submitOwnerRuntimeScheduleUpdateProposal,
       onOwnerRuntimeScheduleDeleteProposal: submitOwnerRuntimeScheduleDeleteProposal,
       onOwnerGoogleReadCredentialProposal: submitOwnerGoogleReadCredentialProposal,
       onOwnerGitHubWriteCredentialProposal: submitOwnerGitHubWriteCredentialProposal,
@@ -5568,10 +5585,12 @@ async function serveWithOwnerLease(
         requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption ||
           pendingApprovals.get(id)?.goal_purpose_repair || pendingApprovals.get(id)?.daily_brief_read ||
           isRuntimeScheduleCreateCommand(pendingApprovals.get(id)?.command) ||
+          isRuntimeScheduleUpdateCommand(pendingApprovals.get(id)?.command) ||
           runtimeScheduleDeleteArguments(pendingApprovals.get(id)?.command)),
         requiresLocalDailyBriefRead: (id: string) => Boolean(pendingApprovals.get(id)?.daily_brief_read),
         requiresLocalRuntimeScheduleCreate: (id: string) => isRuntimeScheduleCreateCommand(pendingApprovals.get(id)?.command),
         requiresLocalRuntimeScheduleDelete: (id: string) => Boolean(runtimeScheduleDeleteArguments(pendingApprovals.get(id)?.command)),
+        requiresLocalRuntimeScheduleUpdate: (id: string) => isRuntimeScheduleUpdateCommand(pendingApprovals.get(id)?.command),
         requiresNativeCredentialApproval: (id: string) => requiresNativeCredentialApproval(pendingApprovals.get(id)?.command),
         activeExecutions: async () => activeTaskExecutions.snapshot(),
         cancelExecution: async (command_id: string, ctx: WebChatApprovalControlContext) =>
@@ -6132,6 +6151,35 @@ async function serveWithOwnerLease(
           "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
           "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" } });
       const plan = hds.prepareRuntimeScheduleCreatePlan(origin, args,
+        { goal_ref: goal.goal_ref, purpose_version: goal.current_version, purpose_digest: goal.current_purpose_digest });
+      return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
+        plan_id_digest: plan.plan_id_digest, ...flags };
+    } catch {
+      return unavailable;
+    }
+  }
+
+  async function submitOwnerRuntimeScheduleUpdateProposal(input: RuntimeScheduleUpdateProposal & { actor: string }) {
+    const flags = { used_for_authority: false as const, may_execute: false as const };
+    const unavailable = { accepted: false as const, status: "schedule_update_proposal_unavailable" as const, ...flags };
+    if (input.actor !== OWNER_TASK_APPROVAL_ACTOR || process.env.BLUE_TANUKI_SAFE_MODE === "1" ||
+        emergencyStop.active || gatewayShuttingDown) return unavailable;
+    try {
+      ownerLease.assertActive();
+      const target = runtimeSchedules.inspectUpdateTarget(input.id);
+      if (!target || target.revision_digest !== input.expected_revision_digest) return unavailable;
+      const goal = hds.getGoalGovernanceProjection()?.goals.find(candidate => candidate.goal_kind === "delegated" &&
+        candidate.goal_ref === input.goal_ref && candidate.current_version === input.purpose_version &&
+        candidate.parent_alignment_status !== "requires_review");
+      if (!goal) return unavailable;
+      const { goal_ref, purpose_version, actor, ...rawArguments } = input;
+      const args = RuntimeScheduleUpdatePlanArgumentsSchema.parse(rawArguments);
+      const origin = createGatewayInternalInboundRequest({ id: randomUUID(), channel: "webchat", user: actor,
+        content: `選択した委任目的の範囲で予定 ${args.id} の内容と発火条件を更新する`, timestamp: Date.now(),
+        metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer", "blue_tanuki.operation_core.source_interface": "gui" } });
+      const plan = hds.prepareRuntimeScheduleUpdatePlan(origin, args,
         { goal_ref: goal.goal_ref, purpose_version: goal.current_version, purpose_digest: goal.current_purpose_digest });
       return { accepted: true as const, status: "candidate_ready" as const, request_id: origin.id,
         plan_id_digest: plan.plan_id_digest, ...flags };
@@ -6848,6 +6896,29 @@ async function serveWithOwnerLease(
     return parsed.success ? parsed.data : null;
   }
 
+  function runtimeScheduleUpdateContentReview(pending: PendingApproval): RuntimeScheduleUpdateReview | null {
+    const args = runtimeScheduleOwnerUpdateArguments(pending.command);
+    if (!args || pending.origin.user !== OWNER_TASK_APPROVAL_ACTOR ||
+        executorCommandDigest(pending.command) !== pending.command_digest ||
+        !hds.operationPlanCommandIsCurrent(pending.command)) return null;
+    const target = runtimeSchedules.inspectUpdateTarget(args.id);
+    const goal = hds.getRuntimeScheduleUpdateGoalBinding(pending.command);
+    const purpose = goal ? hds.readGoalPurposeContent(goal.goal_ref, goal.purpose_version) : null;
+    const bindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+    if (!target || target.revision_digest !== args.expected_revision_digest || !goal || !purpose ||
+        purpose.used_for_authority !== false || purpose.purpose_digest !== goal.purpose_digest || !bindingDigest) return null;
+    const review = { kind: "schedule_update", operation: "schedule.update", command_digest: pending.command_digest,
+      operation_plan_binding_digest: bindingDigest, schedule_id: args.id, expected_revision_digest: args.expected_revision_digest,
+      channel: args.channel, target: args.target, content: args.content,
+      ...(args.time === undefined ? { interval_ms: args.interval_ms } : { time: args.time, time_zone: args.time_zone }),
+      payload_hash: runtimeSchedulePayloadHash(args), goal_ref: goal.goal_ref, purpose_version: goal.purpose_version,
+      purpose_digest: purpose.purpose_digest, purpose_text: purpose.purpose_text,
+      no_store: true, used_for_authority: false, may_execute: false } as const;
+    const parsed = RuntimeScheduleUpdateReviewSchema.safeParse({ ...review, command_id: pending.command.id,
+      review_digest: operationPlanDigest(review) });
+    return parsed.success ? parsed.data : null;
+  }
+
   function dailyBriefReadContentReview(pending: PendingApproval): WebChatDailyBriefReadContentReview | null {
     const binding = pending.daily_brief_read;
     if (!binding || !dailyBriefReadIsCurrent(binding) || pending.command.type !== "tool_call" ||
@@ -6866,6 +6937,16 @@ async function serveWithOwnerLease(
 
   async function pendingApprovalContentReview(command_id: string): Promise<WebChatApprovalContentReview | null> {
     const pending = pendingApprovals.get(command_id);
+    if (pending && isRuntimeScheduleUpdateCommand(pending.command)) {
+      if (!runtimeScheduleOwnerUpdateArguments(pending.command)) return null;
+      const review = runtimeScheduleUpdateContentReview(pending);
+      if (!review || approvalRecoveryStore.state(command_id) !== "pending") return null;
+      if (pending.content_review_digest === review.review_digest) return review;
+      if (!recordApprovalHistory("runtime_schedule_update_content_reviewed", pending.command, pending.log,
+        pending.origin, OWNER_TASK_APPROVAL_ACTOR, pending.evaluation, { content_review_digest: review.review_digest })) return null;
+      pendingApprovals.set(command_id, { ...pending, content_review_digest: review.review_digest });
+      return review;
+    }
     if (pending && runtimeScheduleCreateArguments(pending.command)) {
       const review = runtimeScheduleCreateContentReview(pending);
       if (!review || approvalRecoveryStore.state(command_id) !== "pending") return null;
@@ -7443,6 +7524,12 @@ async function serveWithOwnerLease(
     const pending = pendingApprovals.get(command_id);
     if (!pending) return "stale";
     if (signal?.aborted) return "cancelled";
+    if (isRuntimeScheduleUpdateCommand(pending.command)) {
+      if (!runtimeScheduleOwnerUpdateArguments(pending.command)) return "unavailable";
+      if (!content_review_digest || !pending.content_review_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      return runtimeScheduleUpdateContentReview(pending)?.review_digest === content_review_digest ? "valid" : "stale";
+    }
     if (runtimeScheduleCreateArguments(pending.command)) {
       if (!content_review_digest || !pending.content_review_digest) return "required";
       if (content_review_digest !== pending.content_review_digest) return "stale";

@@ -45,7 +45,7 @@ import {
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
   SettingsWriteArgumentsSchema,
-  RuntimeScheduleCreateArgumentsSchema, runtimeSchedulePayloadHash,
+  RuntimeScheduleCreateArgumentsSchema, RuntimeScheduleUpdatePlanArgumentsSchema, runtimeSchedulePayloadHash,
   RuntimeScheduleDeleteArgumentsSchema,
   runtimeScheduleDeleteResult,
   settingsWriteRequiresNativeCredentialEntry,
@@ -4227,6 +4227,9 @@ ${planControl.question}`,
   getRuntimeScheduleCreateGoalBinding(command: ExecuteCommand): OperationPlanGoalPurposeBinding | undefined {
     return this.operationPlans.runtimeScheduleCreateGoalBinding(command);
   }
+  getRuntimeScheduleUpdateGoalBinding(command: ExecuteCommand): OperationPlanGoalPurposeBinding | undefined {
+    return this.operationPlans.runtimeScheduleUpdateGoalBinding(command);
+  }
   /** Require an exact active delegated purpose for a schedule that can fire later. */
   getRuntimeScheduleGoalVersionBinding(command: ExecuteCommand): ExecutionGoalVersionBinding | undefined {
     if (command.type !== "tool_call" ||
@@ -5324,6 +5327,91 @@ ${planControl.question}`,
     });
     const plan_id_digest = this.operationPlans.retainCandidate(plan, origin, undefined, undefined, undefined,
       undefined, "runtime_schedule_create");
+    return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
+      used_for_authority: false, may_execute: false };
+  }
+
+  /** 所有者が選んだ現行版の完全置換を計画にし、実行には通常の計画審査とL3承認を要求する。 */
+  prepareRuntimeScheduleUpdatePlan(rawOrigin: unknown, rawArguments: unknown, rawGoalPurposeBinding: unknown): {
+    plan_id_digest: string;
+    revision_digest: string;
+    step_id_digest: string;
+    used_for_authority: false;
+    may_execute: false;
+  } {
+    const boundary = parseInboundRequestAtBoundary(rawOrigin);
+    if (!boundary.ok || !isGatewayInternalInboundRequest(boundary.request)) {
+      throw new Error("runtime_schedule_update_owner_origin_required");
+    }
+    const caller = boundary.request;
+    const metadata = caller.metadata;
+    if (caller.channel !== "webchat" || caller.user !== "webchat-owner-token-holder" ||
+        metadata?.["blue_tanuki.authority_context"] !== "gateway_internal_v1" ||
+        metadata["blue_tanuki.actor_kind"] !== "owner" || metadata["blue_tanuki.trust_level"] !== "owner" ||
+        metadata["blue_tanuki.process_kind"] !== "chat" || metadata["blue_tanuki.operator_surface"] !== "developer" ||
+        metadata["blue_tanuki.operation_core.source_interface"] !== "gui") {
+      throw new Error("runtime_schedule_update_owner_origin_required");
+    }
+    if (!this.audit.isPersistent() || !this.audit.verify() || !this.getSelfHealth().command_execution_allowed) {
+      throw new Error("runtime_schedule_update_authority_unavailable");
+    }
+    const args = RuntimeScheduleUpdatePlanArgumentsSchema.parse(rawArguments);
+    const binding = OperationPlanGoalPurposeBindingSchema.parse(rawGoalPurposeBinding);
+    const governance = this.getGoalGovernanceProjection();
+    const goal = governance?.goals.find(candidate => candidate.goal_ref === binding.goal_ref);
+    if (governance?.used_for_authority !== false || goal?.goal_kind !== "delegated" ||
+        goal.parent_alignment_status === "requires_review" || goal.current_version !== binding.purpose_version ||
+        goal.current_purpose_digest !== binding.purpose_digest) {
+      throw new Error("plan_goal_purpose_stale");
+    }
+    const purpose = this.readGoalPurposeContent(binding.goal_ref, binding.purpose_version);
+    if (!purpose || purpose.used_for_authority !== false || purpose.purpose_digest !== binding.purpose_digest) {
+      throw new Error("plan_goal_purpose_relation_unavailable");
+    }
+    const target = { kind: "runtime", id: "gateway.runtime-schedules", scope: args.id } as const;
+    const stepId = "update-runtime-schedule";
+    const plan: OperationPlan = {
+      version: "operation-core.v1",
+      plan_id: `owner-runtime-schedule-update-${operationPlanDigest(caller.id)}`,
+      request_id: caller.id,
+      state: "planned",
+      steps: [{
+        step_id: stepId,
+        operation: "schedule.update",
+        target,
+        state: "planned",
+        effects: ["schedule_change", "write"],
+        permission: { risk: "high", approval_level: "L3_final_review", final_review_required: true,
+          hds_brain_authority_required: true, approval_gate_required: true },
+        parameters: args,
+        adapter: "internal_runtime",
+        adapter_is_authority: false,
+        command_generated_by_adapter_only: false,
+        preparation: {
+          depends_on: [], bindings: [], preconditions: [],
+          validation: [{ check_id: "runtime-schedule-updated", method: "runtime_schedule_update_result_matches", target,
+            expected: { schema_version: "blue-tanuki.runtime-schedule-update-result-validation.v1",
+              schedule_id: args.id, payload_hash: runtimeSchedulePayloadHash(args) } }],
+          compensation: { available: false, reason: "予定更新の取り消しには現在版を使う別の承認が必要" },
+        },
+      }],
+      rollback: { available: false },
+      raw_command_policy: { raw_command_is_core_operation: false, command_generation_location: "not_applicable" },
+      planner_output_used_for_authority: false,
+      hds_brain_authority_required: true,
+    };
+    const origin = createGatewayInternalInboundRequest({
+      id: caller.id,
+      channel: caller.channel,
+      user: caller.user,
+      content: `選択した委任目的の範囲で予定 ${args.id} の内容と発火条件を更新する`,
+      timestamp: caller.timestamp,
+      metadata: { "blue_tanuki.authority_context": "gateway_internal_v1", "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner", "blue_tanuki.process_kind": "chat", "blue_tanuki.operator_surface": "developer",
+        "blue_tanuki.operation_core.source_interface": "gui", "blue_tanuki.operation_core.goal_purpose_binding": binding },
+    });
+    const plan_id_digest = this.operationPlans.retainCandidate(plan, origin, undefined, undefined, undefined,
+      undefined, "runtime_schedule_update");
     return { plan_id_digest, revision_digest: operationPlanDigest(plan), step_id_digest: operationPlanDigest(stepId),
       used_for_authority: false, may_execute: false };
   }

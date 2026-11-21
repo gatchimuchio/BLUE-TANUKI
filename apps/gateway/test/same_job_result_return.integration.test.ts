@@ -2056,6 +2056,117 @@ describe("served owner runtime schedule deletion", () => {
         log.event === "schedule.lifecycle.activated" ? [log] : []);
       expect(activations).toContainEqual(expect.objectContaining({ schedule_id: createdScheduleId,
         command_id: createPending.command_id, operation: "create" }));
+
+      const updateRoute = "/owner/runtime-schedule-update-proposal";
+      const createdRow = createdSnapshot.runtime_schedules.find(row => row.id === createdScheduleId);
+      expect(createdRow).toMatchObject({ status: "active", enabled: true,
+        revision_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      const updatedContent = "合成試験専用の更新後本文。外部送信はしない。";
+      const updateProposal = { id: createdScheduleId, expected_revision_digest: createdRow!.revision_digest,
+        channel: "webchat", target, content: updatedContent, interval_ms: 1_800_000_000, ...goalSelection };
+      for (const bearer of ["", WEBCHAT_TOKEN, resumeToken, maintenanceToken, runtimeToken]) {
+        expect((await request(updateRoute, bearer, updateProposal, { origin })).status).toBe(401);
+      }
+      expect((await request(updateRoute, OWNER_TOKEN, updateProposal)).status).toBe(403);
+      expect((await request(updateRoute, OWNER_TOKEN, updateProposal, { origin: "https://other.invalid" })).status).toBe(403);
+      expect((await request(updateRoute + "?ignored=1", OWNER_TOKEN, updateProposal, { origin })).status).toBe(403);
+      expect((await request(updateRoute, OWNER_TOKEN, { ...updateProposal, actor: "forged" }, { origin })).status).toBe(400);
+      for (const { input: invalid, status } of [
+        { input: { ...updateProposal, expected_revision_digest: "0".repeat(64) }, status: 409 },
+        { input: { ...updateProposal, purpose_version: 2 }, status: 409 },
+        { input: { ...updateProposal, content: undefined }, status: 400 },
+        { input: { ...updateProposal, time: "08:30", time_zone: "Asia/Tokyo" }, status: 400 },
+      ]) {
+        expect((await request(updateRoute, OWNER_TOKEN, invalid, { origin })).status).toBe(status);
+      }
+      expect(await getQueue()).toEqual([]);
+      expect(readFileSync(scheduleFile).includes(Buffer.from(updatedContent))).toBe(false);
+
+      const updateResponse = await request(updateRoute, OWNER_TOKEN, updateProposal, { origin });
+      expect(updateResponse.status, await updateResponse.clone().text()).toBe(202);
+      expect(updateResponse.headers.get("cache-control")).toBe("no-store");
+      const updateReceipt = await updateResponse.json() as { plan_id_digest: string; request_id: string };
+      const updatePlan = (await schedules()).operation_plan_status?.plans?.find(row => row.plan_id === updateReceipt.plan_id_digest);
+      expect(updatePlan).toMatchObject({ goal_purpose_binding: goalSelection,
+        steps: [{ operation: "schedule.update", step_id: expect.any(String), status: "not_selected" }] });
+      expect(await getQueue()).toEqual([]);
+
+      const updateRelation = await request("/owner/goal-purpose-relation-review", OWNER_TOKEN, {
+        plan_id_digest: updateReceipt.plan_id_digest, revision_digest: updatePlan!.revision_digest, outcome: "supports",
+      }, { origin });
+      expect(updateRelation.status, await updateRelation.clone().text()).toBe(202);
+      const updateRelationReceipt = await updateRelation.json() as { command_id: string };
+      expect(await finishOrdinaryReview(updateRelationReceipt.command_id, "goal_purpose_relation")).toMatchObject({ ok: true, result: {
+        approval: "approve", executed: false, status: "goal_purpose_relation_review_committed",
+      } });
+      const [updateStep] = updatePlan!.steps as { step_id: string }[];
+      expect((await invokeOwnerControl(port, "synthetic-schedule-owner-review", OWNER_TOKEN, "review", {
+        plan_id: updateReceipt.plan_id_digest, revision_digest: updatePlan!.revision_digest, step_id: updateStep!.step_id,
+        goal_purpose_binding: updatePlan!.goal_purpose_binding,
+      })).status).toBe(202);
+      const updatePending = await waitFor(async () => (await getQueue()).find(item => item.operation === "schedule.update") ?? null,
+        gateway, "owner plan did not queue the exact schedule update review");
+      const updateApprovalRoute = "/approval/" + encodeURIComponent(String(updatePending.command_id));
+      const updateSameOwner = { origin, owner: true };
+      expect((await request(updateApprovalRoute + "/content", resumeToken, {}, { origin })).status).toBe(401);
+      expect((await request(updateApprovalRoute + "/content", resumeToken, {},
+        { ...updateSameOwner, origin: "https://other.invalid" })).status).toBe(403);
+      const updateReviewResponse = await request(updateApprovalRoute + "/content", resumeToken, {}, updateSameOwner);
+      expect(updateReviewResponse.status, await updateReviewResponse.clone().text()).toBe(200);
+      expect(updateReviewResponse.headers.get("cache-control")).toBe("no-store");
+      const updateReviewText = await updateReviewResponse.text();
+      const updateReview = JSON.parse(updateReviewText) as { review_digest: string };
+      expect(updateReviewText).toContain(updatedContent);
+      expect(updateReviewText).not.toContain(createdContent);
+      expect(updateReview).toMatchObject({ kind: "schedule_update", operation: "schedule.update", command_id: updatePending.command_id,
+        schedule_id: createdScheduleId, expected_revision_digest: createdRow!.revision_digest, channel: "webchat", target,
+        content: updatedContent, interval_ms: 1_800_000_000, goal_ref: goalSelection.goal_ref,
+        purpose_version: goalSelection.purpose_version, purpose_text: purpose,
+        command_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), review_digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        purpose_digest: expect.stringMatching(/^[a-f0-9]{64}$/u), operation_plan_binding_digest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        no_store: true, ...flags });
+      expect(readFileSync(join(root, "complete-history.jsonl"), "utf8")).not.toContain(updatedContent);
+      const updateVerdict = { verdict: "approve", approval_token: updatePending.approval_token };
+      expect((await request(updateApprovalRoute, resumeToken, updateVerdict, { origin })).status).toBe(401);
+      expect((await request(updateApprovalRoute, resumeToken, updateVerdict,
+        { ...updateSameOwner, origin: "https://other.invalid" })).status).toBe(403);
+      const updateShortcut = await request("/resume", resumeToken,
+        { ...updateVerdict, request_id: updatePending.command_id }, updateSameOwner);
+      expect(updateShortcut.status).toBe(409);
+      expect(await updateShortcut.json()).toEqual({ error: "approval_endpoint_required" });
+      const missingUpdateDigest = await request(updateApprovalRoute, resumeToken, updateVerdict, updateSameOwner);
+      expect(missingUpdateDigest.status).toBe(400);
+      expect(await missingUpdateDigest.json()).toEqual({ error: "invalid_schedule_update_approval" });
+      expect((await request(updateApprovalRoute, resumeToken,
+        { ...updateVerdict, content_review_digest: "0".repeat(64) }, updateSameOwner)).status).toBe(409);
+      expect(readFileSync(scheduleFile).includes(Buffer.from(updatedContent))).toBe(false);
+      const updateApproved = await request(updateApprovalRoute, resumeToken,
+        { ...updateVerdict, content_review_digest: updateReview.review_digest }, updateSameOwner);
+      expect(updateApproved.status, await updateApproved.clone().text()).toBe(200);
+      expect(await updateApproved.json()).toMatchObject({ ok: true, result: { approval: "approve", executed: true } });
+      const updatedSnapshot = await schedules();
+      const updatedRow = updatedSnapshot.runtime_schedules.find(row => row.id === createdScheduleId);
+      expect(updatedRow).toMatchObject({ status: "active", enabled: true, channel: "webchat", target,
+        interval_ms: 1_800_000_000, payload_hash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        revision_digest: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+      expect(updatedRow).not.toHaveProperty("content");
+      expect(updatedRow!.revision_digest).not.toBe(createdRow!.revision_digest);
+      const updatedStored = JSON.parse(readFileSync(scheduleFile, "utf8")) as Record<string, unknown>[];
+      expect(updatedStored.find(row => row.id === createdScheduleId)).toMatchObject({ content: updatedContent,
+        status: "active", enabled: true, interval_ms: 1_800_000_000 });
+      expect(readFileSync(join(root, "complete-history.jsonl"), "utf8")).not.toContain(updatedContent);
+      const updateAudit = new AuditLog({ filepath: auditFile, read_only: true });
+      expect(updateAudit.verify()).toBe(true);
+      const updates = updateAudit.list().flatMap(({ log }) => "kind" in log && log.kind === "schedule_lifecycle" &&
+        log.event === "schedule.lifecycle.updated" ? [log] : []);
+      expect(updates).toContainEqual(expect.objectContaining({ schedule_id: createdScheduleId,
+        command_id: updatePending.command_id, operation: "update" }));
+      await stopChild(gateway);
+      gateway = spawnGateway(config);
+      await waitForHealth(port, gateway, 60_000);
+      const afterUpdateRestart = await schedules();
+      expect(afterUpdateRestart.runtime_schedules.find(row => row.id === createdScheduleId)).toEqual(updatedRow);
+      expect(readFileSync(scheduleFile).includes(Buffer.from(updatedContent))).toBe(true);
     } finally {
       if (gateway) await stopChild(gateway);
       rmSync(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
