@@ -172,7 +172,14 @@ export function isCompleteHistoryKind(value: unknown): value is CompleteHistoryK
   return typeof value === "string" && COMPLETE_HISTORY_KINDS.includes(value as CompleteHistoryKind);
 }
 
-export function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebChatHistoryEntry {
+type WebChatHistoryEntryForSanitization = WebChatHistoryEntry & { payload?: unknown };
+
+/**
+ * Keep the payload inside the Gateway-to-WebChat server boundary so the WebChat
+ * sanitizer can derive its allowlisted lifecycle observation. The HTTP handler
+ * strips this field before serializing the replay response.
+ */
+export function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebChatHistoryEntryForSanitization {
   return {
     schema_version: entry.schema_version,
     index: entry.index,
@@ -183,6 +190,7 @@ export function projectCompleteHistoryEntry(entry: CompleteHistoryEntry): WebCha
     actor: entry.actor,
     source: entry.source,
     payload_digest: entry.payload_digest,
+    payload: entry.payload,
     used_for_authority: false,
     timestamp: entry.timestamp,
     prev_hash: entry.prev_hash,
