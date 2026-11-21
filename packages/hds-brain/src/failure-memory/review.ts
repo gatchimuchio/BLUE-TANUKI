@@ -1,6 +1,7 @@
 import {
   FailureReviewCandidateSchema,
   FailureReviewIndependentObservationSchema,
+  FailureReviewJDispositionSchema,
   FailureReviewLineageReferenceSchema,
   FailureReviewProjectionSchema,
   FailureLearningDevelopmentHandoffSchema,
@@ -128,6 +129,29 @@ export function failureReviewProjectionDigest(projection: FailureReviewProjectio
   return sha256Hex(stableJson(projection));
 }
 
+/** Repeated projections hash the same J ruling even when unrelated prior-lineage references grow. */
+export function failureReviewDispositionDigest(trace: FailureReviewAuditTrace): string {
+  return sha256Hex(stableJson({
+    scope_disposition: trace.scope_disposition,
+    independent_observation_count: trace.independent_observation_count,
+    independent_observation_digest: trace.independent_observation_digest,
+    counterexample_review_target_status: trace.counterexample_review_target_status,
+    resume_condition_review_target_status: trace.resume_condition_review_target_status,
+    cause_hypothesis_count: trace.cause_hypothesis_count,
+    cause_hypothesis_categories: trace.cause_hypothesis_categories,
+    cause_hypothesis_digests: trace.cause_hypothesis_digests,
+    alternative_hypothesis_digests: trace.alternative_hypothesis_digests,
+    observation_error_hypothesis_digests: trace.observation_error_hypothesis_digests,
+    counterexample_digests: trace.counterexample_digests,
+    resume_condition_digests: trace.resume_condition_digests,
+    additional_observation_digests: trace.additional_observation_digests,
+    cause_adoption: trace.cause_adoption,
+    follow_up_required: trace.follow_up_required,
+    may_execute: trace.may_execute,
+    used_for_authority: trace.used_for_authority,
+  }));
+}
+
 function failureReviewOperationMatchesScope(
   scope: FailureReviewProjection["scope"],
   operation: FailureReviewIndependentObservation["operation"],
@@ -171,6 +195,7 @@ export function failureReviewExperienceDigest(projection: FailureReviewProjectio
 export function buildFailureLearningLineageRecord(input: {
   projection: FailureReviewProjection;
   candidate: FailureReviewCandidate;
+  j_review: FailureReviewAuditTrace;
   request_id: string;
   command_id: string;
   derived_at?: Date;
@@ -181,6 +206,22 @@ export function buildFailureLearningLineageRecord(input: {
       candidate.projection_digest !== failureReviewProjectionDigest(projection)) {
     throw new Error("failure learning candidate is not bound to current projection");
   }
+  const expectedReview = assessFailureReviewCandidate({ projection, candidate, source_bound: true });
+  if (stableJson(expectedReview) !== stableJson(input.j_review)) {
+    throw new Error("failure learning candidate lacks the matching J review disposition");
+  }
+  const jDisposition = FailureReviewJDispositionSchema.parse({
+    disposition_digest: failureReviewDispositionDigest(input.j_review),
+    scope_disposition: input.j_review.scope_disposition,
+    independent_observation_count: input.j_review.independent_observation_count,
+    independent_observation_digest: input.j_review.independent_observation_digest,
+    counterexample_review_target_status: input.j_review.counterexample_review_target_status,
+    resume_condition_review_target_status: input.j_review.resume_condition_review_target_status,
+    cause_adoption: input.j_review.cause_adoption,
+    follow_up_required: input.j_review.follow_up_required,
+    may_execute: input.j_review.may_execute,
+    used_for_authority: input.j_review.used_for_authority,
+  });
   const content = {
     schema_version: "blue-tanuki.failure-learning-lineage.v1" as const,
     signature_id_digest: sha256Hex(projection.signature_id),
@@ -200,6 +241,7 @@ export function buildFailureLearningLineageRecord(input: {
     derivation_categories: [...new Set(candidate.cause_hypotheses.map((hypothesis) => hypothesis.category))].sort() as FailureType[],
     derived_at: (input.derived_at ?? new Date()).toISOString(),
     learning_action_status: "candidate_derivation_recorded" as const,
+    j_disposition: jDisposition,
     validity_status: "not_assessed" as const,
     improvement_status: "not_measured" as const,
     generalization_status: "not_assessed" as const,
@@ -287,6 +329,7 @@ export function failureLearningLineageReference(record: FailureLearningLineageRe
     approval_status: parsed.approval_status,
     memory_application_status: parsed.memory_application_status,
     follow_up_action_status: parsed.follow_up_action_status,
+    ...(parsed.j_disposition ? { j_disposition: parsed.j_disposition } : {}),
     used_for_authority: false,
     may_execute: false,
   });

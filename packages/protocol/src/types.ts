@@ -487,7 +487,22 @@ export const FailureReviewIndependentObservationSchema = z.object({
 });
 export type FailureReviewIndependentObservation = z.infer<typeof FailureReviewIndependentObservationSchema>;
 
-/** A retained, non-authoritative reference to an earlier C derivation. */
+/** C由来の失敗レビューに対する、実行権限を持たないJ判定の要約。 */
+export const FailureReviewJDispositionSchema = z.object({
+  disposition_digest: FailureReviewSha256Schema,
+  scope_disposition: z.enum(["held_for_independent_observation", "bound_to_independent_observation"]),
+  independent_observation_count: z.number().int().nonnegative(),
+  independent_observation_digest: FailureReviewSha256Schema,
+  counterexample_review_target_status: z.enum(["not_present", "held_for_scope", "retained_for_future_observation"]),
+  resume_condition_review_target_status: z.enum(["not_present", "held_for_scope", "retained_for_future_observation"]),
+  cause_adoption: z.literal("not_adopted"),
+  follow_up_required: z.enum(["none", "independent_observation"]),
+  may_execute: z.literal(false),
+  used_for_authority: z.literal(false),
+}).strict();
+export type FailureReviewJDisposition = z.infer<typeof FailureReviewJDispositionSchema>;
+
+/** 以前のC導出と、任意でそのJ判定要約を参照する非権威reference。 */
 export const FailureReviewLineageReferenceSchema = z.object({
   record_digest: FailureReviewSha256Schema,
   signature_digest: FailureReviewSha256Schema,
@@ -508,6 +523,7 @@ export const FailureReviewLineageReferenceSchema = z.object({
   approval_status: z.literal("not_requested"),
   memory_application_status: z.literal("stored_for_future_reference"),
   follow_up_action_status: z.literal("unconfirmed"),
+  j_disposition: FailureReviewJDispositionSchema.optional(),
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict();
@@ -544,6 +560,7 @@ export const FailureLearningLineageRecordSchema = z.object({
   internal_derivation_attribution_status: z.literal("not_established").optional(),
   external_change_contribution_status: z.literal("not_assessed").optional(),
   teacher_input_contribution_status: z.literal("excluded_from_c_projection").optional(),
+  j_disposition: FailureReviewJDispositionSchema.optional(),
   adoption_status: z.literal("not_adopted"),
   approval_status: z.literal("not_requested"),
   memory_application_status: z.literal("stored_for_future_reference"),

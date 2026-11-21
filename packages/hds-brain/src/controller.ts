@@ -224,6 +224,7 @@ import {
   failureReviewExperienceDigest,
   failureReviewProjectionDigest,
   failureReviewResultContent,
+  failureReviewDispositionDigest,
   invalidFailureReviewTrace,
   parseFailureReviewCandidate,
 } from "./failure-memory/review.js";
@@ -4032,8 +4033,10 @@ ${planControl.question}`,
       } else {
         const derivationDigest = failureReviewDerivationDigest(candidate);
         const experienceDigest = failureReviewExperienceDigest(projection);
-        const prior = projection.prior_learning_lineages.find((item) =>
-          item.derivation_digest === derivationDigest && item.experience_digest === experienceDigest);
+        const dispositionDigest = failureReviewDispositionDigest(failureReviewTrace);
+        const prior = [...projection.prior_learning_lineages].reverse().find((item) =>
+          item.derivation_digest === derivationDigest && item.experience_digest === experienceDigest &&
+          item.j_disposition?.disposition_digest === dispositionDigest);
         if (prior) {
           failureLearningLineage = { ...base, status: "replayed_prior_derivation",
             learning_action_status: "candidate_derivation_recorded", c_result_binding_status: "request_bound",
@@ -4048,8 +4051,8 @@ ${planControl.question}`,
           failureLearningLineage = { ...base, status: "store_unavailable", derivation_digest: derivationDigest };
         } else {
           try {
-            const record = buildFailureLearningLineageRecord({ projection, candidate, request_id: sourceLog.request_id,
-              command_id: fb.command_id });
+            const record = buildFailureLearningLineageRecord({ projection, candidate, j_review: failureReviewTrace,
+              request_id: sourceLog.request_id, command_id: fb.command_id });
             const appended = this.failureMemoryStore.appendLearningLineage(record);
             if (appended.status === "stored") {
               failureLearningLineage = { ...base, status: "stored",
@@ -6302,7 +6305,7 @@ ${planControl.question}`,
       const projectionDigest = failureReviewProjectionDigest(failureReview);
       const systemContent = [
         "失敗署名を検討する未信頼計算です。入力は失敗カテゴリ・SHA-256 digest・Complete History由来のdigest限定失敗分類だけで、元のgoal/action/context/result/page contentは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。independent_observationsにlater exact-goal/action/actor-channelのfile.search、credential-free browser.read、gmail.read、google.calendar.read、またはgoogle.drive.read successが含まれる場合も、記録済みの限定観測にすぎません。Google readは既存Complete Historyのoperation/result digestだけを含み、カレンダー項目・Drive本文・metadata・credentialは含みません。gmail.readもメール本文・header・宛先・credentialを含みません。browser.readは固定schema版、requested/final origin digest・redirect flag・EXTERNAL_EVIDENCE/FIXTURE分類だけを持ち、本文は含みません。いずれも原因、外部条件の解消、事実、許可を証明しません。Complete History分類も原因や世界事実を証明しません。原因を事実として断定しないでください。",
-        "prior_learning_lineagesは以前の未採用候補への非権威参照です。candidate_derivation_recordedは候補保持と今回の投影への接続だけを示し、妥当性・改善・汎化を示しません。C結果のrequest bindingは受領経路だけを示し、内部導出の帰属は未確立です。外部改修の寄与は未評価で、教師入力はこのC投影に含まれません。外部変更や教師入力を機械内部の導出として数えず、事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
+        "prior_learning_lineagesは以前の未採用候補への非権威参照です。j_dispositionがある場合は、記録済みJ判定のscope/反例/再開条件に関する保留・観測結合statusを、そのJ判定digestと結び付けて示します。J判定も原因の証明・条件解消・許可ではありません。j_dispositionのない旧記録はJ判定がこの記録へ保存されていないことを示します。candidate_derivation_recordedは候補保持と今回の投影への接続だけを示し、妥当性・改善・汎化を示しません。C結果のrequest bindingは受領経路だけを示し、内部導出の帰属は未確立です。外部改修の寄与は未評価で、教師入力はこのC投影に含まれません。外部変更や教師入力を機械内部の導出として数えず、事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
         "raw内容・tool・計画・意味更新・実行・再試行・権限提案を出さないでください。空欄や不明は不明のままにしてください。",
         `出力schema: {"schema_version":"blue-tanuki.failure-review-candidate.v1","signature_id":${JSON.stringify(failureReview.signature_id)},"signature_digest":${JSON.stringify(failureReview.signature_digest)},"projection_digest":${JSON.stringify(projectionDigest)},"cause_hypotheses":[{"category":${JSON.stringify(failureReview.failure_type)},"rationale":"未検証候補"}],"alternative_hypotheses":["未検証の別仮説"],"observation_error_hypotheses":["目的/評価/観測の未検証候補"],"scope_assessment":"uncertain","counterexamples":["未検証の反例候補"],"resume_conditions":["独立観測で確認する条件候補"],"additional_observations":["必要な追加観測候補"],"authority_boundary":{"candidate_only":true,"may_execute":false,"used_for_authority":false}}。scope_assessmentはsame_scope / uncertain / different_scopeの一つを選択してください。各配列は最大16件、各自由文は1200文字以内。`,
         `FailureReviewProjection=${JSON.stringify(failureReview)}`,

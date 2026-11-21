@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FailureMemoryStore,
+  assessFailureReviewCandidate,
   buildFailureLearningDevelopmentHandoff,
   buildFailureLearningLineageRecord,
   createFailureReviewProjection,
@@ -36,9 +37,11 @@ function createHandoff() {
     additional_observations: ["collect one independent observation"],
     authority_boundary: { candidate_only: true as const, may_execute: false as const, used_for_authority: false as const },
   };
+  const jReview = assessFailureReviewCandidate({ projection, candidate, source_bound: true });
   const record = buildFailureLearningLineageRecord({
     projection,
     candidate,
+    j_review: jReview,
     request_id: "request-id",
     command_id: "command-id",
     derived_at: new Date("2026-10-21T01:00:00.000Z"),

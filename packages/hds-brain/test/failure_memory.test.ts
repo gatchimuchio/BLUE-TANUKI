@@ -12,6 +12,7 @@ import {
   createFailureReviewProjection,
   extractFailureSignatures,
   failureLearningLineageReference,
+  failureReviewDispositionDigest,
   failureReviewProjectionDigest,
   sha256Hex,
   runPeriodicFailureMemoryVerification,
@@ -103,9 +104,11 @@ describe("FailureMemoryStore", () => {
         additional_observations: ["private observation request"],
         authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
       });
+      const jReview = assessFailureReviewCandidate({ projection, candidate, source_bound: true });
       const record = buildFailureLearningLineageRecord({
         projection,
         candidate,
+        j_review: jReview,
         request_id: "private-request-id",
         command_id: "private-command-id",
         derived_at: new Date("2026-10-21T00:00:00.000Z"),
@@ -119,8 +122,32 @@ describe("FailureMemoryStore", () => {
         internal_derivation_attribution_status: "not_established",
         external_change_contribution_status: "not_assessed",
         teacher_input_contribution_status: "excluded_from_c_projection",
+        j_disposition: {
+          scope_disposition: "held_for_independent_observation",
+          counterexample_review_target_status: "held_for_scope",
+          resume_condition_review_target_status: "held_for_scope",
+          cause_adoption: "not_adopted",
+          may_execute: false,
+          used_for_authority: false,
+        },
       });
       expect(store.appendLearningLineage(record)).toMatchObject({ status: "stored" });
+      expect(store.appendLearningLineage(record)).toMatchObject({ status: "replayed" });
+      expect(() => buildFailureLearningLineageRecord({ projection, candidate,
+        j_review: { ...jReview, scope_disposition: "bound_to_independent_observation" },
+        request_id: "mismatched-review", command_id: "mismatched-review-command" })).toThrow(
+          "failure learning candidate lacks the matching J review disposition");
+      const repeatedProjection = createFailureReviewProjection(signature, [], "unavailable", [
+        failureLearningLineageReference(record),
+      ]);
+      const repeatedCandidate = { ...candidate, projection_digest: failureReviewProjectionDigest(repeatedProjection) };
+      const repeatedJReview = assessFailureReviewCandidate({
+        projection: repeatedProjection, candidate: repeatedCandidate, source_bound: true,
+      });
+      expect(failureReviewDispositionDigest(repeatedJReview)).toBe(record.j_disposition?.disposition_digest);
+      expect(store.appendLearningLineage(buildFailureLearningLineageRecord({ projection: repeatedProjection,
+        candidate: repeatedCandidate, j_review: repeatedJReview, request_id: "repeat", command_id: "repeat-command",
+        derived_at: new Date("2026-10-22T00:00:00.000Z") }))).toMatchObject({ status: "replayed" });
 
       const saved = JSON.parse(readFileSync(file, "utf8")) as { learning_lineage_records: unknown[] };
       const savedLineages = JSON.stringify(saved.learning_lineage_records);
@@ -134,7 +161,7 @@ describe("FailureMemoryStore", () => {
       const legacyContent = Object.fromEntries(Object.entries(record).filter(([key]) =>
         !["record_id", "learning_action_status", "validity_status", "improvement_status", "generalization_status",
           "c_result_binding_status", "internal_derivation_attribution_status", "external_change_contribution_status",
-          "teacher_input_contribution_status"].includes(key)));
+          "teacher_input_contribution_status", "j_disposition"].includes(key)));
       const legacyRecord = { ...legacyContent, record_id: sha256Hex(stableJson(legacyContent)) };
       writeFileSync(file, JSON.stringify({ ...saved, learning_lineage_records: [legacyRecord] }));
       const legacyReloaded = new FailureMemoryStore({ filepath: file });
@@ -147,6 +174,8 @@ describe("FailureMemoryStore", () => {
         external_change_contribution_status: "not_assessed",
         teacher_input_contribution_status: "excluded_from_c_projection",
       });
+      expect(legacyReloaded.appendLearningLineage(record)).toMatchObject({ status: "stored" });
+      expect(legacyReloaded.listLearningLineageForSignature(signature.id)).toHaveLength(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

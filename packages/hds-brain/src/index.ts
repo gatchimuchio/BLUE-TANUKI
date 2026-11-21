@@ -289,6 +289,7 @@ export {
   createFailureReviewProjection,
   failureLearningLineageReference,
   failureReviewDerivationDigest,
+  failureReviewDispositionDigest,
   failureReviewExperienceDigest,
   failureReviewProjectionDigest,
   failureSignatureDigest,

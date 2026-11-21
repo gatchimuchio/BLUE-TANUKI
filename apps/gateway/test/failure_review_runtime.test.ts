@@ -154,11 +154,24 @@ describe("prepareFailureReviewInbound", () => {
     expect(reviewedContent.counterexamples_adopted_as_facts).toBe(false);
     expect(reviewedContent.resume_conditions_adopted_as_permissions).toBe(false);
     hds.onFeedback(rawFeedback);
+    const storedLineage = store.listLearningLineageForSignature(signature.id)[0];
+    expect(storedLineage?.j_disposition).toMatchObject({
+      scope_disposition: "held_for_independent_observation",
+      counterexample_review_target_status: "held_for_scope",
+      resume_condition_review_target_status: "held_for_scope",
+      cause_adoption: "not_adopted",
+      follow_up_required: "independent_observation",
+      may_execute: false,
+      used_for_authority: false,
+    });
+    expect(storedLineage?.j_disposition?.disposition_digest).toMatch(/^[0-9a-f]{64}$/);
     const next = prepareFailureReviewInbound(developerRequest("failure:review " + signature.id), store) as InboundRequest;
     const nextProjection = JSON.parse(String(next.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
       prior_learning_lineages: Array<{ derivation_digest: string; adoption_status: string; may_execute: boolean;
         validity_status: string; improvement_status: string; generalization_status: string;
-        external_change_contribution_status: string; teacher_input_contribution_status: string }>;
+        external_change_contribution_status: string; teacher_input_contribution_status: string;
+        j_disposition?: { scope_disposition: string; counterexample_review_target_status: string;
+          resume_condition_review_target_status: string; cause_adoption: string; may_execute: boolean } }>;
     };
     expect(nextProjection.prior_learning_lineages).toHaveLength(1);
     expect(nextProjection.prior_learning_lineages[0]).toMatchObject({
@@ -169,6 +182,13 @@ describe("prepareFailureReviewInbound", () => {
       generalization_status: "not_assessed",
       external_change_contribution_status: "not_assessed",
       teacher_input_contribution_status: "excluded_from_c_projection",
+      j_disposition: {
+        scope_disposition: "held_for_independent_observation",
+        counterexample_review_target_status: "held_for_scope",
+        resume_condition_review_target_status: "held_for_scope",
+        cause_adoption: "not_adopted",
+        may_execute: false,
+      },
     });
   });
 
@@ -220,6 +240,8 @@ describe("prepareFailureReviewInbound", () => {
     const prepared = prepareFailureReviewInbound(developerRequest(`failure:review ${signature.id}`), store, history) as InboundRequest;
     const projectedResultDigest = sha256Hex(resultDigest);
     const projection = JSON.parse(String(prepared.metadata?.["blue_tanuki.failure_review.projection_json"])) as {
+      signature_id: string;
+      signature_digest: string;
       independent_observation_source_status: string;
       independent_observations: Array<{ operation?: string; result_digest?: string }>;
     };
@@ -228,7 +250,8 @@ describe("prepareFailureReviewInbound", () => {
     expect(JSON.stringify(projection)).not.toContain(resultDigest);
     expect(JSON.stringify(projection)).not.toContain("google-read-later-request");
 
-    const reviewed = new HDSUpperController({ failure_memory_store: store }).decide(prepared).command;
+    const hds = new HDSUpperController({ failure_memory_store: store });
+    const reviewed = hds.decide(prepared).command;
     expect(reviewed?.type).toBe("llm_call");
     if (!reviewed || reviewed.type !== "llm_call") return;
     expect(reviewed.payload.compute_context?.data_exposure.input_sources).toContain("complete_history_digest_observations");
@@ -236,6 +259,44 @@ describe("prepareFailureReviewInbound", () => {
     expect(JSON.stringify(reviewed.payload.messages)).not.toContain(resultDigest);
     expect(JSON.stringify(reviewed.payload.messages)).not.toContain("google-read-later-request");
     expect(JSON.stringify(reviewed.payload.messages)).not.toContain("provider read failed");
+    const projectionDigest = reviewed.payload.compute_context?.projection_digest;
+    expect(projectionDigest).toBeDefined();
+    if (!projectionDigest) throw new Error("FailureReview command did not bind its projection digest");
+    const candidate = {
+      schema_version: "blue-tanuki.failure-review-candidate.v1",
+      signature_id: projection.signature_id,
+      signature_digest: projection.signature_digest,
+      projection_digest: projectionDigest,
+      cause_hypotheses: [{ category: signature.failure_type, rationale: "unverified cause" }],
+      alternative_hypotheses: ["alternative"],
+      observation_error_hypotheses: ["observation error"],
+      scope_assessment: "same_scope",
+      counterexamples: ["candidate counterexample"],
+      resume_conditions: ["candidate resume condition"],
+      additional_observations: ["additional observation"],
+      authority_boundary: { candidate_only: true, may_execute: false, used_for_authority: false },
+    } as const;
+    const feedback = { command_id: reviewed.id, status: "success" as const,
+      result: { content: JSON.stringify(candidate) }, metrics: { duration_ms: 1 } };
+    const judged = hds.reviewMemoryCitations(reviewed, feedback);
+    const judgedContent = JSON.parse(String((judged.result as { content?: string }).content)) as {
+      review: Record<string, unknown>;
+    };
+    expect(judgedContent.review).toMatchObject({
+      scope_disposition: "bound_to_independent_observation",
+      counterexample_review_target_status: "retained_for_future_observation",
+      resume_condition_review_target_status: "retained_for_future_observation",
+      cause_adoption: "not_adopted",
+      may_execute: false,
+    });
+    hds.onFeedback(feedback);
+    expect(store.listLearningLineageForSignature(signature.id)[0]?.j_disposition).toMatchObject({
+      scope_disposition: "bound_to_independent_observation",
+      counterexample_review_target_status: "retained_for_future_observation",
+      resume_condition_review_target_status: "retained_for_future_observation",
+      cause_adoption: "not_adopted",
+      may_execute: false,
+    });
   });
 
   it.each([

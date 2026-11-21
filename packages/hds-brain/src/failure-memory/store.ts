@@ -253,7 +253,8 @@ export class FailureMemoryStore {
     }
     const priorDerivation = this.learningLineageRecords.find((item) =>
       item.signature_id_digest === record.signature_id_digest && item.signature_digest === record.signature_digest &&
-      item.experience_digest === record.experience_digest && item.derivation_digest === record.derivation_digest);
+      item.experience_digest === record.experience_digest && item.derivation_digest === record.derivation_digest &&
+      item.j_disposition?.disposition_digest === record.j_disposition?.disposition_digest);
     if (priorDerivation) return { status: "replayed", record: cloneLearningLineageRecord(priorDerivation) };
     this.learningLineageRecords.push(cloneLearningLineageRecord(record));
     this.persist();
