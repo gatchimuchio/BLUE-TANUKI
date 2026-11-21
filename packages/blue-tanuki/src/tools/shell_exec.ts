@@ -7,6 +7,7 @@ import { requireToolOperationDescriptor, ShellExecTargetVersionObservationSchema
   type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { Tool, ToolContext, ToolExecutionLifecycleObservation } from "./registry.js";
 import { isSecretLikeRelativePath, sandboxRootFromEnv } from "./file_safety.js";
+import { brokerWorkspaceMutationRevisionDigest } from "./workspace_resource_version.js";
 import {
   SYNTHETIC_FILE_EDIT_TEST_FAILURE_EXIT_CODE,
   SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE,
@@ -106,7 +107,7 @@ export async function invokeShellExec(
         ? { operation_plan_binding_digest: expected.operation_plan_binding_digest } : {}),
     }, false);
     if (JSON.stringify(current) !== JSON.stringify(expected)) {
-      throw new Error("shell.exec sandbox root or cwd changed after owner review; request fresh review");
+      throw new Error("shell.exec sandbox root, cwd, or workspace version changed after owner review; request fresh review");
     }
   }
 
@@ -207,7 +208,7 @@ export const shellExecTool: Tool = {
     return await inspectShellExecTargetVersion(args, options);
   },
   async invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
-    if (ctx.target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
+    if (ctx.target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v2") {
       throw new Error("shell.exec requires Broker target version evidence; no process was started");
     }
     return await invokeShellExec(args, { signal: ctx.signal, targetVersionObservation: ctx.target_version_observation,
@@ -271,10 +272,11 @@ async function inspectShellExecTargetVersionCore(
     }
   }
   return ShellExecTargetVersionObservationSchema.parse({
-    schema_version: "blue-tanuki.shell-exec-target-version.v1",
+    schema_version: "blue-tanuki.shell-exec-target-version.v2",
     command_digest: commandDigest,
     root_identity_digest: rootIdentityDigest,
     cwd_identity_digest: cwdIdentityDigest,
+    broker_workspace_revision_digest: brokerWorkspaceMutationRevisionDigest(rootIdentityDigest),
     operation_plan_binding_digest: operationPlanBindingDigest ?? null,
     used_for_authority: false,
     may_execute: false,

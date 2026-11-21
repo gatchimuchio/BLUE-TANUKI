@@ -64,6 +64,7 @@ import {
   type GoogleWriteOptions,
   type HttpFetchOptions,
 } from "../src/tools/builtin.js";
+import { advanceBrokerWorkspaceMutationRevisionDigest } from "../src/tools/workspace_resource_version.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { inspectShellExecTargetVersion as inspectShellExecTargetVersionRaw } from "../src/tools/shell_exec.js";
 import { SYNTHETIC_FILE_EDIT_TEST_FAILURE_PROFILE } from "../src/tools/shell_exec_profile.js";
@@ -3213,7 +3214,7 @@ describe("built-in tools", () => {
         command_digest: "f".repeat(64),
       });
       expect(observation).toMatchObject({
-        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        schema_version: "blue-tanuki.shell-exec-target-version.v2",
         used_for_authority: false,
         may_execute: false,
       });
@@ -3315,7 +3316,7 @@ describe("built-in tools", () => {
         command_digest: "b".repeat(64),
       });
       expect(observation).toMatchObject({
-        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        schema_version: "blue-tanuki.shell-exec-target-version.v2",
         used_for_authority: false,
         may_execute: false,
       });
@@ -3390,7 +3391,7 @@ describe("built-in tools", () => {
         isolationProviderAvailable: async () => true,
       });
       expect(observation).toMatchObject({
-        schema_version: "blue-tanuki.shell-exec-target-version.v1",
+        schema_version: "blue-tanuki.shell-exec-target-version.v2",
         operation_plan_binding_digest: null,
         used_for_authority: false,
         may_execute: false,
@@ -3401,7 +3402,40 @@ describe("built-in tools", () => {
       await fs.rename(cwd, retiredCwd);
       await fs.mkdir(cwd);
       await expect(tool.invoke(args, { ...invocation, target_version_observation: observation }))
-        .rejects.toThrow(/sandbox root or cwd changed after owner review/);
+        .rejects.toThrow(/sandbox root, cwd, or workspace version changed after owner review/);
+      await expect(fs.access(marker)).rejects.toThrow();
+    } finally {
+      if (priorRoot === undefined) delete process.env.BLUE_TANUKI_SHELL_ROOT;
+      else process.env.BLUE_TANUKI_SHELL_ROOT = priorRoot;
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("shell.exec rejects a stale Broker workspace revision before process creation", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-shell-workspace-revision-"));
+    const root = path.join(parent, "root");
+    const marker = path.join(root, "process-started.txt");
+    await fs.mkdir(root, { recursive: true });
+    const env = shellTestEnv(root);
+    const priorRoot = process.env.BLUE_TANUKI_SHELL_ROOT;
+    process.env.BLUE_TANUKI_SHELL_ROOT = root;
+    const tools = new ToolRegistry();
+    registerBuiltinTools(tools);
+    const tool = tools.get("shell.exec");
+    const args = { cmd: "node", args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`], cwd: "." };
+    try {
+      if (!tool?.inspect_target_version) throw new Error("built-in shell target resolver was not registered");
+      const observation = await tool.inspect_target_version(args, {
+        env,
+        command_digest: "d".repeat(64),
+        isolationProviderAvailable: async () => true,
+      });
+      advanceBrokerWorkspaceMutationRevisionDigest(observation.root_identity_digest);
+      await expect(tool.invoke(args, {
+        command_id: "cmd-shell-workspace-revision",
+        upstream_commit_hash: "a".repeat(64),
+        target_version_observation: observation,
+      })).rejects.toThrow(/workspace version changed after owner review/);
       await expect(fs.access(marker)).rejects.toThrow();
     } finally {
       if (priorRoot === undefined) delete process.env.BLUE_TANUKI_SHELL_ROOT;

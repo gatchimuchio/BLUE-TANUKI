@@ -123,6 +123,14 @@ describe("Executor shared target resource lock", () => {
         notifyFileStarted();
         await fileGate;
       }
+      if (label === "file.write") {
+        try {
+          await fs.writeFile(path.join(root, "shared.txt"), "updated-before-error", "utf8");
+        } finally {
+          active -= 1;
+        }
+        throw new Error("fixture adapter reported an uncertain result after changing the workspace");
+      }
       active -= 1;
       return { completed: true };
     };
@@ -190,8 +198,42 @@ describe("Executor shared target resource lock", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
       expect(started).toEqual(["file.write"]);
       releaseFile();
-      const feedback = await Promise.all(executions);
-      expect(feedback.map((entry) => entry.status)).toEqual(["success", "success"]);
+      const staleFeedback = await Promise.all(executions);
+      expect(staleFeedback.map((entry) => entry.status)).toEqual(["failed", "failed"]);
+      expect(JSON.stringify(staleFeedback[0])).toMatch(/uncertain result after changing the workspace/);
+      expect(JSON.stringify(staleFeedback[1])).toMatch(/workspace version changed after review/);
+      expect(await fs.readFile(path.join(root, "shared.txt"), "utf8")).toBe("updated-before-error");
+      expect(started).toEqual(["file.write"]);
+      expect(maxActive).toBe(1);
+
+      const freshShellRequest = createGatewayInternalInboundRequest({
+        id: "workspace-lock-shell-request-fresh",
+        channel: "webchat",
+        user: "fixture-owner",
+        content: `tool:shell.exec ${JSON.stringify({ cmd: "node", args: ["-v"], cwd: ".",
+          same_workspace_as_file_root: true, summary_only: true })}`,
+        timestamp: 2,
+        metadata: { "blue_tanuki.operator_surface": "developer" },
+      });
+      const freshShellDecision = activeHds.decide(freshShellRequest);
+      if (freshShellDecision.command?.type !== "tool_call" || freshShellDecision.command.payload.tool_name !== "shell.exec" ||
+          freshShellDecision.log.commit.decision !== "ASSERT") {
+        throw new Error("fixture HDS did not issue the fresh reviewed shell command");
+      }
+      const freshShellCommand = freshShellDecision.command;
+      const freshShellObservation = await inspectShellExecTargetVersion(freshShellCommand.payload.arguments, {
+        env: { ...process.env, BLUE_TANUKI_FILE_ROOT: root, BLUE_TANUKI_SHELL_ROOT: root },
+        command_digest: operationPlanDigest(freshShellCommand),
+        platform: "win32",
+        isolationProviderAvailable: async () => true,
+      });
+      const freshHdsBinding = activeHds.createExecutionAuthorityBinding(freshShellCommand, freshShellObservation);
+      const freshShellExecution = executors[1]!.execute(
+        approved(authority, freshShellCommand, freshShellObservation, freshHdsBinding),
+      );
+      executions = [freshShellExecution];
+      const freshFeedback = await Promise.all(executions);
+      expect(freshFeedback.map((entry) => entry.status)).toEqual(["success"]);
       expect(started).toEqual(["file.write", "shell.exec"]);
       expect(maxActive).toBe(1);
     } finally {

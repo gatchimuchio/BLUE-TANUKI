@@ -119,6 +119,10 @@ import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDr
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
 import { isSettingsWriteTool, settingsWriteActivationReview } from "./tools/settings_write.js";
+import {
+  advanceBrokerWorkspaceMutationRevisionDigest,
+  brokerWorkspaceMutationRevisionDigest,
+} from "./tools/workspace_resource_version.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
   resolveComposioActionEffectRegistryBinding, composioToolEnvironment, composioAccountsTool, composioExecuteTool,
@@ -333,7 +337,7 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     await brokerFileResourceLockDigest(tool_name, args);
     return `filesystem-root:${await brokerFileWorkspaceResourceLockDigest()}`;
   }
-  if (tool_name === "shell.exec" && observation?.schema_version === "blue-tanuki.shell-exec-target-version.v1") {
+  if (tool_name === "shell.exec" && observation?.schema_version === "blue-tanuki.shell-exec-target-version.v2") {
     return `filesystem-root:${observation.root_identity_digest}`;
   }
   if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
@@ -952,7 +956,7 @@ function approveCommandForExecution(
     }
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "shell.exec" &&
-      target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v1") {
+      target_version_observation?.schema_version !== "blue-tanuki.shell-exec-target-version.v2") {
     throw new Error("Executor approval rejected: shell.exec requires Broker target version evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "memory.personalization.stop" &&
@@ -3103,6 +3107,16 @@ export class Executor {
         }
       }
       if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
+      if (payload.tool_name === "shell.exec") {
+        const observation = ShellExecTargetVersionObservationSchema.parse(record.target_version_observation);
+        if (observation.schema_version !== "blue-tanuki.shell-exec-target-version.v2" ||
+            brokerWorkspaceMutationRevisionDigest(observation.root_identity_digest) !==
+              observation.broker_workspace_revision_digest) {
+          throw new Error(
+            "Executor dispatch rejected: shell.exec workspace version changed after review; no process was started; request fresh review",
+          );
+        }
+      }
       const adapterTimeout = remainingTimeoutMs();
       const guardedBrowserFormSubmit = before_browser_form_submit ? (): void => {
         assertCurrentHdsGoalVersion(command);
@@ -3115,6 +3129,7 @@ export class Executor {
         assertCurrentHdsGoalVersion(command);
         before_action_dispatch?.();
       } : undefined;
+      let filesystemAdapterDispatched = false;
       const invocation = Promise.resolve().then(() => {
         if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
         before_action_dispatch?.();
@@ -3123,6 +3138,7 @@ export class Executor {
         const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
         if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
         const githubCredentialResolver = tool === githubWriteTool ? this.deps.resolve_github_write_credential : undefined;
+        if (lockKey?.startsWith("filesystem-root:")) filesystemAdapterDispatched = true;
         markInvoked("tool_adapter");
         return tool.invoke(payload.arguments, {
           command_id: id,
@@ -3152,7 +3168,18 @@ export class Executor {
         adapterOwnsTargetLock = true;
         // Keep the target serialized until the real adapter promise settles, even if
         // the caller's timeout has already returned an outcome-unknown receipt.
-        void invocation.then(releaseTargetLock, releaseTargetLock);
+        const settleTarget = (): void => {
+          try {
+            if (filesystemAdapterDispatched && lockKey?.startsWith("filesystem-root:")) {
+              advanceBrokerWorkspaceMutationRevisionDigest(lockKey.slice("filesystem-root:".length));
+            }
+          } catch {
+            // The revision module keeps this root fail-closed if invalidation cannot be recorded.
+          } finally {
+            releaseTargetLock?.();
+          }
+        };
+        void invocation.then(settleTarget, settleTarget);
       }
       const result = await this.withTimeout(invocation, adapterTimeout, controller);
       if (signal?.aborted) {
