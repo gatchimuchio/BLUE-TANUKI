@@ -275,9 +275,10 @@ export class FailureMemoryStore {
             conditionChangeMatches.push({
               signature_id: signature.id,
               changed_conditions: changedConditions,
-              decision: signature.suppression_policy === "block" && signature.probe_policy === "never"
-                ? "block"
-                : "require_approval",
+              // A changed HDS context is only a re-observation candidate. It does not
+              // prove the failure condition was resolved, so a fresh approval alone
+              // must not turn it into an executable retry.
+              decision: "block",
             });
           }
         }
@@ -313,7 +314,7 @@ export class FailureMemoryStore {
       ...conditionChangeMatches.map((match) => match.decision),
     ]);
     const conditionChangeReasons = conditionChangeMatches.map((match) =>
-      `condition_changed:${match.changed_conditions.join("+")}:${match.decision}`);
+      `condition_changed_requires_independent_reaudit:${match.changed_conditions.join("+")}`);
     return {
       decision,
       matches,

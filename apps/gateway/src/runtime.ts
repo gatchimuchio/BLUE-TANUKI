@@ -601,6 +601,9 @@ async function runCliWithExecutionStore(
         changed_conditions: match.changed_conditions,
         decision: match.decision,
       })),
+      condition_reaudit_required: failureGate.condition_change_matches.length > 0,
+      condition_resolution_verified: false,
+      may_execute: false,
       reason: failureGate.reason,
     });
     auditLog.info("summary", { entries: hds.getAudit().size(), chain_valid: hds.getAudit().verify() });

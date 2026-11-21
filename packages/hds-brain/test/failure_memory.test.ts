@@ -336,7 +336,7 @@ describe("Pre-execution failure gate", () => {
     expect(result.matches).toHaveLength(0);
   });
 
-  it("requires fresh approval when the same exact action is re-observed under changed goal/actor/channel conditions", () => {
+  it("holds the same exact action for independent re-audit when goal/actor/channel conditions change", () => {
     const command = toolCommand("cmd-a", "req-a", "file.search", { path: "/tmp/a/input.txt" });
     const sourceContext = { actor: "fixture-owner", channel: "webchat", request_id: "req-a", surface: "webchat" };
     const extracted = extractFailureSignatures({
@@ -346,7 +346,7 @@ describe("Pre-execution failure gate", () => {
       feedback: { command_id: command.id, status: "failed", error: "target unavailable", metrics: { duration_ms: 1 } },
     })[0]!;
     const store = new FailureMemoryStore();
-    store.addSignature({
+    const signature = store.addSignature({
       ...extracted,
       state: "active",
       suppression_policy: "require_approval",
@@ -371,14 +371,16 @@ describe("Pre-execution failure gate", () => {
     expect(sameConditions.decision).toBe("require_approval");
     expect(sameConditions.matches[0]?.match_level).toBe(1);
     const changedGoal = store.evaluateCommandGate(differentGoal, sourceContext);
-    expect(changedGoal.decision).toBe("require_approval");
+    expect(changedGoal.decision).toBe("block");
     expect(changedGoal.condition_change_matches).toMatchObject([{
-      signature_id: expect.any(String), changed_conditions: ["goal"], decision: "require_approval",
+      signature_id: signature.id, changed_conditions: ["goal"], decision: "block",
     }]);
-    expect(differentActor.decision).toBe("require_approval");
-    expect(differentActor.condition_change_matches[0]?.changed_conditions).toEqual(["actor"]);
-    expect(differentChannel.decision).toBe("require_approval");
-    expect(differentChannel.condition_change_matches[0]?.changed_conditions).toEqual(["channel"]);
+    expect(changedGoal.reason).toContain("condition_changed_requires_independent_reaudit:goal");
+    expect(differentActor.decision).toBe("block");
+    expect(differentActor.condition_change_matches[0]).toMatchObject({ changed_conditions: ["actor"], decision: "block" });
+    expect(differentChannel.decision).toBe("block");
+    expect(differentChannel.condition_change_matches[0]).toMatchObject({ changed_conditions: ["channel"], decision: "block" });
+    expect(store.get(signature.id)).toMatchObject({ state: "active", evidence_log_ids: signature.evidence_log_ids });
   });
 
   it("keeps never-probe blocks and the old failure signature intact across changed conditions", () => {
@@ -404,7 +406,7 @@ describe("Pre-execution failure gate", () => {
       probe_policy: "sandbox",
     });
     expect(sandboxStore.evaluateCommandGate(changed, { actor: "fixture-owner", channel: "webchat" }).decision)
-      .toBe("require_approval");
+      .toBe("block");
     expect(sandboxStore.get(sandboxSignature.id)).toMatchObject({
       state: "active", suppression_policy: "block", evidence_log_ids: ["sandbox-failure-entry"],
     });

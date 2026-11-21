@@ -156,11 +156,11 @@ describe("実Executor結果から既存監査・履歴projectionへの接続", (
       actor: "fixture-owner", channel: "test", request_id: "other-request",
     });
     expect(sameCondition.decision).toBe("require_approval");
-    expect(changedConditions.decision).toBe("require_approval");
+    expect(changedConditions.decision).toBe("block");
     expect(changedConditions.condition_change_matches).toMatchObject([{
       signature_id: savedSignature.id,
       changed_conditions: ["goal", "channel"],
-      decision: "require_approval",
+      decision: "block",
     }]);
     expect(store.get(savedSignature.id)?.evidence_log_ids).toEqual(signatures[0]!.evidence_log_ids);
     expect(differentCondition.decision).toBe("allow");

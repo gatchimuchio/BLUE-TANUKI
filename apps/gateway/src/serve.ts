@@ -2632,7 +2632,12 @@ async function serveWithOwnerLease(
         actor,
         reason: `failure_memory:${failureGate.reason}`,
       });
-      const content = `[blocked] Failure memory gate blocked execution. command_id=${cmd.id} reason=${failureGate.reason}`;
+      const changedConditions = [...new Set(
+        failureGate.condition_change_matches.flatMap((match) => match.changed_conditions),
+      )].sort();
+      const content = failureGate.condition_change_matches.length > 0
+        ? `[failure-memory-condition-reaudit-required] command_id=${cmd.id} executed=false reason=changed context does not prove the prior failure condition was resolved. changed_conditions=${changedConditions.join(",")} condition_resolution=unverified previous_signature_preserved=true old_approval_reused=false new_authority_granted=false action_invoked=false next_action=Retry remains unavailable until a cause-bound independent observation and J re-audit are connected.`
+        : `[blocked] Failure memory gate blocked execution. command_id=${cmd.id} reason=${failureGate.reason}`;
       auditGatewayStatusOutput(log, origin, actor, cmd.id, "failure_memory", content);
       if (!opts.daily_brief_read) await dispatcher.dispatch(
         replyPayload(origin, content),
