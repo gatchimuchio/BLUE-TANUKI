@@ -5,8 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { standaloneRecoveryDatabaseUrl } from "@blue-tanuki/hds-brain";
-import type { ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt, ExecutionInvocationBoundary, ExecutionWorkerIdentity,
-  ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
+import type { AgentWorkerLifecycleEvent, ExecutionIntentStore, ExecutionIntentTicket, ExecutionIntentReceipt,
+  ExecutionInvocationBoundary, ExecutionWorkerIdentity, ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
 import { BOUNDARY_EXCHANGE_SCHEMA_VERSION, BOUNDARY_EXCHANGE_CANONICALIZATION_VERSION,
   parseBoundaryExchangeAtBoundary, inspectExecutionResultDelivery, inspectOperationCommandExecutionResult,
   ExecutionGoalVersionBindingSchema, getOperationDescriptor, getToolOperationDescriptor,
@@ -18,6 +18,7 @@ const MAX_PENDING_TOOL_LIFECYCLE_EVENTS = 1_000;
 const MAX_PENDING_TOOL_LIFECYCLE_BYTES = 8_388_608;
 const MAX_PENDING_TASK_CANCELLATION_EVENTS = 1_000;
 const MAX_PENDING_TASK_CANCELLATION_BYTES = 8_388_608;
+const MAX_AGENT_WORKER_LIFECYCLE_EVENTS_PER_COMMAND = 16;
 interface ToolLifecycleEvidenceEvent {
   lifecycle_event_id: string;
   command_id: string;
@@ -29,6 +30,10 @@ interface ToolLifecycleHistoryAcknowledgement {
   observed_at_ms: number;
   used_for_authority: false;
   may_execute: false;
+}
+interface AgentWorkerLifecycleEvidenceEvent {
+  lifecycle_event_id: string;
+  event: AgentWorkerLifecycleEvent;
 }
 export interface TaskExecutionCancellationEvidence {
   cancellation_event_id: string;
@@ -57,12 +62,17 @@ type ExecutionLedgerContent =
   | { profile: "executor-intent-event.v1"; receipt: ExecutionIntentReceipt }
   | { profile: "executor-tool-lifecycle-event.v1"; event: ToolLifecycleEvidenceEvent }
   | { profile: "executor-tool-lifecycle-history-ack.v1"; acknowledgement: ToolLifecycleHistoryAcknowledgement }
+  | { profile: "executor-agent-worker-lifecycle-event.v1"; event: AgentWorkerLifecycleEvidenceEvent }
   | { profile: "executor-task-cancellation-event.v1"; event: TaskExecutionCancellationEvidence }
   | { profile: "executor-task-cancellation-history-ack.v1"; acknowledgement: TaskExecutionCancellationHistoryAcknowledgement };
 export interface PendingToolLifecycleEvidence {
   lifecycle_event_id: string;
   command_id: string;
   observation: ToolExecutionLifecycleObservation;
+}
+export interface AgentWorkerLifecycleEvidence {
+  lifecycle_event_id: string;
+  event: AgentWorkerLifecycleEvent;
 }
 export type PendingTaskExecutionCancellationEvidence = TaskExecutionCancellationEvidence;
 /** JのadmissionとBroker receiptを結ぶ非権威digest。旧ticket形式も維持する。 */
@@ -299,6 +309,59 @@ export class GatewayExecutionIntentStore implements ExecutionIntentStore {
         profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement,
       }, observed_at_ms);
     });
+  }
+  /** 子Cの本文なしlifecycle証拠をBrokerの既存耐久hash chainへ保存する。 */
+  recordAgentWorkerLifecycleEvidence(lifecycle_event_id: string, event: AgentWorkerLifecycleEvent): void {
+    const record: AgentWorkerLifecycleEvidenceEvent = { lifecycle_event_id, event: { ...event } };
+    validateAgentWorkerLifecycleEvidenceEvent(record);
+    const commandKey = digest(JSON.stringify(["gateway-executor-command.v1", event.parent_command_id]));
+    this.transaction(() => {
+      const row = this.db.prepare("SELECT ticket_id FROM execution_intents WHERE command_key=?").get(commandKey) as
+        { ticket_id: string } | undefined;
+      const receipt = row ? this.lookup(row.ticket_id) : null;
+      if (!row || !receipt || receipt.command_key !== commandKey) throw new Error("execution_agent_worker_receipt_missing");
+
+      const state = collectAgentWorkerLifecycleEvidence(this.db);
+      const prior = state.events.get(lifecycle_event_id);
+      if (prior) {
+        if (prior.ticket_id === row.ticket_id && isDeepStrictEqual(prior.event, record)) return;
+        throw new Error("execution_agent_worker_event_conflict");
+      }
+      const parentEvents = [...state.events.values()].filter((entry) =>
+        entry.event.event.parent_command_id === event.parent_command_id);
+      if (parentEvents.some((entry) => entry.event.event.child_task_digest === event.child_task_digest &&
+          entry.event.event.state === event.state)) {
+        throw new Error("execution_agent_worker_event_conflict");
+      }
+      if (parentEvents.length >= MAX_AGENT_WORKER_LIFECYCLE_EVENTS_PER_COMMAND) {
+        throw new Error("execution_agent_worker_evidence_store_full");
+      }
+      this.appendLedgerContent(row.ticket_id, {
+        profile: "executor-agent-worker-lifecycle-event.v1", event: record,
+      }, event.observed_at_ms);
+    });
+  }
+  /** 履歴永続化が任意でも保持される、本文を含まない子worker証拠を対象親から読む。 */
+  agentWorkerLifecycleEvidenceForCommands(command_ids: readonly string[], limit = 10_000): AgentWorkerLifecycleEvidence[] {
+    if (!Array.isArray(command_ids) || command_ids.length > 256 ||
+        command_ids.some((id) => typeof id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(id)) ||
+        new Set(command_ids).size !== command_ids.length || !Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new Error("execution_agent_worker_query_invalid");
+    }
+    let observations: AgentWorkerLifecycleEvidence[] = [];
+    this.transaction(() => {
+      const wanted = new Set(command_ids);
+      const state = collectAgentWorkerLifecycleEvidence(this.db);
+      const matching = [...state.events.values()]
+        .map((record) => record.event)
+        .filter((record) => wanted.has(record.event.parent_command_id));
+      if (matching.length > limit) throw new Error("execution_agent_worker_query_limit_exceeded");
+      observations = matching.map((record) => ({
+        lifecycle_event_id: record.lifecycle_event_id,
+        event: { ...record.event },
+      }));
+    });
+    return observations;
   }
   /** Keep task cancellation and settlement observations recoverable until durable CompleteHistory projection. */
   recordTaskExecutionCancellationEvidence(event: TaskExecutionCancellationEvidence): void {
@@ -849,6 +912,31 @@ function validateToolLifecycleHistoryAcknowledgement(value: unknown): asserts va
   }
 }
 
+function validateAgentWorkerLifecycleEvidenceEvent(value: unknown): asserts value is AgentWorkerLifecycleEvidenceEvent {
+  const record = asRecord(value);
+  if (!record || !hasOnlyKeys(record, ["lifecycle_event_id", "event"]) || !isUuid(record.lifecycle_event_id)) {
+    throw new Error("execution_agent_worker_event_invalid");
+  }
+  const event = asRecord(record.event);
+  const allowedKeys = ["schema_version", "parent_command_id", "parent_command_digest", "child_task_digest", "role", "state",
+    "observed_at_ms", "output_observed", "output_characters", "resource_use_digest", "used_for_authority", "may_execute"];
+  if (!event || !hasOnlyKeys(event, allowedKeys) || event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" ||
+      typeof event.parent_command_id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.parent_command_id) ||
+      event.parent_command_digest !== createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
+        .update(event.parent_command_id).digest("hex") || !/^[a-f0-9]{64}$/.test(String(event.child_task_digest)) ||
+      !["division", "independent_comparison", "audit", "redundancy"].includes(String(event.role)) ||
+      !["started", "cancel_requested", "cancelled_before_dispatch", "settled", "settled_after_abort",
+        "late_result_discarded", "residual_worker_observed"].includes(String(event.state)) ||
+      !isSafeTimestamp(event.observed_at_ms) ||
+      (event.output_observed !== undefined && event.output_observed !== true) ||
+      (event.output_characters !== undefined && (!Number.isSafeInteger(event.output_characters) ||
+        Number(event.output_characters) < 0 || event.output_observed !== true)) ||
+      (event.resource_use_digest !== undefined && !/^[a-f0-9]{64}$/.test(String(event.resource_use_digest))) ||
+      event.used_for_authority !== false || event.may_execute !== false) {
+    throw new Error("execution_agent_worker_event_invalid");
+  }
+}
+
 function validateTaskExecutionCancellationEvidence(value: unknown): asserts value is TaskExecutionCancellationEvidence {
   const event = asRecord(value);
   if (!event || !hasOnlyKeys(event, ["cancellation_event_id", "command_id", "event", "actor", "token_kind", "observed_at_ms",
@@ -908,6 +996,12 @@ function parseExecutionLedgerContent(event_json: string): ExecutionLedgerContent
         validateToolLifecycleHistoryAcknowledgement(acknowledgement);
         return { profile: "executor-tool-lifecycle-history-ack.v1", acknowledgement };
       }
+      case "executor-agent-worker-lifecycle-event.v1": {
+        if (!hasOnlyKeys(content, ["profile", "event"])) return null;
+        const event = content.event as AgentWorkerLifecycleEvidenceEvent;
+        validateAgentWorkerLifecycleEvidenceEvent(event);
+        return { profile: "executor-agent-worker-lifecycle-event.v1", event };
+      }
       case "executor-task-cancellation-event.v1": {
         if (!hasOnlyKeys(content, ["profile", "event"])) return null;
         const event = content.event as TaskExecutionCancellationEvidence;
@@ -956,6 +1050,25 @@ function collectToolLifecycleEvidence(database: DatabaseType): ToolLifecycleEvid
   return state;
 }
 
+interface AgentWorkerLifecycleEvidenceLedgerState {
+  events: Map<string, { ticket_id: string; event: AgentWorkerLifecycleEvidenceEvent }>;
+}
+
+function collectAgentWorkerLifecycleEvidence(database: DatabaseType): AgentWorkerLifecycleEvidenceLedgerState {
+  const state: AgentWorkerLifecycleEvidenceLedgerState = { events: new Map() };
+  const rows = database.prepare("SELECT ticket_id,event_json FROM execution_events ORDER BY sequence")
+    .all() as { ticket_id: string; event_json: string }[];
+  for (const row of rows) {
+    const content = parseExecutionLedgerContent(row.event_json);
+    if (!content) throw new Error("execution_event_integrity_failed");
+    if (content.profile === "executor-agent-worker-lifecycle-event.v1") {
+      if (state.events.has(content.event.lifecycle_event_id)) throw new Error("execution_agent_worker_event_conflict");
+      state.events.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
+    }
+  }
+  return state;
+}
+
 interface TaskExecutionCancellationEvidenceLedgerState {
   events: Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>;
   acknowledgements: Map<string, { ticket_id: string; history_entry_id: string }>;
@@ -992,6 +1105,7 @@ function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: bool
     const latest = new Map<string, ExecutionIntentReceipt>();
     const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
     const lifecycleAcknowledgements = new Set<string>();
+    const agentWorkerLifecycleEvents = new Map<string, { ticket_id: string; event: AgentWorkerLifecycleEvidenceEvent }>();
     const cancellationEvents = new Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>();
     const cancellationAcknowledgements = new Set<string>();
     const rows = database.prepare("SELECT sequence,ticket_id,event_json,previous_hash,event_hash FROM execution_events ORDER BY sequence").all() as
@@ -1014,6 +1128,12 @@ function verifyExecutionIntentDatabase(database: DatabaseType, checkSchema: bool
         const event = lifecycleEvents.get(eventId);
         if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) return false;
         lifecycleAcknowledgements.add(eventId);
+      } else if (content.profile === "executor-agent-worker-lifecycle-event.v1") {
+        const receipt = latest.get(row.ticket_id);
+        if (!receipt || receipt.command_key !== digest(JSON.stringify([
+          "gateway-executor-command.v1", content.event.event.parent_command_id,
+        ])) || agentWorkerLifecycleEvents.has(content.event.lifecycle_event_id)) return false;
+        agentWorkerLifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
       } else if (content.profile === "executor-task-cancellation-event.v1") {
         const receipt = latest.get(row.ticket_id);
         if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||
@@ -1210,6 +1330,7 @@ export function inspectExecutionIntentRecoveryLedger(options: {
     const latest = new Map<string, VerifiedExecutionEvent>();
     const lifecycleEvents = new Map<string, { ticket_id: string; event: ToolLifecycleEvidenceEvent }>();
     const lifecycleAcknowledgements = new Set<string>();
+    const agentWorkerLifecycleEvents = new Map<string, { ticket_id: string; event: AgentWorkerLifecycleEvidenceEvent }>();
     const cancellationEvents = new Map<string, { ticket_id: string; event: TaskExecutionCancellationEvidence }>();
     const cancellationAcknowledgements = new Set<string>();
     let previous = "0".repeat(64);
@@ -1235,6 +1356,12 @@ export function inspectExecutionIntentRecoveryLedger(options: {
           const event = lifecycleEvents.get(eventId);
           if (!event || event.ticket_id !== row.ticket_id || lifecycleAcknowledgements.has(eventId)) break;
           lifecycleAcknowledgements.add(eventId);
+        } else if (content.profile === "executor-agent-worker-lifecycle-event.v1") {
+          const receipt = latest.get(row.ticket_id)?.receipt;
+          if (!receipt || receipt.command_key !== digest(JSON.stringify([
+            "gateway-executor-command.v1", content.event.event.parent_command_id,
+          ])) || agentWorkerLifecycleEvents.has(content.event.lifecycle_event_id)) break;
+          agentWorkerLifecycleEvents.set(content.event.lifecycle_event_id, { ticket_id: row.ticket_id, event: content.event });
         } else if (content.profile === "executor-task-cancellation-event.v1") {
           const receipt = latest.get(row.ticket_id)?.receipt;
           if (!receipt || receipt.command_key !== digest(JSON.stringify(["gateway-executor-command.v1", content.event.command_id])) ||

@@ -8922,6 +8922,19 @@ async function serveWithOwnerLease(
     resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
+      const lifecycleEventId = randomUUID();
+      try {
+        executionStore.recordAgentWorkerLifecycleEvidence(lifecycleEventId, event);
+      } catch (error) {
+        gatewayLog.error("agent worker durable lifecycle evidence unavailable", {
+          command_id: event.parent_command_id,
+          child_task_digest: event.child_task_digest,
+          state: event.state,
+          error: error instanceof Error ? error.message : String(error),
+          used_for_authority: false,
+        });
+        return false;
+      }
       activeTaskExecutions.observeAgentWorkerLifecycle(event);
       const entry = recordCompleteHistory({
         kind: "audit_history",
@@ -8930,6 +8943,7 @@ async function serveWithOwnerLease(
         source: "executor_agent_worker",
         timestamp: event.observed_at_ms,
         payload: {
+          lifecycle_event_id: lifecycleEventId,
           schema_version: event.schema_version,
           parent_command_digest: event.parent_command_digest,
           child_task_digest: event.child_task_digest,
@@ -8944,13 +8958,15 @@ async function serveWithOwnerLease(
         },
       });
       if (!entry) {
-        gatewayLog.error("agent worker lifecycle evidence unavailable", {
+        gatewayLog.error("agent worker lifecycle history projection unavailable; durable evidence retained", {
+          lifecycle_event_id: lifecycleEventId,
           command_id: event.parent_command_id,
           child_task_digest: event.child_task_digest,
           state: event.state,
+          durable_store: "execution_intent_ledger",
         });
       }
-      return entry !== null;
+      return true;
     },
     on_tool_execution_lifecycle: (event: ExecutorToolExecutionLifecycleEvent) => {
       const lifecycleEventId = randomUUID();

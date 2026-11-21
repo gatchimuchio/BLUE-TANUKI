@@ -138,6 +138,72 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
     }
   });
 
+  it("CompleteHistory未設定でもAgent workerの本文なしlifecycle証拠を親receiptへ結合して再起動後に保持する", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-agent-worker-lifecycle-"));
+    const filepath = join(root, "execution-intents", "executor.sqlite");
+    const epoch = randomUUID();
+    let store = new GatewayExecutionIntentStore(filepath, epoch);
+    try {
+      const source = command("agent-parent-command");
+      const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: epoch });
+      authority.approve(source, proof(source));
+      const event = {
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1" as const,
+        parent_command_id: source.id,
+        parent_command_digest: createHash("sha256")
+          .update("blue-tanuki.agent.parent-command.v1\0").update(source.id).digest("hex"),
+        child_task_digest: "a".repeat(64),
+        role: "audit" as const,
+        state: "late_result_discarded" as const,
+        observed_at_ms: Date.now(),
+        output_observed: true as const,
+        output_characters: 41,
+        resource_use_digest: "b".repeat(64),
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      const lifecycleEventId = randomUUID();
+      store.recordAgentWorkerLifecycleEvidence(lifecycleEventId, event);
+      store.recordAgentWorkerLifecycleEvidence(lifecycleEventId, event);
+      expect(() => store.recordAgentWorkerLifecycleEvidence(randomUUID(), event))
+        .toThrow(/execution_agent_worker_event_conflict/);
+      const roles = ["division", "independent_comparison", "audit", "redundancy"] as const;
+      for (let index = 0; index < 15; index++) {
+        store.recordAgentWorkerLifecycleEvidence(randomUUID(), { ...event,
+          child_task_digest: index.toString(16).padStart(64, "0"), role: roles[index % roles.length]!,
+          state: "started", observed_at_ms: event.observed_at_ms + index + 1 });
+      }
+      expect(() => store.recordAgentWorkerLifecycleEvidence(randomUUID(), { ...event,
+        child_task_digest: "f".repeat(64), state: "started", observed_at_ms: event.observed_at_ms + 20 }))
+        .toThrow(/execution_agent_worker_evidence_store_full/);
+      const recorded = store.agentWorkerLifecycleEvidenceForCommands([source.id]);
+      expect(recorded).toHaveLength(16);
+      expect(recorded[0]).toEqual({ lifecycle_event_id: lifecycleEventId, event });
+      const unmatchedParent = "unmatched-parent";
+      expect(() => store.recordAgentWorkerLifecycleEvidence(randomUUID(), { ...event, parent_command_id: unmatchedParent,
+        parent_command_digest: createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0").update(unmatchedParent).digest("hex") }))
+        .toThrow(/execution_agent_worker_receipt_missing/);
+      expect(() => store.recordAgentWorkerLifecycleEvidence(randomUUID(), { ...event, parent_command_digest: "c".repeat(64) }))
+        .toThrow(/execution_agent_worker_event_invalid/);
+      expect(store.verifyEvents()).toBe(true);
+      store.close();
+
+      store = new GatewayExecutionIntentStore(filepath, epoch);
+      const recovered = store.agentWorkerLifecycleEvidenceForCommands([source.id]);
+      expect(recovered).toHaveLength(16);
+      expect(recovered[0]).toEqual({ lifecycle_event_id: lifecycleEventId, event });
+      expect(store.agentWorkerLifecycleEvidenceForCommands(["different-parent"])).toEqual([]);
+      expect(store.verifyEvents()).toBe(true);
+      expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
+        status: "verified", used_for_authority: false, execution_eligible: false,
+      });
+      expect(recovered[0]?.event).not.toHaveProperty("content");
+    } finally {
+      try { store.close(); } catch { /* closed before reopening */ }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("task cancellation要求とExecutor終了観測を再起動後に重複なく回復し、永続履歴後だけackする", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-task-cancel-recovery-"));
     const filepath = join(root, "execution-intents", "executor.sqlite");

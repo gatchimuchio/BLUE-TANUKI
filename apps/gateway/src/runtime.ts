@@ -405,6 +405,19 @@ async function runCliWithExecutionStore(
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     approval_authority: executorApproval,
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
+      const lifecycleEventId = randomUUID();
+      try {
+        executionStore.recordAgentWorkerLifecycleEvidence(lifecycleEventId, event);
+      } catch (error) {
+        gatewayLog.error("agent worker durable lifecycle evidence unavailable", {
+          command_id: event.parent_command_id,
+          child_task_digest: event.child_task_digest,
+          state: event.state,
+          error: error instanceof Error ? error.message : String(error),
+          used_for_authority: false,
+        });
+        return false;
+      }
       try {
         const entry = completeHistory.append({
           kind: "audit_history",
@@ -413,6 +426,7 @@ async function runCliWithExecutionStore(
           source: "executor_agent_worker",
           timestamp: event.observed_at_ms,
           payload: {
+            lifecycle_event_id: lifecycleEventId,
             schema_version: event.schema_version,
             parent_command_digest: event.parent_command_digest,
             child_task_digest: event.child_task_digest,
@@ -426,19 +440,23 @@ async function runCliWithExecutionStore(
             may_execute: false,
           },
         });
-        if (!entry) gatewayLog.error("agent worker lifecycle evidence unavailable", {
+        if (!entry) gatewayLog.error("agent worker lifecycle history projection unavailable; durable evidence retained", {
+          lifecycle_event_id: lifecycleEventId,
           command_id: event.parent_command_id,
           child_task_digest: event.child_task_digest,
           state: event.state,
+          durable_store: "execution_intent_ledger",
         });
-        return entry !== null;
+        return true;
       } catch {
-        gatewayLog.error("agent worker lifecycle evidence unavailable", {
+        gatewayLog.error("agent worker lifecycle history projection unavailable; durable evidence retained", {
+          lifecycle_event_id: lifecycleEventId,
           command_id: event.parent_command_id,
           child_task_digest: event.child_task_digest,
           state: event.state,
+          durable_store: "execution_intent_ledger",
         });
-        return false;
+        return true;
       }
     },
     file_search_worker: createFileSearchWorker({ execution_epoch: ownerLease.executionEpoch,
