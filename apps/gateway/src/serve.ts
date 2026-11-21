@@ -1,7 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isIP } from "node:net";
 import { join as joinPath, resolve as resolvePath } from "node:path";
 import {
   COMPLETE_HISTORY_SCHEMA_VERSION,
@@ -112,7 +111,9 @@ import {
   describeLLMConfig,
 } from "./llm_config.js";
 import {
+  assertLoopbackListenerHost,
   correlateOutboundReply,
+  isLoopbackListenerHost,
   InboundRouter,
   OutboundDispatcher,
   type InboundChannel,
@@ -1222,20 +1223,13 @@ interface WebChatTransportConfig {
 
 function webchatTransportFromEnvironment(env: NodeJS.ProcessEnv): WebChatTransportConfig {
   const host = nonEmptyEnv(env.WEBCHAT_HOST) ?? "127.0.0.1";
+  assertLoopbackListenerHost(host);
   const publicHost = nonEmptyEnv(env.WEBCHAT_PUBLIC_HOST) ?? host;
   const tls = webchatTlsFromEnvironment(env);
-  if (!isLoopbackWebChatHost(publicHost) && !tls) {
+  if (!isLoopbackListenerHost(publicHost) && !tls) {
     throw new Error("webchat_non_loopback_public_binding_requires_tls");
   }
   return { host, publicHost, ...(tls ? { tls } : {}) };
-}
-
-function isLoopbackWebChatHost(host: string): boolean {
-  const normalized = host.trim().replace(/^\[|\]$/g, "").toLowerCase();
-  if (normalized === "localhost" || normalized === "localhost.") return true;
-  const family = isIP(normalized);
-  if (family === 4) return Number(normalized.split(".", 1)[0]) === 127;
-  return family === 6 && normalized === "::1";
 }
 
 function webchatTlsFromEnvironment(env: NodeJS.ProcessEnv): { cert: Buffer; key: Buffer } | undefined {

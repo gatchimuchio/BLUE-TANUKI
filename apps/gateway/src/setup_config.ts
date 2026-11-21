@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { ApprovalMode } from "@blue-tanuki/hds-brain";
 import { DEFAULT_COMPUTE_BUDGET_POLICY } from "@blue-tanuki/core";
+import { assertLoopbackListenerHost } from "@blue-tanuki/channel-base";
 import { validateLLMFallbackProfilesJson } from "./llm_config.js";
 import { parseComputeBudgetPolicy } from "./compute_budget_store.js";
 import { DEFAULT_GATEWAY_RESOURCE_BACKPRESSURE_POLICY, parseGatewayResourceBackpressurePolicy } from "./resource_backpressure.js";
@@ -330,6 +331,7 @@ export function validateSetupConfig(
   if (!isNonEmptyString(config.webchat.host)) {
     throw new Error("webchat.host is required");
   }
+  assertLoopbackListenerHost(config.webchat.host);
   if (!Number.isInteger(config.webchat.port) || config.webchat.port <= 0) {
     throw new Error("webchat.port must be a positive integer");
   }

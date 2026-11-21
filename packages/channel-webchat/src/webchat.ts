@@ -68,6 +68,7 @@ import {
 } from "@blue-tanuki/protocol";
 import {
   TokenBucket,
+  assertLoopbackListenerHost,
   type InboundChannel,
   type InboundEphemeralContext,
   type InboundHandler,
@@ -1179,6 +1180,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (this.started || this.starting) {
       throw new Error("WebChatChannel: already started");
     }
+    assertLoopbackListenerHost(this.opts.host ?? "127.0.0.1");
     this.starting = true;
     this.handler = handler;
 
