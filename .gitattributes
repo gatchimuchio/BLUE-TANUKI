@@ -1,0 +1,6 @@
+# 正本raw SHAとWindows作業時の同一性を保持する局所指定。
+AGENTS.md text eol=lf
+docs/qe/現行/*.jsonl text eol=lf
+docs/qe/現行/MANIFEST.json text eol=lf
+docs/qe/採用記録/*.json text eol=lf
+docs/qe/履歴/rev6.1/* text eol=lf

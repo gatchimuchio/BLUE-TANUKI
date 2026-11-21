@@ -1,6 +1,14 @@
 # BLUE-TANUKI QE統合工程・公開ロードマップ
 
-## 現在の位置
+## 現行設計・工程の入口
+
+2026-11-21、ownerの「エージェントmdも揃えておいて／3点セットも更新しといて」に基づきrev7.0三点を採用。版・SHA・対象・効力は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)と採用イベントに固定する。本ロードマップは要約・時点付き証拠であり、独立の施工命令ではない。
+
+全域P2一括施工→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→影響是正/再QC→QE_QA→owner独立GOの順を維持。起動時は実物に対応するP0～P9の現在工程を確認し、既済結果を保持する。J制御正本/M記憶保存/Broker開始消費の責務は分離する。文書採用から施工進捗・QC/QA・GOを推定しない。
+
+## 採用前の状態記録
+
+以下は更新基点`bfd1913bcb10c963c16f4108b714ca84b9287efa`までに記録されていた観測・旧版説明。旧writer/採用版/工程状態の記述を現在規範や次の着工指示として実行しない。原文は当時の証拠として保持する。
 
 `QE_STAGE=QE_BUILD`。2026-11-19のowner指示に基づき、現行はrev6.0仕様書・工程表とrev6.1指示書の三点正本であり、実体とSHAは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)に固定する。HDS原点資料は本製品の必要資料とせず、製品に実装するHDSの判断・学習・停止とBLUE RuntimeのJ/M状態管理を区別する。現行TypeScript HDS-BRAINは現行正本のsingle-writer cutover条件が成立するまで唯一の実行authority／状態writerである。Rust shadow、契約、schemaだけでは権限移管や製品機能の成立を示さない。
 
@@ -671,6 +679,6 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 ## 維持する境界
 
-独立作業の開始・切替・再開時は、固定された現行三点セット全文を読み直す。current pinは[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)。技術原典・QE三点・要求対応表は公開可能とし、別のactive施工指示書を置かない。完了バッチや旧版の証拠は[`IMPLEMENTATION_HISTORY.md`](IMPLEMENTATION_HISTORY.md)／[`開発進捗.md`](開発進捗.md)のログに保持し、通常作業で現行正本として併読しない。J4 strict closureは通常のdocs gateから推定しない。
+固定された現行三点セット全文は03内包本文で読める。独立作業・部分作業・再開はAGENTSの要領/受領と指示/読取宣言に従い、旧decoderや重複投入を要求しない。現行入口は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)。技術資料は公開可能、保護情報と実製品GOは別。完了履歴は[IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md)・[開発進捗.md](開発進捗.md)に保持する。J4 strict closureは通常docs gateから推定しない。
 
-Approval Gate／L3、Brokerの現在権限、Mの非権限性、監査、秘密、停止・復旧、fail-closedを維持する。Gitはmain一本、Windows通常開発、単一writer、local復旧branch二世代／remote backup tag二世代。backup-ref migrationは`MIGRATION_COMPLETE`で、closeout時はremoteの`refs/tags/codex/backup-main`と`refs/tags/codex/backup-main-prev`を実SHAで照合する。意味あるBUILD_BATCHの末に限定commit／pushとremote/ref照合を行う。
+Approval Gate/L3、Broker現在権限、M非権限、監査、秘密、独立停止/復旧を維持。全5OSのWindows最終は所有実PC、Linux/macOS/Android/iOSは契約忠実な仮想/hosted等の対象別証拠を用いる。Gitはmain・単一統合writer、必要時の正規復旧ref保全。MIGRATION_COMPLETEとrefs/tags/codex/backup-main・refs/tags/codex/backup-main-prevの履歴を保持し、操作は要領/Gitの現在委任/対象/現SHAに従う。198索引をcommit/承認/品質ゲートにしない。

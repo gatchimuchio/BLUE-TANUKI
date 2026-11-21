@@ -24,7 +24,7 @@
 | 系列 | 確認できる状態 |
 |---|---|
 | **公開済み技術RC** | <code>1.0.0-rc.1</code>。Windows／macOS／Linux向けのportable installerを配布。HDS-BRAIN・承認・監査・チャット／操作面などの局所実装を含む |
-| **現行の次世代開発** | QEの **<code>QE_BUILD</code>** 段階。現行三点正本（rev6.0仕様書・工程表＋rev6.1指示書）の対象は431要求・全機能・5OSの全域一括施工。過去の局所実装・検査は履歴証拠であり、次の局所BUILD_BATCHを選ぶ命令や全体完成の証拠にはならない |
+| **現行の次世代開発** | rev7.0の仕様書・工程表・施工指示書を採用。431要求・全機能・全5OSの全域施工を維持し、現在のQE_BUILD／QE_QC／QE_QAと工程出口は対象版の実物証拠で判定。旧局所BUILD_BATCHや文書更新を全体完成へ変換しない |
 | **目標とする製品範囲** | Windows、Linux、macOS、Android、iOSの5OS。現在の対応・到達実績と、今後の完成目標は別 |
 | **未成立の全体条件** | 全能力の<code>BUILD_COVERED</code>、実物全体のQE_QC、対象別QE_QA、5OS製品受入、GA／owner GO |
 
