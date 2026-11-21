@@ -354,6 +354,12 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     ]), "utf8").digest("hex");
     return `google-calendar-event:${resourceDigest}`;
   }
+  if (tool_name === "google.drive.write" &&
+      observation?.schema_version === "blue-tanuki.google-drive-write-target-version.v1" &&
+      args.operation === "file.create") {
+    const driveObservation = GoogleDriveWriteTargetVersionObservationSchema.parse(observation);
+    return `google-drive-create:${driveObservation.target_identity_digest}`;
+  }
   if (tool_name === "google.drive.write" && typeof args.file_id === "string" &&
       ["file.update", "permissions.create", "permissions.create.public_link", "file.trash"].includes(String(args.operation))) {
     return `google-drive:${createHash("sha256").update(args.file_id, "utf8").digest("hex")}`;

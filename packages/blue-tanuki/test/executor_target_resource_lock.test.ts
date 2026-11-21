@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { approvalContextFromCommand, finalReviewRequired, HDSUpperController, operationPlanDigest,
   type HDSExecutionAuthorityBinding, type OperationPlanStatePort } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, GoogleCalendarWriteTargetVersionObservationSchema,
-  OperationPlanCheckpointSchema, requireToolOperationDescriptor,
+  GoogleDriveWriteTargetVersionObservationSchema, googleDriveWriteRequestPayloadDigest,
+  googleDriveWriteTargetIdentityDigest, OperationPlanCheckpointSchema, requireToolOperationDescriptor,
   type ExecuteCommand } from "@blue-tanuki/protocol";
 import { createExecutorApprovalAuthority, Executor, executorCommandDigest } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
@@ -538,6 +539,165 @@ describe("Executor shared target resource lock", () => {
     } finally {
       releaseFirst();
       await Promise.allSettled(executions);
+    }
+  });
+
+  it("serializes duplicate Drive creates by their parent folder and name", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let notifyFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { notifyFirstStarted = resolve; });
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const invoke = async (): Promise<unknown> => {
+      active += 1;
+      started += 1;
+      maxActive = Math.max(maxActive, active);
+      if (started === 1) {
+        notifyFirstStarted();
+        await firstGate;
+      }
+      active -= 1;
+      return { completed: true };
+    };
+    const descriptor = requireToolOperationDescriptor("google.drive.write");
+    const tools = new ToolRegistry();
+    tools.register({ name: "google.drive.write", adapter_version: descriptor.adapter_version,
+      description: "isolated Drive create-lock fixture", required_capabilities: descriptor.required_capabilities, invoke });
+    const authority = createExecutorApprovalAuthority();
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    const activeHds: HDSUpperController[] = [];
+    const parentId = "fixture-parent-folder";
+    const name = "same-name.txt";
+
+    const makeReviewedCreate = async (id: string, content: string) => {
+      const requestId = `drive-create-${id}`;
+      const planId = `drive-create-plan-${id}`;
+      const stepId = `drive-create-step-${id}`;
+      const goal = "Create one synthetic Drive file in the isolated target-lock fixture.";
+      const parameters = { operation: "file.create", parent_id: parentId, name, mime_type: "text/plain",
+        content, max_bytes: 1024, max_content_bytes: 512 };
+      const plan = {
+        version: "operation-core.v1" as const,
+        plan_id: planId,
+        request_id: requestId,
+        state: "planned" as const,
+        steps: [{
+          step_id: stepId,
+          operation: "google.drive.write",
+          target: { kind: "external_service" as const, id: "drive" },
+          state: "planned" as const,
+          effects: ["external_send" as const, "write" as const, "credential_access" as const],
+          permission: { risk: "high" as const, approval_level: "L3_final_review" as const,
+            final_review_required: true, hds_brain_authority_required: true as const, approval_gate_required: true },
+          adapter: "external_api" as const,
+          adapter_is_authority: false as const,
+          command_generated_by_adapter_only: false,
+          parameters,
+          preparation: { depends_on: [], bindings: [], preconditions: [], validation: [{
+            check_id: `drive-created-${id}`,
+            method: "result_equals" as const,
+            target: { kind: "external_service" as const, id: "drive" },
+            expected: { created: true },
+          }],
+            compensation: { available: false as const, reason: "The provider is isolated behind a fixture adapter." } },
+        }],
+        rollback: { available: false },
+        raw_command_policy: { raw_command_is_core_operation: false as const, command_generation_location: "not_applicable" as const },
+        planner_output_used_for_authority: false as const,
+        hds_brain_authority_required: true as const,
+      };
+      const revisionDigest = operationPlanDigest(plan);
+      let checkpoint = OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [{
+          owner: "fixture-owner",
+          channel: "webchat",
+          goal,
+          request_goal_criteria: {
+            status: "not_provided",
+            request_id: requestId,
+            content_sha256: createHash("sha256").update(goal, "utf8").digest("hex"),
+            criteria: [],
+            used_for_authority: false,
+          },
+          revisions: [{ digest: revisionDigest, plan }],
+          receipt_observations: [],
+          bindings: [],
+          results: [],
+        }],
+      });
+      let savedDigest: string | null = operationPlanDigest(checkpoint);
+      const statePort: OperationPlanStatePort = {
+        load: () => checkpoint,
+        compareAndSet(expectedDigest, next) {
+          if (expectedDigest !== savedDigest) throw new Error("fixture operation-plan revision changed");
+          checkpoint = OperationPlanCheckpointSchema.parse(next);
+          savedDigest = operationPlanDigest(checkpoint);
+        },
+        loadRecoveryHoldState: () => null,
+        compareAndSetRecoveryHoldState() { throw new Error("not used by Drive target-lock fixture"); },
+      };
+      const hds = new HDSUpperController({ operation_plan_state: statePort });
+      activeHds.push(hds);
+      const request = createGatewayInternalInboundRequest({
+        id: `drive-plan-review-${id}`,
+        channel: "webchat",
+        user: "fixture-owner",
+        content: `plan:review ${JSON.stringify({ plan_id: planId, revision_digest: revisionDigest, step_id: stepId })}`,
+        timestamp: 1,
+        metadata: { "blue_tanuki.operator_surface": "developer" },
+      });
+      const decision = hds.decide(request);
+      if (decision.command?.type !== "tool_call" || decision.command.payload.tool_name !== "google.drive.write" ||
+          decision.log.commit.decision !== "ASSERT") {
+        throw new Error(`fixture HDS did not issue the selected Drive create command: ${decision.log.commit.reason}`);
+      }
+      const command = decision.command;
+      const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(command);
+      if (!operationPlanBindingDigest) throw new Error("fixture Drive create has no selected Operation Plan binding");
+      const observation = GoogleDriveWriteTargetVersionObservationSchema.parse({
+        schema_version: "blue-tanuki.google-drive-write-target-version.v1",
+        operation: "file.create",
+        target_identity_digest: googleDriveWriteTargetIdentityDigest(parentId, name),
+        request_payload_digest: googleDriveWriteRequestPayloadDigest({ ...parameters, parent_id: parentId, name,
+          mime_type: "text/plain", max_bytes: 1024, max_content_bytes: 512 }),
+        parent_folder_id: parentId,
+        parent_folder_state_digest: "b".repeat(64),
+        parent_access_scope_digest: "c".repeat(64),
+        parent_access_scope_complete: true,
+        parent_access_scope_entry_count: 1,
+        target_name_absent: true,
+        command_digest: operationPlanDigest(command),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        used_for_authority: false,
+        may_execute: false,
+      });
+      const hdsBinding = hds.createExecutionAuthorityBinding(command, observation);
+      return { command, observation, hdsBinding };
+    };
+
+    let executions: Promise<unknown>[] = [];
+    try {
+      const reviewed = await Promise.all([
+        makeReviewedCreate("first", "first synthetic Drive payload"),
+        makeReviewedCreate("second", "second synthetic Drive payload"),
+      ]);
+      const commands = reviewed.map((entry) => approved(authority, entry.command, entry.observation, entry.hdsBinding));
+      const pending = commands.map((command, index) => executors[index]!.execute(command));
+      executions = pending;
+      await firstStarted;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(started).toBe(1);
+      releaseFirst();
+      const feedback = await Promise.all(pending);
+      expect(feedback.map((entry) => entry.status)).toEqual(["success", "success"]);
+      expect(maxActive).toBe(1);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled(executions);
+      activeHds.forEach((hds) => hds.close());
     }
   });
 
