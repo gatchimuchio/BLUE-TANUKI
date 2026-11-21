@@ -404,6 +404,7 @@ describe("Operation Core execution projection", () => {
         memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
           dependency_digest: "0".repeat(64), action_count: 1, evidence_digest: "1".repeat(64),
           validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+          external_change_contribution_status: "not_assessed",
           used_for_authority: false, may_execute: false },
         steps: [{ step_id: "c".repeat(64), definition_digest: "d".repeat(64), operation: "gmail.write",
           binding_source_revision_digest: selectedBinding.revision_digest,
@@ -415,7 +416,8 @@ describe("Operation Core execution projection", () => {
     expect(observed).toMatchObject({ status: "available", used_for_authority: false, plans: [{ owner_authentication_required: false,
       memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1, dependency_digest: "0".repeat(64),
         action_count: 1, evidence_digest: "1".repeat(64), validity_status: "not_assessed", improvement_status: "not_measured",
-        generalization_status: "not_assessed", used_for_authority: false, may_execute: false }, steps: [{
+        generalization_status: "not_assessed", external_change_contribution_status: "not_assessed",
+        used_for_authority: false, may_execute: false }, steps: [{
       status: "outcome_unknown", external_receipt_observation: "matched", external_receipt: {
         source: "local_inspection", match_count: 1, evidence_digest: "e".repeat(64), receipt_digest: "f".repeat(64),
       },
@@ -463,6 +465,7 @@ describe("Operation Core execution projection", () => {
         status: "awaiting_step_review", memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
           dependency_digest: "0".repeat(64), action_count: 1, evidence_digest: "1".repeat(64),
           validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+          external_change_contribution_status: "not_assessed",
           used_for_authority: true, may_execute: false }, steps: [], bindings: [] }] }))
       .toMatchObject({ status: "unavailable", plans: [] });
   });

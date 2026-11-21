@@ -2141,6 +2141,7 @@ describe("WebChatChannel — Control Center shell", () => {
           memory_interpretation_follow_up: { status: "action_observed", dependency_count: 1,
             dependency_digest: "a".repeat(64), action_count: 1, evidence_digest: "b".repeat(64),
             validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+            external_change_contribution_status: "not_assessed",
             used_for_authority: false, may_execute: false },
           status: "results_verified", step_count: 2,
           compute_source_observations: [sourceObservation(nowMs, nowMs + 600_000, "SYNTHETIC PRIVATE SOURCE PATH MUST NOT RENDER"),
@@ -2205,7 +2206,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered).toContain("記憶解釈の後続行為");
     expect(rendered).toContain("依存digestを束縛した後続行為と検証済み結果・M receiptを確認しました。");
     expect(rendered).toContain("確認行為数 1・証拠digest bbbbbbbbbbbb");
-    expect(rendered).toContain("妥当性は未評価、改善は未測定、汎化は未評価です。");
+    expect(rendered).toContain("妥当性は未評価、改善は未測定、汎化と外部変更の寄与は未評価です。");
+    expect(rendered).toContain("後続作用の観測自体は学習成立や改善の判定ではなく、権限も作りません。");
     expect(rendered).toContain("復旧後の状態確認が必要です。");
     expect(rendered).toContain("計画候補をJ台帳へ保存（採用・実行未許可）");
     expect(rendered).toContain('data-owner-authentication-required="true"');

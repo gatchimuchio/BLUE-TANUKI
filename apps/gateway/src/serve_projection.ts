@@ -247,6 +247,7 @@ export interface OperationPlanMemoryInterpretationFollowUpProjection {
   validity_status: "not_assessed";
   improvement_status: "not_measured";
   generalization_status: "not_assessed";
+  external_change_contribution_status: "not_assessed";
   used_for_authority: false;
   may_execute: false;
 }
@@ -622,9 +623,10 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
       (isRecord(memoryInterpretationFollowUp) &&
         Object.keys(memoryInterpretationFollowUp).every((key) => ["status", "dependency_count", "dependency_digest",
           "action_count", "evidence_digest", "validity_status", "improvement_status", "generalization_status",
-          "used_for_authority", "may_execute"].includes(key)) &&
+          "external_change_contribution_status", "used_for_authority", "may_execute"].includes(key)) &&
         ["status", "dependency_count", "action_count", "validity_status", "improvement_status",
-          "generalization_status", "used_for_authority", "may_execute"].every((key) => Object.hasOwn(memoryInterpretationFollowUp, key)) &&
+          "generalization_status", "external_change_contribution_status", "used_for_authority", "may_execute"]
+          .every((key) => Object.hasOwn(memoryInterpretationFollowUp, key)) &&
         ["not_referenced", "unconfirmed", "action_observed"].includes(String(memoryInterpretationFollowUp.status)) &&
         typeof memoryInterpretationFollowUp.dependency_count === "number" &&
         Number.isInteger(memoryInterpretationFollowUp.dependency_count) &&
@@ -637,6 +639,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         memoryInterpretationFollowUp.validity_status === "not_assessed" &&
         memoryInterpretationFollowUp.improvement_status === "not_measured" &&
         memoryInterpretationFollowUp.generalization_status === "not_assessed" &&
+        memoryInterpretationFollowUp.external_change_contribution_status === "not_assessed" &&
         memoryInterpretationFollowUp.used_for_authority === false && memoryInterpretationFollowUp.may_execute === false &&
         ((memoryInterpretationFollowUp.status === "not_referenced" &&
           memoryInterpretationFollowUp.dependency_count === 0 && memoryInterpretationFollowUp.action_count === 0 &&
@@ -857,6 +860,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
         validity_status: "not_assessed" as const,
         improvement_status: "not_measured" as const,
         generalization_status: "not_assessed" as const,
+        external_change_contribution_status: "not_assessed" as const,
         used_for_authority: false as const,
         may_execute: false as const,
       } } : {}),

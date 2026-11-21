@@ -4209,6 +4209,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             (memoryFollowUp.evidence_digest === undefined || /^[a-f0-9]{64}$/.test(memoryFollowUp.evidence_digest)) &&
             memoryFollowUp.validity_status === "not_assessed" && memoryFollowUp.improvement_status === "not_measured" &&
             memoryFollowUp.generalization_status === "not_assessed" &&
+            memoryFollowUp.external_change_contribution_status === "not_assessed" &&
             ((memoryFollowUp.status === "not_referenced" && memoryFollowUp.dependency_count === 0 && memoryFollowUp.action_count === 0) ||
              (memoryFollowUp.status === "unconfirmed" && memoryFollowUp.dependency_count > 0 && memoryFollowUp.action_count === 0 &&
               /^[a-f0-9]{64}$/.test(memoryFollowUp.dependency_digest || "") && memoryFollowUp.evidence_digest === undefined) ||
@@ -4222,8 +4223,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   escapeHtml(memoryFollowUp.evidence_digest.slice(0, 12)) + '</span>' :
                 memoryFollowUp.dependency_digest
                   ? '<br><span class="muted">依存digest ' + escapeHtml(memoryFollowUp.dependency_digest.slice(0, 12)) + '</span>' : '') +
-              '<br><span class="muted">妥当性は未評価、改善は未測定、汎化は未評価です。この状態は権限や学習成立の判定ではありません。</span>'
-            : '未確認です。後続行為、妥当性、改善、汎化を成立扱いしません。') + '</dd>';
+              '<br><span class="muted">妥当性は未評価、改善は未測定、汎化と外部変更の寄与は未評価です。後続作用の観測自体は学習成立や改善の判定ではなく、権限も作りません。</span>'
+            : '未確認です。後続行為、妥当性、改善、汎化、外部変更の寄与を成立扱いしません。') + '</dd>';
           const purposeRelation = isObject(plan.goal_purpose_relation) ? plan.goal_purpose_relation : null;
           const purposeReviewBindingStatus = plan.goal_purpose_binding_status ?? (purposeBinding ? "current" : "not_configured");
           const purposeRelationAllowsStepReview = purposeBinding

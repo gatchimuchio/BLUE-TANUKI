@@ -219,10 +219,14 @@ describe("plan review consumes memory interpretation reassessment", () => {
       ledger.bind(control, origin, command);
       const taskIdentityDigest = ledger.executionTaskIdentityDigest(command);
       if (!taskIdentityDigest) throw new Error("plan_memory_follow_up_task_identity_unavailable");
+      const goalIdentity = ledger.executionGoalIdentity(command);
+      if (!goalIdentity) throw new Error("plan_memory_follow_up_goal_identity_unavailable");
       const admission = { ticket_id: randomUUID(),
         command_key: createHash("sha256").update(JSON.stringify(["gateway-executor-command.v1", command.id])).digest("hex"),
         command_digest: executorCommandDigest(command), proof_digest: "b".repeat(64),
-        task_identity_digest: taskIdentityDigest, execution_epoch: randomUUID(),
+        operation_plan_binding_digest: goalIdentity.operation_plan_binding_digest,
+        target_id: goalIdentity.target_id, task_identity_digest: taskIdentityDigest,
+        goal_version_binding: goalIdentity.goal_version_binding, execution_epoch: randomUUID(),
         issued_at_ms: nowMs, expires_at_ms: nowMs + 60_000 };
       expect(ledger.beginAttempt(command, admission)).toBe(true);
 
@@ -248,6 +252,7 @@ describe("plan review consumes memory interpretation reassessment", () => {
         .plans[0]!.memory_interpretation_follow_up;
       expect(followUp).toMatchObject({ status: "action_observed", dependency_count: 1, action_count: 1,
         validity_status: "not_assessed", improvement_status: "not_measured", generalization_status: "not_assessed",
+        external_change_contribution_status: "not_assessed",
         used_for_authority: false, may_execute: false });
       expect(followUp.dependency_digest).toMatch(/^[a-f0-9]{64}$/);
       expect(followUp.evidence_digest).toMatch(/^[a-f0-9]{64}$/);

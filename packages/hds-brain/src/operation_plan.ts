@@ -6274,6 +6274,7 @@ export class OperationPlanLedger {
       validity_status: "not_assessed" as const,
       improvement_status: "not_measured" as const,
       generalization_status: "not_assessed" as const,
+      external_change_contribution_status: "not_assessed" as const,
       used_for_authority: false as const,
       may_execute: false as const,
     };
