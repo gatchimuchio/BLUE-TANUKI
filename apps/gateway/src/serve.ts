@@ -1753,6 +1753,8 @@ async function serveWithOwnerLease(
   const cronEventStore = GatewayCronEventStore.fromEnvironment(process.env, {
     verifyNoReplayDisposition: (event_id, payload_digest) =>
       hds.isCronEventNoReplayAcknowledged(event_id, payload_digest),
+    verifyCatchUpSkipDisposition: (event_id, payload_digest) =>
+      hds.isCronCatchUpOccurrenceSkipped(event_id, payload_digest),
   });
   cronEventStore.recoverInterruptedDispatches();
   cronEventStore.recoverPendingApprovalHandoffs();
@@ -3510,6 +3512,17 @@ async function serveWithOwnerLease(
         cmd.payload.tool_name === "schedule.resolve_event") {
       if (!executionEvaluation) throw new Error("cron event disposition requires its HDS approval evaluation");
       hds.acknowledgeCronEventNoReplay(cmd, executionEvaluation, actor, log.request_id);
+      const args = cmd.payload.arguments;
+      if (args && typeof args === "object" && !Array.isArray(args) &&
+          (args as Record<string, unknown>).disposition === "skip_missed_occurrence") {
+        const { event_id, payload_digest } = args as Record<string, unknown>;
+        if (typeof event_id !== "string" || typeof payload_digest !== "string" ||
+            !cron.resumeAfterCatchUpSkip(event_id, payload_digest)) {
+          gatewayLog.warn("owner-approved missed Cron occurrence was recorded; this process could not resume the exact held runtime, so a later scheduler load must re-read the durable disposition", {
+            event_id: typeof event_id === "string" ? event_id : undefined,
+          });
+        }
+      }
     }
     if (planBound) gatewayLog.info("saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
@@ -8028,38 +8041,42 @@ async function serveWithOwnerLease(
 
   function cronNoReplayReview(command: ExecuteCommand): WebChatApprovalQueueItem["cron_no_replay_review"] {
     if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event") return undefined;
-    if (canonicalStoreRestoreMaintenanceCommandId || runtimeRecoveryMutationCommandId) {
-      return {
-        kind: "cron_no_replay",
-        status: "verification_unavailable",
-        disposition: "acknowledge_no_replay",
-        original_outcome: "unknown",
-        eligible: false,
-      };
-    }
     const rawArgs = command.payload.arguments;
     const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
       ? rawArgs as Record<string, unknown>
       : undefined;
-    if (!args) {
+    const disposition = args?.disposition;
+    const validDisposition = disposition === "acknowledge_no_replay" || disposition === "skip_missed_occurrence";
+    const reviewDisposition = validDisposition ? disposition : "acknowledge_no_replay";
+    const originalOutcome = reviewDisposition === "skip_missed_occurrence" ? "not_dispatched" : "unknown";
+    if (canonicalStoreRestoreMaintenanceCommandId || runtimeRecoveryMutationCommandId) {
+      return {
+        kind: "cron_no_replay",
+        status: "verification_unavailable",
+        disposition: reviewDisposition,
+        original_outcome: originalOutcome,
+        eligible: false,
+      };
+    }
+    if (!args || !validDisposition) {
       return {
         kind: "cron_no_replay",
         status: "invalid_request",
-        disposition: "acknowledge_no_replay",
-        original_outcome: "unknown",
+        disposition: reviewDisposition,
+        original_outcome: originalOutcome,
         eligible: false,
       };
     }
     const event_id = args.event_id;
     const payload_digest = args.payload_digest;
-    if (Object.keys(args).length !== 3 || args.disposition !== "acknowledge_no_replay" ||
+    if (Object.keys(args).length !== 3 ||
         typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
         typeof payload_digest !== "string" || !/^[a-f0-9]{64}$/.test(payload_digest)) {
       return {
         kind: "cron_no_replay",
         status: "invalid_request",
-        disposition: "acknowledge_no_replay",
-        original_outcome: "unknown",
+        disposition: reviewDisposition,
+        original_outcome: originalOutcome,
         eligible: false,
       };
     }
@@ -8070,31 +8087,34 @@ async function serveWithOwnerLease(
         status: "stale_or_resolved",
         event_id,
         payload_digest,
-        disposition: "acknowledge_no_replay",
-        original_outcome: "unknown",
+        disposition: reviewDisposition,
+        original_outcome: originalOutcome,
         eligible: false,
       };
     }
-    if (current.delivery_state === "held_catch_up_policy") {
+    const observedOutcome = current.delivery_state === "held_catch_up_policy" ? "not_dispatched" : "unknown";
+    const isMissedOccurrence = current.delivery_state === "held_catch_up_policy";
+    if (isMissedOccurrence && reviewDisposition !== "skip_missed_occurrence") {
       return {
         kind: "cron_no_replay",
         status: "policy_unresolved",
         event_id,
         payload_digest,
         delivery_state: current.delivery_state,
-        disposition: "acknowledge_no_replay",
+        disposition: reviewDisposition,
         original_outcome: "not_dispatched",
         eligible: false,
       };
     }
-    if (current.delivery_state === "handler_returned") {
+    if ((!isMissedOccurrence && reviewDisposition !== "acknowledge_no_replay") ||
+        current.delivery_state === "handler_returned") {
       return {
         kind: "cron_no_replay",
         status: "stale_or_resolved",
         event_id,
         payload_digest,
-        disposition: "acknowledge_no_replay",
-        original_outcome: "unknown",
+        disposition: reviewDisposition,
+        original_outcome: observedOutcome,
         eligible: false,
       };
     }
@@ -8111,8 +8131,8 @@ async function serveWithOwnerLease(
       event_id,
       payload_digest,
       delivery_state: current.delivery_state,
-      disposition: "acknowledge_no_replay",
-      original_outcome: "unknown",
+      disposition: reviewDisposition,
+      original_outcome: observedOutcome,
       eligible: status === "eligible",
     };
   }

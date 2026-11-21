@@ -920,13 +920,17 @@ describe("HDSUpperController.decide()", () => {
 });
 
 describe("HDS Cron no-replay disposition", () => {
-  function dispositionCommand(event_id: string, payload_digest: string): ExecuteCommand {
+  function dispositionCommand(
+    event_id: string,
+    payload_digest: string,
+    disposition: "acknowledge_no_replay" | "skip_missed_occurrence" = "acknowledge_no_replay",
+  ): ExecuteCommand {
     return {
       id: "cron-disposition-command-1",
       type: "tool_call",
       payload: {
         tool_name: "schedule.resolve_event",
-        arguments: { event_id, payload_digest, disposition: "acknowledge_no_replay" },
+        arguments: { event_id, payload_digest, disposition },
       },
       constraints: {
         allowed_tools: ["schedule.resolve_event"],
@@ -997,6 +1001,40 @@ describe("HDS Cron no-replay disposition", () => {
       expect(() => hds.acknowledgeCronEventNoReplay(command, evaluation, "owner", "owner-request"))
         .toThrow(/recorded human L3 approval/);
       expect(hds.isCronEventNoReplayAcknowledged(`cron-${"d".repeat(64)}`, "e".repeat(64))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a missed occurrence skip as a distinct exact L3 disposition", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-tanuki-cron-skip-audit-"));
+    const filepath = join(root, "audit.jsonl");
+    const event_id = `cron-${"9".repeat(64)}`;
+    const payload_digest = "8".repeat(64);
+    const command = dispositionCommand(event_id, payload_digest, "skip_missed_occurrence");
+    const evaluation = evaluateApproval(command, [], { actor: "requester", default_mode: "full_access" });
+    try {
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath }) });
+      expect(evaluation.decision).toBe("ask");
+      expect(evaluation.risk).toBe("high");
+      expect(evaluation.approval_level).toBe("L3_final_review");
+      hds.onApprovalEvaluation(evaluation, { request_id: "owner-skip-request" });
+      hds.onCommandLifecycle(command.id, "approval_approved", {
+        actor: "owner",
+        reason: "human_approval:approve",
+        request_id: "owner-skip-request",
+      });
+
+      expect(hds.acknowledgeCronEventNoReplay(command, evaluation, "owner", "owner-skip-request")).toEqual({
+        event_id,
+        payload_digest,
+        disposition: "skip_missed_occurrence",
+      });
+      expect(hds.isCronCatchUpOccurrenceSkipped(event_id, payload_digest)).toBe(true);
+      expect(hds.isCronEventNoReplayAcknowledged(event_id, payload_digest)).toBe(false);
+      expect(hds.getAudit().list().some(({ log }) => "kind" in log && log.kind === "authority_event" &&
+        log.cron_event_id === event_id && log.reason === "owner_l3_approved_skip; occurrence was never dispatched")).toBe(true);
+      expect(hds.getAudit().verify()).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

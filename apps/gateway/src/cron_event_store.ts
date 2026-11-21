@@ -103,12 +103,15 @@ export class GatewayCronEventStore {
   private readonly filepath: string;
   private closed = false;
   private readonly verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
+  private readonly verifyCatchUpSkipDisposition?: (event_id: string, payload_digest: string) => boolean;
 
   constructor(filepath: string, opts: {
     verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
+    verifyCatchUpSkipDisposition?: (event_id: string, payload_digest: string) => boolean;
   } = {}) {
     this.filepath = filepath;
     this.verifyNoReplayDisposition = opts.verifyNoReplayDisposition;
+    this.verifyCatchUpSkipDisposition = opts.verifyCatchUpSkipDisposition;
     mkdirSync(dirname(resolve(filepath)), { recursive: true });
     this.db = new DatabaseSync(filepath);
     this.initializeDatabase();
@@ -237,7 +240,10 @@ export class GatewayCronEventStore {
 
   static fromEnvironment(
     env: NodeJS.ProcessEnv = process.env,
-    opts: { verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean } = {},
+    opts: {
+      verifyNoReplayDisposition?: (event_id: string, payload_digest: string) => boolean;
+      verifyCatchUpSkipDisposition?: (event_id: string, payload_digest: string) => boolean;
+    } = {},
   ): GatewayCronEventStore {
     const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
     mkdirSync(stateRoot, { recursive: true });
@@ -262,7 +268,7 @@ export class GatewayCronEventStore {
     if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event receipt time");
     const source_digest = sha256(event.source);
     return this.transaction(() => {
-      const catchUpHold = this.readLatestCatchUpHold(source_digest);
+      const catchUpHold = this.readLatestUnresolvedCatchUpHold(source_digest);
       if (catchUpHold) {
         if (event.sequence < catchUpHold.sequence) return { status: "stale" } as const;
         if (event.sequence === catchUpHold.sequence) {
@@ -271,6 +277,15 @@ export class GatewayCronEventStore {
             : { status: "identity_conflict" } as const;
         }
         return { status: "blocked_unresolved", delivery_state: "held_catch_up_policy" } as const;
+      }
+      const latestCatchUpHold = this.readLatestCatchUpHold(source_digest);
+      if (latestCatchUpHold) {
+        if (event.sequence < latestCatchUpHold.sequence) return { status: "stale" } as const;
+        if (event.sequence === latestCatchUpHold.sequence) {
+          return latestCatchUpHold.event_id === event.event_id && latestCatchUpHold.payload_digest === event.payload_digest
+            ? { status: "duplicate", delivery_state: "held_catch_up_policy" } as const
+            : { status: "identity_conflict" } as const;
+        }
       }
       const current = this.readCurrentCursor(source_digest);
       if (current && event.sequence < current.sequence) return { status: "stale" } as const;
@@ -332,7 +347,7 @@ export class GatewayCronEventStore {
     if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event hold time");
     const source_digest = sha256(event.source);
     return this.transaction(() => {
-      const existingHold = this.readLatestCatchUpHold(source_digest);
+      const existingHold = this.readLatestUnresolvedCatchUpHold(source_digest);
       if (existingHold) {
         if (event.sequence < existingHold.sequence) return { status: "stale" } as const;
         if (event.sequence === existingHold.sequence) {
@@ -355,6 +370,14 @@ export class GatewayCronEventStore {
         return { status: "already_recorded", delivery_state: current.delivery_state } as const;
       }
 
+      const latestRecordedHold = this.readLatestCatchUpHold(source_digest);
+      if (latestRecordedHold && event.sequence <= latestRecordedHold.sequence) {
+        return event.sequence < latestRecordedHold.sequence ? { status: "stale" } as const :
+          latestRecordedHold.event_id === event.event_id && latestRecordedHold.payload_digest === event.payload_digest
+            ? { status: "stale" } as const
+            : { status: "identity_conflict" } as const;
+      }
+
       this.archiveEvent({
         source_digest,
         sequence: event.sequence,
@@ -372,7 +395,7 @@ export class GatewayCronEventStore {
     if (typeof source !== "string" || source.trim().length === 0 || source.length > 200) {
       throw new Error("invalid cron event source");
     }
-    const row = this.readLatestCatchUpHold(sha256(source.normalize("NFKC").trim()));
+    const row = this.readLatestUnresolvedCatchUpHold(sha256(source.normalize("NFKC").trim()));
     if (!row) return null;
     return {
       source_digest: row.source_digest,
@@ -380,7 +403,7 @@ export class GatewayCronEventStore {
       event_id: row.event_id,
       payload_digest: row.payload_digest,
       delivery_state: "held_catch_up_policy",
-      resolution_state: "policy_unresolved",
+      resolution_state: this.resolutionState(row.event_id, row.payload_digest, "held_catch_up_policy"),
       updated_at_ms: row.updated_at_ms,
     };
   }
@@ -785,12 +808,14 @@ export class GatewayCronEventStore {
     payload_digest: string,
     delivery_state: CronEventDeliveryState,
   ): CronEventResolutionState {
-    if (delivery_state === "held_catch_up_policy") return "policy_unresolved";
-    if (!this.verifyNoReplayDisposition) return "unacknowledged";
+    const verifier = delivery_state === "held_catch_up_policy"
+      ? this.verifyCatchUpSkipDisposition
+      : this.verifyNoReplayDisposition;
+    if (!verifier) return delivery_state === "held_catch_up_policy" ? "policy_unresolved" : "unacknowledged";
     try {
-      return this.verifyNoReplayDisposition(event_id, payload_digest)
+      return verifier(event_id, payload_digest)
         ? "owner_acknowledged_no_replay"
-        : "unacknowledged";
+        : delivery_state === "held_catch_up_policy" ? "policy_unresolved" : "unacknowledged";
     } catch {
       return "verification_unavailable";
     }
@@ -803,6 +828,19 @@ export class GatewayCronEventStore {
     if (!row) return null;
     validateCronEventHistoryRow(row);
     return row;
+  }
+
+  private readLatestUnresolvedCatchUpHold(source_digest: string): CronEventHistoryRow | null {
+    const rows = this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
+      FROM cron_event_archive WHERE source_digest=? AND delivery_state='held_catch_up_policy'
+      ORDER BY sequence DESC`).all(source_digest) as unknown as CronEventHistoryRow[];
+    for (const row of rows) {
+      validateCronEventHistoryRow(row);
+      if (this.resolutionState(row.event_id, row.payload_digest, "held_catch_up_policy") !== "owner_acknowledged_no_replay") {
+        return row;
+      }
+    }
+    return null;
   }
 
   private readCatchUpHoldRows(): CronEventCursorSnapshot[] {
@@ -819,13 +857,15 @@ export class GatewayCronEventStore {
     for (const row of rows) {
       try {
         validateCronEventHistoryRow(row);
+        const resolution_state = this.resolutionState(row.event_id, row.payload_digest, "held_catch_up_policy");
+        if (resolution_state === "owner_acknowledged_no_replay") continue;
         events.push({
           source_digest: row.source_digest,
           sequence: row.sequence,
           event_id: row.event_id,
           payload_digest: row.payload_digest,
           delivery_state: "held_catch_up_policy",
-          resolution_state: "policy_unresolved",
+          resolution_state,
           updated_at_ms: row.updated_at_ms,
         });
       } catch {

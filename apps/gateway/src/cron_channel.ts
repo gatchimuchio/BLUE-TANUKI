@@ -256,6 +256,27 @@ export class CronSchedulerChannel implements InboundChannel {
     return this.inFlightEventIds.has(event_id);
   }
 
+  /** Resume only the exact source hold after its owner-approved skip is visible in HDS audit. */
+  resumeAfterCatchUpSkip(event_id: string, payload_digest: string): boolean {
+    if (!this.started || this.recoveryHold || this.recoveryRestorePause || this.recoveryRestoreQuiescing || !this.handler) {
+      return false;
+    }
+    let resumed = false;
+    for (const runtime of this.runtimes.values()) {
+      const held = runtime.catchUpHold;
+      if (!held || held.event_id !== event_id || held.payload_digest !== payload_digest ||
+          !runtime.task.enabled || (runtime.task.content_source_hold && !runtime.task.local_acquisition_due_only)) {
+        continue;
+      }
+      const source = cronTaskEventSource(runtime.task);
+      if (this.eventStore?.latestCatchUpHoldForSource(source)) continue;
+      runtime.catchUpHold = undefined;
+      this.scheduleTask(runtime, this.handler);
+      resumed = true;
+    }
+    return resumed;
+  }
+
   upsertTask(task: CronTaskOptions): CronTaskSnapshot {
     const [normalized] = normalizeCronTasks([task]);
     if (!normalized) throw new Error("cron upsertTask received no task");

@@ -75,6 +75,8 @@ describe("schedule.resolve_event tool", () => {
       const idleTool = createCronEventResolutionTool(store, { isEventInFlight: () => false });
       await expect(idleTool.invoke({ ...args, payload_digest: "f".repeat(64) }, context))
         .rejects.toThrow(/stale or not unresolved/);
+      await expect(idleTool.invoke({ ...args, disposition: "skip_missed_occurrence" }, context))
+        .rejects.toThrow(/skip disposition applies only/);
       await expect(idleTool.invoke({ ...args, replay: true }, context))
         .rejects.toThrow(/requires exact/);
     } finally {
@@ -82,7 +84,7 @@ describe("schedule.resolve_event tool", () => {
     }
   });
 
-  it("does not translate a catch-up policy hold into an unknown-outcome no-replay disposition", async () => {
+  it("requires the explicit skip disposition for an occurrence that was never dispatched", async () => {
     const { store } = makeStore();
     const held = makeEvent("cron:runtime:policy-review", 1_000, "synthetic missed occurrence");
     expect(store.holdForCatchUpPolicy(held, 1_500)).toEqual({ status: "held" });
@@ -92,7 +94,23 @@ describe("schedule.resolve_event tool", () => {
         event_id: held.event_id,
         payload_digest: held.payload_digest,
         disposition: "acknowledge_no_replay",
-      }, context)).rejects.toThrow(/catch-up policy is unresolved/);
+      }, context)).rejects.toThrow(/requires the explicit skip disposition/);
+      await expect(tool.invoke({
+        event_id: held.event_id,
+        payload_digest: held.payload_digest,
+        disposition: "skip_missed_occurrence",
+      }, context)).resolves.toEqual({
+        status: "validated_for_hds_disposition",
+        event_id: held.event_id,
+        payload_digest: held.payload_digest,
+        original_delivery_state: "held_catch_up_policy",
+        disposition: "skip_missed_occurrence",
+        external_outcome: "not_dispatched",
+      });
+      expect(store.unresolvedEvent(held.event_id, held.payload_digest)).toMatchObject({
+        delivery_state: "held_catch_up_policy",
+        resolution_state: "policy_unresolved",
+      });
     } finally {
       store.close();
     }

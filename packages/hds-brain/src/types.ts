@@ -654,7 +654,7 @@ export interface AuthorityEventLog {
   authority_trace?: ApprovalEvaluation["authority_trace"];
   cron_event_id?: string;
   cron_payload_digest?: string;
-  cron_disposition?: "acknowledge_no_replay";
+  cron_disposition?: "acknowledge_no_replay" | "skip_missed_occurrence";
   /** Stable correlation for a local, deny-only safety-control event. */
   control_event_id?: string;
   /** Original event time when a durable safety-control event is reconciled after recovery. */

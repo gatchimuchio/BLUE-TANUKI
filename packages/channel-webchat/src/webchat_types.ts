@@ -218,7 +218,7 @@ export interface WebChatCronNoReplayReview {
   event_id?: string;
   payload_digest?: string;
   delivery_state?: "dispatching" | "outcome_unknown" | "held_catch_up_policy";
-  disposition: "acknowledge_no_replay";
+  disposition: "acknowledge_no_replay" | "skip_missed_occurrence";
   original_outcome: "unknown" | "not_dispatched";
   eligible: boolean;
 }

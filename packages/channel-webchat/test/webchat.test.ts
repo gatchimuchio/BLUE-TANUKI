@@ -9278,6 +9278,55 @@ describe("WebChatChannel — approval API", () => {
     }
   });
 
+  it("returns an explicit not-dispatched skip disposition in the approval queue", async () => {
+    const eventId = `cron-${"c".repeat(64)}`;
+    const payloadDigest = "d".repeat(64);
+    const ctx = await setup({
+      approval: {
+        list: async () => [{
+          command_id: "cmd-cron-skip-missed",
+          request_id: "req-cron-skip-missed",
+          operation: "schedule.resolve_event",
+          risk: "high",
+          approval_level: "L3_final_review",
+          final_review_required: true,
+          reason: "final_review_required",
+          approval_token: "one-time-token",
+          cron_no_replay_review: {
+            kind: "cron_no_replay",
+            status: "eligible",
+            event_id: eventId,
+            payload_digest: payloadDigest,
+            delivery_state: "held_catch_up_policy",
+            disposition: "skip_missed_occurrence",
+            original_outcome: "not_dispatched",
+            eligible: true,
+          },
+        }],
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const response = await getRaw(ctx.port, "/approval", {
+        authorization: `Bearer ${RESUME_TOKEN}`,
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text).pending_approvals[0]).toMatchObject({
+        operation: "schedule.resolve_event",
+        cron_no_replay_review: {
+          event_id: eventId,
+          payload_digest: payloadDigest,
+          delivery_state: "held_catch_up_policy",
+          disposition: "skip_missed_occurrence",
+          original_outcome: "not_dispatched",
+          eligible: true,
+        },
+      });
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("routes POST /approval/:id through the same one-time resume approval gate", async () => {
     const calls: unknown[] = [];
     const ctx = await setup({

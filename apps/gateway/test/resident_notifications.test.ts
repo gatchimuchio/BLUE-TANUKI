@@ -397,6 +397,35 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(notifications[0]).not.toHaveProperty("external_receipt_observation_status");
   });
 
+  it("keeps a missed occurrence held when skip-audit verification is unavailable", () => {
+    const event = {
+      source_digest: "a".repeat(64),
+      sequence: 42,
+      event_id: "cron-event-held-unverified",
+      payload_digest: "b".repeat(64),
+      delivery_state: "held_catch_up_policy" as const,
+      resolution_state: "verification_unavailable" as const,
+      updated_at_ms: 950,
+    };
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [event],
+    });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      kind: "schedule_catch_up_policy_held",
+      source: "cron_event_archive",
+      cron_resolution_state: "verification_unavailable",
+      next_action: expect.stringContaining("audit verification"),
+    });
+    expect(notifications[0]?.message).toContain("was not dispatched");
+    expect(notifications[0]?.message).toContain("not an unknown delivery result");
+  });
+
   it.each([
     [undefined, "projection_unavailable"],
     [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [] }, "no_matching_plan"],

@@ -19,9 +19,12 @@ import {
 import { createCronEventResultReceipt } from "../src/cron_event_result_receipt.js";
 import { InboundRouter } from "@blue-tanuki/channel-base";
 
-function makeTestEventStore(prefix: string): { root: string; store: GatewayCronEventStore } {
+function makeTestEventStore(
+  prefix: string,
+  opts: ConstructorParameters<typeof GatewayCronEventStore>[1] = {},
+): { root: string; store: GatewayCronEventStore } {
   const root = mkdtempSync(join(tmpdir(), prefix));
-  return { root, store: new GatewayCronEventStore(join(root, "private", "cron-events.sqlite")) };
+  return { root, store: new GatewayCronEventStore(join(root, "private", "cron-events.sqlite"), opts) };
 }
 
 describe("DailyBriefCronChannel snapshot", () => {
@@ -107,7 +110,13 @@ describe("daily wall-clock scheduling", () => {
     vi.useFakeTimers();
     const targetAt = Date.UTC(2026, 4, 9, 7, 0);
     vi.setSystemTime(targetAt - 5 * 60_000);
-    const { root, store } = makeTestEventStore("blue-tanuki-cron-clock-jump-");
+    let skipped = false;
+    let skippedEventId: string | null = null;
+    let skippedPayloadDigest: string | null = null;
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-clock-jump-", {
+      verifyCatchUpSkipDisposition: (event_id, payload_digest) =>
+        skipped && event_id === skippedEventId && payload_digest === skippedPayloadDigest,
+    });
     const received: number[] = [];
     const ch = new CronSchedulerChannel({
       tasks: [{
@@ -141,13 +150,24 @@ describe("daily wall-clock scheduling", () => {
       expect(heldEvent).toMatchObject({ sequence: targetAt, resolution_state: "policy_unresolved" });
       expect(heldEvent && store.resultReceipt({ ...heldEvent, source: "cron:boot:clock-jump" })).toBeNull();
 
+      skippedEventId = heldEvent?.event_id ?? null;
+      skippedPayloadDigest = heldEvent?.payload_digest ?? null;
+      expect(ch.resumeAfterCatchUpSkip(heldEvent!.event_id, heldEvent!.payload_digest)).toBe(false);
+      skipped = true;
+      expect(ch.resumeAfterCatchUpSkip(heldEvent!.event_id, heldEvent!.payload_digest)).toBe(true);
+      const nextHeldEvent = store.unresolvedEvents().find((event) => event.delivery_state === "held_catch_up_policy");
+      expect(nextHeldEvent).toMatchObject({ sequence: targetAt + 24 * 60 * 60_000, resolution_state: "policy_unresolved" });
+      expect(received).toEqual([]);
+
       const restarted = new CronSchedulerChannel({
         tasks: [{ id: "clock-jump", channel: "webchat", target: "local-user", content: "synthetic daily event", time: "07:00", time_zone: "UTC" }],
         event_store: store,
         log: () => undefined,
       });
       await restarted.start(async (request) => { received.push(request.timestamp); });
-      expect(restarted.snapshot()[0]).toMatchObject({ running: false, next_fire_at_ms: null, catch_up_hold: { persisted: true } });
+      expect(restarted.snapshot()[0]).toMatchObject({ running: false, next_fire_at_ms: null, catch_up_hold: {
+        persisted: true, scheduled_at_ms: targetAt + 24 * 60 * 60_000,
+      } });
       expect(received).toEqual([]);
       await restarted.stop();
     } finally {

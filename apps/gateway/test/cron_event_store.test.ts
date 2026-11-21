@@ -325,6 +325,39 @@ describe("GatewayCronEventStore", () => {
     }
   });
 
+  it("skips only an exact held occurrence after its separate HDS skip audit is verified", () => {
+    const { filepath, store } = makeStore();
+    const missed = makeEvent("cron:runtime:catch-up-skip", 9_000, "synthetic missed event");
+    const next = makeEvent("cron:runtime:catch-up-skip", 10_000, "next synthetic event");
+    let skipped = false;
+    store.close();
+    const verified = new GatewayCronEventStore(filepath, {
+      verifyCatchUpSkipDisposition: (event_id, payload_digest) =>
+        skipped && event_id === missed.event_id && payload_digest === missed.payload_digest,
+    });
+    try {
+      expect(verified.holdForCatchUpPolicy(missed, 9_500)).toEqual({ status: "held" });
+      expect(verified.latestCatchUpHoldForSource(missed.source)).toMatchObject({
+        event_id: missed.event_id,
+        resolution_state: "policy_unresolved",
+      });
+      expect(verified.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "held_catch_up_policy" });
+
+      skipped = true;
+      expect(verified.latestCatchUpHoldForSource(missed.source)).toBeNull();
+      expect(verified.latestSequenceForSource(missed.source)).toBe(missed.sequence);
+      expect(verified.unresolvedEvents()).toEqual([]);
+      expect(verified.claim(missed)).toEqual({ status: "duplicate", delivery_state: "held_catch_up_policy" });
+      expect(verified.claim(next)).toEqual({ status: "accepted" });
+      expect(verified.unresolvedEvents()).toEqual([expect.objectContaining({
+        event_id: next.event_id,
+        delivery_state: "dispatching",
+      })]);
+    } finally {
+      verified.close();
+    }
+  });
+
   it("reports unavailable verification and keeps the next event blocked", () => {
     const { store, filepath } = makeStore();
     const unresolved = makeEvent("cron:runtime:verify", 7_000, "synthetic action");

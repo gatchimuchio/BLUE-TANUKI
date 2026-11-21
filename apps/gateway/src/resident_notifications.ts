@@ -257,7 +257,9 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const event of input.unresolved_cron_events ?? []) {
-    const catchUpPolicyHold = event.resolution_state === "policy_unresolved";
+    const catchUpPolicyHold = event.delivery_state === "held_catch_up_policy" &&
+      event.resolution_state !== "owner_acknowledged_no_replay";
+    const catchUpVerificationUnavailable = catchUpPolicyHold && event.resolution_state === "verification_unavailable";
     const resultCorrelation = catchUpPolicyHold ? {} : cronResultCorrelation(event.event_id, input.operation_plan_projection);
     const externalReceiptCorrelation = catchUpPolicyHold
       ? {}
@@ -276,7 +278,9 @@ export function buildResidentNotificationsSnapshot(
         ? "Scheduled occurrence held pending catch-up policy"
         : "Schedule delivery result is unsettled",
       message: catchUpPolicyHold
-        ? `Cron event sequence ${event.sequence} was not dispatched because its catch-up policy is unresolved; later events from this source remain held. This is a policy hold, not an unknown delivery result.`
+        ? catchUpVerificationUnavailable
+          ? `Cron event sequence ${event.sequence} was not dispatched. Its owner skip audit could not be verified, so this source remains held. This is not an unknown delivery result.`
+          : `Cron event sequence ${event.sequence} was not dispatched and remains held because the catch-up policy is unresolved. Later events from this source remain held until the owner explicitly skips this exact occurrence through L3 review. This is a policy hold, not an unknown delivery result.`
         : event.resolution_state === "owner_acknowledged_no_replay"
         ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the owner recorded a no-replay disposition, so later events may proceed. The original outcome remains unknown. A saved-result link is evidence correlation only.${receiptDisclosure}`
         : event.resolution_state === "verification_unavailable"
@@ -292,7 +296,9 @@ export function buildResidentNotificationsSnapshot(
       ...resultCorrelation,
       ...externalReceiptCorrelation,
       next_action: catchUpPolicyHold
-        ? "Resolve the schedule catch-up policy before allowing this source to fire again. Do not treat the held occurrence as sent or replay it automatically."
+        ? catchUpVerificationUnavailable
+          ? "The audit verification needed to determine whether this exact occurrence was skipped is unavailable. Keep the source held and restore audit verification before deciding; do not replay it."
+          : "This occurrence was never dispatched. If it should be omitted, request schedule.resolve_event with skip_missed_occurrence for this exact event and payload digest, then complete L3 review. That decision skips only this occurrence; later missed occurrences remain held. Do not replay it automatically."
         : event.resolution_state === "owner_acknowledged_no_replay"
         ? "The next event may proceed, but this result is still unknown; inspect the authorized target independently before treating the action as complete."
         : "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",

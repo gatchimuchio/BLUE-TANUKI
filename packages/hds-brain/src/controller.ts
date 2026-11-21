@@ -3269,7 +3269,7 @@ ${planControl.question}`,
     evaluation: ApprovalEvaluation,
     actor: string,
     request_id: string,
-  ): { event_id: string; payload_digest: string; disposition: "acknowledge_no_replay" } {
+  ): { event_id: string; payload_digest: string; disposition: "acknowledge_no_replay" | "skip_missed_occurrence" } {
     if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.resolve_event" ||
         !command.payload.arguments || typeof command.payload.arguments !== "object" ||
         Array.isArray(command.payload.arguments)) {
@@ -3278,7 +3278,8 @@ ${planControl.question}`,
     const args = command.payload.arguments as Record<string, unknown>;
     const event_id = args.event_id;
     const payload_digest = args.payload_digest;
-    if (Object.keys(args).length !== 3 || args.disposition !== "acknowledge_no_replay" ||
+    if (Object.keys(args).length !== 3 ||
+        (args.disposition !== "acknowledge_no_replay" && args.disposition !== "skip_missed_occurrence") ||
         typeof event_id !== "string" || !/^cron-[a-f0-9]{64}$/.test(event_id) ||
         typeof payload_digest !== "string" || !/^[a-f0-9]{64}$/.test(payload_digest)) {
       throw new Error("cron event disposition arguments are invalid");
@@ -3311,43 +3312,63 @@ ${planControl.question}`,
     if (!recordedL3Ask || !explicitHumanApproval) {
       throw new Error("cron event disposition requires a recorded human L3 approval");
     }
-    if (this.isCronEventNoReplayAcknowledged(event_id, payload_digest)) {
+    if (this.isCronEventNoReplayAcknowledged(event_id, payload_digest) ||
+        this.isCronCatchUpOccurrenceSkipped(event_id, payload_digest)) {
       throw new Error("cron event already has an owner no-replay disposition");
     }
+    const disposition = args.disposition;
     this.audit.append({
       kind: "authority_event",
       event: "cron_event_no_replay_acknowledged",
       request_id,
       command_id,
       actor: normalizedActor,
-      reason: "owner_l3_approved_no_replay; original outcome remains unknown",
+      reason: disposition === "acknowledge_no_replay"
+        ? "owner_l3_approved_no_replay; original outcome remains unknown"
+        : "owner_l3_approved_skip; occurrence was never dispatched",
       operation: evaluation.context.operation,
       target_scope: evaluation.context.target_scope,
       risk: evaluation.risk,
       authority_trace: evaluation.authority_trace,
       cron_event_id: event_id,
       cron_payload_digest: payload_digest,
-      cron_disposition: "acknowledge_no_replay",
+      cron_disposition: disposition,
       timestamp: this.nowMs(),
     });
-    return { event_id, payload_digest, disposition: "acknowledge_no_replay" };
+    return { event_id, payload_digest, disposition };
   }
 
   /** Read-only verification used by the Cron cursor to decide whether it may advance. */
   isCronEventNoReplayAcknowledged(event_id: string, payload_digest: string): boolean {
+    return this.verifyCronEventNoReplayAudit(event_id, payload_digest, "acknowledge_no_replay");
+  }
+
+  /** Read-only verification for an owner-approved skip of an exact, never-dispatched missed occurrence. */
+  isCronCatchUpOccurrenceSkipped(event_id: string, payload_digest: string): boolean {
+    return this.verifyCronEventNoReplayAudit(event_id, payload_digest, "skip_missed_occurrence");
+  }
+
+  private verifyCronEventNoReplayAudit(
+    event_id: string,
+    payload_digest: string,
+    disposition: "acknowledge_no_replay" | "skip_missed_occurrence",
+  ): boolean {
     if (!/^cron-[a-f0-9]{64}$/.test(event_id) || !/^[a-f0-9]{64}$/.test(payload_digest)) return false;
     if (!this.audit.isPersistent() || !this.audit.verify()) {
       throw new Error("cron no-replay disposition audit is unavailable or invalid");
     }
     const entries = this.audit.list();
+    const expectedReason = disposition === "acknowledge_no_replay"
+      ? "owner_l3_approved_no_replay; original outcome remains unknown"
+      : "owner_l3_approved_skip; occurrence was never dispatched";
     return entries.some(({ log }) => {
       if (!("kind" in log) || log.kind !== "authority_event" ||
           log.event !== "cron_event_no_replay_acknowledged" ||
           log.cron_event_id !== event_id || log.cron_payload_digest !== payload_digest ||
-          log.cron_disposition !== "acknowledge_no_replay" ||
+          log.cron_disposition !== disposition ||
           log.operation !== "schedule.resolve_event" || log.risk !== "high" ||
           log.actor === "system" || !log.command_id || !log.request_id ||
-          log.reason !== "owner_l3_approved_no_replay; original outcome remains unknown" ||
+          log.reason !== expectedReason ||
           log.authority_trace?.resolved_factors.operation !== "schedule.resolve_event" ||
           !log.authority_trace.resolved_factors.final_review_required) return false;
       const matchingL3Ask = entries.some(({ log: candidate }) => "kind" in candidate && candidate.kind === "approval_gate" &&

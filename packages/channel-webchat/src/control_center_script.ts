@@ -4664,6 +4664,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               const cronReview = isObject(item.cron_no_replay_review) && item.cron_no_replay_review.kind === "cron_no_replay"
                 ? item.cron_no_replay_review
                 : null;
+              const cronSkipMissedOccurrence = cronReview?.disposition === "skip_missed_occurrence";
               const goalPurposeReview = isObject(item.goal_purpose_change_review) && item.goal_purpose_change_review.kind === "goal_purpose_change"
                 ? item.goal_purpose_change_review
                 : null;
@@ -4729,10 +4730,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                     (cronReview.event_id ? '<dt>event ID</dt><dd class="mono">' + escapeHtml(cronReview.event_id) + '</dd>' : '') +
                     (cronReview.payload_digest ? '<dt>payload digest</dt><dd class="mono">' + escapeHtml(cronReview.payload_digest) + '</dd>' : '') +
                     (cronReview.delivery_state ? '<dt>cursor state</dt><dd>' + escapeHtml(cronReview.delivery_state) + '</dd>' : '') +
-                    '<dt>disposition</dt><dd>acknowledge no replay</dd>' +
-                    '<dt>external outcome</dt><dd>unknown</dd>' +
+                    '<dt>disposition</dt><dd>' + (cronSkipMissedOccurrence ? 'skip this exact missed occurrence' : 'acknowledge no replay') + '</dd>' +
+                    '<dt>external outcome</dt><dd>' + (cronReview.original_outcome === "not_dispatched" ? 'not dispatched' : 'unknown') + '</dd>' +
                     '<dt>approval readiness</dt><dd>' + escapeHtml(cronReview.status || "unknown") + '</dd>' +
-                    '</dl><p class="muted">Approval allows the next Cron event to proceed; it does not confirm this delivery. The event identity and in-flight state are checked again before recording.</p></section>'
+                    '</dl><p class="muted">' + (cronSkipMissedOccurrence
+                      ? 'Approval skips this exact occurrence without running it. Any later missed occurrence remains subject to its own hold. The event identity and current hold are checked again before recording.'
+                      : 'Approval allows the next Cron event to proceed; it does not confirm this delivery. The event identity and in-flight state are checked again before recording.') + '</p></section>'
                   : '') +
                 (goalPurposeReview
                   ? '<section class="approval-content-review"><strong>Delegated goal purpose change</strong><dl class="kv">' +
