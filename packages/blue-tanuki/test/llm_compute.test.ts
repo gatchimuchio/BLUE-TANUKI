@@ -101,6 +101,7 @@ describe("LLMComputeAdapter", () => {
         expect(input.scope.parent_task_identity_digest).toBe("c".repeat(64));
         expect(input.scope.task_identity_digest).toBe("d".repeat(64));
         expect(input.reserved_tokens).toBe(256);
+        expect(input.reserved_compute_ms).toBe(6_000);
         expect(input.reserved_cost).toEqual({ amount: 0.5, currency: "USD", source: "CONFIG" });
         return {
           reservation_id: "e".repeat(64),
@@ -284,7 +285,9 @@ describe("LLMComputeAdapter", () => {
   it("records a permitted provider switch and bounded estimated cost in execution identity", async () => {
     class Primary implements LLMBackend {
       readonly name = "primary";
+      calls = 0;
       async call(): Promise<LLMResponse> {
+        this.calls += 1;
         throw new LLMProviderError("primary unavailable", {
           provider: this.name,
           kind: "remote_service_unavailable",
@@ -303,18 +306,18 @@ describe("LLMComputeAdapter", () => {
     }
     const primary = new Primary();
     const backup = new Backup();
-    const registry = new LLMRegistry({ retry: { max_attempts: 1 } })
+    const registry = new LLMRegistry({ retry: { max_attempts: 2, max_delay_ms: 37 }, sleep: async () => {} })
       .register(primary)
       .register(backup)
       .setDefault("primary")
       .setFallback("backup")
       .setFallbackProfile("primary", {
         capabilities: ["llm.text.generate"],
-        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
       })
       .setFallbackProfile("backup", {
         capabilities: ["llm.text.generate"],
-        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+        max_cost_per_attempt: { amount: 0.05, currency: "USD" },
       });
     const request = computeRequest();
     request.data_exposure_scope.requested_egress_provider = "registry-default";
@@ -330,11 +333,33 @@ describe("LLMComputeAdapter", () => {
       currency: "USD",
       source: "CONFIG",
     });
-    expect(registry.maximumCallsForRequest(request.input, request.fallback_authorization)).toBe(2);
+    expect(registry.maximumCallsForRequest(request.input, request.fallback_authorization)).toBe(4);
+    expect(registry.maximumComputeMsForRequest(request.input, 2_000, request.fallback_authorization)).toBe(8_074);
+    request.budget_scope = {
+      parent_task_identity_digest: "c".repeat(64),
+      task_identity_digest: "d".repeat(64),
+    };
+    let reserved: Parameters<ComputeBudgetPort["reserve"]>[0] | undefined;
+    let reservationCount = 0;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        reservationCount += 1;
+        reserved = input;
+        return {
+          reservation_id: "f".repeat(64),
+          reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms,
+          reserved_cost: input.reserved_cost,
+        };
+      },
+      settle() {},
+    };
 
-    const result = await new LLMComputeAdapter(registry).compute(request);
+    const result = await new LLMComputeAdapter(registry, budget).compute(request);
 
+    expect(primary.calls).toBe(2);
     expect(backup.seen).toHaveLength(1);
+    expect(reserved).toMatchObject({ reserved_tokens: 512, reserved_compute_ms: 8_074 });
     expect(backup.seen[0]).toEqual(request.input);
     expect(result.execution_identity.provider).toEqual({
       requested: "registry-default",
@@ -360,6 +385,17 @@ describe("LLMComputeAdapter", () => {
       source: "CONFIG",
     });
     expect(result.authority_boundary.used_for_authority).toBe(false);
+
+    const overflowRequest: ComputeRequest<LLMRequest> = {
+      ...request,
+      request_id: "request-overflow",
+      resource_limits: { ...request.resource_limits, timeout_ms: Number.MAX_SAFE_INTEGER },
+    };
+    await expect(new LLMComputeAdapter(registry, budget).compute(overflowRequest))
+      .rejects.toThrow("llm_compute_budget_compute_upper_bound_unavailable");
+    expect(reservationCount).toBe(1);
+    expect(primary.calls).toBe(2);
+    expect(backup.seen).toHaveLength(1);
 
     const historyRequest = computeRequest();
     historyRequest.data_exposure_scope = {

@@ -310,6 +310,32 @@ export class LLMRegistry implements LLMBackend {
     return this.retryPolicy.max_attempts * (selectedCalls + (canFallback ? fallbackCalls : 0));
   }
 
+  /** Upper elapsed-time bound for every routed provider call plus bounded retry delays. */
+  maximumComputeMsForRequest(
+    req: LLMRequest,
+    perCallTimeoutMs: number,
+    fallbackAuthorization?: LLMFallbackAuthorization,
+  ): number | undefined {
+    if (!Number.isSafeInteger(perCallTimeoutMs) || perCallTimeoutMs <= 0) return undefined;
+    const selected = this.resolveWithName(req.backend_hint);
+    const canFallback = Boolean(this.fallbackName && this.authorizedFallbackCost(
+      selected.name,
+      this.fallbackName,
+      req,
+      fallbackAuthorization,
+    ));
+    const routeCount = canFallback ? 2 : 1;
+    const calls = this.maximumCallsForRequest(req, fallbackAuthorization);
+    const attempts = this.retryPolicy.max_attempts;
+    const maxDelayMs = this.retryPolicy.max_delay_ms;
+    if (!Number.isSafeInteger(calls) || calls <= 0 ||
+        !Number.isSafeInteger(attempts) || attempts <= 0 ||
+        !Number.isSafeInteger(maxDelayMs) || maxDelayMs < 0) return undefined;
+    const retryDelayBound = routeCount * (attempts - 1) * maxDelayMs;
+    const maximumComputeMs = perCallTimeoutMs * calls + retryDelayBound;
+    return Number.isSafeInteger(maximumComputeMs) && maximumComputeMs > 0 ? maximumComputeMs : undefined;
+  }
+
   /** @internal HDS fallback authorization is consumed here and never forwarded to a provider. */
   async callWithFallbackAuthorization(
     req: LLMRequest,

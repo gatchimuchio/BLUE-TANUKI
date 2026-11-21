@@ -252,11 +252,21 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       maximumCalls = this.backend instanceof LLMRegistry
         ? this.backend.maximumCallsForRequest(request.input, fallbackAuthorization)
         : 1;
+      const reservedTokens = maxTokens * maximumCalls;
+      if (!Number.isSafeInteger(reservedTokens) || reservedTokens <= 0) {
+        throw new Error("llm_compute_budget_token_upper_bound_unavailable");
+      }
+      const reservedComputeMs = this.backend instanceof LLMRegistry
+        ? this.backend.maximumComputeMsForRequest(request.input, timeoutMs, fallbackAuthorization)
+        : timeoutMs;
+      if (reservedComputeMs === undefined) {
+        throw new Error("llm_compute_budget_compute_upper_bound_unavailable");
+      }
       reservation = await this.budget.reserve({
         request_id: request.request_id,
         scope: request.budget_scope,
-        reserved_tokens: maxTokens * maximumCalls,
-        reserved_compute_ms: timeoutMs,
+        reserved_tokens: reservedTokens,
+        reserved_compute_ms: reservedComputeMs,
         reserved_cost: maxCost,
       });
     }
