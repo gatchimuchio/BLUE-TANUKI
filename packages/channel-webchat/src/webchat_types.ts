@@ -1670,6 +1670,15 @@ export interface WebChatActiveExecutionSnapshot {
   executor_state: "running" | "cancel_requested";
   local_worker_stop: "not_observed" | "worker_exit_observed" |
     "process_tree_empty_confirmed" | "provider_state_unknown";
+  agent_workers?: readonly {
+    child_task_digest: string;
+    role: "division" | "independent_comparison" | "audit" | "redundancy";
+    state: "started" | "cancel_requested" | "cancelled_before_dispatch" | "settled" |
+      "settled_after_abort" | "late_result_discarded" | "residual_worker_observed";
+    observed_at_ms: number;
+    used_for_authority: false;
+    may_execute: false;
+  }[];
   external_processing_stop: "unknown";
   used_for_authority: false;
 }

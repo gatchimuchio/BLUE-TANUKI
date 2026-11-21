@@ -8922,6 +8922,7 @@ async function serveWithOwnerLease(
     resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
+      activeTaskExecutions.observeAgentWorkerLifecycle(event);
       const entry = recordCompleteHistory({
         kind: "audit_history",
         command_id: event.parent_command_id,

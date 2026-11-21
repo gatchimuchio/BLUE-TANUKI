@@ -8476,6 +8476,14 @@ describe("WebChatChannel — approval API", () => {
       execution_signal_aborted: false,
       executor_state: "running" as const,
       local_worker_stop: "not_observed" as const,
+      agent_workers: [{
+        child_task_digest: "a".repeat(64),
+        role: "audit" as const,
+        state: "residual_worker_observed" as const,
+        observed_at_ms: 150,
+        used_for_authority: false as const,
+        may_execute: false as const,
+      }],
       external_processing_stop: "unknown" as const,
       used_for_authority: false as const,
     };
@@ -8506,6 +8514,8 @@ describe("WebChatChannel — approval API", () => {
       const app = await getRaw(ctx.port, "/app");
       expect(app.text).toContain("active-executions-list");
       expect(app.text).toContain("/approval/executions/");
+      expect(app.text).toContain("Agent child workers");
+      expect(app.text).toContain("compute request still pending, provider stop unknown");
 
       const snapshot = await getRaw(ctx.port, "/approval", {
         authorization: `Bearer ${RESUME_TOKEN}`,

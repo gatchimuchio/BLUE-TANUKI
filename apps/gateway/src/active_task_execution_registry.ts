@@ -1,4 +1,5 @@
-import type { ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
+import { createHash } from "node:crypto";
+import type { AgentWorkerLifecycleEvent, ToolExecutionLifecycleObservation } from "@blue-tanuki/core";
 import type { ExecuteFeedback } from "@blue-tanuki/protocol";
 
 export type LocalWorkerStopObservation =
@@ -8,6 +9,15 @@ export type LocalWorkerStopObservation =
   | "provider_state_unknown";
 
 export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime" | "owner_task";
+
+export interface ActiveAgentWorkerSnapshot {
+  child_task_digest: string;
+  role: AgentWorkerLifecycleEvent["role"];
+  state: AgentWorkerLifecycleEvent["state"];
+  observed_at_ms: number;
+  used_for_authority: false;
+  may_execute: false;
+}
 
 export interface D4RuntimeExecutionBinding {
   readonly request_id: string;
@@ -22,6 +32,7 @@ export interface ActiveTaskExecutionSnapshot {
   execution_signal_aborted: boolean;
   executor_state: "running" | "cancel_requested";
   local_worker_stop: LocalWorkerStopObservation;
+  agent_workers: readonly ActiveAgentWorkerSnapshot[];
   external_processing_stop: "unknown";
   used_for_authority: false;
 }
@@ -55,6 +66,7 @@ interface ActiveTaskExecution {
   executor_status: ExecuteFeedback["status"] | "unknown";
   local_worker_state: LocalWorkerStopObservation;
   local_worker_observed_at_ms: number;
+  agent_workers: Map<string, ActiveAgentWorkerSnapshot>;
 }
 
 /** Owns the command-id to AbortController binding used by task cancellation. */
@@ -84,6 +96,7 @@ export class ActiveTaskExecutionRegistry {
       executor_status: "unknown",
       local_worker_state: "not_observed",
       local_worker_observed_at_ms: 0,
+      agent_workers: new Map(),
     });
   }
 
@@ -142,6 +155,29 @@ export class ActiveTaskExecutionRegistry {
           : "not_observed";
   }
 
+  observeAgentWorkerLifecycle(event: AgentWorkerLifecycleEvent): void {
+    const execution = this.active.get(event.parent_command_id);
+    if (!execution || event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" ||
+        event.used_for_authority !== false || event.may_execute !== false ||
+        event.parent_command_digest !== createHash("sha256")
+          .update("blue-tanuki.agent.parent-command.v1\0").update(event.parent_command_id).digest("hex") ||
+        !/^[a-f0-9]{64}$/u.test(event.child_task_digest) ||
+        !Number.isSafeInteger(event.observed_at_ms) || event.observed_at_ms <= 0 ||
+        !["division", "independent_comparison", "audit", "redundancy"].includes(event.role) ||
+        !["started", "cancel_requested", "cancelled_before_dispatch", "settled", "settled_after_abort",
+          "late_result_discarded", "residual_worker_observed"].includes(event.state)) return;
+    const current = execution.agent_workers.get(event.child_task_digest);
+    if (current && (event.observed_at_ms < current.observed_at_ms || current.role !== event.role)) return;
+    execution.agent_workers.set(event.child_task_digest, {
+      child_task_digest: event.child_task_digest,
+      role: event.role,
+      state: event.state,
+      observed_at_ms: event.observed_at_ms,
+      used_for_authority: false,
+      may_execute: false,
+    });
+  }
+
   markExecutorSettled(command_id: string, status: ExecuteFeedback["status"] | "unknown"): void {
     const execution = this.active.get(command_id);
     if (!execution) return;
@@ -178,6 +214,9 @@ export class ActiveTaskExecutionRegistry {
       execution_signal_aborted: execution.controller.signal.aborted,
       executor_state: execution.cancel_requested_at_ms === null ? "running" : "cancel_requested",
       local_worker_stop: execution.local_worker_state,
+      agent_workers: [...execution.agent_workers.values()]
+        .sort((left, right) => left.role.localeCompare(right.role) || left.child_task_digest.localeCompare(right.child_task_digest))
+        .map((worker) => ({ ...worker })),
       external_processing_stop: "unknown",
       used_for_authority: false,
     };

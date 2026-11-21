@@ -4881,6 +4881,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setHtml("active-executions-list", visible.map(function (item) {
           const cancelRequested = item.cancel_requested_at_ms !== null;
           const signalState = item.execution_signal_aborted ? "aborted" : "active";
+          const agentWorkers = Array.isArray(item.agent_workers) ? item.agent_workers.filter(function (worker) {
+            return isObject(worker) && /^[a-f0-9]{64}$/.test(worker.child_task_digest || "") &&
+              ["division", "independent_comparison", "audit", "redundancy"].includes(worker.role) &&
+              ["started", "cancel_requested", "cancelled_before_dispatch", "settled", "settled_after_abort",
+                "late_result_discarded", "residual_worker_observed"].includes(worker.state) &&
+              Number.isSafeInteger(worker.observed_at_ms) && worker.used_for_authority === false &&
+              worker.may_execute === false;
+          }) : [];
+          const workerSummary = agentWorkers.length === 0 ? "" :
+            '<dt>Agent child workers</dt><dd>' + agentWorkers.map(function (worker) {
+              const state = worker.state === "residual_worker_observed"
+                ? "residual_worker_observed; compute request still pending, provider stop unknown"
+                : worker.state;
+              return escapeHtml(worker.role) + " · " + escapeHtml(worker.child_task_digest.slice(0, 12)) + " · " + escapeHtml(state);
+            }).join("<br>") + '</dd>';
           return '<article class="queue-item" data-active-command="' + escapeHtml(item.command_id) + '">' +
             '<div class="row"><h3>Command ' + escapeHtml(item.command_id) + '</h3>' +
             badge(cancelRequested ? "Cancel requested" : "Running", cancelRequested ? "warn" : "good") + '</div>' +
@@ -4889,6 +4904,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             '<dt>Executor</dt><dd>' + escapeHtml(item.executor_state) + '</dd>' +
             '<dt>execution signal</dt><dd>' + escapeHtml(signalState) + '</dd>' +
             '<dt>local worker</dt><dd>' + escapeHtml(item.local_worker_stop) + '</dd>' +
+            workerSummary +
             '<dt>external processing stop</dt><dd>unknown</dd>' +
             '</dl>' +
             '<button class="danger" data-cancel-execution="' + escapeHtml(item.command_id) + '"' +

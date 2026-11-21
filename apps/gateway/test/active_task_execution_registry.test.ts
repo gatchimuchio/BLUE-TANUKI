@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ActiveTaskExecutionRegistry } from "../src/active_task_execution_registry.js";
 
@@ -96,5 +97,49 @@ describe("ActiveTaskExecutionRegistry", () => {
       external_processing_stop: "unknown",
     });
     expect(registry.snapshot().map((execution) => execution.command_id)).toEqual(["command-other"]);
+  });
+
+  it("projects correlated Agent child states without treating them as process-tree evidence", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    const commandId = "command-agent-parent";
+    const parentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(commandId).digest("hex");
+    const childTaskDigest = "a".repeat(64);
+    const controller = new AbortController();
+    registry.register(commandId, controller, 100);
+    const observe = (state: "started" | "cancel_requested" | "residual_worker_observed", observed_at_ms: number) =>
+      registry.observeAgentWorkerLifecycle({
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+        parent_command_id: commandId,
+        parent_command_digest: parentCommandDigest,
+        child_task_digest: childTaskDigest,
+        role: "audit",
+        state,
+        observed_at_ms,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+    observe("started", 200);
+    registry.requestCancel(commandId, "webchat-resume-token-holder", 300);
+    observe("cancel_requested", 301);
+    observe("residual_worker_observed", 1_301);
+    observe("started", 250);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(registry.snapshot()[0]).toMatchObject({
+      command_id: commandId,
+      executor_state: "cancel_requested",
+      local_worker_stop: "not_observed",
+      external_processing_stop: "unknown",
+      agent_workers: [{
+        child_task_digest: childTaskDigest,
+        role: "audit",
+        state: "residual_worker_observed",
+        observed_at_ms: 1_301,
+        used_for_authority: false,
+        may_execute: false,
+      }],
+    });
   });
 });
