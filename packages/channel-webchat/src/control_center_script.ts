@@ -5421,13 +5421,21 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         setText("composio-configured-status", composio.configured ? "configured" : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
-        setText("composio-live-status", composio.live_execution_available ? "available" : "blocked");
+        const liveConfigurationReady = composio.live_execution_configuration_ready === true ||
+          composio.live_execution_configuration_ready === undefined && composio.live_execution_available === true;
+        setText("composio-live-status", liveConfigurationReady
+          ? "configuration prerequisites met; per-action review required"
+          : "configuration prerequisites not met");
         setText("composio-authority-status", composio.used_for_authority === true ? "unsafe" : "HDS gated");
         setText("composio-toolkits-status", toolkits.length > 0 ? toolkits.join(", ") : "none");
         setText("composio-actions-status", actions.length > 0 ? actions.join(", ") : "none");
         setText("composio-revoked-status", revoked.length > 0 ? revoked.join(", ") : "none");
         setText("composio-user-status", composio.user_id_set ? "configured" : "missing");
-        setText("composio-disconnect-status", composio.connection_revoke_available ? "available" : "not configured");
+        const localCredentialRemovalAvailable = composio.local_credential_removal_available === true ||
+          composio.local_credential_removal_available === undefined && composio.connection_revoke_available === true;
+        setText("composio-disconnect-status", localCredentialRemovalAvailable
+          ? "local credential removal can be proposed"
+          : "local credential not configured");
         setText("connectors-json", compactJson(redactRuntimeValue({
           native_first: snapshot.integrations ? snapshot.integrations.native_first : true,
           composio

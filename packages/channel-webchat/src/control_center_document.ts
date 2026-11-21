@@ -351,23 +351,23 @@ ${CONTROL_CENTER_STYLE}    </style>
             <button id="load-connectors" class="primary" type="button">Load Connectors</button>
             <button id="save-connectors" class="primary" type="button">Prepare Composio settings plan</button>
           </div>
-          <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; key replacement remains in OS-protected setup, and disconnect is shown as a reviewed removal.</p>
+          <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; key replacement remains in OS-protected setup. An approved change that clears a key removes only the local credential/reference and disables live execution; it does not disconnect the connected account at Composio.</p>
           <div class="status-grid">
             <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
             <div class="metric"><span>Live opt-in</span><span id="composio-live-opt-in-status">not loaded</span></div>
-            <div class="metric"><span>Live execution</span><span id="composio-live-status">not loaded</span></div>
+            <div class="metric"><span>Live configuration prerequisites</span><span id="composio-live-status">not loaded</span></div>
             <div class="metric technical-boundary"><span>Boundary</span><span id="composio-authority-status">HDS gated</span></div>
             <div class="metric"><span>Toolkits</span><span id="composio-toolkits-status">not loaded</span></div>
             <div class="metric"><span>Actions</span><span id="composio-actions-status">not loaded</span></div>
             <div class="metric"><span>Revoked</span><span id="composio-revoked-status">not loaded</span></div>
             <div class="metric"><span>User</span><span id="composio-user-status">not loaded</span></div>
-            <div class="metric"><span>Disconnect</span><span id="composio-disconnect-status">not loaded</span></div>
+            <div class="metric"><span>Local credential removal</span><span id="composio-disconnect-status">not loaded</span></div>
             <div class="metric"><span>Save</span><span id="composio-save-status">not saved</span></div>
           </div>
           <pre id="connectors-json">not loaded</pre>
           <div class="screen-grid">
-            <div class="screen-card"><h3>Live Boundary</h3><p class="muted">Composio live execution opens only when dry-run is disabled, live execution is enabled, user id exists, and toolkit/action allowlists pass HDS approval.</p></div>
+            <div class="screen-card"><h3>Live Boundary</h3><p class="muted">This readiness indicator covers local configuration prerequisites only: dry-run is disabled, live execution is enabled, a user id exists, and toolkit/action allowlists are non-empty. It does not verify the connected account, action schema/effects, current delegation, or HDS approval. Those are checked separately for each action immediately before execution.</p></div>
             <div class="screen-card"><h3>Allowlist</h3><p class="muted">Toolkits are explicit operator configuration, not permission escalation or authority.</p></div>
             <div class="screen-card"><h3>Secret Update</h3><p class="muted">Leave the API key blank to keep the existing secret; enter a new key only when rotating it.</p></div>
             <div class="screen-card"><h3>Review Boundary</h3><p class="muted">Connected account metadata and tool results stay behind approval review.</p></div>

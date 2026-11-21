@@ -791,6 +791,8 @@ export function buildSettingsSnapshot(
       composio: {
         ...composio,
         configured: composioKeyConfigured,
+        local_credential_removal_available:
+          composio.local_credential_removal_available || composioKeyConfigured,
         connection_revoke_available: composio.connection_revoke_available || composioKeyConfigured,
         last_tool_call: null,
       },
@@ -1279,7 +1281,7 @@ export function renderSettingsHtml(): string {
           <p id="slack-next-action" role="status"></p>
           <p class="muted">This is configuration status only. It does not test Slack connectivity or change Slack preview status.</p>
           <p id="mcp-next-action" role="status"></p>
-          <p id="composio-next-action" class="muted" role="status">Composio settings are read-only here. Prepare changes through Owner Task settings.write and review the no-store L3 change list; provision or replace keys through OS-protected setup.</p>
+          <p id="composio-next-action" class="muted" role="status">Composio settings are read-only here. Prepare changes through Owner Task settings.write and review the no-store L3 change list; provision or replace keys through OS-protected setup. Configuration readiness does not verify the connected account, action schema/effects, current delegation, or HDS approval; those are reviewed per action immediately before execution.</p>
           <p id="d4-runtime-next-action" role="status"></p>
           <p id="mcp-runtime-next-action" role="status"></p>
           <p id="mcp-inspection-result" role="status"></p>
@@ -1440,7 +1442,8 @@ export function renderSettingsHtml(): string {
       fields.composioStatus.value =
         (snapshot.integrations.composio.configured ? "configured" : "missing") +
         "; dry_run=" + snapshot.integrations.composio.dry_run +
-        "; live=" + snapshot.integrations.composio.live_execution_available;
+        "; live_configuration_preconditions=" +
+        (snapshot.integrations.composio.live_execution_configuration_ready ? "met" : "not met");
       fields.d4RuntimeStatus.value = snapshot.integrations.d4_runtime.status.replaceAll("_", " ");
       fields.d4RuntimeSecretStorage.value = snapshot.integrations.d4_runtime.secret_storage.storage.replaceAll("_", " ");
       fields.d4RuntimeNextAction.textContent = snapshot.integrations.d4_runtime.next_action;

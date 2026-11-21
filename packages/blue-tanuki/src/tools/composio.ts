@@ -38,11 +38,17 @@ export interface ComposioConnectorStatus {
   revoked_actions: string[];
   user_id_set: boolean;
   api_base_url: string;
+  /** @deprecated Compatibility alias for local_credential_removal_available; no provider-side disconnect is implied. */
   connection_revoke_available: boolean;
   toolkit_count: number;
   action_scope_count: number;
   revoked_action_count: number;
+  /** Local flags and allowlists satisfy configuration prerequisites only; this does not verify the account, action schema/effects, current delegation, or HDS approval. */
+  live_execution_configuration_ready: boolean;
+  /** @deprecated Compatibility alias for live_execution_configuration_ready; not an authorization or provider-readiness signal. */
   live_execution_available: boolean;
+  /** The locally configured credential can be removed through the reviewed settings path; no provider-side disconnect is implied. */
+  local_credential_removal_available: boolean;
   used_for_authority: false;
   metadata_used_for_authority: false;
   live_execution_used_for_authority: false;
@@ -366,6 +372,13 @@ export function composioStatus(env: Env = process.env): ComposioConnectorStatus 
   const allowedActions = composioAllowedActions(env);
   const revokedActions = composioRevokedActions(env);
   const userIdSet = Boolean(envValue(env, "COMPOSIO_USER_ID"));
+  const liveExecutionConfigurationReady =
+    configured &&
+    !dryRun &&
+    liveExecutionEnabled &&
+    userIdSet &&
+    allowedToolkits.length > 0 &&
+    allowedActions.length > 0;
   return {
     configured,
     dry_run: dryRun,
@@ -379,13 +392,9 @@ export function composioStatus(env: Env = process.env): ComposioConnectorStatus 
     toolkit_count: allowedToolkits.length,
     action_scope_count: allowedActions.length,
     revoked_action_count: revokedActions.length,
-    live_execution_available:
-      configured &&
-      !dryRun &&
-      liveExecutionEnabled &&
-      userIdSet &&
-      allowedToolkits.length > 0 &&
-      allowedActions.length > 0,
+    live_execution_configuration_ready: liveExecutionConfigurationReady,
+    live_execution_available: liveExecutionConfigurationReady,
+    local_credential_removal_available: configured,
     used_for_authority: false,
     metadata_used_for_authority: false,
     live_execution_used_for_authority: false,
