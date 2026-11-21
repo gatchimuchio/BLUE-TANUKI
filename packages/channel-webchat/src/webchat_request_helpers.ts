@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type {
   WebChatApprovalControlContext,
@@ -74,6 +75,7 @@ export function sanitizeHistorySnapshot(snapshot: WebChatHistorySnapshot): WebCh
     entries: Array.isArray(snapshot.entries)
       ? snapshot.entries.map((entry) => {
           const raw = entry as WebChatHistoryEntry & { payload?: unknown };
+          const agent_worker_observation = projectAgentWorkerObservation(raw);
           return {
             schema_version: raw.schema_version,
             index: raw.index,
@@ -84,6 +86,7 @@ export function sanitizeHistorySnapshot(snapshot: WebChatHistorySnapshot): WebCh
             actor: raw.actor,
             source: raw.source,
             payload_digest: raw.payload_digest,
+            ...(agent_worker_observation ? { agent_worker_observation } : {}),
             used_for_authority: false,
             timestamp: raw.timestamp,
             prev_hash: raw.prev_hash,
@@ -92,6 +95,54 @@ export function sanitizeHistorySnapshot(snapshot: WebChatHistorySnapshot): WebCh
         })
       : [],
   };
+}
+
+function projectAgentWorkerObservation(
+  entry: WebChatHistoryEntry & { payload?: unknown },
+): WebChatHistoryEntry["agent_worker_observation"] {
+  if (entry.kind !== "audit_history" || entry.actor !== "executor" || entry.source !== "executor_agent_worker" ||
+      typeof entry.command_id !== "string" || !Number.isSafeInteger(entry.timestamp) || entry.timestamp <= 0) return undefined;
+  try {
+    const payload = entry.payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    const value = payload as Record<string, unknown>;
+    const allowedKeys = new Set([
+      "schema_version", "parent_command_digest", "child_task_digest", "role", "state", "observed_at_ms",
+      "output_observed", "output_characters", "resource_use_digest", "used_for_authority", "may_execute",
+    ]);
+    if (Object.keys(value).some((key) => !allowedKeys.has(key)) ||
+        !["schema_version", "parent_command_digest", "child_task_digest", "role", "state", "observed_at_ms",
+          "used_for_authority", "may_execute"].every((key) => Object.hasOwn(value, key))) return undefined;
+    const parentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(entry.command_id).digest("hex");
+    const roles = ["division", "independent_comparison", "audit", "redundancy"];
+    const states = ["started", "cancel_requested", "cancelled_before_dispatch", "settled", "settled_after_abort",
+      "late_result_discarded", "residual_worker_observed"];
+    if (value.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" || value.parent_command_digest !== parentCommandDigest ||
+        typeof value.child_task_digest !== "string" || !/^[a-f0-9]{64}$/u.test(value.child_task_digest) ||
+        typeof value.role !== "string" || !roles.includes(value.role) ||
+        typeof value.state !== "string" || !states.includes(value.state) ||
+        !Number.isSafeInteger(value.observed_at_ms) || value.observed_at_ms !== entry.timestamp ||
+        value.used_for_authority !== false || value.may_execute !== false ||
+        (Object.hasOwn(value, "output_observed") && value.output_observed !== true) ||
+        (Object.hasOwn(value, "output_characters") &&
+          (!Number.isSafeInteger(value.output_characters) || (value.output_characters as number) < 0)) ||
+        (Object.hasOwn(value, "resource_use_digest") &&
+          (typeof value.resource_use_digest !== "string" || !/^[a-f0-9]{64}$/u.test(value.resource_use_digest)))) return undefined;
+    return {
+      schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+      child_task_digest: value.child_task_digest,
+      role: value.role as NonNullable<WebChatHistoryEntry["agent_worker_observation"]>["role"],
+      state: value.state as NonNullable<WebChatHistoryEntry["agent_worker_observation"]>["state"],
+      observed_at_ms: value.observed_at_ms as number,
+      current_worker_state: "unknown",
+      external_processing_stop: "unknown",
+      used_for_authority: false,
+      may_execute: false,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function readWebhookContent(body: Record<string, unknown> | null): string | null {

@@ -10587,6 +10587,82 @@ describe("WebChatChannel - complete history replay API", () => {
     }
   });
 
+  it("projects only verified Agent worker lifecycle metadata and marks current state unknown", async () => {
+    const commandId = "agent-parent-1";
+    const timestamp = 23_456;
+    const parentCommandDigest = createHash("sha256")
+      .update("blue-tanuki.agent.parent-command.v1\0").update(commandId).digest("hex");
+    const lifecyclePayload = {
+      schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+      parent_command_digest: parentCommandDigest,
+      child_task_digest: "a".repeat(64),
+      role: "division",
+      state: "residual_worker_observed",
+      observed_at_ms: timestamp,
+      output_observed: true,
+      output_characters: 24,
+      used_for_authority: false,
+      may_execute: false,
+    };
+    const historyEntry = (id: string, payload: unknown) => ({
+      schema_version: "phase12-s2-complete-history-v1",
+      index: id === "hist-valid" ? 0 : 1,
+      id,
+      kind: "audit_history",
+      request_id: null,
+      command_id: commandId,
+      actor: "executor",
+      source: "executor_agent_worker",
+      payload_digest: "payload-hash",
+      used_for_authority: false as const,
+      timestamp,
+      prev_hash: id === "hist-valid" ? "GENESIS" : "prev-hash",
+      entry_hash: id === "hist-valid" ? "entry-hash" : "entry-hash-2",
+      payload,
+    });
+    const ctx = await setup({
+      history: {
+        replay: async (filter) => ({
+          schema_version: "phase12-s2-complete-history-v1",
+          entries_count: 2,
+          skipped_count: 0,
+          chain_valid: true,
+          complete_history_used_for_authority: false,
+          replay_filter: filter,
+          entries: [
+            historyEntry("hist-valid", lifecyclePayload),
+            historyEntry("hist-invalid", { ...lifecyclePayload, parent_command_digest: "b".repeat(64), private_output: "MUST NOT ESCAPE" }),
+          ] as never,
+        }),
+      },
+    });
+    await ctx.ch.start(async () => {});
+    try {
+      const response = await getRaw(ctx.port, "/history/replay?kind=audit_history", {
+        authorization: `Bearer ${TOKEN}`,
+      });
+      expect(response.status).toBe(200);
+      const body = JSON.parse(response.text);
+      expect(body.history.entries[0].agent_worker_observation).toEqual({
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+        child_task_digest: "a".repeat(64),
+        role: "division",
+        state: "residual_worker_observed",
+        observed_at_ms: timestamp,
+        current_worker_state: "unknown",
+        external_processing_stop: "unknown",
+        used_for_authority: false,
+        may_execute: false,
+      });
+      expect(body.history.entries[1]).not.toHaveProperty("agent_worker_observation");
+      expect(response.text).not.toContain("MUST NOT ESCAPE");
+      expect(response.text).not.toContain("private_output");
+      expect(response.text).not.toContain("\"payload\"");
+    } finally {
+      await ctx.teardown();
+    }
+  });
+
   it("does not accept POST /history/replay", async () => {
     const ctx = await setup({
       history: {

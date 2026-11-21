@@ -50,6 +50,55 @@ function scriptBetween(from: string, to: string) {
   return CONTROL_CENTER_SCRIPT.slice(start, end);
 }
 
+describe("Control Center historical Agent worker observations", () => {
+  it("labels recorded worker status as historical and current status as unknown", () => {
+    const html = new Map<string, string>();
+    const text = new Map<string, string>();
+    const nodes = new Map<string, { className: string }>();
+    const byId = (id: string) => {
+      if (!nodes.has(id)) nodes.set(id, { className: "" });
+      return nodes.get(id)!;
+    };
+    const context = {
+      byId,
+      setHtml: (id: string, value: string) => { html.set(id, value); },
+      setText: (id: string, value: string | number) => { text.set(id, String(value)); },
+      badge: (value: string) => value,
+      labelForBoolean: (value: boolean) => String(value),
+      isObject: (value: unknown) => typeof value === "object" && value !== null && !Array.isArray(value),
+      escapeHtml: (value: unknown) => String(value).replace(/[&<>"']/g, (character) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+      }[character] ?? character)),
+      formatDate: (value: number) => `time:${value}`,
+      redactRuntimeValue: (value: unknown) => value,
+      compactJson: (value: unknown) => JSON.stringify(value),
+    };
+    new Script(scriptBetween("function renderHistory(body) {", "function renderEvidenceExport(body)")).runInNewContext(context);
+    (context as typeof context & { renderHistory: (body: unknown) => void }).renderHistory({
+      history: {
+        entries_count: 1,
+        chain_valid: true,
+        complete_history_used_for_authority: false,
+        entries: [{
+          kind: "audit_history", command_id: "parent", actor: "executor", source: "executor_agent_worker",
+          payload_digest: "digest", used_for_authority: false, timestamp: 23_456,
+          agent_worker_observation: {
+            schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+            child_task_digest: "a".repeat(64), role: "division", state: "residual_worker_observed",
+            observed_at_ms: 23_456, current_worker_state: "unknown", external_processing_stop: "unknown",
+            used_for_authority: false, may_execute: false,
+          },
+        }],
+      },
+    });
+    const rendered = html.get("history-list") ?? "";
+    expect(rendered).toContain("Agent worker observation");
+    expect(rendered).toContain("residual_worker_observed");
+    expect(rendered).toContain("記録時点");
+    expect(rendered).toContain("現在のworker状態と外部処理停止は不明");
+  });
+});
+
 describe("Control Center recent owner requests", () => {
   it("restores a recent request in a blank tab and separately requests cancellation for its selected receipt", async () => {
     const requestId = "00000000-0000-4000-8000-000000000099";

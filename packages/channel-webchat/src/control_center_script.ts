@@ -5184,7 +5184,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
 
         setText("history-entry-count", history.entries_count ?? entries.length);
         setText("history-chain-valid", labelForBoolean(chainValid));
-        setText("history-authority-use", authorityUsed ? "unsafe" : "digest only");
+        setText("history-authority-use", authorityUsed ? "unsafe" : "metadata only");
         setText("history-skipped-count", history.skipped_count ?? 0);
         setText("history-summary", String(entries.length) + " replay entries");
         byId("history-summary").className = "badge " + (chainValid && !authorityUsed ? "good" : "bad");
@@ -5199,7 +5199,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               .reverse()
               .map(function (entry) {
                 const safe = redactRuntimeValue(entry);
-                const boundaryBadge = safe.used_for_authority === false ? badge("digest only", "good") : badge("unsafe", "bad");
+                const boundaryBadge = safe.used_for_authority === false ? badge("metadata only", "good") : badge("unsafe", "bad");
+                const worker = safe.agent_worker_observation;
+                const workerRoles = ["division", "independent_comparison", "audit", "redundancy"];
+                const workerStates = ["started", "cancel_requested", "cancelled_before_dispatch", "settled", "settled_after_abort",
+                  "late_result_discarded", "residual_worker_observed"];
+                const workerObservation = isObject(worker) && worker.schema_version === "blue-tanuki.agent-worker-lifecycle.v1" &&
+                  typeof worker.child_task_digest === "string" && /^[a-f0-9]{64}$/u.test(worker.child_task_digest) &&
+                  workerRoles.includes(worker.role) && workerStates.includes(worker.state) && Number.isSafeInteger(worker.observed_at_ms) &&
+                  worker.current_worker_state === "unknown" && worker.external_processing_stop === "unknown" &&
+                  worker.used_for_authority === false && worker.may_execute === false
+                  ? '<dt>Agent worker observation</dt><dd>' + escapeHtml(worker.role) + ' / ' + escapeHtml(worker.state) + ' at ' +
+                    escapeHtml(formatDate(worker.observed_at_ms)) + '（記録時点）。現在のworker状態と外部処理停止は不明。</dd>'
+                  : "";
                 return '<article class="history-item"><dl class="kv">' +
                   '<dt>kind</dt><dd>' + escapeHtml(safe.kind || "unknown") + '</dd>' +
                   '<dt>request</dt><dd class="mono">' + escapeHtml(safe.request_id || "none") + '</dd>' +
@@ -5210,6 +5222,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   '<dt>entry</dt><dd class="mono">' + escapeHtml(safe.entry_hash || "not recorded") + '</dd>' +
                   '<dt>boundary</dt><dd>' + boundaryBadge + '</dd>' +
                   '<dt>time</dt><dd>' + escapeHtml(formatDate(safe.timestamp)) + '</dd>' +
+                  workerObservation +
                   '</dl></article>';
               })
               .join("")

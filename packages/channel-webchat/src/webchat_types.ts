@@ -1947,6 +1947,18 @@ export interface WebChatHistoryEntry {
   actor?: string;
   source?: string;
   payload_digest: string;
+  agent_worker_observation?: {
+    schema_version: "blue-tanuki.agent-worker-lifecycle.v1";
+    child_task_digest: string;
+    role: "division" | "independent_comparison" | "audit" | "redundancy";
+    state: "started" | "cancel_requested" | "cancelled_before_dispatch" | "settled" |
+      "settled_after_abort" | "late_result_discarded" | "residual_worker_observed";
+    observed_at_ms: number;
+    current_worker_state: "unknown";
+    external_processing_stop: "unknown";
+    used_for_authority: false;
+    may_execute: false;
+  };
   used_for_authority: false;
   timestamp: number;
   prev_hash?: string;
@@ -1964,7 +1976,7 @@ export interface WebChatHistorySnapshot {
 }
 
 export interface WebChatHistorySurface {
-  /** Return read-only complete-history replay metadata; raw payloads are never exposed. */
+  /** Return read-only replay metadata and validated Agent lifecycle fields; raw history payloads never leave the server. */
   replay: (filter: WebChatHistoryReplayFilter) => Promise<WebChatHistorySnapshot>;
 }
 
