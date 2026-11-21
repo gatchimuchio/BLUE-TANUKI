@@ -338,7 +338,7 @@ const CRON_EVENT_CORRELATIONS: readonly OperationPlanBrokerCorrelation["cron_eve
 const CRON_EVENT_CORRELATION_RESIDUALS = new Set<OperationPlanBrokerCorrelation["cron_event_correlation"]>([
   "ambiguous",
 ]);
-const CRON_EVENT_DELIVERY_STATES: readonly CronEventDeliveryState[] = ["dispatching", "handler_returned", "outcome_unknown"];
+const CRON_EVENT_DELIVERY_STATES: readonly CronEventDeliveryState[] = ["dispatching", "handler_returned", "outcome_unknown", "held_catch_up_policy"];
 const CRON_RESULT_RECEIPT_STATUSES: readonly OperationPlanBrokerCorrelation["cron_result_receipt_status"][] = [
   "not_applicable", "verified", "not_recorded", "not_available", "unverified", "event_unmatched",
 ];
@@ -782,6 +782,7 @@ function projectCronEventSummary(value: unknown): {
     unverified_cursor_count: null,
     omitted_cursor_count: null,
     unresolved_cursor_count: null,
+    catch_up_policy_hold_count: null,
     event_history_available: null,
     archived_event_count: null,
     verified_archived_event_count: null,
@@ -806,7 +807,7 @@ function projectCronEventSummary(value: unknown): {
   const status = fixedEnum(value.status, CRON_RECOVERY_STATUSES);
   const reason = value.reason === null ? null : fixedEnum(value.reason, CRON_RECOVERY_REASONS);
   const countKeys = [
-    "cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count",
+    "cursor_count", "verified_cursor_count", "unverified_cursor_count", "omitted_cursor_count", "unresolved_cursor_count", "catch_up_policy_hold_count",
     "archived_event_count", "verified_archived_event_count", "unverified_archived_event_count", "omitted_archived_event_count",
     "orphan_outbox_count", "approval_handoff_count", "verified_approval_handoff_count", "unverified_approval_handoff_count",
     "omitted_approval_handoff_count", "pending_approval_handoff_count", "interrupted_approval_handoff_count",
@@ -849,6 +850,7 @@ function projectCronEventSummary(value: unknown): {
   const verifiedArchivedEventCount = counts.verified_archived_event_count as number;
   const unverifiedArchivedEventCount = counts.unverified_archived_event_count as number;
   const omittedArchivedEventCount = counts.omitted_archived_event_count as number;
+  const catchUpPolicyHoldCount = counts.catch_up_policy_hold_count as number;
   const approvalCount = counts.approval_handoff_count as number;
   const verifiedApprovalCount = counts.verified_approval_handoff_count as number;
   const unverifiedApprovalCount = counts.unverified_approval_handoff_count as number;
@@ -858,12 +860,13 @@ function projectCronEventSummary(value: unknown): {
   const unverifiedResultReceiptCount = resultReceiptAvailable ? counts.unverified_result_receipt_count as number : 0;
   const omittedResultReceiptCount = resultReceiptAvailable ? counts.omitted_result_receipt_count as number : 0;
   const expectedResidualCount = unverifiedCursorCount + omittedCursorCount + (counts.unresolved_cursor_count as number) +
-    unverifiedArchivedEventCount + omittedArchivedEventCount + (counts.orphan_outbox_count as number) +
+    unverifiedArchivedEventCount + omittedArchivedEventCount + catchUpPolicyHoldCount + (counts.orphan_outbox_count as number) +
     unverifiedApprovalCount + omittedApprovalCount +
     (counts.pending_approval_handoff_count as number) + (counts.interrupted_approval_handoff_count as number) +
     unverifiedResultReceiptCount + omittedResultReceiptCount;
   const consistent = verifiedCursorCount + unverifiedCursorCount + omittedCursorCount === cursorCount &&
     verifiedArchivedEventCount + unverifiedArchivedEventCount + omittedArchivedEventCount === archivedEventCount &&
+    catchUpPolicyHoldCount <= verifiedArchivedEventCount &&
     verifiedApprovalCount + unverifiedApprovalCount + omittedApprovalCount === approvalCount &&
     (!resultReceiptAvailable || verifiedResultReceiptCount + unverifiedResultReceiptCount + omittedResultReceiptCount === resultReceiptCount) &&
     Number.isSafeInteger(expectedResidualCount) && expectedResidualCount === residualCount &&
@@ -1409,7 +1412,8 @@ function inspectGatewayRecoveryStateFromPaths(
   };
   const unavailableCronEvents: CronEventRecoveryInspection = {
     status: "unavailable", reason: "store_unavailable", cursor_count: null, verified_cursor_count: null,
-    unverified_cursor_count: null, omitted_cursor_count: null, unresolved_cursor_count: null, event_history_available: null,
+    unverified_cursor_count: null, omitted_cursor_count: null, unresolved_cursor_count: null, catch_up_policy_hold_count: null,
+    event_history_available: null,
     archived_event_count: null, verified_archived_event_count: null, unverified_archived_event_count: null,
     omitted_archived_event_count: null, orphan_outbox_count: null,
     approval_handoff_count: null, verified_approval_handoff_count: null, unverified_approval_handoff_count: null,

@@ -97,6 +97,49 @@ function preparePending(m: RuntimeScheduleManager, cmd: ExecuteCommand, result: 
 }
 
 describe("RuntimeScheduleManager", () => {
+  it("projects a durable catch-up policy hold into the owner-visible runtime schedule snapshot", async () => {
+    vi.useFakeTimers();
+    const createdAt = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    const nowAtStart = createdAt + 3500;
+    vi.setSystemTime(nowAtStart);
+    const fixture = await scheduleFixture({ now: () => createdAt });
+    const eventStore = new GatewayCronEventStore(join(fixture.directory, "cron-events.sqlite"));
+    const cron = new CronSchedulerChannel({
+      tasks: [],
+      now: () => new Date(nowAtStart),
+      event_store: eventStore,
+      log: () => undefined,
+    });
+    fixture.manager.attachScheduler(cron);
+    try {
+      await cron.start(async () => { throw new Error("held occurrence must not dispatch"); });
+      const create = command("schedule.create", {
+        id: "first-fire-held",
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic held schedule",
+        interval_ms: 1000,
+      });
+      expect(preparePending(fixture.manager, create, evaluation(create), {
+        request_id: "req-first-fire-held", actor: "alice",
+      }).ok).toBe(true);
+      await approve(fixture.manager, create);
+      expect(fixture.manager.snapshot()).toMatchObject([{
+        id: "first-fire-held",
+        status: "active",
+        catch_up_hold: {
+          reason: "catch_up_policy_unresolved",
+          scheduled_at_ms: createdAt + 1000,
+          persisted: true,
+        },
+      }]);
+    } finally {
+      await cron.stop();
+      eventStore.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects create and update when no current delegated purpose is supplied", async () => {
     const m = await manager();
     const create = command("schedule.create", { id: "purpose-required", channel: "webchat", target: "local-user",

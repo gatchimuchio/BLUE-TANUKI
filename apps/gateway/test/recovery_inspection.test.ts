@@ -253,6 +253,34 @@ describe("Gateway read-only recovery inspection", () => {
     }
   });
 
+  it("reports a catch-up policy hold as an unresolved recovery residual without opening the result path", async () => {
+    temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-catch-up-"));
+    const privateRoot = path.join(temporaryRoot, "state", "private-state");
+    const cronDirectory = path.join(privateRoot, "cron-events");
+    await mkdir(cronDirectory, { recursive: true });
+    const databasePath = path.join(cronDirectory, "cron-events.sqlite");
+    const store = new GatewayCronEventStore(databasePath);
+    const held = createCronEventIdentity("synthetic-catch-up-policy-source", 3_000, sha256("schedule-version"));
+    expect(store.holdForCatchUpPolicy(held, 3_500)).toEqual({ status: "held" });
+    store.close();
+    const before = await readFile(databasePath);
+
+    const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: path.dirname(privateRoot) });
+    expect(report.ledgers.cron_events).toMatchObject({
+      status: "residuals_present",
+      cursor_count: 0,
+      unresolved_cursor_count: 0,
+      catch_up_policy_hold_count: 1,
+      archived_event_count: 1,
+      verified_archived_event_count: 1,
+      residual_count: 1,
+      used_for_authority: false,
+    });
+    expect(report.replay_checkpoint).toBeNull();
+    expect(await readFile(databasePath)).toEqual(before);
+    expect(JSON.stringify(report)).not.toContain(held.event_id);
+  });
+
   it("refuses Cron inspection when a SQLite sidecar exists and leaves the database unopened", async () => {
     temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "blue-tanuki-recovery-cron-sidecar-"));
     const privateRoot = path.join(temporaryRoot, "state", "private-state");
@@ -1084,6 +1112,7 @@ function cronEventInspection(status: "verified" | "unavailable" = "verified"): C
       unverified_cursor_count: null,
       omitted_cursor_count: null,
       unresolved_cursor_count: null,
+      catch_up_policy_hold_count: null,
       event_history_available: null,
       archived_event_count: null,
       verified_archived_event_count: null,
@@ -1114,6 +1143,7 @@ function cronEventInspection(status: "verified" | "unavailable" = "verified"): C
     unverified_cursor_count: 0,
     omitted_cursor_count: 0,
     unresolved_cursor_count: 0,
+    catch_up_policy_hold_count: 0,
     event_history_available: true,
     archived_event_count: 0,
     verified_archived_event_count: 0,

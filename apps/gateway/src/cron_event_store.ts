@@ -27,8 +27,9 @@ export interface CronEventIdentity {
   readonly payload_digest: string;
 }
 
-export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
-export type CronEventResolutionState = "unacknowledged" | "owner_acknowledged_no_replay" | "verification_unavailable";
+export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown" | "held_catch_up_policy";
+export type CronEventResolutionState =
+  | "unacknowledged" | "owner_acknowledged_no_replay" | "verification_unavailable" | "policy_unresolved";
 
 export interface CronEventCursorSnapshot {
   readonly source_digest: string;
@@ -39,6 +40,12 @@ export interface CronEventCursorSnapshot {
   readonly resolution_state: CronEventResolutionState;
   readonly updated_at_ms: number;
 }
+
+export type CronEventCatchUpHoldResult =
+  | { readonly status: "held" | "already_held" }
+  | { readonly status: "already_recorded"; readonly delivery_state: Exclude<CronEventDeliveryState, "held_catch_up_policy"> }
+  | { readonly status: "stale" | "identity_conflict" }
+  | { readonly status: "blocked_unresolved"; readonly delivery_state: CronEventDeliveryState };
 
 export interface CronEventNotificationInspection {
   readonly events: readonly CronEventCursorSnapshot[];
@@ -133,7 +140,7 @@ export class GatewayCronEventStore {
         source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
         sequence INTEGER NOT NULL CHECK(sequence >= 0),
         payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
-        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown','held_catch_up_policy')),
         updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
       ) STRICT;
       CREATE INDEX IF NOT EXISTS cron_event_archive_request_digest
@@ -166,6 +173,7 @@ export class GatewayCronEventStore {
         ON cron_approval_handoff(command_id_digest);
       CREATE INDEX IF NOT EXISTS cron_approval_handoff_request_ref
         ON cron_approval_handoff(request_id_digest);`);
+      this.migrateCatchUpHoldDeliveryState();
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") {
         throw new Error("cron_event_store_integrity_check_failed");
@@ -192,6 +200,37 @@ export class GatewayCronEventStore {
     } catch (error) {
       this.db.close();
       this.closed = true;
+      throw error;
+    }
+  }
+
+  private migrateCatchUpHoldDeliveryState(): void {
+    const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='cron_event_archive'")
+      .get() as { sql: string } | undefined;
+    if (typeof schema?.sql !== "string") throw new Error("cron_event_store_archive_schema_incomplete");
+    if (schema.sql.includes("held_catch_up_policy")) return;
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      this.db.exec(`
+        CREATE TABLE cron_event_archive_migration AS
+          SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms FROM cron_event_archive;
+        DROP TABLE cron_event_archive;
+        CREATE TABLE cron_event_archive (
+          event_id TEXT PRIMARY KEY,
+          request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+          source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
+          sequence INTEGER NOT NULL CHECK(sequence >= 0),
+          payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+          delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown','held_catch_up_policy')),
+          updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+        ) STRICT;
+        INSERT INTO cron_event_archive SELECT * FROM cron_event_archive_migration;
+        DROP TABLE cron_event_archive_migration;
+        CREATE INDEX cron_event_archive_request_digest ON cron_event_archive(request_id_digest);
+      `);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* retain the migration error */ }
       throw error;
     }
   }
@@ -223,6 +262,16 @@ export class GatewayCronEventStore {
     if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event receipt time");
     const source_digest = sha256(event.source);
     return this.transaction(() => {
+      const catchUpHold = this.readLatestCatchUpHold(source_digest);
+      if (catchUpHold) {
+        if (event.sequence < catchUpHold.sequence) return { status: "stale" } as const;
+        if (event.sequence === catchUpHold.sequence) {
+          return catchUpHold.event_id === event.event_id && catchUpHold.payload_digest === event.payload_digest
+            ? { status: "duplicate", delivery_state: "held_catch_up_policy" } as const
+            : { status: "identity_conflict" } as const;
+        }
+        return { status: "blocked_unresolved", delivery_state: "held_catch_up_policy" } as const;
+      }
       const current = this.readCurrentCursor(source_digest);
       if (current && event.sequence < current.sequence) return { status: "stale" } as const;
       if (current && event.sequence === current.sequence) {
@@ -232,7 +281,7 @@ export class GatewayCronEventStore {
         return { status: "duplicate", delivery_state: current.delivery_state } as const;
       }
       if (current && current.delivery_state !== "handler_returned" &&
-          this.resolutionState(current.event_id, current.payload_digest) !== "owner_acknowledged_no_replay") {
+          this.resolutionState(current.event_id, current.payload_digest, current.delivery_state) !== "owner_acknowledged_no_replay") {
         return { status: "blocked_unresolved", delivery_state: current.delivery_state } as const;
       }
 
@@ -270,7 +319,70 @@ export class GatewayCronEventStore {
       throw new Error("invalid cron event source");
     }
     const source_digest = sha256(source.normalize("NFKC").trim());
-    return this.readCurrentCursor(source_digest)?.sequence ?? null;
+    const cursorSequence = this.readCurrentCursor(source_digest)?.sequence ?? null;
+    const holdSequence = this.readLatestCatchUpHold(source_digest)?.sequence ?? null;
+    if (cursorSequence === null) return holdSequence;
+    if (holdSequence === null) return cursorSequence;
+    return Math.max(cursorSequence, holdSequence);
+  }
+
+  /** Persist a missed occurrence as an unresolved policy hold, never as a dispatch or result. */
+  holdForCatchUpPolicy(event: CronEventIdentity, now_ms = Date.now()): CronEventCatchUpHoldResult {
+    validateEvent(event);
+    if (!Number.isSafeInteger(now_ms) || now_ms < 0) throw new Error("invalid cron event hold time");
+    const source_digest = sha256(event.source);
+    return this.transaction(() => {
+      const existingHold = this.readLatestCatchUpHold(source_digest);
+      if (existingHold) {
+        if (event.sequence < existingHold.sequence) return { status: "stale" } as const;
+        if (event.sequence === existingHold.sequence) {
+          return existingHold.event_id === event.event_id && existingHold.payload_digest === event.payload_digest
+            ? { status: "already_held" } as const
+            : { status: "identity_conflict" } as const;
+        }
+        return { status: "blocked_unresolved", delivery_state: "held_catch_up_policy" } as const;
+      }
+
+      const current = this.readCurrentCursor(source_digest);
+      if (current && event.sequence < current.sequence) return { status: "stale" } as const;
+      if (current && event.sequence === current.sequence) {
+        if (current.event_id !== event.event_id || current.payload_digest !== event.payload_digest) {
+          return { status: "identity_conflict" } as const;
+        }
+        if (current.delivery_state === "held_catch_up_policy") {
+          return { status: "blocked_unresolved", delivery_state: "held_catch_up_policy" } as const;
+        }
+        return { status: "already_recorded", delivery_state: current.delivery_state } as const;
+      }
+
+      this.archiveEvent({
+        source_digest,
+        sequence: event.sequence,
+        event_id: event.event_id,
+        request_id_digest: sha256(event.event_id),
+        payload_digest: event.payload_digest,
+        delivery_state: "held_catch_up_policy",
+        updated_at_ms: now_ms,
+      });
+      return { status: "held" } as const;
+    });
+  }
+
+  latestCatchUpHoldForSource(source: string): CronEventCursorSnapshot | null {
+    if (typeof source !== "string" || source.trim().length === 0 || source.length > 200) {
+      throw new Error("invalid cron event source");
+    }
+    const row = this.readLatestCatchUpHold(sha256(source.normalize("NFKC").trim()));
+    if (!row) return null;
+    return {
+      source_digest: row.source_digest,
+      sequence: row.sequence,
+      event_id: row.event_id,
+      payload_digest: row.payload_digest,
+      delivery_state: "held_catch_up_policy",
+      resolution_state: "policy_unresolved",
+      updated_at_ms: row.updated_at_ms,
+    };
   }
 
   /** Settle the local due marker. This source has no inbound or execution handler. */
@@ -297,7 +409,7 @@ export class GatewayCronEventStore {
 
   settle(
     event: CronEventIdentity,
-    state: Exclude<CronEventDeliveryState, "dispatching">,
+    state: Exclude<CronEventDeliveryState, "dispatching" | "held_catch_up_policy">,
     now_ms = Date.now(),
     completionReceipt?: CronEventResultReceipt,
   ): void {
@@ -384,12 +496,14 @@ export class GatewayCronEventStore {
 
   unresolvedEvents(): CronEventCursorSnapshot[] {
     if (this.readOrphanOutboxCount() > 0) throw new Error("cron_event_store_orphan_outbox_detected");
-    return this.readUnresolvedEventRows()
+    const currentEvents = this.readUnresolvedEventRows()
       .map((row) => {
         const cursor = parseCursorRow(row.source_digest, row);
-        return { ...cursor, resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest) };
+        return { ...cursor, resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest, cursor.delivery_state) };
       })
       .filter((row) => row.delivery_state !== "handler_returned");
+    return [...currentEvents, ...this.readCatchUpHoldRows()]
+      .sort((a, b) => a.source_digest.localeCompare(b.source_digest) || a.sequence - b.sequence);
   }
 
   /** Read-only notification projection that keeps independently verified sources visible. */
@@ -403,12 +517,19 @@ export class GatewayCronEventStore {
         if (cursor.delivery_state !== "handler_returned") {
           events.push({
             ...cursor,
-            resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest),
+            resolution_state: this.resolutionState(cursor.event_id, cursor.payload_digest, cursor.delivery_state),
           });
         }
       } catch {
         invalidRecordCount += 1;
       }
+    }
+    try {
+      const catchUpHolds = this.inspectCatchUpHoldRows();
+      events.push(...catchUpHolds.events);
+      invalidRecordCount += catchUpHolds.invalid_record_count;
+    } catch {
+      invalidRecordCount += 1;
     }
     return { events, invalid_record_count: invalidRecordCount };
   }
@@ -659,7 +780,12 @@ export class GatewayCronEventStore {
     );
   }
 
-  private resolutionState(event_id: string, payload_digest: string): CronEventResolutionState {
+  private resolutionState(
+    event_id: string,
+    payload_digest: string,
+    delivery_state: CronEventDeliveryState,
+  ): CronEventResolutionState {
+    if (delivery_state === "held_catch_up_policy") return "policy_unresolved";
     if (!this.verifyNoReplayDisposition) return "unacknowledged";
     try {
       return this.verifyNoReplayDisposition(event_id, payload_digest)
@@ -668,6 +794,45 @@ export class GatewayCronEventStore {
     } catch {
       return "verification_unavailable";
     }
+  }
+
+  private readLatestCatchUpHold(source_digest: string): CronEventHistoryRow | null {
+    const row = this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
+      FROM cron_event_archive WHERE source_digest=? AND delivery_state='held_catch_up_policy'
+      ORDER BY sequence DESC LIMIT 1`).get(source_digest) as CronEventHistoryRow | undefined;
+    if (!row) return null;
+    validateCronEventHistoryRow(row);
+    return row;
+  }
+
+  private readCatchUpHoldRows(): CronEventCursorSnapshot[] {
+    const inspection = this.inspectCatchUpHoldRows();
+    if (inspection.invalid_record_count > 0) throw new Error("cron_event_store_catch_up_hold_integrity_failed");
+    return inspection.events;
+  }
+
+  private inspectCatchUpHoldRows(): { readonly events: CronEventCursorSnapshot[]; readonly invalid_record_count: number } {
+    const rows = this.db.prepare(`SELECT event_id,request_id_digest,source_digest,sequence,payload_digest,delivery_state,updated_at_ms
+      FROM cron_event_archive WHERE delivery_state='held_catch_up_policy' ORDER BY source_digest,sequence`).all() as unknown as CronEventHistoryRow[];
+    const events: CronEventCursorSnapshot[] = [];
+    let invalidRecordCount = 0;
+    for (const row of rows) {
+      try {
+        validateCronEventHistoryRow(row);
+        events.push({
+          source_digest: row.source_digest,
+          sequence: row.sequence,
+          event_id: row.event_id,
+          payload_digest: row.payload_digest,
+          delivery_state: "held_catch_up_policy",
+          resolution_state: "policy_unresolved",
+          updated_at_ms: row.updated_at_ms,
+        });
+      } catch {
+        invalidRecordCount += 1;
+      }
+    }
+    return { events, invalid_record_count: invalidRecordCount };
   }
 }
 
@@ -712,7 +877,7 @@ function validateCronEventHistoryRow(row: CronEventHistoryRow): void {
       row.event_id !== `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` ||
       row.request_id_digest !== sha256(row.event_id) || !DIGEST.test(row.payload_digest) ||
       (row.delivery_state !== "dispatching" && row.delivery_state !== "handler_returned" &&
-        row.delivery_state !== "outcome_unknown") ||
+        row.delivery_state !== "outcome_unknown" && row.delivery_state !== "held_catch_up_policy") ||
       !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
     throw new Error("cron event history integrity check failed");
   }

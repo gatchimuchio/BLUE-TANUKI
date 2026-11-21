@@ -214,12 +214,12 @@ export interface WebChatOperatorSurface {
 
 export interface WebChatCronNoReplayReview {
   kind: "cron_no_replay";
-  status: "eligible" | "in_flight" | "stale_or_resolved" | "already_acknowledged" | "verification_unavailable" | "invalid_request";
+  status: "eligible" | "in_flight" | "stale_or_resolved" | "already_acknowledged" | "verification_unavailable" | "policy_unresolved" | "invalid_request";
   event_id?: string;
   payload_digest?: string;
-  delivery_state?: "dispatching" | "outcome_unknown";
+  delivery_state?: "dispatching" | "outcome_unknown" | "held_catch_up_policy";
   disposition: "acknowledge_no_replay";
-  original_outcome: "unknown";
+  original_outcome: "unknown" | "not_dispatched";
   eligible: boolean;
 }
 
@@ -1829,6 +1829,7 @@ export type WebChatNotificationKind =
   | "owner_saved_result_ready"
   | "schedule_fired"
   | "schedule_delivery_unknown"
+  | "schedule_catch_up_policy_held"
   | "cron_recovery_state_unavailable"
   | "schedule_failed"
   | "connector_failure"
@@ -1869,7 +1870,8 @@ export type WebChatCronExternalReceiptObservationStatus =
 export type WebChatCronResolutionState =
   | "unacknowledged"
   | "owner_acknowledged_no_replay"
-  | "verification_unavailable";
+  | "verification_unavailable"
+  | "policy_unresolved";
 
 export interface WebChatNotificationItem {
   id: string;

@@ -8075,6 +8075,18 @@ async function serveWithOwnerLease(
         eligible: false,
       };
     }
+    if (current.delivery_state === "held_catch_up_policy") {
+      return {
+        kind: "cron_no_replay",
+        status: "policy_unresolved",
+        event_id,
+        payload_digest,
+        delivery_state: current.delivery_state,
+        disposition: "acknowledge_no_replay",
+        original_outcome: "not_dispatched",
+        eligible: false,
+      };
+    }
     if (current.delivery_state === "handler_returned") {
       return {
         kind: "cron_no_replay",

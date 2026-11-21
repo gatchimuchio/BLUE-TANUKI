@@ -257,31 +257,43 @@ export function buildResidentNotificationsSnapshot(
   }
 
   for (const event of input.unresolved_cron_events ?? []) {
-    const externalReceiptCorrelation = cronExternalReceiptCorrelation(event.event_id, input.operation_plan_projection);
-    const receiptDisclosure = receiptObservationDisclosure(
+    const catchUpPolicyHold = event.resolution_state === "policy_unresolved";
+    const resultCorrelation = catchUpPolicyHold ? {} : cronResultCorrelation(event.event_id, input.operation_plan_projection);
+    const externalReceiptCorrelation = catchUpPolicyHold
+      ? {}
+      : cronExternalReceiptCorrelation(event.event_id, input.operation_plan_projection);
+    const receiptDisclosure = catchUpPolicyHold ? "" : receiptObservationDisclosure(
       externalReceiptCorrelation.external_receipt_observation_status,
       externalReceiptCorrelation.external_receipt_observation_source,
     );
     notifications.push({
-      id: `schedule-delivery-unsettled:${event.event_id}`,
-      kind: "schedule_delivery_unknown",
+      id: catchUpPolicyHold
+        ? `schedule-catch-up-policy-held:${event.event_id}`
+        : `schedule-delivery-unsettled:${event.event_id}`,
+      kind: catchUpPolicyHold ? "schedule_catch_up_policy_held" : "schedule_delivery_unknown",
       severity: "warning",
-      title: "Schedule delivery result is unsettled",
-      message: event.resolution_state === "owner_acknowledged_no_replay"
+      title: catchUpPolicyHold
+        ? "Scheduled occurrence held pending catch-up policy"
+        : "Schedule delivery result is unsettled",
+      message: catchUpPolicyHold
+        ? `Cron event sequence ${event.sequence} was not dispatched because its catch-up policy is unresolved; later events from this source remain held. This is a policy hold, not an unknown delivery result.`
+        : event.resolution_state === "owner_acknowledged_no_replay"
         ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the owner recorded a no-replay disposition, so later events may proceed. The original outcome remains unknown. A saved-result link is evidence correlation only.${receiptDisclosure}`
         : event.resolution_state === "verification_unavailable"
         ? `Cron event sequence ${event.sequence} remains ${event.delivery_state}; the no-replay disposition could not be verified, so later events remain blocked. A saved-result link is evidence correlation only, not proof of external success.${receiptDisclosure}`
         : `Cron event sequence ${event.sequence} remains ${event.delivery_state}; delivery is not confirmed, and later events from this source are blocked without automatic replay. A saved-result link is evidence correlation only, not proof of external success.${receiptDisclosure}`,
       timestamp: event.updated_at_ms,
-      source: "cron_event_cursor",
+      source: catchUpPolicyHold ? "cron_event_archive" : "cron_event_cursor",
       read_only: true,
       authority: "display_only",
       request_id: event.event_id,
       payload_hash: event.payload_digest,
       cron_resolution_state: event.resolution_state,
-      ...cronResultCorrelation(event.event_id, input.operation_plan_projection),
+      ...resultCorrelation,
       ...externalReceiptCorrelation,
-      next_action: event.resolution_state === "owner_acknowledged_no_replay"
+      next_action: catchUpPolicyHold
+        ? "Resolve the schedule catch-up policy before allowing this source to fire again. Do not treat the held occurrence as sent or replay it automatically."
+        : event.resolution_state === "owner_acknowledged_no_replay"
         ? "The next event may proceed, but this result is still unknown; inspect the authorized target independently before treating the action as complete."
         : "Inspect Authority Trace for this event ID and verify target delivery before taking any duplicate action.",
     });

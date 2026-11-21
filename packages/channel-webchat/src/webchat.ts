@@ -171,6 +171,7 @@ const D4_RUNTIME_NOTIFICATION_CATEGORY_BY_KIND: Record<
   operation_outcome_unknown: "outcome_unknown",
   schedule_fired: "scheduled_activity",
   schedule_delivery_unknown: "outcome_unknown",
+  schedule_catch_up_policy_held: "owner_attention",
   cron_recovery_state_unavailable: "recovery_unavailable",
   schedule_failed: "service_issue",
   connector_failure: "service_issue",

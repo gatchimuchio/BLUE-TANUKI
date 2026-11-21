@@ -12,7 +12,7 @@ const CRON_INSPECTION_ROW_LIMIT = 10_000;
 
 export type CronEventRecoveryStatus = "verified" | "residuals_present" | "corrupt" | "unavailable" | "schema_mismatch";
 export type CronEventRecoveryReason = "store_unavailable" | "schema_mismatch" | "ledger_corrupt" | "outbox_mismatch";
-export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown";
+export type CronEventDeliveryState = "dispatching" | "handler_returned" | "outcome_unknown" | "held_catch_up_policy";
 export type CronEventRequestMatchStatus = "matched" | "not_in_current_cursor" | "not_in_retained_event_history" |
   "not_observed_due_to_limit" | "ambiguous" | "unverified";
 
@@ -24,6 +24,7 @@ export interface CronEventRecoveryInspection {
   readonly unverified_cursor_count: number | null;
   readonly omitted_cursor_count: number | null;
   readonly unresolved_cursor_count: number | null;
+  readonly catch_up_policy_hold_count: number | null;
   readonly event_history_available: boolean | null;
   readonly archived_event_count: number | null;
   readonly verified_archived_event_count: number | null;
@@ -154,6 +155,7 @@ function unavailableInspection(
     unverified_cursor_count: null,
     omitted_cursor_count: null,
     unresolved_cursor_count: null,
+    catch_up_policy_hold_count: null,
     event_history_available: null,
     archived_event_count: null,
     verified_archived_event_count: null,
@@ -310,7 +312,7 @@ function validArchivedEvent(row: CronEventHistoryRow): boolean {
     row.event_id === `cron-${sha256(`${row.source_digest}\0${row.sequence}`)}` &&
     typeof row.request_id_digest === "string" && row.request_id_digest === sha256(row.event_id) &&
     typeof row.payload_digest === "string" && DIGEST.test(row.payload_digest) &&
-    ["dispatching", "handler_returned", "outcome_unknown"].includes(String(row.delivery_state)) &&
+    ["dispatching", "handler_returned", "outcome_unknown", "held_catch_up_policy"].includes(String(row.delivery_state)) &&
     nonnegativeSafeInteger(row.updated_at_ms);
 }
 
@@ -481,6 +483,7 @@ export function inspectCronEventRecoveryLedger(options: {
     }
     let verifiedArchivedEventCount = 0;
     let unverifiedArchivedEventCount = 0;
+    let catchUpPolicyHoldCount = 0;
     for (const row of archivedEventRows) {
       if (!validArchivedEvent(row) || observedEventIds.has(String(row.event_id))) {
         unverifiedArchivedEventCount++;
@@ -493,6 +496,7 @@ export function inspectCronEventRecoveryLedger(options: {
         continue;
       }
       verifiedArchivedEventCount++;
+      if (row.delivery_state === "held_catch_up_policy") catchUpPolicyHoldCount++;
       observedEventIds.add(String(row.event_id));
       observedEventIdentities.set(String(row.event_id), {
         request_id_digest: String(row.request_id_digest), source_digest: String(row.source_digest), sequence: Number(row.sequence),
@@ -570,7 +574,7 @@ export function inspectCronEventRecoveryLedger(options: {
       unverifiedCursorCount === 0 && unverifiedArchivedEventCount === 0
       ? orphanResultReceiptCandidateCount : 0;
     const residualCount = unverifiedCursorCount + omittedCursorCount + unresolvedCursorCount +
-      unverifiedArchivedEventCount + omittedArchivedEventCount + orphanRow.count +
+      unverifiedArchivedEventCount + omittedArchivedEventCount + catchUpPolicyHoldCount + orphanRow.count +
       unverifiedApprovalCount + omittedApprovalCount + pendingApprovalCount + interruptedApprovalCount +
       unverifiedResultReceiptCount + (omittedResultReceiptCount ?? 0);
     const status: CronEventRecoveryStatus = residualCount === 0 ? "verified" : "residuals_present";
@@ -584,6 +588,7 @@ export function inspectCronEventRecoveryLedger(options: {
       unverified_cursor_count: unverifiedCursorCount,
       omitted_cursor_count: omittedCursorCount,
       unresolved_cursor_count: unresolvedCursorCount,
+      catch_up_policy_hold_count: catchUpPolicyHoldCount,
       event_history_available: schemaVersion === "digest_history",
       archived_event_count: archivedEventCount,
       verified_archived_event_count: verifiedArchivedEventCount,

@@ -82,6 +82,22 @@ describe("schedule.resolve_event tool", () => {
     }
   });
 
+  it("does not translate a catch-up policy hold into an unknown-outcome no-replay disposition", async () => {
+    const { store } = makeStore();
+    const held = makeEvent("cron:runtime:policy-review", 1_000, "synthetic missed occurrence");
+    expect(store.holdForCatchUpPolicy(held, 1_500)).toEqual({ status: "held" });
+    try {
+      const tool = createCronEventResolutionTool(store, { isEventInFlight: () => false });
+      await expect(tool.invoke({
+        event_id: held.event_id,
+        payload_digest: held.payload_digest,
+        disposition: "acknowledge_no_replay",
+      }, context)).rejects.toThrow(/catch-up policy is unresolved/);
+    } finally {
+      store.close();
+    }
+  });
+
   it("rejects when the HDS disposition cannot be verified", async () => {
     const { root, store } = makeStore();
     const current = makeEvent("cron:runtime:audit-unavailable", 1_000, "synthetic action");

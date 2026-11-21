@@ -2931,7 +2931,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             rows
               .map(function (item) {
                 const sourceHeld = heldSources.includes(item);
-                const status = sourceHeld ? "保留" : item.status || (item.enabled === false ? "disabled" : "active");
+                const catchUpHold = isObject(item.catch_up_hold) && item.catch_up_hold.reason === "catch_up_policy_unresolved"
+                  ? item.catch_up_hold : null;
+                const status = sourceHeld ? "保留" : catchUpHold ? "時刻方針未確定で停止" : item.status || (item.enabled === false ? "disabled" : "active");
                 const tone = status === "active" ? "good" : status === "pending" ? "review" : status === "rejected" ? "bad" : "warn";
                 const pending = item.pending_operation ? badge(item.pending_operation, "review") : badge("none", "good");
                 const fields = [
@@ -2947,6 +2949,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   ["expires", formatDate(item.approval_expires_at_ms), false],
                   ["payload", item.payload_hash || "not recorded", false]
                 ];
+                if (catchUpHold) {
+                  fields.push(["catch-up policy", catchUpHold.persisted === true ? "未確定・永続保留" : "未確定・永続状態は未確認", false]);
+                  fields.push(["保留した予定時刻", formatDate(catchUpHold.scheduled_at_ms), false]);
+                }
                 if (sourceHeld) {
                   const marker = item.local_acquisition_due;
                   if (item.id === "daily_brief" && item.origin === "boot" && isObject(marker) &&

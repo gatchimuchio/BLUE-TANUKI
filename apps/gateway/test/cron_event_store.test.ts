@@ -93,6 +93,112 @@ describe("GatewayCronEventStore", () => {
     }
   });
 
+  it("persists catch-up policy holds separately from delivery outcomes and blocks the source", () => {
+    const { filepath, store } = makeStore();
+    const held = makeEvent("cron:runtime:catch-up-hold", 2_000, "synthetic schedule version");
+    const next = makeEvent("cron:runtime:catch-up-hold", 3_000, "synthetic schedule version");
+    expect(store.holdForCatchUpPolicy(held, 2_500)).toEqual({ status: "held" });
+    expect(store.holdForCatchUpPolicy(held, 2_600)).toEqual({ status: "already_held" });
+    expect(store.latestCatchUpHoldForSource(held.source)).toMatchObject({
+      event_id: held.event_id,
+      payload_digest: held.payload_digest,
+      delivery_state: "held_catch_up_policy",
+      resolution_state: "policy_unresolved",
+      sequence: held.sequence,
+      updated_at_ms: 2_500,
+    });
+    expect(store.claim(held)).toEqual({ status: "duplicate", delivery_state: "held_catch_up_policy" });
+    expect(store.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "held_catch_up_policy" });
+    expect(store.resultReceipt(held)).toBeNull();
+    expect(store.unresolvedEvents()).toEqual([expect.objectContaining({
+      event_id: held.event_id,
+      delivery_state: "held_catch_up_policy",
+      resolution_state: "policy_unresolved",
+    })]);
+    store.close();
+
+    const reopened = new GatewayCronEventStore(filepath);
+    try {
+      expect(reopened.latestSequenceForSource(held.source)).toBe(held.sequence);
+      expect(reopened.latestCatchUpHoldForSource(held.source)?.event_id).toBe(held.event_id);
+      expect(reopened.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "held_catch_up_policy" });
+      expect(reopened.unresolvedEvents()).toEqual([expect.objectContaining({
+        event_id: held.event_id,
+        delivery_state: "held_catch_up_policy",
+        resolution_state: "policy_unresolved",
+      })]);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("retains an existing unknown delivery while separately recording a later missed occurrence", () => {
+    const { store } = makeStore();
+    const unknown = makeEvent("cron:runtime:catch-up-with-unknown", 1_000, "synthetic prior event");
+    const held = makeEvent("cron:runtime:catch-up-with-unknown", 2_000, "synthetic current schedule");
+    const next = makeEvent("cron:runtime:catch-up-with-unknown", 3_000, "synthetic current schedule");
+    try {
+      expect(store.claim(unknown, 10)).toEqual({ status: "accepted" });
+      store.settle(unknown, "outcome_unknown", 11);
+      expect(store.holdForCatchUpPolicy(held, 12)).toEqual({ status: "held" });
+      expect(store.unresolvedEvents()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ event_id: unknown.event_id, delivery_state: "outcome_unknown", resolution_state: "unacknowledged" }),
+        expect.objectContaining({ event_id: held.event_id, delivery_state: "held_catch_up_policy", resolution_state: "policy_unresolved" }),
+      ]));
+      expect(store.claim(next)).toEqual({ status: "blocked_unresolved", delivery_state: "held_catch_up_policy" });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("migrates the legacy archive check constraint without changing retained rows", () => {
+    const { filepath, store } = makeStore();
+    const first = makeEvent("cron:history:catch-up-migration", 1, "synthetic retained event one");
+    const second = makeEvent("cron:history:catch-up-migration", 2, "synthetic retained event two");
+    expect(store.claim(first, 10)).toEqual({ status: "accepted" });
+    store.settle(first, "handler_returned", 11);
+    expect(store.claim(second, 12)).toEqual({ status: "accepted" });
+    store.settle(second, "handler_returned", 13);
+    store.close();
+
+    const legacy = new DatabaseSync(filepath);
+    try {
+      legacy.exec(`DROP INDEX cron_event_archive_request_digest;
+        ALTER TABLE cron_event_archive RENAME TO cron_event_archive_previous;
+        CREATE TABLE cron_event_archive (
+          event_id TEXT PRIMARY KEY,
+          request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+          source_digest TEXT NOT NULL CHECK(length(source_digest) = 64),
+          sequence INTEGER NOT NULL CHECK(sequence >= 0),
+          payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+          delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','handler_returned','outcome_unknown')),
+          updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0)
+        ) STRICT;
+        INSERT INTO cron_event_archive SELECT * FROM cron_event_archive_previous;
+        DROP TABLE cron_event_archive_previous;
+        CREATE INDEX cron_event_archive_request_digest ON cron_event_archive(request_id_digest);`);
+    } finally {
+      legacy.close();
+    }
+
+    const migrated = new GatewayCronEventStore(filepath);
+    try {
+      expect(migrated.unresolvedEvents()).toEqual([]);
+      const database = new DatabaseSync(filepath, { readOnly: true });
+      try {
+        expect(database.prepare("SELECT event_id,delivery_state FROM cron_event_archive ORDER BY sequence").all())
+          .toEqual([
+            { event_id: first.event_id, delivery_state: "handler_returned" },
+          ]);
+        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        database.close();
+      }
+    } finally {
+      migrated.close();
+    }
+  });
+
   it("retains prior event delivery correlation as digest-only history when the cursor advances", () => {
     const { filepath, store } = makeStore();
     const first = makeEvent("cron:history:private-source", 1, "private synthetic payload one");

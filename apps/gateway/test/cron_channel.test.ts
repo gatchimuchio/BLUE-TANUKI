@@ -103,7 +103,7 @@ describe("daily wall-clock scheduling", () => {
       .toBe(Date.UTC(2026, 10, 2, 9, 30)); // The repeated second 01:30 is skipped.
   });
 
-  it("dispatches one due occurrence after a forward clock jump and skips missed days", async () => {
+  it("persists a catch-up policy hold after a forward clock jump and survives restart", async () => {
     vi.useFakeTimers();
     const targetAt = Date.UTC(2026, 4, 9, 7, 0);
     vi.setSystemTime(targetAt - 5 * 60_000);
@@ -126,11 +126,30 @@ describe("daily wall-clock scheduling", () => {
       expect(ch.snapshot()[0]?.next_fire_at_ms).toBe(targetAt);
       vi.setSystemTime(targetAt + 2 * 24 * 60 * 60_000);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(received).toEqual([targetAt]);
+      expect(received).toEqual([]);
       expect(ch.snapshot()[0]).toMatchObject({
-        last_fire_at_ms: targetAt,
-        next_fire_at_ms: Date.UTC(2026, 4, 12, 7, 0),
+        running: false,
+        last_fire_at_ms: null,
+        next_fire_at_ms: null,
+        catch_up_hold: {
+          reason: "catch_up_policy_unresolved",
+          scheduled_at_ms: targetAt,
+          persisted: true,
+        },
       });
+      const heldEvent = store.unresolvedEvents().find((event) => event.delivery_state === "held_catch_up_policy");
+      expect(heldEvent).toMatchObject({ sequence: targetAt, resolution_state: "policy_unresolved" });
+      expect(heldEvent && store.resultReceipt({ ...heldEvent, source: "cron:boot:clock-jump" })).toBeNull();
+
+      const restarted = new CronSchedulerChannel({
+        tasks: [{ id: "clock-jump", channel: "webchat", target: "local-user", content: "synthetic daily event", time: "07:00", time_zone: "UTC" }],
+        event_store: store,
+        log: () => undefined,
+      });
+      await restarted.start(async (request) => { received.push(request.timestamp); });
+      expect(restarted.snapshot()[0]).toMatchObject({ running: false, next_fire_at_ms: null, catch_up_hold: { persisted: true } });
+      expect(received).toEqual([]);
+      await restarted.stop();
     } finally {
       await ch.stop();
       store.close();
@@ -559,7 +578,7 @@ describe("CronSchedulerChannel", () => {
     }
   });
 
-  it("preserves an interval cadence after restart and skips missed ticks instead of catching them up", async () => {
+  it("preserves an interval cadence but holds after restart when a tick was missed", async () => {
     vi.useFakeTimers();
     const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
     vi.setSystemTime(base);
@@ -589,12 +608,52 @@ describe("CronSchedulerChannel", () => {
       await vi.advanceTimersByTimeAsync(2500);
       const restarted = makeChannel();
       await restarted.start(async (req) => { received.push(Number(req.metadata?.["blue_tanuki.cron.event_sequence"])); });
-      expect(restarted.snapshot()[0]?.next_fire_at_ms).toBe(base + 4000);
+      expect(restarted.snapshot()[0]).toMatchObject({
+        running: false,
+        next_fire_at_ms: null,
+        catch_up_hold: { reason: "catch_up_policy_unresolved", scheduled_at_ms: base + 2000, persisted: true },
+      });
       await vi.advanceTimersByTimeAsync(500);
       await restarted.stop();
 
-      expect(received).toEqual([base + 1000, base + 4000]);
+      expect(received).toEqual([base + 1000]);
     } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the first runtime interval occurrence missed before the scheduler's first start", async () => {
+    vi.useFakeTimers();
+    const base = new Date(2026, 4, 9, 6, 30, 0, 0).getTime();
+    vi.setSystemTime(base + 3500);
+    const { root, store } = makeTestEventStore("blue-tanuki-cron-first-fire-missed-");
+    const received: unknown[] = [];
+    const ch = new CronSchedulerChannel({
+      tasks: [{
+        id: "created-before-start",
+        origin: "runtime",
+        created_at_ms: base,
+        channel: "webchat",
+        target: "local-user",
+        content: "synthetic created schedule",
+        interval_ms: 1000,
+      }],
+      event_store: store,
+      log: () => undefined,
+    });
+    try {
+      await ch.start(async (request) => { received.push(request); });
+      expect(ch.snapshot()[0]).toMatchObject({
+        running: false,
+        next_fire_at_ms: null,
+        catch_up_hold: { scheduled_at_ms: base + 1000, persisted: true },
+      });
+      expect(received).toEqual([]);
+      expect(store.latestSequenceForSource("cron:runtime:created-before-start")).toBe(base + 1000);
+    } finally {
+      await ch.stop();
       store.close();
       rmSync(root, { recursive: true, force: true });
       vi.useRealTimers();

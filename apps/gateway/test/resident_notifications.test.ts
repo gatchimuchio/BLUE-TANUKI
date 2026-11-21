@@ -358,6 +358,45 @@ describe("buildResidentNotificationsSnapshot", () => {
     expect(JSON.stringify(notifications)).not.toContain("c".repeat(64));
   });
 
+  it("shows missed schedules as owner policy holds without result correlation", () => {
+    const event = {
+      source_digest: "a".repeat(64),
+      sequence: 42,
+      event_id: "cron-event-held",
+      payload_digest: "b".repeat(64),
+      delivery_state: "held_catch_up_policy" as const,
+      resolution_state: "policy_unresolved" as const,
+      updated_at_ms: 950,
+    };
+    const notifications = buildResidentNotificationsSnapshot({
+      now_ms: 1000,
+      audit_chain_valid: true,
+      pending_approvals: [],
+      authority_trace: [],
+      unresolved_cron_events: [event],
+      operation_plan_projection: {
+        schema_version: "operation-plan-projection.v1",
+        used_for_authority: false,
+        raw_payload_exposed: false,
+        plans: [{ request_id: event.event_id, bindings: [{ request_id: event.event_id, status: "verified" }] }],
+      } as never,
+    });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({
+      kind: "schedule_catch_up_policy_held",
+      source: "cron_event_archive",
+      cron_resolution_state: "policy_unresolved",
+      read_only: true,
+      authority: "display_only",
+      request_id: event.event_id,
+    });
+    expect(notifications[0]?.message).toContain("was not dispatched");
+    expect(notifications[0]?.message).toContain("not an unknown delivery result");
+    expect(notifications[0]).not.toHaveProperty("result_correlation_status");
+    expect(notifications[0]).not.toHaveProperty("external_receipt_observation_status");
+  });
+
   it.each([
     [undefined, "projection_unavailable"],
     [{ schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false, plans: [] }, "no_matching_plan"],

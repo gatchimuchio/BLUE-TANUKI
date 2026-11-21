@@ -14,6 +14,7 @@ import {
   systemCronTimeZone,
   type CronSchedulerChannel,
   type CronTaskOptions,
+  type CronTaskSnapshot,
 } from "./cron_channel.js";
 import { resolveRuntimeSchedulesDirectory } from "./runtime_path_config.js";
 
@@ -55,6 +56,7 @@ export interface RuntimeScheduleSnapshot {
   pending_operation?: RuntimeScheduleOperation;
   pending_command_id?: string;
   approval_expires_at_ms?: number;
+  catch_up_hold?: CronTaskSnapshot["catch_up_hold"];
 }
 
 export interface RuntimeScheduleDeleteTarget {
@@ -555,6 +557,7 @@ export class RuntimeScheduleManager {
       time: schedule.time,
       time_zone: schedule.time_zone,
       interval_ms: schedule.interval_ms,
+      created_at_ms: schedule.created_at_ms,
       payload_hash: schedule.payload_hash,
       delegation: schedule.delegation,
     };
@@ -567,6 +570,7 @@ export class RuntimeScheduleManager {
     const updateTarget = !op && schedule.status === "active" && schedule.enabled
       ? this.inspectUpdateTarget(schedule.id) : null;
     const deletion = op ? null : this.inspectDeleteTarget(schedule.id);
+    const catchUpHold = this.scheduler?.snapshot().find((task) => task.id === schedule.id && task.origin === "runtime")?.catch_up_hold;
     return {
       id: schedule.id,
       origin: "runtime",
@@ -585,6 +589,7 @@ export class RuntimeScheduleManager {
       pending_operation: op?.operation,
       pending_command_id: op?.command_id,
       approval_expires_at_ms: op?.expires_at_ms,
+      ...(catchUpHold ? { catch_up_hold: catchUpHold } : {}),
     };
   }
 

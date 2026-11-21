@@ -35,6 +35,8 @@ export interface CronTaskOptions {
   interval_ms?: number;
   /** Stable schedule-version digest for the durable occurrence claim. */
   payload_hash?: string;
+  /** Durable creation time used to detect an initial missed occurrence after restart. */
+  created_at_ms?: number;
   delegation?: RuntimeScheduleDelegation;
   content_source_hold?: CronContentSourceHold;
   google_service_scope_digest?: string;
@@ -80,6 +82,14 @@ export interface CronTaskSnapshot {
   payload_hash: string;
   next_fire_at_ms: number | null;
   last_fire_at_ms: number | null;
+  catch_up_hold?: {
+    readonly reason: "catch_up_policy_unresolved";
+    readonly event_id: string;
+    readonly payload_digest: string;
+    readonly scheduled_at_ms: number;
+    readonly detected_at_ms: number;
+    readonly persisted: boolean;
+  };
   recovery_hold: "restore_observation_unverified" | null;
   content_source_hold?: CronContentSourceHold;
   local_acquisition_due?: CronLocalAcquisitionDue;
@@ -115,6 +125,7 @@ interface NormalizedCronTask {
   time: string;
   time_zone?: string;
   interval_ms?: number;
+  created_at_ms?: number;
   payload_hash: string;
   delegation?: RuntimeScheduleDelegation;
   content_source_hold?: CronContentSourceHold;
@@ -129,6 +140,7 @@ interface CronTaskRuntime {
   nextFireAtMs: number | null;
   lastFireAtMs: number | null;
   scheduledTimeZone: string | null;
+  catchUpHold?: CronTaskSnapshot["catch_up_hold"];
 }
 
 const DAILY_CLOCK_RECHECK_MS = 60_000;
@@ -268,11 +280,33 @@ export class CronSchedulerChannel implements InboundChannel {
 
   private scheduleTask(runtime: CronTaskRuntime, handler: InboundHandler): void {
     const task = runtime.task;
-    const lastScheduledAt = this.eventStore?.latestSequenceForSource(cronTaskEventSource(task)) ?? null;
+    const source = cronTaskEventSource(task);
+    const persistedHold = this.eventStore?.latestCatchUpHoldForSource(source) ?? null;
+    if (persistedHold) {
+      runtime.catchUpHold = {
+        reason: "catch_up_policy_unresolved",
+        event_id: persistedHold.event_id,
+        payload_digest: persistedHold.payload_digest,
+        scheduled_at_ms: persistedHold.sequence,
+        detected_at_ms: persistedHold.updated_at_ms,
+        persisted: true,
+      };
+      this.stopRuntime(runtime);
+      this.log(`[cron] task held id=${task.id} reason=catch_up_policy_unresolved event_id=${persistedHold.event_id}`);
+      return;
+    }
+    const lastScheduledAt = this.eventStore?.latestSequenceForSource(source) ?? null;
     runtime.lastFireAtMs = lastScheduledAt;
     runtime.running = true;
     if (task.interval_ms && task.interval_ms > 0) {
-      runtime.nextFireAtMs = nextIntervalFireAtMs(this.nowMs(), task.interval_ms, lastScheduledAt);
+      const anchor = lastScheduledAt ?? task.created_at_ms ?? this.nowMs();
+      const nextAt = anchor + task.interval_ms;
+      if (!Number.isSafeInteger(nextAt)) throw new Error("cron interval schedule exceeds safe timestamp range");
+      if (nextAt < this.nowMs()) {
+        this.holdMissedOccurrence(runtime, nextAt);
+        return;
+      }
+      runtime.nextFireAtMs = nextAt;
       this.scheduleNextInterval(runtime, handler);
       this.log(`[cron] task interval enabled id=${task.id} interval_ms=${task.interval_ms}`);
       return;
@@ -289,10 +323,13 @@ export class CronSchedulerChannel implements InboundChannel {
     runtime.timer = setTimeout(() => {
       if (!this.started || !runtime.running || this.runtimes.get(runtime.task.id) !== runtime) return;
       const nowMs = this.nowMs();
-      const actualScheduledAtMs = scheduledAtMs + Math.floor(Math.max(0, nowMs - scheduledAtMs) / intervalMs) * intervalMs;
-      runtime.lastFireAtMs = actualScheduledAtMs;
-      runtime.nextFireAtMs = actualScheduledAtMs + intervalMs;
-      void this.enqueueFire(runtime, handler, actualScheduledAtMs);
+      if (nowMs - scheduledAtMs >= intervalMs) {
+        this.holdMissedOccurrence(runtime, scheduledAtMs);
+        return;
+      }
+      runtime.lastFireAtMs = scheduledAtMs;
+      runtime.nextFireAtMs = scheduledAtMs + intervalMs;
+      void this.enqueueFire(runtime, handler, scheduledAtMs);
       this.scheduleNextInterval(runtime, handler);
     }, delay);
     runtime.timer.unref?.();
@@ -303,7 +340,14 @@ export class CronSchedulerChannel implements InboundChannel {
     if (!this.started || !runtime.running || this.runtimes.get(task.id) !== runtime) return;
     const nowMs = this.nowMs();
     const timeZone = task.time_zone ?? systemCronTimeZone();
-    const scheduledAtMs = nextDailyFireAtMs(nowMs, task.time, timeZone, runtime.lastFireAtMs);
+    const anchor = runtime.lastFireAtMs ?? task.created_at_ms ?? null;
+    const scheduledAtMs = anchor === null
+      ? nextDailyFireAtMs(nowMs, task.time, timeZone, null)
+      : nextDailyFireAtMs(anchor + 1, task.time, timeZone, anchor);
+    if (scheduledAtMs < nowMs) {
+      this.holdMissedOccurrence(runtime, scheduledAtMs);
+      return;
+    }
     runtime.scheduledTimeZone = timeZone;
     runtime.nextFireAtMs = scheduledAtMs;
     const delay = Math.max(0, Math.min(DAILY_CLOCK_RECHECK_MS, scheduledAtMs - nowMs));
@@ -312,9 +356,17 @@ export class CronSchedulerChannel implements InboundChannel {
       const firedAtMs = this.nowMs();
       const currentTimeZone = task.time_zone ?? systemCronTimeZone();
       const targetAtMs = runtime.nextFireAtMs;
-      if (currentTimeZone !== runtime.scheduledTimeZone || targetAtMs === null || firedAtMs < targetAtMs) {
+      if (targetAtMs === null || firedAtMs < targetAtMs) {
         // Re-evaluate wall time after clock changes, early timer wakeups, or suspend/resume.
         this.scheduleNextDaily(runtime, handler);
+        return;
+      }
+      if (currentTimeZone !== runtime.scheduledTimeZone) {
+        this.holdMissedOccurrence(runtime, targetAtMs);
+        return;
+      }
+      if (firedAtMs - targetAtMs > DAILY_CLOCK_RECHECK_MS) {
+        this.holdMissedOccurrence(runtime, targetAtMs);
         return;
       }
       runtime.timer = null;
@@ -344,6 +396,41 @@ export class CronSchedulerChannel implements InboundChannel {
       if (this.pendingBySource.get(source) === queued) this.pendingBySource.delete(source);
     });
     return queued;
+  }
+
+  private holdMissedOccurrence(runtime: CronTaskRuntime, scheduledAtMs: number): void {
+    if (runtime.timer) clearTimeout(runtime.timer);
+    runtime.timer = null;
+    runtime.running = false;
+    runtime.nextFireAtMs = null;
+    const event = createCronEventIdentity(cronTaskEventSource(runtime.task), scheduledAtMs, runtime.task.payload_hash);
+    const detectedAtMs = this.nowMs();
+    let persisted = false;
+    try {
+      const result = this.eventStore?.holdForCatchUpPolicy(event, detectedAtMs);
+      persisted = result?.status === "held" || result?.status === "already_held";
+      if (result && !persisted) {
+        this.log(`[cron] catch-up hold persistence status id=${runtime.task.id} status=${result.status}`);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.log(`[cron] catch-up hold persistence failed id=${runtime.task.id} reason=${truncateMetadata(reason)}`);
+    }
+    let savedHold: ReturnType<GatewayCronEventStore["latestCatchUpHoldForSource"]> = null;
+    try {
+      savedHold = this.eventStore?.latestCatchUpHoldForSource(event.source) ?? null;
+    } catch {
+      // The local snapshot still blocks this runtime; the durable store error is logged above.
+    }
+    runtime.catchUpHold = {
+      reason: "catch_up_policy_unresolved",
+      event_id: savedHold?.event_id ?? event.event_id,
+      payload_digest: savedHold?.payload_digest ?? event.payload_digest,
+      scheduled_at_ms: savedHold?.sequence ?? scheduledAtMs,
+      detected_at_ms: savedHold?.updated_at_ms ?? detectedAtMs,
+      persisted: persisted || savedHold !== null,
+    };
+    this.log(`[cron] task held id=${runtime.task.id} reason=catch_up_policy_unresolved event_id=${runtime.catchUpHold.event_id}`);
   }
 
   private async fire(runtime: CronTaskRuntime, handler: InboundHandler, scheduledAtMs: number): Promise<void> {
@@ -474,6 +561,7 @@ export class CronSchedulerChannel implements InboundChannel {
       payload_hash: payloadHash ?? runtime.task.payload_hash,
       next_fire_at_ms: runtime.nextFireAtMs,
       last_fire_at_ms: runtime.lastFireAtMs,
+      ...(runtime.catchUpHold ? { catch_up_hold: runtime.catchUpHold } : {}),
       recovery_hold: this.recoveryHold,
       ...(runtime.task.content_source_hold ? {
         content_source_hold: runtime.task.content_source_hold,
@@ -615,6 +703,10 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
     if (task.interval_ms !== undefined && timeZone !== undefined) {
       throw new Error(`cron task ${id} cannot set time_zone for an interval schedule`);
     }
+    const createdAt = task.created_at_ms;
+    if (createdAt !== undefined && (!Number.isSafeInteger(createdAt) || createdAt < 0)) {
+      throw new Error(`cron task ${id} created_at_ms must be a non-negative safe integer`);
+    }
     const channel = requireTrimmed(task.channel, `cron task ${id} channel`);
     const target = requireTrimmed(task.target, `cron task ${id} target`);
     const content = requireTrimmed(task.content, `cron task ${id} content`);
@@ -641,6 +733,7 @@ function normalizeCronTasks(tasks: CronTaskOptions[]): NormalizedCronTask[] {
       time,
       time_zone: timeZone,
       interval_ms: task.interval_ms,
+      created_at_ms: createdAt,
       payload_hash: payloadHash,
       delegation: task.delegation,
       content_source_hold: task.content_source_hold,

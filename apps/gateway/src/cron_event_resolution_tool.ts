@@ -30,6 +30,9 @@ export function createCronEventResolutionTool(
       }
       const current = eventStore.unresolvedEvent(event_id, payload_digest);
       if (!current) throw new Error("schedule.resolve_event rejected: event identity is stale or not unresolved");
+      if (current.resolution_state === "policy_unresolved" || current.delivery_state === "held_catch_up_policy") {
+        throw new Error("schedule.resolve_event rejected: catch-up policy is unresolved; no-replay disposition is not applicable");
+      }
       if (current.resolution_state !== "unacknowledged") {
         throw new Error("schedule.resolve_event rejected: existing disposition is present or cannot be verified");
       }

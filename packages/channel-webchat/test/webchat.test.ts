@@ -2910,6 +2910,9 @@ describe("WebChatChannel — Control Center shell", () => {
       function formatInterval() { return ""; }
       function escapeHtml(value) { return String(value); }
       ${inline.slice(start, end)}
+      renderRuntimeScheduleCreateAvailability = function () {};
+      renderRuntimeScheduleUpdateOptions = function () {};
+      renderRuntimeScheduleDeleteOptions = function () {};
       renderSchedules(snapshot);
     `);
     const task = { id: "daily_brief", origin: "boot", enabled: true, running: false, recovery_hold: null,
@@ -2925,6 +2928,28 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(rendered["runtime-schedule-list"]).toContain("Googleの定期取得は未接続です。");
     expect(rendered["runtime-schedule-list"]).not.toContain("前回の予定到達");
     expect(rendered["runtime-schedule-list"]).not.toContain("次の予定");
+
+    const catchUpHeldTask = {
+      ...task,
+      catch_up_hold: {
+        reason: "catch_up_policy_unresolved",
+        event_id: "cron-synthetic-held-event",
+        payload_digest: "c".repeat(64),
+        scheduled_at_ms: 9_000,
+        detected_at_ms: 9_500,
+        persisted: true,
+      },
+    };
+    evaluate(catchUpHeldTask);
+    expect(rendered["runtime-schedule-list"]).toContain("保留");
+    expect(rendered["runtime-schedule-list"]).toContain("catch-up policy");
+    expect(rendered["runtime-schedule-list"]).toContain("未確定・永続保留");
+    expect(rendered["runtime-schedule-list"]).toContain("time-9000");
+    expect(rendered["runtime-schedule-list"]).not.toContain(catchUpHeldTask.catch_up_hold.event_id);
+
+    evaluate({ ...catchUpHeldTask, catch_up_hold: { ...catchUpHeldTask.catch_up_hold, persisted: false } });
+    expect(rendered["runtime-schedule-list"]).toContain("未確定・永続状態は未確認");
+    expect(rendered["runtime-schedule-list"]).not.toContain("未確定・永続保留");
 
     const marker = { status: "awaiting_authorized_acquisition", occurrence_id_digest: "b".repeat(64),
       schedule_payload_digest: task.payload_hash, scheduled_at_ms: 10_000, recorded_at_ms: 10_001,
@@ -10064,6 +10089,20 @@ describe("WebChatChannel - resident notifications API", () => {
             result_correlation_status: "saved_result_linked",
             result_memory_status: "receipt_confirmed",
           },
+          {
+            id: "schedule-catch-up-policy-held:cron-event-held",
+            kind: "schedule_catch_up_policy_held",
+            severity: "warning",
+            title: "Scheduled occurrence held pending catch-up policy",
+            message: "Cron event sequence 43 was not dispatched; catch-up policy is unresolved.",
+            timestamp: 12347,
+            source: "cron_event_archive",
+            read_only: true,
+            authority: "display_only",
+            request_id: "cron-event-held",
+            payload_hash: "c".repeat(64),
+            cron_resolution_state: "policy_unresolved",
+          },
         ],
       },
     });
@@ -10081,7 +10120,7 @@ describe("WebChatChannel - resident notifications API", () => {
       });
       expect(ok.status).toBe(200);
       const body = JSON.parse(ok.text);
-      expect(body.notifications).toHaveLength(2);
+      expect(body.notifications).toHaveLength(3);
       expect(body.notifications[0]).toMatchObject({
         kind: "approval_required",
         severity: "action_required",
@@ -10099,12 +10138,22 @@ describe("WebChatChannel - resident notifications API", () => {
         result_correlation_status: "saved_result_linked",
         result_memory_status: "receipt_confirmed",
       });
+      expect(body.notifications[2]).toMatchObject({
+        kind: "schedule_catch_up_policy_held",
+        severity: "warning",
+        source: "cron_event_archive",
+        cron_resolution_state: "policy_unresolved",
+      });
       expect(JSON.stringify(body)).not.toContain("approval_token");
       const d4Reader = await getRaw(ctx.port, "/notifications", {
         authorization: `Bearer ${D4_RUNTIME_TOKEN}`,
       });
       expect(d4Reader.status).toBe(200);
-      expect(JSON.parse(d4Reader.text).notifications).toHaveLength(2);
+      expect(JSON.parse(d4Reader.text).notifications).toEqual([
+        { category: "owner_attention", severity: "action_required", occurred_at_ms: 12345 },
+        { category: "outcome_unknown", severity: "warning", occurred_at_ms: 12346 },
+        { category: "owner_attention", severity: "warning", occurred_at_ms: 12347 },
+      ]);
       expect(d4Reader.text).not.toContain(D4_RUNTIME_TOKEN);
     } finally {
       await ctx.teardown();
