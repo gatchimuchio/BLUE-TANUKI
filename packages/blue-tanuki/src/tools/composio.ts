@@ -938,11 +938,9 @@ function connectedAccountProjection(
   }
   const experimental = isRecord(value.experimental) ? value.experimental : {};
   const accountTypeRaw = experimental.account_type;
-  const accountType = accountTypeRaw === undefined
-    ? "PRIVATE"
-    : accountTypeRaw === "PRIVATE" || accountTypeRaw === "SHARED"
-      ? accountTypeRaw
-      : "UNKNOWN";
+  const accountType = accountTypeRaw === "PRIVATE" || accountTypeRaw === "SHARED"
+    ? accountTypeRaw
+    : "UNKNOWN";
   if (accountType !== "PRIVATE") {
     throw new Error("Composio account list returned a non-private or unclassified entry; account_status=not_confirmed");
   }
