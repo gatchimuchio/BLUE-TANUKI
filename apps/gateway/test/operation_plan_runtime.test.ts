@@ -1158,6 +1158,76 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     }
   });
 
+  it("rejects a new plan whose command identity collides with a quarantined plan", async () => {
+    const root = await mkdtemp(join(tmpdir(), "blue-plan-quarantine-command-collision-"));
+    const databasePath = join(root, "state.sqlite");
+    const store = new OperationPlanStateStore(databasePath);
+    const damagedCandidate = plan("command-collision-damaged", root);
+    const sourceCandidate = plan("command-collision-source", root);
+    const survivorCandidate = plan("command-collision-survivor", root);
+    const state = (candidate: OperationPlan, goal: string) => ({
+      owner: "fixture-owner", channel: "webchat", goal,
+      request_goal_criteria: noRequestCriteria(goal, candidate.request_id),
+      revisions: [{ digest: operationPlanDigest(candidate), plan: candidate }],
+      receipt_observations: [], bindings: [], results: [],
+    });
+    let sourcePlan: NonNullable<ReturnType<typeof store.load>>["plans"][number] | undefined;
+    try {
+      store.compareAndSet(null, OperationPlanCheckpointSchema.parse({
+        schema_version: "operation-plan-state.v1",
+        plans: [
+          state(damagedCandidate, "damaged synthetic task"),
+          state(sourceCandidate, "source synthetic task"),
+          state(survivorCandidate, "survivor synthetic task"),
+        ],
+      }));
+      const hds = new HDSUpperController({ operation_plan_state: store });
+      try {
+        const reviewed = review(hds, sourceCandidate, "search");
+        expect(reviewed.command?.id).toBeTruthy();
+        sourcePlan = store.load()?.plans.find((entry) =>
+          entry.revisions[0]!.plan.plan_id === sourceCandidate.plan_id);
+        expect(sourcePlan?.bindings[0]?.command_id).toBe(reviewed.command?.id);
+      } finally { hds.close(); }
+
+      const database = new DatabaseSync(databasePath);
+      try {
+        const row = database.prepare("SELECT checkpoint_json FROM operation_plan_state WHERE id=1").get() as {
+          checkpoint_json: string;
+        };
+        const raw = JSON.parse(row.checkpoint_json) as { plans: Array<Record<string, unknown>> };
+        const damaged = raw.plans.find((entry) => {
+          const revisions = entry.revisions as Array<{ plan: OperationPlan }>;
+          return revisions[0]?.plan.plan_id === damagedCandidate.plan_id;
+        });
+        const survivor = raw.plans.find((entry) => {
+          const revisions = entry.revisions as Array<{ plan: OperationPlan }>;
+          return revisions[0]?.plan.plan_id === survivorCandidate.plan_id;
+        });
+        if (!damaged || !survivor || !sourcePlan) throw new Error("missing collision fixture state");
+        damaged.owner = null;
+        damaged.bindings = structuredClone(sourcePlan.bindings);
+        raw.plans = [damaged, survivor];
+        database.prepare("UPDATE operation_plan_state SET checkpoint_json=?,digest=? WHERE id=1")
+          .run(JSON.stringify(raw), operationPlanDigest(raw));
+      } finally { database.close(); }
+
+      const current = store.load();
+      if (!current || !sourcePlan) throw new Error("missing isolated collision checkpoint");
+      expect(current.plans.map((entry) => entry.revisions[0]!.plan.plan_id)).toEqual([survivorCandidate.plan_id]);
+      const incoming = OperationPlanCheckpointSchema.parse({
+        ...current,
+        plans: [...current.plans, sourcePlan],
+      });
+      expect(() => store.compareAndSet(operationPlanDigest(current), incoming))
+        .toThrow("plan_checkpoint_quarantined_command_id_conflict");
+      expect(store.load()?.plans.map((entry) => entry.revisions[0]!.plan.plan_id))
+        .toEqual([survivorCandidate.plan_id]);
+    } finally {
+      store.close(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed on invalid shared checkpoint state even when the top-level digest matches", async () => {
     const root = await mkdtemp(join(tmpdir(), "blue-plan-shared-schema-fail-closed-"));
     const databasePath = join(root, "state.sqlite");

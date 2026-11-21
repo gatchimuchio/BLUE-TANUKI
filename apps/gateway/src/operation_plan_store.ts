@@ -59,6 +59,15 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
       if ([...incomingPlanDigests].some((digest) => quarantinedPlanDigests.has(digest))) {
         throw new Error("plan_checkpoint_quarantined_identity_conflict");
       }
+      for (const identity of ["command_id", "ticket_id"] as const) {
+        const quarantinedIdentities = new Set(quarantinedPlans.flatMap((plan) =>
+          checkpointBindingIdentityDigests(plan, identity)));
+        const incomingIdentities = incoming.plans.flatMap((plan) =>
+          checkpointBindingIdentityDigests(plan, identity));
+        if (incomingIdentities.some((digest) => quarantinedIdentities.has(digest))) {
+          throw new Error(`plan_checkpoint_quarantined_${identity}_conflict`);
+        }
+      }
 
       const quarantinedWaitIndices = current?.partition.quarantined_wait_indices ?? [];
       const quarantinedWaits = quarantinedWaitIndices.map((index) => current!.raw.waits![index]!);
@@ -266,6 +275,27 @@ export class OperationPlanStateStore implements OperationPlanStatePort {
     this.db.exec("CREATE TABLE IF NOT EXISTS operation_plan_recovery_holds (id INTEGER PRIMARY KEY CHECK(id=1), state_json TEXT NOT NULL, digest TEXT NOT NULL) STRICT");
   }
   close(): void { this.db.close(); }
+}
+
+function checkpointBindingIdentityDigests(value: unknown, identity: "command_id" | "ticket_id"): string[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+  const bindings = (value as Record<string, unknown>).bindings;
+  if (!Array.isArray(bindings)) return [];
+  const digests: string[] = [];
+  for (const binding of bindings) {
+    if (typeof binding !== "object" || binding === null || Array.isArray(binding)) continue;
+    const record = binding as Record<string, unknown>;
+    const admission = record.execution_admission;
+    const rawIdentity = identity === "command_id"
+      ? record.command_id
+      : typeof admission === "object" && admission !== null && !Array.isArray(admission)
+        ? (admission as Record<string, unknown>).ticket_id
+        : undefined;
+    if (typeof rawIdentity === "string" && rawIdentity.length > 0 && rawIdentity.length <= 200) {
+      digests.push(operationPlanDigest(rawIdentity));
+    }
+  }
+  return digests;
 }
 
 function checkpointPlanTaskIdentityDigest(value: unknown): string | null {
