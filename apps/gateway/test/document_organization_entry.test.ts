@@ -2056,6 +2056,11 @@ describe("delegated goal purpose owner review", () => {
       expect((await submissionReceipt("cancel", submissionId, token)).status).toBe(401);
       expect((await submissionReceipt("cancel", cancelledSubmissionId)).status).toBe(409);
       expect(await readOriginalWait()).toMatchObject({ state: "waiting" });
+      const providerCallsWhileWaiting = providerCalls;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      expect(Date.now()).toBeLessThan(deadlineAt);
+      expect(await readOriginalWait()).toMatchObject({ state: "waiting" });
+      expect(providerCalls).toBe(providerCallsWhileWaiting);
       const cancelledWaitResponse = await submissionReceipt("cancel");
       expect(cancelledWaitResponse.status).toBe(202);
       expect(cancelledWaitResponse.headers.get("cache-control")).toBe("no-store");
