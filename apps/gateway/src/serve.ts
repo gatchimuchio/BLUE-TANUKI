@@ -1612,7 +1612,7 @@ async function serveWithOwnerLease(
   });
   hds.onRuntimeInvariantsEvidence({ reason: "gateway_startup" });
   const runtimeScheduleDeleteFences = new Map<string, () => void>();
-  const runtimeScheduleUpdateFences = new Map<string, () => void>();
+  const runtimeScheduleMutationFences = new Map<string, () => void>();
   const runtimeSchedules = await RuntimeScheduleManager.open({
     env: process.env,
     beforePersist: (kind, commandId, versionBound) => {
@@ -1621,7 +1621,7 @@ async function serveWithOwnerLease(
         throw new Error("runtime_schedule_mutation_blocked");
       }
       if (kind === "approve" && versionBound) {
-        const recheck = runtimeScheduleDeleteFences.get(commandId) ?? runtimeScheduleUpdateFences.get(commandId);
+        const recheck = runtimeScheduleDeleteFences.get(commandId) ?? runtimeScheduleMutationFences.get(commandId);
         if (!recheck) throw new Error("runtime_schedule_versioned_mutation_authority_unavailable");
         recheck();
       }
@@ -2685,9 +2685,11 @@ async function serveWithOwnerLease(
         }
         try {
         if (runtimeScheduleMutationCommand(cmd)) {
+          const goalVersionBinding = hds.getRuntimeScheduleGoalVersionBinding(cmd);
           const prepared = runtimeSchedules.preparePending(cmd, evaluation, {
             request_id: log.request_id,
             actor,
+            ...(goalVersionBinding ? { goal_version_binding: goalVersionBinding } : {}),
           });
           if (!prepared.ok) {
             hds.onCommandLifecycle(cmd.id, "approval_rejected", {
@@ -3327,6 +3329,8 @@ async function serveWithOwnerLease(
     };
     const scheduleDelete = runtimeScheduleDeleteArguments(cmd);
     const scheduleUpdate = runtimeScheduleUpdateArguments(cmd);
+    const scheduleMutation = cmd.type === "tool_call" &&
+      (cmd.payload.tool_name === "schedule.create" || cmd.payload.tool_name === "schedule.update");
     if (scheduleDelete && opts.skip_approval && origin.user === OWNER_TASK_APPROVAL_ACTOR) {
       runtimeScheduleDeleteFences.set(cmd.id, () => {
         recheckFailureMemoryApproval();
@@ -3337,13 +3341,16 @@ async function serveWithOwnerLease(
         }
       });
     }
-    if (scheduleUpdate && opts.skip_approval) {
-      runtimeScheduleUpdateFences.set(cmd.id, () => {
+    if (scheduleMutation && opts.skip_approval) {
+      runtimeScheduleMutationFences.set(cmd.id, () => {
         recheckFailureMemoryApproval();
+        const pendingPurpose = runtimeSchedules.pendingGoalVersionBinding(cmd.id);
         if (!admission || Date.now() >= admission.expires_at_ms ||
+            !pendingPurpose || operationPlanDigest(pendingPurpose) !== operationPlanDigest(hdsBinding.goal_version_binding) ||
             !isHdsExecutionGoalVersionBindingCurrent(cmd, hdsBinding) ||
-            runtimeSchedules.inspectUpdateTarget(scheduleUpdate.id)?.revision_digest !== scheduleUpdate.expected_revision_digest) {
-          throw new Error("runtime_schedule_update_target_or_purpose_stale");
+            (scheduleUpdate !== undefined &&
+              runtimeSchedules.inspectUpdateTarget(scheduleUpdate.id)?.revision_digest !== scheduleUpdate.expected_revision_digest)) {
+          throw new Error("runtime_schedule_target_or_delegated_purpose_stale");
         }
       });
     }
@@ -3463,7 +3470,7 @@ async function serveWithOwnerLease(
       }
     } finally {
       if (scheduleDelete) runtimeScheduleDeleteFences.delete(cmd.id);
-      if (scheduleUpdate) runtimeScheduleUpdateFences.delete(cmd.id);
+      if (scheduleMutation) runtimeScheduleMutationFences.delete(cmd.id);
       recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
       if (executionTask) executionTasks.delete(executionTask);
       executionAdmissionLease?.release();

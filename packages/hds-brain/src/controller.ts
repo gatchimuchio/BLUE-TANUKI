@@ -3439,14 +3439,35 @@ ${planControl.question}`,
     const commandId = metadata["blue_tanuki.cron.delegation.command_id"];
     const requestId = metadata["blue_tanuki.cron.delegation.request_id"];
     const scopeDigest = metadata["blue_tanuki.cron.delegation.scope_digest"];
+    const goalIdDigest = metadata["blue_tanuki.cron.delegation.goal_id_digest"];
+    const purposeVersion = metadata["blue_tanuki.cron.delegation.purpose_version"];
+    const purposeDigest = metadata["blue_tanuki.cron.delegation.purpose_digest"];
     const send = trustedChannelSendFromMetadata(req);
     if (typeof scheduleId !== "string" || !scheduleId.trim() ||
         typeof payloadHash !== "string" || !/^[a-f0-9]{64}$/.test(payloadHash) ||
         typeof commandId !== "string" || !commandId.trim() ||
         typeof requestId !== "string" || !requestId.trim() ||
-        typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/.test(scopeDigest) || !send ||
+        typeof scopeDigest !== "string" || !/^[a-f0-9]{64}$/.test(scopeDigest) ||
+        typeof goalIdDigest !== "string" || !/^[a-f0-9]{64}$/.test(goalIdDigest) ||
+        typeof purposeVersion !== "number" || !Number.isSafeInteger(purposeVersion) || purposeVersion <= 0 ||
+        typeof purposeDigest !== "string" || !/^[a-f0-9]{64}$/.test(purposeDigest) || !send ||
         req.content !== send.content) {
       return "runtime_schedule_delegation_metadata_invalid";
+    }
+    const goalVersionBinding: ExecutionGoalVersionBinding = {
+      goal_id_digest: goalIdDigest,
+      purpose_version: purposeVersion,
+      purpose_digest: purposeDigest,
+    };
+    const governance = this.getGoalGovernanceProjection();
+    const goal = governance?.used_for_authority === false
+      ? governance.goals.find((candidate) =>
+        createHash("sha256").update(candidate.goal_ref, "utf8").digest("hex") === goalIdDigest)
+      : undefined;
+    if (!goal || goal.goal_kind !== "delegated" || goal.parent_alignment_status === "requires_review" ||
+        goal.current_version !== goalVersionBinding.purpose_version ||
+        goal.current_purpose_digest !== goalVersionBinding.purpose_digest) {
+      return "runtime_schedule_delegated_purpose_stale_or_unavailable";
     }
     let actualScopeDigest: string;
     try {
@@ -3485,7 +3506,10 @@ ${planControl.question}`,
         finalState.command_id !== commandId || finalState.request_id !== requestId ||
         finalState.payload_hash !== payloadHash ||
         finalState.delegation?.command_id !== commandId || finalState.delegation.request_id !== requestId ||
-        finalState.delegation.scope_digest !== scopeDigest) {
+        finalState.delegation.scope_digest !== scopeDigest ||
+        finalState.delegation.goal_version_binding?.goal_id_digest !== goalVersionBinding.goal_id_digest ||
+        finalState.delegation.goal_version_binding?.purpose_version !== goalVersionBinding.purpose_version ||
+        finalState.delegation.goal_version_binding?.purpose_digest !== goalVersionBinding.purpose_digest) {
       return "runtime_schedule_latest_mutation_not_active_scope";
     }
 
@@ -3493,7 +3517,10 @@ ${planControl.question}`,
       log.origin === "runtime" && log.schedule_id === scheduleId && log.operation === operation &&
       log.command_id === commandId && log.request_id === requestId && log.payload_hash === payloadHash &&
       log.delegation?.command_id === commandId && log.delegation.request_id === requestId &&
-      log.delegation.scope_digest === scopeDigest;
+      log.delegation.scope_digest === scopeDigest &&
+      log.delegation.goal_version_binding?.goal_id_digest === goalVersionBinding.goal_id_digest &&
+      log.delegation.goal_version_binding?.purpose_version === goalVersionBinding.purpose_version &&
+      log.delegation.goal_version_binding?.purpose_digest === goalVersionBinding.purpose_digest;
     const requested = scheduleEntries.filter(({ log }) =>
       log.event === "schedule.lifecycle.requested" && matchesDelegation(log));
     const approvedMutation = scheduleEntries.filter(({ log }) =>
@@ -4195,6 +4222,21 @@ ${planControl.question}`,
   }
   getRuntimeScheduleDeleteGoalBinding(command: ExecuteCommand): OperationPlanGoalPurposeBinding | undefined {
     return this.operationPlans.runtimeScheduleDeleteGoalBinding(command);
+  }
+  /** Require an exact active delegated purpose for a schedule that can fire later. */
+  getRuntimeScheduleGoalVersionBinding(command: ExecuteCommand): ExecutionGoalVersionBinding | undefined {
+    if (command.type !== "tool_call" ||
+        (command.payload.tool_name !== "schedule.create" && command.payload.tool_name !== "schedule.update")) return undefined;
+    let binding: ExecutionGoalVersionBinding;
+    try { binding = this.createExecutionAuthorityBinding(command).goal_version_binding; }
+    catch { return undefined; }
+    const governance = this.getGoalGovernanceProjection();
+    if (governance?.used_for_authority !== false) return undefined;
+    const goal = governance.goals.find((candidate) =>
+      createHash("sha256").update(candidate.goal_ref, "utf8").digest("hex") === binding.goal_id_digest);
+    if (!goal || goal.goal_kind !== "delegated" || goal.parent_alignment_status === "requires_review" ||
+        goal.current_version !== binding.purpose_version || goal.current_purpose_digest !== binding.purpose_digest) return undefined;
+    return structuredClone(binding);
   }
   /** Stable digest for the J-owned plan task instance; it is identity evidence, never authority. */
   getExecutionOperationPlanTaskIdentityDigest(command: ExecuteCommand): string | undefined {

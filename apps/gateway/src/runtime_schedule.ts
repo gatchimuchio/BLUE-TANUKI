@@ -4,8 +4,9 @@ import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import { runtimeScheduleScopeDigest, type ApprovalEvaluation, type RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
 import {
-  RuntimeScheduleDeleteArgumentsSchema, RuntimeScheduleUpdateArgumentsSchema,
+  ExecutionGoalVersionBindingSchema, RuntimeScheduleDeleteArgumentsSchema, RuntimeScheduleUpdateArgumentsSchema,
   requireToolOperationDescriptor, runtimeScheduleDeleteResult, type ExecuteCommand,
+  type ExecutionGoalVersionBinding,
 } from "@blue-tanuki/protocol";
 import {
   canonicalizeCronTimeZone,
@@ -167,7 +168,8 @@ export class RuntimeScheduleManager {
   activeCronTasks(): CronTaskOptions[] {
     if (this.safeMode) return [];
     return Array.from(this.schedules.values())
-      .filter((schedule) => schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined)
+      .filter((schedule) => schedule.status === "active" && schedule.enabled &&
+        schedule.delegation?.goal_version_binding !== undefined)
       .map((schedule) => this.toCronTask(schedule));
   }
 
@@ -244,12 +246,17 @@ export class RuntimeScheduleManager {
 
   activeCount(): number {
     return Array.from(this.schedules.values()).filter((schedule) =>
-      schedule.status === "active" && schedule.enabled && schedule.delegation !== undefined).length;
+      schedule.status === "active" && schedule.enabled && schedule.delegation?.goal_version_binding !== undefined).length;
   }
 
   pendingCount(): number {
     this.pruneExpiredPending("system");
     return this.pending.size;
+  }
+
+  pendingGoalVersionBinding(command_id: string): ExecutionGoalVersionBinding | undefined {
+    const binding = this.pending.get(command_id)?.proposed.delegation?.goal_version_binding;
+    return binding ? structuredClone(binding) : undefined;
   }
 
   hasPending(command_id: string): boolean {
@@ -260,7 +267,7 @@ export class RuntimeScheduleManager {
   preparePending(
     command: ExecuteCommand,
     evaluation: ApprovalEvaluation,
-    opts: { request_id?: string | null; actor?: string },
+    opts: { request_id?: string | null; actor?: string; goal_version_binding?: ExecutionGoalVersionBinding },
   ): { ok: true; pending: PendingRuntimeScheduleOperation } | { ok: false; message: string } {
     this.pruneExpiredPending(opts.actor ?? evaluation.context.actor);
     if (this.safeMode) {
@@ -272,6 +279,9 @@ export class RuntimeScheduleManager {
     const tool = command.payload.tool_name;
     if (tool !== "schedule.create" && tool !== "schedule.update" && tool !== "schedule.delete") {
       return { ok: false, message: "schedule operation rejected: unsupported schedule tool; nothing was activated; retry with schedule.create/update/delete" };
+    }
+    if (tool !== "schedule.delete" && !opts.goal_version_binding) {
+      return { ok: false, message: "schedule operation rejected: a current delegated purpose binding is required; nothing was activated; select an active delegated purpose and submit a new request" };
     }
     const expectedOperation = tool;
     const actor = opts.actor?.trim() || evaluation.context.actor;
@@ -361,7 +371,8 @@ export class RuntimeScheduleManager {
     return this.enqueueCommit(async () => {
       const check = () => {
         signal?.throwIfAborted();
-        this.beforePersist?.("approve", pending.command_id, pending.expected_revision_digest !== undefined);
+        this.beforePersist?.("approve", pending.command_id,
+          pending.expected_revision_digest !== undefined || pending.proposed.delegation?.goal_version_binding !== undefined);
         signal?.throwIfAborted();
         this.assertPreviousSchedule(pending);
         if (pending.expires_at_ms <= this.now()) {
@@ -431,7 +442,7 @@ export class RuntimeScheduleManager {
     tool: "schedule.create" | "schedule.update" | "schedule.delete",
     command: Extract<ExecuteCommand, { type: "tool_call" }>,
     evaluation: ApprovalEvaluation,
-    opts: { request_id?: string | null; actor?: string },
+    opts: { request_id?: string | null; actor?: string; goal_version_binding?: ExecutionGoalVersionBinding },
   ): PendingRuntimeScheduleOperation {
     const now = this.now();
     const actor = opts.actor ?? evaluation.context.actor;
@@ -448,7 +459,8 @@ export class RuntimeScheduleManager {
     if (operation === "create") {
       if (previous && previous.status === "active") throw new Error(`schedule ${id} is already active; nothing was activated`);
       const schedule = buildScheduleFromArgs(id, args, now, undefined);
-      return this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor);
+      return this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor,
+        opts.goal_version_binding);
     }
     if (!previous || previous.status !== "active") {
       throw new Error(`schedule ${id} is not active; nothing was changed`);
@@ -483,7 +495,8 @@ export class RuntimeScheduleManager {
     }
     const expectedRevisionDigest = bound.data.expected_revision_digest;
     const schedule = buildScheduleFromArgs(id, args, now, previous);
-    const pending = this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor);
+    const pending = this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor,
+      opts.goal_version_binding);
     return { ...pending, expected_revision_digest: expectedRevisionDigest };
   }
 
@@ -495,6 +508,7 @@ export class RuntimeScheduleManager {
     previous: RuntimeSchedule | undefined,
     request_id: string | null,
     actor: string,
+    goal_version_binding?: ExecutionGoalVersionBinding,
   ): PendingRuntimeScheduleOperation {
     let proposed = schedule;
     if (operation !== "delete") {
@@ -511,6 +525,7 @@ export class RuntimeScheduleManager {
           content: schedule.content,
           payload_hash: schedule.payload_hash,
         }),
+        goal_version_binding: ExecutionGoalVersionBindingSchema.parse(goal_version_binding),
       };
       proposed = { ...schedule, delegation };
     }
@@ -547,7 +562,8 @@ export class RuntimeScheduleManager {
 
   private scheduleSnapshot(schedule: RuntimeSchedule, pending?: PendingRuntimeScheduleOperation): RuntimeScheduleSnapshot {
     const op = pending ?? this.pending.get(this.pendingBySchedule.get(schedule.id) ?? "");
-    const legacyUnbound = schedule.status === "active" && schedule.delegation === undefined;
+    const legacyUnbound = schedule.status === "active" && schedule.enabled &&
+      schedule.delegation?.goal_version_binding === undefined;
     const updateTarget = !op && schedule.status === "active" && schedule.enabled
       ? this.inspectUpdateTarget(schedule.id) : null;
     const deletion = op ? null : this.inspectDeleteTarget(schedule.id);
@@ -648,16 +664,18 @@ export class RuntimeScheduleManager {
 
 function runtimeScheduleRevisionDigest(schedule: RuntimeSchedule, delegation: RuntimeScheduleDelegation): string {
   return createHash("sha256").update(JSON.stringify([
-    "blue-tanuki.runtime-schedule-revision.v1", schedule.id, schedule.payload_hash, schedule.created_at_ms,
+    "blue-tanuki.runtime-schedule-revision.v2", schedule.id, schedule.payload_hash, schedule.created_at_ms,
     schedule.updated_at_ms, delegation.command_id, delegation.request_id, delegation.scope_digest,
+    delegation.goal_version_binding ?? null,
   ]), "utf8").digest("hex");
 }
 
 function runtimeScheduleUpdateRevisionDigest(schedule: RuntimeSchedule): string {
   return createHash("sha256").update(JSON.stringify([
-    "blue-tanuki.runtime-schedule-update-revision.v1", schedule.id, schedule.payload_hash,
+    "blue-tanuki.runtime-schedule-update-revision.v2", schedule.id, schedule.payload_hash,
     schedule.created_at_ms, schedule.updated_at_ms,
-    schedule.delegation ? [schedule.delegation.command_id, schedule.delegation.request_id, schedule.delegation.scope_digest] : null,
+    schedule.delegation ? [schedule.delegation.command_id, schedule.delegation.request_id,
+      schedule.delegation.scope_digest, schedule.delegation.goal_version_binding ?? null] : null,
   ]), "utf8").digest("hex");
 }
 
@@ -805,10 +823,13 @@ function parseRuntimeScheduleDelegation(value: unknown): RuntimeScheduleDelegati
       typeof value.scope_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.scope_digest)) {
     throw new Error("runtime schedule store delegation is invalid");
   }
+  const goalVersionBinding = value.goal_version_binding === undefined
+    ? undefined : ExecutionGoalVersionBindingSchema.parse(value.goal_version_binding);
   return {
     command_id: value.command_id,
     request_id: value.request_id,
     scope_digest: value.scope_digest,
+    ...(goalVersionBinding ? { goal_version_binding: goalVersionBinding } : {}),
   };
 }
 

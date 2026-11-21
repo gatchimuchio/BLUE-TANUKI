@@ -394,6 +394,11 @@ export class CronSchedulerChannel implements InboundChannel {
           "blue_tanuki.cron.delegation.command_id": task.delegation.command_id,
           "blue_tanuki.cron.delegation.request_id": task.delegation.request_id,
           "blue_tanuki.cron.delegation.scope_digest": task.delegation.scope_digest,
+          ...(task.delegation.goal_version_binding ? {
+            "blue_tanuki.cron.delegation.goal_id_digest": task.delegation.goal_version_binding.goal_id_digest,
+            "blue_tanuki.cron.delegation.purpose_version": task.delegation.goal_version_binding.purpose_version,
+            "blue_tanuki.cron.delegation.purpose_digest": task.delegation.goal_version_binding.purpose_digest,
+          } : {}),
         } : {}),
         "blue_tanuki.cron.event_source": event.source,
         "blue_tanuki.cron.event_id": event.event_id,

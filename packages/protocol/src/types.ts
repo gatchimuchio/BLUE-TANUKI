@@ -26,6 +26,9 @@ export const RESERVED_EXTERNAL_METADATA_KEYS = [
   "blue_tanuki.operation_core.goal_purpose_binding",
   "blue_tanuki.operation_plan",
   "blue_tanuki.channel_send",
+  "blue_tanuki.cron.delegation.goal_id_digest",
+  "blue_tanuki.cron.delegation.purpose_version",
+  "blue_tanuki.cron.delegation.purpose_digest",
   "blue_tanuki.runtime_ingress.version",
   "blue_tanuki.runtime_ingress.runtime_id_digest",
   "blue_tanuki.runtime_ingress.session_id_digest",
@@ -65,6 +68,9 @@ export interface GatewayInternalAuthorityMetadata extends MetadataObject {
   };
   "blue_tanuki.channel_send.channel"?: string;
   "blue_tanuki.channel_send.target"?: string;
+  "blue_tanuki.cron.delegation.goal_id_digest"?: string;
+  "blue_tanuki.cron.delegation.purpose_version"?: number;
+  "blue_tanuki.cron.delegation.purpose_digest"?: string;
   "blue_tanuki.runtime_ingress.version"?: "d4-runtime-intent.v1";
   "blue_tanuki.runtime_ingress.runtime_id_digest"?: string;
   "blue_tanuki.runtime_ingress.session_id_digest"?: string;

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ChannelSendPayload, ExecuteCommand, InboundRequest } from "@blue-tanuki/protocol";
+import type { ChannelSendPayload, ExecuteCommand, ExecutionGoalVersionBinding, InboundRequest } from "@blue-tanuki/protocol";
 import { isGatewayInternalInboundRequest } from "@blue-tanuki/protocol";
 import type { CommitResult, DecisionLog } from "./types.js";
 
@@ -118,6 +118,8 @@ export interface RuntimeScheduleDelegation {
   readonly command_id: string;
   readonly request_id: string;
   readonly scope_digest: string;
+  /** Exact delegated purpose version; missing only on legacy schedules, which HDS refuses to fire. */
+  readonly goal_version_binding?: ExecutionGoalVersionBinding;
 }
 
 /** Digest the exact runtime-schedule identity and effect scope without retaining message content in HDS audit. */

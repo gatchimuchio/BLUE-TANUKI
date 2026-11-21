@@ -1,8 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createGatewayInternalInboundRequest, type ExecuteCommand } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, GOAL_GOVERNANCE_SCHEMA_VERSION,
+  type ExecuteCommand, type GoalGovernanceConfig } from "@blue-tanuki/protocol";
 import { AuditLog } from "../src/audit.js";
 import { evaluateApproval } from "../src/approval_policy.js";
 import { HDSUpperController } from "../src/controller.js";
@@ -17,6 +19,20 @@ const schedule = {
 };
 const commandId = "cmd-runtime-delegation-create";
 const requestId = "req-runtime-delegation-create";
+const goalRef = "goal_0123456789abcdef";
+const goalVersionBinding = {
+  goal_id_digest: createHash("sha256").update(goalRef, "utf8").digest("hex"),
+  purpose_version: 1,
+  purpose_digest: "e".repeat(64),
+};
+const goalGovernance: GoalGovernanceConfig = {
+  schema_version: GOAL_GOVERNANCE_SCHEMA_VERSION,
+  goals: [{ goal_ref: goalRef, goal_kind: "delegated", source_ref: "F:0123456789abcdef",
+    initial_purpose_digest: goalVersionBinding.purpose_digest,
+    initial_interpretation_digest: "f".repeat(64), adopted_at: 0 }],
+  authorizations: [],
+  events: [],
+};
 const delegation: RuntimeScheduleDelegation = {
   command_id: commandId,
   request_id: requestId,
@@ -27,6 +43,7 @@ const delegation: RuntimeScheduleDelegation = {
     content: schedule.content,
     payload_hash: schedule.payload_hash,
   }),
+  goal_version_binding: goalVersionBinding,
 };
 
 function scheduleCommand(): Extract<ExecuteCommand, { type: "tool_call" }> {
@@ -61,6 +78,10 @@ function runtimeRequest(overrides: {
   target?: string;
   payload_hash?: string;
   scope_digest?: string;
+  goal_id_digest?: string;
+  purpose_version?: number;
+  purpose_digest?: string;
+  omit_goal_binding?: boolean;
 } = {}) {
   const content = overrides.content ?? schedule.content;
   const target = overrides.target ?? schedule.target;
@@ -82,6 +103,11 @@ function runtimeRequest(overrides: {
       "blue_tanuki.cron.delegation.command_id": commandId,
       "blue_tanuki.cron.delegation.request_id": requestId,
       "blue_tanuki.cron.delegation.scope_digest": overrides.scope_digest ?? delegation.scope_digest,
+      ...(!overrides.omit_goal_binding ? {
+        "blue_tanuki.cron.delegation.goal_id_digest": overrides.goal_id_digest ?? goalVersionBinding.goal_id_digest,
+        "blue_tanuki.cron.delegation.purpose_version": overrides.purpose_version ?? goalVersionBinding.purpose_version,
+        "blue_tanuki.cron.delegation.purpose_digest": overrides.purpose_digest ?? goalVersionBinding.purpose_digest,
+      } : {}),
       "blue_tanuki.channel_send.channel": schedule.channel,
       "blue_tanuki.channel_send.target": target,
       "blue_tanuki.channel_send.content": content,
@@ -143,7 +169,8 @@ describe("runtime schedule delegation", () => {
   it("lets J emit only the exact durable scope backed by the matching L3 approval", () => {
     const root = mkdtempSync(join(tmpdir(), "bt-runtime-schedule-delegation-"));
     try {
-      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }) });
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+        goal_governance: goalGovernance });
       recordActiveApproval(hds);
 
       const allowed = hds.decide(runtimeRequest());
@@ -157,6 +184,9 @@ describe("runtime schedule delegation", () => {
         runtimeRequest({ target: "different-target" }),
         runtimeRequest({ payload_hash: "c".repeat(64) }),
         runtimeRequest({ scope_digest: "d".repeat(64) }),
+        runtimeRequest({ purpose_version: 2 }),
+        runtimeRequest({ purpose_digest: "9".repeat(64) }),
+        runtimeRequest({ omit_goal_binding: true }),
       ]) {
         const denied = hds.decide(tampered);
         expect(denied.command).toBeNull();
@@ -175,7 +205,8 @@ describe("runtime schedule delegation", () => {
 
     const root = mkdtempSync(join(tmpdir(), "bt-runtime-schedule-deleted-"));
     try {
-      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }) });
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+        goal_governance: goalGovernance });
       recordActiveApproval(hds);
       hds.onScheduleLifecycle("schedule.lifecycle.approved", {
         schedule_id: schedule.id,
@@ -190,6 +221,24 @@ describe("runtime schedule delegation", () => {
       const denied = hds.decide(runtimeRequest());
       expect(denied.command).toBeNull();
       expect(denied.log.commit.reason).toContain("runtime_schedule_latest_mutation_not_active_scope");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the delegated purpose changes after a schedule was approved", () => {
+    const root = mkdtempSync(join(tmpdir(), "bt-runtime-schedule-purpose-stale-"));
+    try {
+      const staleGovernance: GoalGovernanceConfig = {
+        ...goalGovernance,
+        goals: goalGovernance.goals.map((goal) => ({ ...goal, initial_purpose_digest: "9".repeat(64) })),
+      };
+      const hds = new HDSUpperController({ audit: new AuditLog({ filepath: join(root, "audit.jsonl") }),
+        goal_governance: staleGovernance });
+      recordActiveApproval(hds);
+      const denied = hds.decide(runtimeRequest());
+      expect(denied.command).toBeNull();
+      expect(denied.log.commit.reason).toContain("runtime_schedule_delegated_purpose_stale_or_unavailable");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

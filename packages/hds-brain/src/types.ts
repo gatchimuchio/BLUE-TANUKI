@@ -702,6 +702,11 @@ export interface ScheduleLifecycleLog {
     command_id: string;
     request_id: string;
     scope_digest: string;
+    goal_version_binding?: {
+      goal_id_digest: string;
+      purpose_version: number;
+      purpose_digest: string;
+    };
   };
   timestamp: number;
 }

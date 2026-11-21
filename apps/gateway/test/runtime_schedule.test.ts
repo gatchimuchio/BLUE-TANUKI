@@ -19,6 +19,7 @@ const upstream = {
 };
 
 const scheduleFixtures: { directory: string; manager?: RuntimeScheduleManager }[] = [];
+const testGoalVersionBinding = { goal_id_digest: "a".repeat(64), purpose_version: 1, purpose_digest: "b".repeat(64) } as const;
 
 afterEach(async () => {
   for (const fixture of scheduleFixtures.splice(0)) {
@@ -85,7 +86,29 @@ function evaluation(cmd: ExecuteCommand) {
   return evaluateApproval(cmd, [], { actor: "alice", now: 1, default_mode: "full_access" });
 }
 
+function preparePending(m: RuntimeScheduleManager, cmd: ExecuteCommand, result: ReturnType<typeof evaluation>,
+  opts: Parameters<RuntimeScheduleManager["preparePending"]>[2]) {
+  const scheduledMutation = cmd.type === "tool_call" &&
+    (cmd.payload.tool_name === "schedule.create" || cmd.payload.tool_name === "schedule.update");
+  return m.preparePending(cmd, result, {
+    ...opts,
+    ...(scheduledMutation && !opts.goal_version_binding ? { goal_version_binding: testGoalVersionBinding } : {}),
+  });
+}
+
 describe("RuntimeScheduleManager", () => {
+  it("rejects create and update when no current delegated purpose is supplied", async () => {
+    const m = await manager();
+    const create = command("schedule.create", { id: "purpose-required", channel: "webchat", target: "local-user",
+      content: "synthetic content", interval_ms: 60_000 });
+    const result = RuntimeScheduleManager.prototype.preparePending.call(m, create, evaluation(create), {
+      request_id: "req-purpose-required", actor: "alice",
+    });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining("current delegated purpose binding") });
+    expect(m.activeCronTasks()).toEqual([]);
+    expect(m.pendingCount()).toBe(0);
+  });
+
   it("stores schedules beneath the configured runtime state root by default", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "bt-runtime-schedules-state-root-"));
     try {
@@ -100,7 +123,7 @@ describe("RuntimeScheduleManager", () => {
         content: "synthetic schedule content",
         interval_ms: 120000,
       });
-      expect(m.preparePending(cmd, evaluation(cmd), { request_id: "req-state-root", actor: "alice" }).ok).toBe(true);
+      expect(preparePending(m, cmd, evaluation(cmd), { request_id: "req-state-root", actor: "alice" }).ok).toBe(true);
       await approve(m, cmd);
 
       expect(existsSync(join(stateRoot, "schedules", "runtime-schedules.json"))).toBe(true);
@@ -121,7 +144,7 @@ describe("RuntimeScheduleManager", () => {
     });
 
     expect(runtimeScheduleMutationCommand(cmd)).toBe(true);
-    const prepared = m.preparePending(cmd, evaluation(cmd), { request_id: "req-1", actor: "alice" });
+    const prepared = preparePending(m, cmd, evaluation(cmd), { request_id: "req-1", actor: "alice" });
     expect(prepared.ok).toBe(true);
     expect(m.pendingCount()).toBe(1);
     expect(m.activeCount()).toBe(0);
@@ -139,6 +162,7 @@ describe("RuntimeScheduleManager", () => {
     });
     expect(m.snapshot()[0]).not.toHaveProperty("time");
     expect(JSON.stringify(m.snapshot())).not.toContain("private runtime content");
+    expect(m.activeCronTasks()[0]?.delegation).toMatchObject({ goal_version_binding: testGoalVersionBinding });
     expect(lifecycle).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "schedule.lifecycle.requested", operation: "create", approval_level: "L3_final_review" }),
       expect.objectContaining({ event: "schedule.lifecycle.approved", operation: "create", delegation: expect.objectContaining({ command_id: cmd.id, request_id: "req-1" }) }),
@@ -160,10 +184,10 @@ describe("RuntimeScheduleManager", () => {
       ...valid,
       context: { ...valid.context, command_id: "another-command" },
     };
-    expect(m.preparePending(cmd, mismatched, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
+    expect(preparePending(m, cmd, mismatched, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
 
     const downgraded = { ...valid, approval_level: "L2_operate" as const };
-    expect(m.preparePending(cmd, downgraded, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
+    expect(preparePending(m, cmd, downgraded, { request_id: "req-review", actor: "alice" })).toMatchObject({ ok: false });
     expect(m.pendingCount()).toBe(0);
     expect(m.activeCount()).toBe(0);
   });
@@ -178,7 +202,7 @@ describe("RuntimeScheduleManager", () => {
       time: "08:30",
       time_zone: "America/New_York",
     });
-    const prepared = m.preparePending(cmd, evaluation(cmd), { request_id: "req-daily-zone", actor: "alice" });
+    const prepared = preparePending(m, cmd, evaluation(cmd), { request_id: "req-daily-zone", actor: "alice" });
     expect(prepared).toMatchObject({ ok: true, pending: { approval_level: "L3_final_review" } });
     await approve(m, cmd);
     expect(m.snapshot()[0]).toMatchObject({
@@ -202,7 +226,7 @@ describe("RuntimeScheduleManager", () => {
       content: "synthetic local daily content",
       time: "09:00",
     });
-    expect(m.preparePending(defaultZone, evaluation(defaultZone), { request_id: "req-daily-zone-default", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, defaultZone, evaluation(defaultZone), { request_id: "req-daily-zone-default", actor: "alice" }).ok).toBe(true);
     await approve(m, defaultZone);
     expect(m.snapshot().find((schedule) => schedule.id === "daily-zone-default")?.time_zone)
       .toBe(new Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -231,7 +255,7 @@ describe("RuntimeScheduleManager", () => {
       expect(m.snapshot()[0]).toMatchObject({ id: "legacy-daily", time: "07:00", status: "disabled", enabled: false });
       expect(m.activeCronTasks()).toEqual([]);
       const partialUpdate = command("schedule.update", { id: "legacy-daily", content: "new content" });
-      expect(m.preparePending(partialUpdate, evaluation(partialUpdate), {
+      expect(preparePending(m, partialUpdate, evaluation(partialUpdate), {
         request_id: "req-legacy-partial", actor: "alice",
       })).toMatchObject({ ok: false });
       const update = command("schedule.update", {
@@ -243,7 +267,7 @@ describe("RuntimeScheduleManager", () => {
         time: "07:00",
         time_zone: "Asia/Tokyo",
       });
-      expect(m.preparePending(update, evaluation(update), { request_id: "req-legacy-upgrade", actor: "alice" }).ok).toBe(true);
+      expect(preparePending(m, update, evaluation(update), { request_id: "req-legacy-upgrade", actor: "alice" }).ok).toBe(true);
       await approve(m, update);
       expect(m.activeCount()).toBe(1);
       expect(m.activeCronTasks()[0]?.delegation).toMatchObject({
@@ -264,7 +288,7 @@ describe("RuntimeScheduleManager", () => {
       content: "first",
       interval_ms: 120000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "req-1", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "req-1", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
 
     const duplicate = command("schedule.create", {
@@ -274,13 +298,13 @@ describe("RuntimeScheduleManager", () => {
       content: "second",
       interval_ms: 120000,
     });
-    expect(m.preparePending(duplicate, evaluation(duplicate), { request_id: "req-2", actor: "alice" })).toMatchObject({ ok: false });
+    expect(preparePending(m, duplicate, evaluation(duplicate), { request_id: "req-2", actor: "alice" })).toMatchObject({ ok: false });
 
     const update = command("schedule.update", { id: "dup", expected_revision_digest: m.inspectUpdateTarget("dup")?.revision_digest,
       content: "updated" });
-    expect(m.preparePending(update, evaluation(update), { request_id: "req-3", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "req-3", actor: "alice" }).ok).toBe(true);
     const del = command("schedule.delete", { id: "dup" });
-    expect(m.preparePending(del, evaluation(del), { request_id: "req-4", actor: "alice" })).toMatchObject({ ok: false });
+    expect(preparePending(m, del, evaluation(del), { request_id: "req-4", actor: "alice" })).toMatchObject({ ok: false });
   });
 
   it("keeps the old schedule active while update/delete waits for approval", async () => {
@@ -292,20 +316,20 @@ describe("RuntimeScheduleManager", () => {
       content: "old",
       interval_ms: 120000,
     });
-    m.preparePending(create, evaluation(create), { request_id: "req-1", actor: "alice" });
+    preparePending(m, create, evaluation(create), { request_id: "req-1", actor: "alice" });
     await approve(m, create);
     const oldHash = m.snapshot()[0]?.payload_hash;
 
     const update = command("schedule.update", { id: "updatable", expected_revision_digest: m.inspectUpdateTarget("updatable")?.revision_digest,
       content: "new" });
-    expect(m.preparePending(update, evaluation(update), { request_id: "req-2", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "req-2", actor: "alice" }).ok).toBe(true);
     expect(m.activeCount()).toBe(1);
     expect(m.snapshot().find((s) => s.id === "updatable")?.payload_hash).toBe(oldHash);
     await approve(m, update);
     expect(m.snapshot().find((s) => s.id === "updatable")?.payload_hash).not.toBe(oldHash);
 
     const del = command("schedule.delete", { id: "updatable" });
-    expect(m.preparePending(del, evaluation(del), { request_id: "req-3", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, del, evaluation(del), { request_id: "req-3", actor: "alice" }).ok).toBe(true);
     expect(m.activeCount()).toBe(1);
     await approve(m, del);
     expect(m.activeCount()).toBe(0);
@@ -321,7 +345,7 @@ describe("RuntimeScheduleManager", () => {
       content: "original private content",
       interval_ms: 120000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "req-revision-create", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "req-revision-create", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
 
     const before = m.snapshot().find((schedule) => schedule.id === "revision-bound");
@@ -329,7 +353,7 @@ describe("RuntimeScheduleManager", () => {
     expect(JSON.stringify(before)).not.toContain("original private content");
 
     const missingRevision = command("schedule.update", { id: "revision-bound", content: "unbound replacement" });
-    expect(m.preparePending(missingRevision, evaluation(missingRevision), {
+    expect(preparePending(m, missingRevision, evaluation(missingRevision), {
       request_id: "req-revision-missing", actor: "alice",
     })).toMatchObject({ ok: false, message: expect.stringContaining("current revision_digest") });
 
@@ -338,7 +362,7 @@ describe("RuntimeScheduleManager", () => {
       expected_revision_digest: "0".repeat(64),
       content: "stale replacement",
     });
-    expect(m.preparePending(stale, evaluation(stale), { request_id: "req-revision-stale", actor: "alice" }))
+    expect(preparePending(m, stale, evaluation(stale), { request_id: "req-revision-stale", actor: "alice" }))
       .toMatchObject({ ok: false, message: expect.stringContaining("current revision_digest") });
     expect(m.snapshot().find((schedule) => schedule.id === "revision-bound")?.payload_hash).toBe(before?.payload_hash);
 
@@ -347,7 +371,7 @@ describe("RuntimeScheduleManager", () => {
       expected_revision_digest: before!.revision_digest,
       content: "approved replacement",
     });
-    expect(m.preparePending(update, evaluation(update), { request_id: "req-revision-update", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "req-revision-update", actor: "alice" }).ok).toBe(true);
     await approve(m, update);
     const after = m.snapshot().find((schedule) => schedule.id === "revision-bound");
     expect(after?.revision_digest).toMatch(/^[a-f0-9]{64}$/);
@@ -364,13 +388,13 @@ describe("RuntimeScheduleManager", () => {
       content: "scheduled content",
       time: "07:15",
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "req-trigger-create", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "req-trigger-create", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
     expect(m.activeCronTasks()[0]).toMatchObject({ time: "07:15", interval_ms: undefined });
 
     const update = command("schedule.update", { id: "trigger-switch",
       expected_revision_digest: m.inspectUpdateTarget("trigger-switch")?.revision_digest, interval_ms: 60000 });
-    expect(m.preparePending(update, evaluation(update), { request_id: "req-trigger-update", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "req-trigger-update", actor: "alice" }).ok).toBe(true);
     expect(m.activeCronTasks()[0]?.time).toBe("07:15");
     await approve(m, update);
     expect(m.activeCronTasks()[0]).toMatchObject({ time: undefined, interval_ms: 60000 });
@@ -385,7 +409,7 @@ describe("RuntimeScheduleManager", () => {
       content: "scheduled content",
       interval_ms: 120000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "req-reload", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "req-reload", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
 
     const reopened = await RuntimeScheduleManager.open({ env });
@@ -394,13 +418,13 @@ describe("RuntimeScheduleManager", () => {
 
     const update = command("schedule.update", { id: "reload-safe",
       expected_revision_digest: reopened.inspectUpdateTarget("reload-safe")?.revision_digest, interval_ms: 60000 });
-    expect(reopened.preparePending(update, evaluation(update), { request_id: "req-reload-update", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(reopened, update, evaluation(update), { request_id: "req-reload-update", actor: "alice" }).ok).toBe(true);
     await approve(reopened, update);
     const updated = await RuntimeScheduleManager.open({ env });
     expect(updated.activeCronTasks()).toMatchObject([{ id: "reload-safe", interval_ms: 60000 }]);
 
     const deletion = command("schedule.delete", { id: "reload-safe" });
-    expect(updated.preparePending(deletion, evaluation(deletion), { request_id: "req-reload-delete", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(updated, deletion, evaluation(deletion), { request_id: "req-reload-delete", actor: "alice" }).ok).toBe(true);
     await approve(updated, deletion);
     const deleted = await RuntimeScheduleManager.open({ env });
     expect(deleted.activeCount()).toBe(0);
@@ -430,7 +454,7 @@ describe("RuntimeScheduleManager", () => {
       content: "original content",
       interval_ms: 120000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "req-persist-create", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "req-persist-create", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
     const oldHash = m.snapshot()[0]?.payload_hash;
     const store = join(dir, "runtime-schedules.json");
@@ -439,7 +463,7 @@ describe("RuntimeScheduleManager", () => {
 
     const update = command("schedule.update", { id: "persist-before-fire",
       expected_revision_digest: m.inspectUpdateTarget("persist-before-fire")?.revision_digest, content: "uncommitted content" });
-    expect(m.preparePending(update, evaluation(update), { request_id: "req-persist-update", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "req-persist-update", actor: "alice" }).ok).toBe(true);
     await expect(approve(m, update)).rejects.toThrow();
     expect(m.activeCount()).toBe(1);
     expect(m.snapshot()[0]?.payload_hash).toBe(oldHash);
@@ -458,14 +482,14 @@ describe("RuntimeScheduleManager", () => {
       await cron.start(async req => { received.push(req.metadata?.["blue_tanuki.cron.task_id"]); });
       const args = { channel: "webchat", target: "local-user", content: "synthetic schedule", interval_ms: 1000 };
       const original = command("schedule.create", { ...args, id: "old-schedule" });
-      expect(m.preparePending(original, evaluation(original), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+      expect(preparePending(m, original, evaluation(original), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
       await approve(m, original);
       expect(cron.snapshot().map(item => item.id)).toEqual(["old-schedule"]);
 
       const deletion = command("schedule.delete", { id: "old-schedule" });
       const creation = command("schedule.create", { ...args, id: "new-schedule" });
-      expect(m.preparePending(deletion, evaluation(deletion), { request_id: "delete-approval", actor: "alice" }).ok).toBe(true);
-      expect(m.preparePending(creation, evaluation(creation), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
+      expect(preparePending(m, deletion, evaluation(deletion), { request_id: "delete-approval", actor: "alice" }).ok).toBe(true);
+      expect(preparePending(m, creation, evaluation(creation), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
       const [deleted, created] = await Promise.all([approve(m, deletion), approve(m, creation)]);
       expect(deleted).toMatchObject({ schedule_id: "old-schedule", status: "deleted", can_fire: false });
       expect(created).toMatchObject({ schedule_id: "new-schedule", status: "active", can_fire: true });
@@ -496,22 +520,22 @@ describe("RuntimeScheduleManager", () => {
     const create = command("schedule.create", {
       id: "reserved-id", channel: "webchat", target: "local-user", content: "previous content", interval_ms: 1000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
     const update = command("schedule.update", { id: "reserved-id",
       expected_revision_digest: m.inspectUpdateTarget("reserved-id")?.revision_digest, content: "updated content" });
     const competing = command("schedule.delete", { id: "reserved-id" });
-    expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
     let admitted: boolean | undefined;
     beforeCommit = () => {
-      admitted = m.preparePending(competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok;
+      admitted = preparePending(m, competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok;
     };
     await approve(m, update);
     expect(admitted).toBe(false);
     expect(m.activeCronTasks()).toMatchObject([{ id: "reserved-id", content: "updated content" }]);
     const reopened = await RuntimeScheduleManager.open({ env });
     expect(reopened.activeCronTasks()).toEqual(m.activeCronTasks());
-    expect(m.preparePending(competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, competing, evaluation(competing), { request_id: "competing-approval", actor: "alice" }).ok).toBe(true);
   });
 
   it("persists a rejected create without discarding a distinct successful approval", async () => {
@@ -519,8 +543,8 @@ describe("RuntimeScheduleManager", () => {
     const args = { channel: "webchat", target: "local-user", content: "synthetic schedule", interval_ms: 1000 };
     const approved = command("schedule.create", { ...args, id: "approved-schedule" });
     const rejected = command("schedule.create", { ...args, id: "rejected-schedule" });
-    expect(m.preparePending(approved, evaluation(approved), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
-    expect(m.preparePending(rejected, evaluation(rejected), { request_id: "rejected-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, approved, evaluation(approved), { request_id: "create-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, rejected, evaluation(rejected), { request_id: "rejected-approval", actor: "alice" }).ok).toBe(true);
     const applying = approve(m, approved);
     expect(m.rejectPending(rejected.id, "alice", "owner declined")).not.toBeNull();
     await applying;
@@ -546,14 +570,14 @@ describe("RuntimeScheduleManager", () => {
     const create = command("schedule.create", {
       id: "abort-target", channel: "webchat", target: "local-user", content: "previous content", interval_ms: 1000,
     });
-    expect(m.preparePending(create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
     const path = join(directory, "runtime-schedules.json");
     const before = readFileSync(path);
     const cronBefore = cron.snapshot();
     const update = command("schedule.update", { id: "abort-target",
       expected_revision_digest: m.inspectUpdateTarget("abort-target")?.revision_digest, content: "uncommitted content" });
-    expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
     abortBeforeRename = true;
     await expect(approve(m, update, controller.signal)).rejects.toThrow(/abort|cancel/iu);
     await m.drain();
@@ -566,7 +590,7 @@ describe("RuntimeScheduleManager", () => {
     abortBeforeRename = false;
     const retry = command("schedule.update", { id: "abort-target",
       expected_revision_digest: m.inspectUpdateTarget("abort-target")?.revision_digest, content: "freshly approved content" });
-    expect(m.preparePending(retry, evaluation(retry), { request_id: "fresh-approval", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, retry, evaluation(retry), { request_id: "fresh-approval", actor: "alice" }).ok).toBe(true);
     await approve(m, retry);
     expect((await RuntimeScheduleManager.open({ env })).activeCronTasks()).toMatchObject([
       { id: "abort-target", content: "freshly approved content" },
@@ -584,7 +608,7 @@ describe("RuntimeScheduleManager", () => {
       { id: "missing-content", channel: "webchat", target: "local-user", interval_ms: 1 },
     ]) {
       const cmd = command("schedule.create", args);
-      const prepared = m.preparePending(cmd, evaluation(cmd), { request_id: "req-invalid", actor: "alice" });
+      const prepared = preparePending(m, cmd, evaluation(cmd), { request_id: "req-invalid", actor: "alice" });
       expect(prepared).toMatchObject({ ok: false });
       expect(prepared.ok === false ? prepared.message : "").toContain("activated=false");
       expect(prepared.ok === false ? prepared.message : "").toContain("next_action=");
@@ -602,7 +626,7 @@ describe("RuntimeScheduleManager", () => {
       content: "will not run",
       interval_ms: 120000,
     });
-    expect(m.preparePending(cmd, evaluation(cmd), { request_id: "req-timeout", actor: "alice" }).ok).toBe(true);
+    expect(preparePending(m, cmd, evaluation(cmd), { request_id: "req-timeout", actor: "alice" }).ok).toBe(true);
     now = 12;
     expect(m.pendingCount()).toBe(0);
     expect(m.activeCount()).toBe(0);
@@ -633,7 +657,7 @@ describe("RuntimeScheduleManager", () => {
         content: "runtime hello",
         interval_ms: 1000,
       });
-      m.preparePending(cmd, evaluation(cmd), { request_id: "req-fire", actor: "alice" });
+      preparePending(m, cmd, evaluation(cmd), { request_id: "req-fire", actor: "alice" });
       await approve(m, cmd);
       await vi.advanceTimersByTimeAsync(1000);
       expect(received).toHaveLength(1);
@@ -645,6 +669,9 @@ describe("RuntimeScheduleManager", () => {
           "blue_tanuki.channel_send.content": "runtime hello",
           "blue_tanuki.cron.delegation.command_id": cmd.id,
           "blue_tanuki.cron.delegation.request_id": "req-fire",
+          "blue_tanuki.cron.delegation.goal_id_digest": testGoalVersionBinding.goal_id_digest,
+          "blue_tanuki.cron.delegation.purpose_version": testGoalVersionBinding.purpose_version,
+          "blue_tanuki.cron.delegation.purpose_digest": testGoalVersionBinding.purpose_digest,
         },
       });
     } finally {

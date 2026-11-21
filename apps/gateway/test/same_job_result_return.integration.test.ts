@@ -1783,7 +1783,8 @@ describe("served owner runtime schedule deletion", () => {
         const evaluation = evaluateApproval(create, [], { actor, default_mode: "full_access" });
         expect(evaluation).toMatchObject({ decision: "ask", approval_level: "L3_final_review" });
         hds.onApprovalEvaluation(evaluation, { request_id: requestId });
-        expect(seed.preparePending(create, evaluation, { request_id: requestId, actor }).ok).toBe(true);
+        expect(seed.preparePending(create, evaluation, { request_id: requestId, actor,
+          goal_version_binding: { goal_id_digest: "a".repeat(64), purpose_version: 1, purpose_digest: "b".repeat(64) } }).ok).toBe(true);
         hds.onCommandLifecycle(create.id, "approval_approved", { actor: "webchat-resume-token-holder",
           reason: "human_approval:approve", request_id: requestId });
         const createTool = seed.tools().find(tool => tool.name === "schedule.create")!;
