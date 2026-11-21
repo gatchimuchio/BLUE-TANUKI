@@ -14,6 +14,7 @@ import {
   type OperationPlanGatewayReceiptRecheckEvidence, OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
   SettingsWriteArgumentsSchema,
+  RuntimeScheduleCreateArgumentsSchema, runtimeSchedulePayloadHash,
   RuntimeScheduleDeleteArgumentsSchema, runtimeScheduleDeleteResult,
   type OperationCommandExecutionResult,
   type GatewayInternalInboundRequestInput,
@@ -1600,6 +1601,22 @@ export function operationPlanResultValidationMatches(
   binding?: Binding,
 ): boolean {
   if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "runtime_schedule_create_result_matches") {
+    const args = RuntimeScheduleCreateArgumentsSchema.safeParse(step.parameters);
+    const expected = validation.expected;
+    if (step.operation !== "schedule.create" || !args.success || !isFileSearchResultRecord(expected) ||
+        !isFileSearchResultRecord(output) ||
+        Object.keys(expected).sort().join(",") !== "payload_hash,schedule_id,schema_version" ||
+        expected.schema_version !== "blue-tanuki.runtime-schedule-create-result-validation.v1" ||
+        expected.schedule_id !== args.data.id || expected.payload_hash !== runtimeSchedulePayloadHash(args.data) ||
+        Object.keys(output).sort().join(",") !== "can_fire,next_action,next_fire_at_ms,operation,payload_hash,schedule_id,status" ||
+        output.schedule_id !== expected.schedule_id || output.status !== "active" || output.operation !== "create" ||
+        output.payload_hash !== expected.payload_hash || output.can_fire !== true ||
+        (output.next_fire_at_ms !== null && (typeof output.next_fire_at_ms !== "number" ||
+          !Number.isSafeInteger(output.next_fire_at_ms) || output.next_fire_at_ms < 0)) ||
+        output.next_action !== "Use tool:schedule.list to inspect safe metadata, or tool:schedule.delete id=<id> to request removal.") return false;
+    return true;
+  }
   if (validation.method === "github_write_result_matches") {
     return githubWriteResultMatches(validation, step, output, binding);
   }
@@ -2361,6 +2378,12 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
         throw new Error(`plan_settings_${registration}_requires_owner_input`);
       }
     }
+    if (p.owner_runtime_schedule_create ?
+      (p.revisions.length !== 1 || first.steps.length !== 1 || first.steps[0]!.operation !== "schedule.create" ||
+        p.owner !== "webchat-owner-token-holder" || p.channel !== "webchat" || !p.goal_purpose_binding ||
+        !hasConnectedPlanTarget(first.steps[0]!)) : p.bindings.some(binding => binding.operation === "schedule.create")) {
+      throw new Error("plan_runtime_schedule_create_requires_owner_input");
+    }
     if (p.owner_runtime_schedule_delete ?
       (p.revisions.length !== 1 || first.steps.length !== 1 || first.steps[0]!.operation !== "schedule.delete" ||
         p.owner !== "webchat-owner-token-holder" || p.channel !== "webchat" || !p.goal_purpose_binding ||
@@ -2663,6 +2686,26 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  if (step.operation === "schedule.create") {
+    const args = RuntimeScheduleCreateArgumentsSchema.safeParse(parameters);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return args.success && step.adapter === "internal_runtime" && step.target.kind === "runtime" &&
+      step.target.id === "gateway.runtime-schedules" && step.target.scope === args.data.id &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.effects.length === 2 && step.effects[0] === "schedule_change" && step.effects[1] === "write" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required && step.permission.hds_brain_authority_required &&
+      preparation !== undefined && preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false &&
+      preparation.compensation.reason === "予定の作成取消には別の承認が必要" && preparation.validation.length === 1 &&
+      validation?.check_id === "runtime-schedule-created" && validation.method === "runtime_schedule_create_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest({
+        schema_version: "blue-tanuki.runtime-schedule-create-result-validation.v1",
+        schedule_id: args.data.id, payload_hash: runtimeSchedulePayloadHash(args.data),
+      });
+  }
   if (step.operation === "schedule.delete") {
     const args = RuntimeScheduleDeleteArgumentsSchema.safeParse(parameters);
     const preparation = step.preparation;
@@ -4317,7 +4360,7 @@ export class OperationPlanLedger {
   retainCandidate(value: unknown, origin: InboundRequest, rawPurposeRelationCandidate?: unknown,
     computeSourceObservations?: readonly OperationPlanComputeSourceObservation[],
     memoryInterpretationDependencies?: readonly OperationPlanMemoryInterpretationDependency[],
-    parentPlanReference?: OperationPlanComputeParent, ownerInput?: "settings" | "runtime_schedule_delete"): string {
+    parentPlanReference?: OperationPlanComputeParent, ownerInput?: "settings" | "runtime_schedule_delete" | "runtime_schedule_create"): string {
     if (this.recoveryRefreshPending) throw new Error("plan_recovery_refresh_hold");
     let plan = candidatePlan(value);
     const ownerSettingsInput = plan.steps.map(stepOwnerSettingsInput).find(Boolean);
@@ -4330,6 +4373,7 @@ export class OperationPlanLedger {
         !isGatewayInternalInboundRequest(origin) || !hasConnectedPlanTarget(plan.steps[0]!))) {
       throw new Error("plan_runtime_schedule_delete_requires_owner_input");
     }
+    const scheduleCreation = plan.steps.some(step => step.operation === "schedule.create");
     const expected = origin.metadata?.["blue_tanuki.operation_core.request_id"] ?? origin.id;
     if (plan.request_id !== expected || this.state.plans.some((p) => p.revisions[0]!.plan.plan_id === plan.plan_id)) {
       throw new Error("plan_source_binding_mismatch");
@@ -4377,6 +4421,11 @@ export class OperationPlanLedger {
       const parsedBinding = OperationPlanGoalPurposeBindingSchema.safeParse(rawGoalPurposeBinding);
       if (!parsedBinding.success) throw new Error("plan_goal_purpose_binding_invalid");
       goalPurposeBinding = this.resolveGoalPurposeBinding(parsedBinding.data, undefined);
+    }
+    if (scheduleCreation && (ownerInput !== "runtime_schedule_create" || plan.steps.length !== 1 ||
+        origin.user !== "webchat-owner-token-holder" || origin.channel !== "webchat" ||
+        !isGatewayInternalInboundRequest(origin) || !goalPurposeBinding || !hasConnectedPlanTarget(plan.steps[0]!))) {
+      throw new Error("plan_runtime_schedule_create_requires_owner_input");
     }
     let verifiedComputeSourceObservations: OperationPlanComputeSourceObservation[] | undefined;
     if (computeSourceObservations?.length) {
@@ -4545,6 +4594,7 @@ export class OperationPlanLedger {
       ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
       ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
       ...(ownerSettingsInput === "telegram_bot_registration" ? { owner_settings_telegram_bot_registration: true } : {}),
+      ...(scheduleCreation ? { owner_runtime_schedule_create: true } : {}),
       ...(scheduleDeletion ? { owner_runtime_schedule_delete: true } : {}),
       revisions: [{ digest: operationPlanDigest(plan), plan }], receipt_observations: [], bindings: [], results: [] }));
     return operationPlanDigest(plan.plan_id);
@@ -4711,6 +4761,9 @@ export class OperationPlanLedger {
     }
     if (step.operation === "schedule.delete" && !p.owner_runtime_schedule_delete) {
       throw new Error("plan_runtime_schedule_delete_requires_owner_input");
+    }
+    if (step.operation === "schedule.create" && !p.owner_runtime_schedule_create) {
+      throw new Error("plan_runtime_schedule_create_requires_owner_input");
     }
     // 実接続がある、対象と引数を狭く結び付けたadapterだけをcommand化する。
     if (!hasConnectedPlanTarget(step)) throw new Error("plan_target_resolver_not_connected");
@@ -5127,6 +5180,23 @@ export class OperationPlanLedger {
     const current = p.revisions.at(-1);
     if (!purpose || !current || current.digest !== b.revision_digest ||
         this.recoveryHolds.has(operationPlanDigest(current.plan.plan_id)) || b.operation !== "schedule.delete" ||
+        command.upstream_decision.commit_decision !== "ASSERT" || command.upstream_decision.commit_hash !== b.commit_hash ||
+        command.upstream_decision.request_id !== b.request_id || commandPayloadDigest(command) !== b.payload_digest ||
+        operationPlanDigest(command) !== b.command_digest || !matchesCanonicalExecutorCommandDigest(command, b.executor_command_digest) ||
+        !this.goalPurposeBindingIsCurrent(purpose) || this.goalPurposeRelationIssue(p) !== undefined) return undefined;
+    return structuredClone(purpose);
+  }
+  /** 予定作成のno-store L3審査で現在の委任目的版を表示する。 */
+  runtimeScheduleCreateGoalBinding(command: ExecuteCommand): OperationPlanGoalPurposeBinding | undefined {
+    if (command.type !== "tool_call" || command.payload.tool_name !== "schedule.create" ||
+        this.issuedBindings.get(command) !== command.id || this.recoveryRefreshPending || this.memoryQuiesced) return undefined;
+    const match = this.binding(command.id);
+    if (!match || !match.p.owner_runtime_schedule_create || match.b.status !== "selected") return undefined;
+    const { p, b } = match;
+    const purpose = p.goal_purpose_binding;
+    const current = p.revisions.at(-1);
+    if (!purpose || !current || current.digest !== b.revision_digest ||
+        this.recoveryHolds.has(operationPlanDigest(current.plan.plan_id)) || b.operation !== "schedule.create" ||
         command.upstream_decision.commit_decision !== "ASSERT" || command.upstream_decision.commit_hash !== b.commit_hash ||
         command.upstream_decision.request_id !== b.request_id || commandPayloadDigest(command) !== b.payload_digest ||
         operationPlanDigest(command) !== b.command_digest || !matchesCanonicalExecutorCommandDigest(command, b.executor_command_digest) ||
@@ -8574,6 +8644,9 @@ export class OperationPlanLedger {
     const next = candidatePlan(input);
     const old = p.revisions.at(-1)!.plan;
     if (next.plan_id !== old.plan_id || next.request_id !== old.request_id) throw new Error("plan_revision_identity_changed");
+    if (p.owner_runtime_schedule_create || next.steps.some(step => step.operation === "schedule.create")) {
+      throw new Error("plan_runtime_schedule_create_requires_owner_input");
+    }
     if (p.owner_runtime_schedule_delete || next.steps.some(step => step.operation === "schedule.delete")) {
       throw new Error("plan_runtime_schedule_delete_requires_owner_input");
     }

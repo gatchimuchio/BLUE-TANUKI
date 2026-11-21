@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   createGatewayInternalInboundRequest,
+  runtimeSchedulePayloadHash,
   type GatewayInternalAuthorityMetadata,
   type InboundRequest,
 } from "@blue-tanuki/protocol";
@@ -665,18 +666,7 @@ function createRuntime(task: NormalizedCronTask): CronTaskRuntime {
 }
 
 export function cronPayloadHash(task: Pick<CronTaskOptions, "channel" | "target" | "content" | "time" | "interval_ms" | "time_zone">): string {
-  const payload: Record<string, unknown> = {
-    channel: task.channel,
-    target: task.target,
-    content: task.content,
-    time: task.time ?? "07:00",
-    interval_ms: task.interval_ms,
-  };
-  // Preserve hashes of schedules written before timezone was added.
-  if (task.time_zone !== undefined) payload.time_zone = canonicalizeCronTimeZone(task.time_zone);
-  return createHash("sha256")
-    .update(JSON.stringify(payload))
-    .digest("hex");
+  return runtimeSchedulePayloadHash(task);
 }
 
 /** Stable executor-history scope for one persistent schedule; this is context, never HDS authority. */

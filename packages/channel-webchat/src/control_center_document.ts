@@ -770,6 +770,8 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>History</span><span id="approval-history-count">not loaded</span></div>
           </div>
           <input id="approval-token" type="password" autocomplete="off" placeholder="resume token" />
+          <label id="runtime-schedule-create-approval-owner" hidden>予定作成の審査用owner token<input id="runtime-schedule-create-review-owner-token" type="password" autocomplete="off" /></label>
+          <p id="runtime-schedule-create-approval-status" class="muted" role="status"></p>
           <label id="runtime-schedule-delete-approval-owner" hidden>予定削除の審査用owner token<input id="runtime-schedule-delete-review-owner-token" type="password" autocomplete="off" /></label>
           <p id="runtime-schedule-delete-approval-status" class="muted" role="status"></p>
           <input id="approval-emergency-reason" type="text" autocomplete="off" placeholder="emergency stop reason" />
@@ -834,6 +836,30 @@ ${CONTROL_CENTER_STYLE}    </style>
             <span id="schedule-summary" class="badge warn">not loaded</span>
           </div>
           <div id="runtime-schedule-list" class="schedule-list"></div>
+          <section id="runtime-schedule-create-request" class="approval-content-review" hidden>
+            <h3>委任目的に沿った予定の作成</h3>
+            <p class="muted">送信本文・宛先・発火条件・現在の委任目的を、ローカルのL3審査で一体確認します。予定発火だけでは後続の送信や操作を承認しません。</p>
+            <label>予定ID<input id="runtime-schedule-create-id" type="text" maxlength="64" autocomplete="off" placeholder="例: morning-note" /></label>
+            <label>送信channel<input id="runtime-schedule-create-channel" type="text" maxlength="128" autocomplete="off" /></label>
+            <label>送信先<input id="runtime-schedule-create-target" type="text" maxlength="1024" autocomplete="off" /></label>
+            <label>送信本文<textarea id="runtime-schedule-create-content" rows="5" maxlength="32768" autocomplete="off"></textarea></label>
+            <label>発火方式<select id="runtime-schedule-create-trigger-kind"><option value="daily">毎日指定時刻</option><option value="interval">経過時間ごと</option></select></label>
+            <div id="runtime-schedule-create-daily-fields">
+              <label>時刻<input id="runtime-schedule-create-time" type="time" /></label>
+              <label>IANA timezone（明示）<input id="runtime-schedule-create-time-zone" type="text" maxlength="128" autocomplete="off" placeholder="例: Asia/Tokyo" /></label>
+            </div>
+            <div id="runtime-schedule-create-interval-fields" hidden>
+              <label>間隔（ミリ秒）<input id="runtime-schedule-create-interval" type="number" min="1" max="2147483647" step="1" /></label>
+            </div>
+            <label>申請用のowner token<input id="runtime-schedule-create-owner-token" type="password" autocomplete="off" /></label>
+            <button id="load-runtime-schedule-create-goals" type="button">委任目的を読み込む</button>
+            <label>作成の委任目的<select id="runtime-schedule-create-goal"><option value="">委任目的を選択</option></select></label>
+            <div class="action-row">
+              <button id="prepare-runtime-schedule-create" class="primary" type="button" disabled>予定の作成案を作成</button>
+              <button id="open-runtime-schedule-create-plan" type="button" hidden>計画を確認</button>
+            </div>
+            <p id="runtime-schedule-create-status" role="status"></p>
+          </section>
           <section id="runtime-schedule-delete-request" hidden>
             <div class="approval-content-review">
               <label>削除案の対象<select id="runtime-schedule-delete-id"><option value="">運転中の予定を選択</option></select></label>

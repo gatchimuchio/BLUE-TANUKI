@@ -50,6 +50,7 @@ function harness() {
     AbortController,
     crypto: webcrypto,
     TextEncoder,
+    isRuntimeScheduleDeleteDigest: (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
     isObject: (value: unknown) => Boolean(value) && typeof value === "object" && !Array.isArray(value),
     formatInterval: (value: number) => String(value) + " ms",
     hasNoStore: (response: Response) => response.headers.get("cache-control") === "no-store",
@@ -206,5 +207,124 @@ describe("Control Center runtime schedule deletion", () => {
     expect(owner.value).toBe("");
     expect(approve.disabled).toBe(true);
     expect(Object.keys(context.state.approvalContentDigests)).toHaveLength(0);
+  });
+});
+
+describe("Control Center runtime schedule creation", () => {
+  it("submits only the exact owner-entered content, explicit trigger and selected current purpose", async () => {
+    expect(() => new Script(CONTROL_CENTER_SCRIPT)).not.toThrow();
+    const html = renderControlCenterDocument();
+    expect(html).toContain('id="prepare-runtime-schedule-create"');
+    expect(html).toContain('id="runtime-schedule-create-content"');
+    expect(html).toContain('id="runtime-schedule-create-review-owner-token" type="password"');
+
+    const { byId, context, calls, responses } = harness();
+    const ui = new Script([
+      scriptBetween("function renderOwnerTaskGoalOptions(", "async function loadOwnerTaskGoals("),
+      scriptBetween("function runtimeScheduleCreateProposalFromForm(", "async function submitRuntimeScheduleDeleteRequest("),
+      "({ runtimeScheduleCreateProposalFromForm, renderRuntimeScheduleCreateAvailability, submitRuntimeScheduleCreateRequest })",
+    ].join("\n")).runInNewContext(context);
+    byId("runtime-schedule-create-id").value = "morning-note";
+    byId("runtime-schedule-create-channel").value = "webchat";
+    byId("runtime-schedule-create-target").value = "owner";
+    byId("runtime-schedule-create-content").value = "<reminder>朝の確認</reminder>";
+    byId("runtime-schedule-create-trigger-kind").value = "daily";
+    byId("runtime-schedule-create-time").value = "08:30";
+    byId("runtime-schedule-create-time-zone").value = "Asia/Tokyo";
+    byId("runtime-schedule-create-owner-token").value = "owner-secret";
+    ui.renderRuntimeScheduleCreateAvailability();
+    expect(byId("prepare-runtime-schedule-create").disabled).toBe(true);
+
+    responses.set("/owner/task-goals", respond({ goals: [{ goal_ref: goalRef, purpose_version: 3, purpose_preview: "朝の確認" }] }));
+    await ui.submitRuntimeScheduleCreateRequest(true);
+    const goal = byId("runtime-schedule-create-goal");
+    goal.value = goalRef;
+    byId("runtime-schedule-create-owner-token").value = "owner-secret";
+    ui.renderRuntimeScheduleCreateAvailability();
+    expect(byId("prepare-runtime-schedule-create").disabled).toBe(false);
+    const candidate = { accepted: true, status: "candidate_ready", request_id: "bounded-request",
+      plan_id_digest: "b".repeat(64), used_for_authority: false, may_execute: false };
+    responses.set("/owner/runtime-schedule-create-proposal", respond(candidate, 202));
+    await ui.submitRuntimeScheduleCreateRequest(false);
+    expect(calls.at(-1)).toMatchObject({ path: "/owner/runtime-schedule-create-proposal", options: {
+      method: "POST", cache: "no-store", mode: "same-origin", redirect: "error",
+      headers: { Authorization: "Bearer owner-secret", "content-type": "application/json" },
+      body: JSON.stringify({ id: "morning-note", channel: "webchat", target: "owner",
+        content: "<reminder>朝の確認</reminder>", goal_ref: goalRef, purpose_version: 3,
+        time: "08:30", time_zone: "Asia/Tokyo" }),
+    } });
+    expect(byId("runtime-schedule-create-owner-token").value).toBe("");
+    expect(byId("runtime-schedule-create-content").value).toBe("");
+    expect(byId("open-runtime-schedule-create-plan").hidden).toBe(false);
+    expect(byId("runtime-schedule-create-status").textContent).toContain("本文・宛先・時刻・委任目的");
+  });
+
+  it("validates daily clock and interval syntax in the emitted Control Center script", () => {
+    const { byId, context } = harness();
+    const ui = new Script([
+      scriptBetween("function runtimeScheduleCreateProposalFromForm(", "function renderRuntimeScheduleCreateAvailability("),
+      "({ runtimeScheduleCreateProposalFromForm })",
+    ].join("\n")).runInNewContext(context) as { runtimeScheduleCreateProposalFromForm: () => Record<string, unknown> | null };
+    byId("runtime-schedule-create-id").value = "morning-note";
+    byId("runtime-schedule-create-channel").value = "webchat";
+    byId("runtime-schedule-create-target").value = "owner";
+    byId("runtime-schedule-create-content").value = "朝の確認";
+    byId("runtime-schedule-create-goal").children.push(Object.assign(new UiOption("目的", goalRef), {
+      dataset: { purposeVersion: "3" },
+    }));
+    byId("runtime-schedule-create-goal").value = goalRef;
+    byId("runtime-schedule-create-trigger-kind").value = "daily";
+    byId("runtime-schedule-create-time").value = "08:30";
+    byId("runtime-schedule-create-time-zone").value = "Asia/Tokyo";
+    expect(ui.runtimeScheduleCreateProposalFromForm()).toMatchObject({ time: "08:30", time_zone: "Asia/Tokyo" });
+    for (const time of ["8:30", "24:00", "08:60"]) {
+      byId("runtime-schedule-create-time").value = time;
+      expect(ui.runtimeScheduleCreateProposalFromForm()).toBeNull();
+    }
+    byId("runtime-schedule-create-trigger-kind").value = "interval";
+    byId("runtime-schedule-create-interval").value = "60000";
+    expect(ui.runtimeScheduleCreateProposalFromForm()).toMatchObject({ interval_ms: 60_000 });
+    for (const interval of ["0", "1e3", "2147483648"]) {
+      byId("runtime-schedule-create-interval").value = interval;
+      expect(ui.runtimeScheduleCreateProposalFromForm()).toBeNull();
+    }
+  });
+
+  it("renders the digest-bound no-store review as text and keeps approval disabled for changed content", async () => {
+    const { byId, context } = harness();
+    const content = new UiElement();
+    const approve = new UiElement();
+    const reviewButton = new UiElement();
+    const commandId = "create-sched";
+    const card = { isConnected: true };
+    const ui = new Script([
+      scriptBetween("function isRuntimeScheduleDeleteDigest(", "function currentRuntimeScheduleDeleteRow("),
+      scriptBetween("async function renderRuntimeScheduleCreateReview(", "async function renderRuntimeScheduleDeleteReview("),
+      "({ renderRuntimeScheduleCreateReview })",
+    ].join("\n")).runInNewContext({ ...context,
+      document: { createElement: () => new UiElement(), querySelectorAll: () => [] },
+    });
+    const purpose = "毎朝の確認事項を owner に案内する。";
+    const body = {
+      kind: "schedule_create", operation: "schedule.create", command_digest: "a".repeat(64),
+      operation_plan_binding_digest: "b".repeat(64), schedule_id: "morning-note", channel: "webchat", target: "owner",
+      content: "<img src=x onerror=alert(1)>", interval_ms: 60_000, payload_hash: "c".repeat(64),
+      goal_ref: goalRef, purpose_version: 3, purpose_digest: createHash("sha256").update(purpose, "utf8").digest("hex"),
+      purpose_text: purpose, no_store: true, used_for_authority: false, may_execute: false,
+    };
+    const digestKeys = Object.keys(body).sort((a, b) => a.localeCompare(b));
+    const reviewDigest = createHash("sha256").update(JSON.stringify(body, digestKeys)).digest("hex");
+    const review = { ...body, command_id: commandId, review_digest: reviewDigest };
+    const isCurrent = () => true;
+    approve.disabled = true;
+    await ui.renderRuntimeScheduleCreateReview(review, commandId, card, content, approve, reviewButton, isCurrent);
+    expect(approve.disabled).toBe(false);
+    expect(content.children.map((node) => node.textContent)).toContain("<img src=x onerror=alert(1)>");
+    expect(content.children.some((node) => node.innerHTML)).toBe(false);
+    approve.disabled = true;
+    await expect(ui.renderRuntimeScheduleCreateReview({ ...review, content: "changed" }, commandId, card, content, approve,
+      reviewButton, isCurrent)).rejects.toThrow("審査");
+    expect(approve.disabled).toBe(true);
+    expect(byId("approval-token").value).toBe("");
   });
 });

@@ -1,6 +1,7 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
   ComposioActionContentReview, D4RuntimeIntentReplyObservation, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
+  RuntimeScheduleCreateProposal, RuntimeScheduleCreateReview,
   RuntimeScheduleDeleteProposal, RuntimeScheduleDeleteReview,
   SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
   SettingsWriteGoogleReadCredentialReview, SettingsWriteGoogleReadCredentialScope,
@@ -1551,6 +1552,7 @@ export interface WebChatMcpCallContentReview {
 export type WebChatComposioExecuteContentReview = ComposioActionContentReview & { command_id: string };
 
 export type WebChatApprovalContentReview = WebChatDailyBriefReadContentReview | WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
+  RuntimeScheduleCreateReview |
   RuntimeScheduleDeleteReview |
   WebChatGmailMessageModifyContentReview |
   WebChatGoalPurposeAdoptionContentReview | WebChatGoalPurposeChangeContentReview | WebChatGoalPurposeRepairContentReview |
@@ -1685,6 +1687,7 @@ export interface WebChatApprovalSurface {
   /** Credential registration approvals require the local browser route before any one-shot token is consumed. */
   requiresNativeCredentialApproval?: (approval_id: string) => boolean;
   requiresLocalDailyBriefRead?: (approval_id: string) => boolean;
+  requiresLocalRuntimeScheduleCreate?: (approval_id: string) => boolean;
   requiresLocalRuntimeScheduleDelete?: (approval_id: string) => boolean;
   /** Return redacted metadata for currently executing commands. */
   activeExecutions?: () => Promise<readonly WebChatActiveExecutionSnapshot[]>;
@@ -2133,6 +2136,8 @@ export interface WebChatOptions {
   onOwnerLlmSettingsProposal?: (input: WebChatOwnerLlmSettingsProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerRuntimeScheduleDeleteProposal?: (input: RuntimeScheduleDeleteProposal & { actor: string }) =>
+    Promise<Record<string, unknown>>;
+  onOwnerRuntimeScheduleCreateProposal?: (input: RuntimeScheduleCreateProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerGoogleReadCredentialProposal?: (input: WebChatOwnerGoogleReadCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
