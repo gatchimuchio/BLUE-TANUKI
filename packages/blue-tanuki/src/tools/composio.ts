@@ -185,6 +185,9 @@ export function resolveComposioActionEffectRegistryBinding(params: {
       entry.output_schema_sha256 !== params.outputSchemaSha256 ||
       entry.action_definition_sha256 !== params.actionDefinitionSha256) return undefined;
 
+  const operationEffects = new Set(requireToolOperationDescriptor("composio.execute").effects);
+  if (entry.effects.some((effect) => !operationEffects.has(effect))) return undefined;
+
   const entryBase = {
     schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1" as const,
     registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
