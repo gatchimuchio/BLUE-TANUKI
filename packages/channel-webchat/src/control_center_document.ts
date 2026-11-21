@@ -365,6 +365,20 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div class="metric"><span>Local credential removal</span><span id="composio-disconnect-status">not loaded</span></div>
             <div class="metric"><span>Save</span><span id="composio-save-status">not saved</span></div>
           </div>
+          <div class="screen-card">
+            <h3>Composio discovery</h3>
+            <div class="status-grid">
+              <select id="composio-discovery-toolkit" aria-label="Composio allowlisted toolkit" disabled>
+                <option value="">Load Connectors first</option>
+              </select>
+              <input id="composio-discovery-query" type="search" maxlength="500" autocomplete="off" placeholder="Search query (max 500 characters)" disabled />
+            </div>
+            <div class="action-row">
+              <button id="prepare-composio-discovery" class="primary" type="button" disabled>Prepare Composio search plan</button>
+            </div>
+            <p class="muted">候補作成ではComposioへ接続せず、検索も実行しません。選択したtoolkitと検索文をOwner Task Computeへ送信し、会話／Plan候補に含めます。built-in <code>composio.search</code> を1回だけ使う未実行Plan候補を依頼します。実行には別途Plan確認・通常の承認が必要です。秘密・認証情報・個人情報を検索文へ入れないでください。</p>
+            <p id="composio-discovery-status" class="badge warn" role="status">Load Connectors to check the configured API key and allowlist.</p>
+          </div>
           <pre id="connectors-json">not loaded</pre>
           <div class="screen-grid">
             <div class="screen-card"><h3>Live Boundary</h3><p class="muted">This readiness indicator covers local configuration prerequisites only: dry-run is disabled, live execution is enabled, a user id exists, and toolkit/action allowlists are non-empty. It does not verify the connected account, action schema/effects, current delegation, or HDS approval. Those are checked separately for each action immediately before execution.</p></div>
