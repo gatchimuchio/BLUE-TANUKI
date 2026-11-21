@@ -4,7 +4,8 @@ import * as path from "node:path";
 import type { Tool } from "@blue-tanuki/core";
 import { runtimeScheduleScopeDigest, type ApprovalEvaluation, type RuntimeScheduleDelegation } from "@blue-tanuki/hds-brain";
 import {
-  RuntimeScheduleDeleteArgumentsSchema, requireToolOperationDescriptor, runtimeScheduleDeleteResult, type ExecuteCommand,
+  RuntimeScheduleDeleteArgumentsSchema, RuntimeScheduleUpdateArgumentsSchema,
+  requireToolOperationDescriptor, runtimeScheduleDeleteResult, type ExecuteCommand,
 } from "@blue-tanuki/protocol";
 import {
   canonicalizeCronTimeZone,
@@ -41,13 +42,14 @@ export interface RuntimeScheduleSnapshot {
   enabled: boolean;
   channel: string;
   target: string;
-  time: string;
+  time?: string;
   time_zone?: string;
   interval_ms?: number;
   created_at_ms: number;
   updated_at_ms: number;
   payload_hash: string;
   status: RuntimeSchedule["status"];
+  revision_digest?: string;
   delete_revision_digest?: string;
   pending_operation?: RuntimeScheduleOperation;
   pending_command_id?: string;
@@ -188,7 +190,7 @@ export class RuntimeScheduleManager {
       {
         name: "schedule.update",
         adapter_version: "1.0.0-rc.1",
-        description: "Activate a previously approved runtime schedule update request. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
+        description: "Activate a previously approved runtime schedule update request. First call schedule.list and pass the selected row's exact revision_digest as expected_revision_digest. The update is rejected if that revision is stale. Daily time schedules bind an IANA time_zone; omitted values capture the host local zone.",
         required_capabilities: requireToolOperationDescriptor("schedule.update").required_capabilities,
         invoke: async (_args, ctx) => this.approvePending(ctx.command_id, ctx.signal),
       },
@@ -232,6 +234,12 @@ export class RuntimeScheduleManager {
       payload_hash: schedule.payload_hash,
       delegation: { ...schedule.delegation },
     };
+  }
+
+  inspectUpdateTarget(id: string): { readonly id: string; readonly revision_digest: string } | null {
+    const schedule = this.schedules.get(id);
+    if (!schedule || !schedule.enabled || schedule.status !== "active") return null;
+    return { id: schedule.id, revision_digest: runtimeScheduleUpdateRevisionDigest(schedule) };
   }
 
   activeCount(): number {
@@ -468,8 +476,15 @@ export class RuntimeScheduleManager {
         throw new Error("legacy schedule has no durable approved scope; repeat channel, target, content and exactly one trigger (include time_zone for daily schedules) before requesting update");
       }
     }
+    const bound = RuntimeScheduleUpdateArgumentsSchema.safeParse(args);
+    if (!bound.success || bound.data.id !== id ||
+        this.inspectUpdateTarget(id)?.revision_digest !== bound.data.expected_revision_digest) {
+      throw new Error("schedule.update requires the current revision_digest from schedule.list; nothing was changed");
+    }
+    const expectedRevisionDigest = bound.data.expected_revision_digest;
     const schedule = buildScheduleFromArgs(id, args, now, previous);
-    return this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor);
+    const pending = this.pendingFromSchedule(command, evaluation, operation, schedule, previous, opts.request_id ?? null, actor);
+    return { ...pending, expected_revision_digest: expectedRevisionDigest };
   }
 
   private pendingFromSchedule(
@@ -533,6 +548,8 @@ export class RuntimeScheduleManager {
   private scheduleSnapshot(schedule: RuntimeSchedule, pending?: PendingRuntimeScheduleOperation): RuntimeScheduleSnapshot {
     const op = pending ?? this.pending.get(this.pendingBySchedule.get(schedule.id) ?? "");
     const legacyUnbound = schedule.status === "active" && schedule.delegation === undefined;
+    const updateTarget = !op && schedule.status === "active" && schedule.enabled
+      ? this.inspectUpdateTarget(schedule.id) : null;
     const deletion = op ? null : this.inspectDeleteTarget(schedule.id);
     return {
       id: schedule.id,
@@ -540,13 +557,14 @@ export class RuntimeScheduleManager {
       enabled: legacyUnbound ? false : schedule.enabled,
       channel: schedule.channel,
       target: schedule.target,
-      time: schedule.time ?? "07:00",
+      ...(schedule.time ? { time: schedule.time } : {}),
       time_zone: schedule.time_zone,
       interval_ms: schedule.interval_ms,
       created_at_ms: schedule.created_at_ms,
       updated_at_ms: schedule.updated_at_ms,
       payload_hash: schedule.payload_hash,
       status: op ? "pending" : legacyUnbound ? "disabled" : schedule.status,
+      ...(updateTarget ? { revision_digest: updateTarget.revision_digest } : {}),
       ...(deletion ? { delete_revision_digest: deletion.revision_digest } : {}),
       pending_operation: op?.operation,
       pending_command_id: op?.command_id,
@@ -583,9 +601,12 @@ export class RuntimeScheduleManager {
   }
 
   private assertPreviousSchedule(pending: PendingRuntimeScheduleOperation): void {
+    const currentRevision = pending.operation === "delete"
+      ? this.inspectDeleteTarget(pending.schedule_id)?.revision_digest
+      : this.inspectUpdateTarget(pending.schedule_id)?.revision_digest;
     if (this.schedules.get(pending.schedule_id) !== pending.previous ||
         (pending.expected_revision_digest !== undefined &&
-          this.inspectDeleteTarget(pending.schedule_id)?.revision_digest !== pending.expected_revision_digest)) {
+          currentRevision !== pending.expected_revision_digest)) {
       throw new Error("schedule target changed since review; the approved change was not committed");
     }
   }
@@ -629,6 +650,14 @@ function runtimeScheduleRevisionDigest(schedule: RuntimeSchedule, delegation: Ru
   return createHash("sha256").update(JSON.stringify([
     "blue-tanuki.runtime-schedule-revision.v1", schedule.id, schedule.payload_hash, schedule.created_at_ms,
     schedule.updated_at_ms, delegation.command_id, delegation.request_id, delegation.scope_digest,
+  ]), "utf8").digest("hex");
+}
+
+function runtimeScheduleUpdateRevisionDigest(schedule: RuntimeSchedule): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.runtime-schedule-update-revision.v1", schedule.id, schedule.payload_hash,
+    schedule.created_at_ms, schedule.updated_at_ms,
+    schedule.delegation ? [schedule.delegation.command_id, schedule.delegation.request_id, schedule.delegation.scope_digest] : null,
   ]), "utf8").digest("hex");
 }
 

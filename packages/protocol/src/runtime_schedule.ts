@@ -4,6 +4,11 @@ const ScheduleIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/).
 const DigestSchema = z.string().length(64).regex(/^[a-f0-9]{64}$/);
 const GoalRefSchema = z.string().regex(/^goal_[a-f0-9]{16,64}$/).refine(value => value === value.trim());
 const PurposeVersionSchema = z.number().int().positive().safe();
+export const RuntimeScheduleUpdateArgumentsSchema = z.object({
+  id: ScheduleIdSchema,
+  expected_revision_digest: DigestSchema,
+}).passthrough();
+export type RuntimeScheduleUpdateArguments = z.infer<typeof RuntimeScheduleUpdateArgumentsSchema>;
 
 export const RuntimeScheduleDeleteArgumentsSchema = z.object({
   id: ScheduleIdSchema,

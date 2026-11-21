@@ -137,6 +137,7 @@ describe("RuntimeScheduleManager", () => {
       origin: "runtime",
       interval_ms: 120000,
     });
+    expect(m.snapshot()[0]).not.toHaveProperty("time");
     expect(JSON.stringify(m.snapshot())).not.toContain("private runtime content");
     expect(lifecycle).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: "schedule.lifecycle.requested", operation: "create", approval_level: "L3_final_review" }),
@@ -235,6 +236,7 @@ describe("RuntimeScheduleManager", () => {
       })).toMatchObject({ ok: false });
       const update = command("schedule.update", {
         id: "legacy-daily",
+        expected_revision_digest: m.inspectUpdateTarget("legacy-daily")?.revision_digest,
         channel: "webchat",
         target: "local-user",
         content: "legacy content",
@@ -274,7 +276,8 @@ describe("RuntimeScheduleManager", () => {
     });
     expect(m.preparePending(duplicate, evaluation(duplicate), { request_id: "req-2", actor: "alice" })).toMatchObject({ ok: false });
 
-    const update = command("schedule.update", { id: "dup", content: "updated" });
+    const update = command("schedule.update", { id: "dup", expected_revision_digest: m.inspectUpdateTarget("dup")?.revision_digest,
+      content: "updated" });
     expect(m.preparePending(update, evaluation(update), { request_id: "req-3", actor: "alice" }).ok).toBe(true);
     const del = command("schedule.delete", { id: "dup" });
     expect(m.preparePending(del, evaluation(del), { request_id: "req-4", actor: "alice" })).toMatchObject({ ok: false });
@@ -293,7 +296,8 @@ describe("RuntimeScheduleManager", () => {
     await approve(m, create);
     const oldHash = m.snapshot()[0]?.payload_hash;
 
-    const update = command("schedule.update", { id: "updatable", content: "new" });
+    const update = command("schedule.update", { id: "updatable", expected_revision_digest: m.inspectUpdateTarget("updatable")?.revision_digest,
+      content: "new" });
     expect(m.preparePending(update, evaluation(update), { request_id: "req-2", actor: "alice" }).ok).toBe(true);
     expect(m.activeCount()).toBe(1);
     expect(m.snapshot().find((s) => s.id === "updatable")?.payload_hash).toBe(oldHash);
@@ -306,6 +310,49 @@ describe("RuntimeScheduleManager", () => {
     await approve(m, del);
     expect(m.activeCount()).toBe(0);
     expect(m.snapshot().find((s) => s.id === "updatable")?.status).toBe("deleted");
+  });
+
+  it("rejects a stale revision-bound update and exposes the current revision without schedule content", async () => {
+    const m = await manager();
+    const create = command("schedule.create", {
+      id: "revision-bound",
+      channel: "webchat",
+      target: "local-user",
+      content: "original private content",
+      interval_ms: 120000,
+    });
+    expect(m.preparePending(create, evaluation(create), { request_id: "req-revision-create", actor: "alice" }).ok).toBe(true);
+    await approve(m, create);
+
+    const before = m.snapshot().find((schedule) => schedule.id === "revision-bound");
+    expect(before?.revision_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(before)).not.toContain("original private content");
+
+    const missingRevision = command("schedule.update", { id: "revision-bound", content: "unbound replacement" });
+    expect(m.preparePending(missingRevision, evaluation(missingRevision), {
+      request_id: "req-revision-missing", actor: "alice",
+    })).toMatchObject({ ok: false, message: expect.stringContaining("current revision_digest") });
+
+    const stale = command("schedule.update", {
+      id: "revision-bound",
+      expected_revision_digest: "0".repeat(64),
+      content: "stale replacement",
+    });
+    expect(m.preparePending(stale, evaluation(stale), { request_id: "req-revision-stale", actor: "alice" }))
+      .toMatchObject({ ok: false, message: expect.stringContaining("current revision_digest") });
+    expect(m.snapshot().find((schedule) => schedule.id === "revision-bound")?.payload_hash).toBe(before?.payload_hash);
+
+    const update = command("schedule.update", {
+      id: "revision-bound",
+      expected_revision_digest: before!.revision_digest,
+      content: "approved replacement",
+    });
+    expect(m.preparePending(update, evaluation(update), { request_id: "req-revision-update", actor: "alice" }).ok).toBe(true);
+    await approve(m, update);
+    const after = m.snapshot().find((schedule) => schedule.id === "revision-bound");
+    expect(after?.revision_digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(after?.revision_digest).not.toBe(before?.revision_digest);
+    expect(after?.payload_hash).not.toBe(before?.payload_hash);
   });
 
   it("switches a trigger mode only through the newly approved update", async () => {
@@ -321,7 +368,8 @@ describe("RuntimeScheduleManager", () => {
     await approve(m, create);
     expect(m.activeCronTasks()[0]).toMatchObject({ time: "07:15", interval_ms: undefined });
 
-    const update = command("schedule.update", { id: "trigger-switch", interval_ms: 60000 });
+    const update = command("schedule.update", { id: "trigger-switch",
+      expected_revision_digest: m.inspectUpdateTarget("trigger-switch")?.revision_digest, interval_ms: 60000 });
     expect(m.preparePending(update, evaluation(update), { request_id: "req-trigger-update", actor: "alice" }).ok).toBe(true);
     expect(m.activeCronTasks()[0]?.time).toBe("07:15");
     await approve(m, update);
@@ -344,7 +392,8 @@ describe("RuntimeScheduleManager", () => {
     expect(reopened.activeCount()).toBe(1);
     expect(reopened.activeCronTasks()).toMatchObject([{ id: "reload-safe", interval_ms: 120000 }]);
 
-    const update = command("schedule.update", { id: "reload-safe", interval_ms: 60000 });
+    const update = command("schedule.update", { id: "reload-safe",
+      expected_revision_digest: reopened.inspectUpdateTarget("reload-safe")?.revision_digest, interval_ms: 60000 });
     expect(reopened.preparePending(update, evaluation(update), { request_id: "req-reload-update", actor: "alice" }).ok).toBe(true);
     await approve(reopened, update);
     const updated = await RuntimeScheduleManager.open({ env });
@@ -388,7 +437,8 @@ describe("RuntimeScheduleManager", () => {
     renameSync(store, join(dir, "runtime-schedules.before-failure.json"));
     mkdirSync(store);
 
-    const update = command("schedule.update", { id: "persist-before-fire", content: "uncommitted content" });
+    const update = command("schedule.update", { id: "persist-before-fire",
+      expected_revision_digest: m.inspectUpdateTarget("persist-before-fire")?.revision_digest, content: "uncommitted content" });
     expect(m.preparePending(update, evaluation(update), { request_id: "req-persist-update", actor: "alice" }).ok).toBe(true);
     await expect(approve(m, update)).rejects.toThrow();
     expect(m.activeCount()).toBe(1);
@@ -448,7 +498,8 @@ describe("RuntimeScheduleManager", () => {
     });
     expect(m.preparePending(create, evaluation(create), { request_id: "initial-approval", actor: "alice" }).ok).toBe(true);
     await approve(m, create);
-    const update = command("schedule.update", { id: "reserved-id", content: "updated content" });
+    const update = command("schedule.update", { id: "reserved-id",
+      expected_revision_digest: m.inspectUpdateTarget("reserved-id")?.revision_digest, content: "updated content" });
     const competing = command("schedule.delete", { id: "reserved-id" });
     expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
     let admitted: boolean | undefined;
@@ -500,7 +551,8 @@ describe("RuntimeScheduleManager", () => {
     const path = join(directory, "runtime-schedules.json");
     const before = readFileSync(path);
     const cronBefore = cron.snapshot();
-    const update = command("schedule.update", { id: "abort-target", content: "uncommitted content" });
+    const update = command("schedule.update", { id: "abort-target",
+      expected_revision_digest: m.inspectUpdateTarget("abort-target")?.revision_digest, content: "uncommitted content" });
     expect(m.preparePending(update, evaluation(update), { request_id: "update-approval", actor: "alice" }).ok).toBe(true);
     abortBeforeRename = true;
     await expect(approve(m, update, controller.signal)).rejects.toThrow(/abort|cancel/iu);
@@ -512,7 +564,8 @@ describe("RuntimeScheduleManager", () => {
     expect((await RuntimeScheduleManager.open({ env })).activeCronTasks()).toEqual(m.activeCronTasks());
 
     abortBeforeRename = false;
-    const retry = command("schedule.update", { id: "abort-target", content: "freshly approved content" });
+    const retry = command("schedule.update", { id: "abort-target",
+      expected_revision_digest: m.inspectUpdateTarget("abort-target")?.revision_digest, content: "freshly approved content" });
     expect(m.preparePending(retry, evaluation(retry), { request_id: "fresh-approval", actor: "alice" }).ok).toBe(true);
     await approve(m, retry);
     expect((await RuntimeScheduleManager.open({ env })).activeCronTasks()).toMatchObject([

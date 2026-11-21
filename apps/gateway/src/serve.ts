@@ -135,6 +135,7 @@ import {
   OperationPlanGoalPurposeRelationReviewArgumentsSchema,
   RuntimeScheduleDeleteArgumentsSchema,
   RuntimeScheduleDeleteReviewSchema,
+  RuntimeScheduleUpdateArgumentsSchema,
   type RuntimeScheduleDeleteProposal,
   type RuntimeScheduleDeleteReview,
   SettingsWriteArgumentsSchema,
@@ -790,6 +791,12 @@ function getMemoryJudgmentReassessmentArguments(command: ExecuteCommand): Memory
 function runtimeScheduleDeleteArguments(command: ExecuteCommand | undefined) {
   if (command?.type !== "tool_call" || command.payload.tool_name !== "schedule.delete") return undefined;
   const parsed = RuntimeScheduleDeleteArgumentsSchema.safeParse(command.payload.arguments);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function runtimeScheduleUpdateArguments(command: ExecuteCommand | undefined) {
+  if (command?.type !== "tool_call" || command.payload.tool_name !== "schedule.update") return undefined;
+  const parsed = RuntimeScheduleUpdateArgumentsSchema.safeParse(command.payload.arguments);
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -1605,6 +1612,7 @@ async function serveWithOwnerLease(
   });
   hds.onRuntimeInvariantsEvidence({ reason: "gateway_startup" });
   const runtimeScheduleDeleteFences = new Map<string, () => void>();
+  const runtimeScheduleUpdateFences = new Map<string, () => void>();
   const runtimeSchedules = await RuntimeScheduleManager.open({
     env: process.env,
     beforePersist: (kind, commandId, versionBound) => {
@@ -1613,8 +1621,8 @@ async function serveWithOwnerLease(
         throw new Error("runtime_schedule_mutation_blocked");
       }
       if (kind === "approve" && versionBound) {
-        const recheck = runtimeScheduleDeleteFences.get(commandId);
-        if (!recheck) throw new Error("runtime_schedule_delete_authority_unavailable");
+        const recheck = runtimeScheduleDeleteFences.get(commandId) ?? runtimeScheduleUpdateFences.get(commandId);
+        if (!recheck) throw new Error("runtime_schedule_versioned_mutation_authority_unavailable");
         recheck();
       }
     },
@@ -3318,6 +3326,7 @@ async function serveWithOwnerLease(
       }
     };
     const scheduleDelete = runtimeScheduleDeleteArguments(cmd);
+    const scheduleUpdate = runtimeScheduleUpdateArguments(cmd);
     if (scheduleDelete && opts.skip_approval && origin.user === OWNER_TASK_APPROVAL_ACTOR) {
       runtimeScheduleDeleteFences.set(cmd.id, () => {
         recheckFailureMemoryApproval();
@@ -3325,6 +3334,16 @@ async function serveWithOwnerLease(
             !isHdsExecutionGoalVersionBindingCurrent(cmd, hdsBinding) ||
             !ownerRuntimeScheduleDeleteTarget(scheduleDelete.id, scheduleDelete.expected_revision_digest)) {
           throw new Error("runtime_schedule_delete_target_or_purpose_stale");
+        }
+      });
+    }
+    if (scheduleUpdate && opts.skip_approval) {
+      runtimeScheduleUpdateFences.set(cmd.id, () => {
+        recheckFailureMemoryApproval();
+        if (!admission || Date.now() >= admission.expires_at_ms ||
+            !isHdsExecutionGoalVersionBindingCurrent(cmd, hdsBinding) ||
+            runtimeSchedules.inspectUpdateTarget(scheduleUpdate.id)?.revision_digest !== scheduleUpdate.expected_revision_digest) {
+          throw new Error("runtime_schedule_update_target_or_purpose_stale");
         }
       });
     }
@@ -3444,6 +3463,7 @@ async function serveWithOwnerLease(
       }
     } finally {
       if (scheduleDelete) runtimeScheduleDeleteFences.delete(cmd.id);
+      if (scheduleUpdate) runtimeScheduleUpdateFences.delete(cmd.id);
       recordTaskExecutionCancellationSettlement(activeTaskExecutions.finish(cmd.id));
       if (executionTask) executionTasks.delete(executionTask);
       executionAdmissionLease?.release();
