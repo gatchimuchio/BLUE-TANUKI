@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { evaluateApproval, HDSUpperController } from "@blue-tanuki/hds-brain";
 import {
   createExecutorApprovalAuthority,
@@ -22,7 +22,9 @@ describe("CLIから合成Cへの計画候補接続", () => {
   it.each([
     { label: "全役割候補", rejectedRole: undefined },
     { label: "不正な子出力を除いた兄弟候補", rejectedRole: "audit" },
-  ])("$labelをworker結果から未実行候補へ変換する", async ({ rejectedRole }) => {
+    { label: "親taskと結び付かない子digestを拒否", rejectedRole: undefined, tamperDigest: "child_task_digest" as const },
+    { label: "形式不正の資源使用digestを拒否", rejectedRole: undefined, tamperDigest: "resource_use_digest" as const },
+  ])("$label", async ({ rejectedRole, tamperDigest }) => {
     const sandbox = await mkdtemp(join(tmpdir(), "blue-synthetic-cli-compute-"));
     const hds = new HDSUpperController();
     const lifecycle: AgentWorkerLifecycleEvent[] = [];
@@ -57,8 +59,25 @@ describe("CLIから合成Cへの計画候補接続", () => {
             return { content: "", tokens_used: 0, model: "synthetic-file-write-plan-v1", provider: syntheticBackend.name };
           }
           const candidateSet = providerRequest.messages.find((message) =>
-            message.role === "user" && message.content.includes("blue-tanuki.agent-candidate-set.v2"));
-          if (candidateSet) candidateSetMessages.push(candidateSet.content);
+            message.role === "user" && message.content.includes("blue-tanuki.agent-candidate-set.v3"));
+          if (candidateSet) {
+            candidateSetMessages.push(candidateSet.content);
+            if (tamperDigest) {
+              const separator = candidateSet.content.indexOf("\n") + 1;
+              const candidateSetValue = JSON.parse(candidateSet.content.slice(separator)) as {
+                candidates: Array<{ child_task_digest: string; resource_use_digest?: string }>;
+              };
+              if (tamperDigest === "child_task_digest") {
+                candidateSetValue.candidates[0]!.child_task_digest = "f".repeat(64);
+              } else {
+                candidateSetValue.candidates[0]!.resource_use_digest = "invalid-digest";
+              }
+              const messages = providerRequest.messages.map((message) => message === candidateSet
+                ? { ...message, content: `${candidateSet.content.slice(0, separator)}${JSON.stringify(candidateSetValue)}` }
+                : message);
+              return syntheticBackend.call({ ...providerRequest, messages }, signal);
+            }
+          }
           return syntheticBackend.call(providerRequest, signal);
         },
       };
@@ -93,14 +112,28 @@ describe("CLIから合成Cへの計画候補接続", () => {
         reason: "isolated synthetic CLI compute fixture",
       });
       const feedback = await executor.execute(approved);
+      if (tamperDigest) {
+        expect(feedback.status).toBe("failed");
+        expect(candidateSetMessages).toHaveLength(1);
+        return;
+      }
       expect(feedback.status, feedback.error ?? JSON.stringify(feedback.llm_failure)).toBe("success");
       expect(candidateSetMessages).toHaveLength(1);
       const candidateSet = JSON.parse(candidateSetMessages[0]!.slice(candidateSetMessages[0]!.indexOf("\n") + 1)) as {
-        candidates: Array<{ role: string; outcome: string }>;
+        parent_task_identity_digest: string;
+        candidates: Array<{ role: string; child_task_digest: string; resource_use_digest?: string; outcome: string }>;
       };
       expect(candidateSet.candidates.filter((candidate) => candidate.outcome === "candidate")).toHaveLength(
         rejectedRole ? 3 : 4,
       );
+      for (const candidate of candidateSet.candidates) {
+        const expectedChildDigest = createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+          .update(candidateSet.parent_task_identity_digest).update("\0").update(candidate.role).digest("hex");
+        expect(candidate.child_task_digest).toBe(expectedChildDigest);
+        expect(candidate.resource_use_digest).toMatch(/^[a-f0-9]{64}$/u);
+        const settledEvent = lifecycle.find((event) => event.state === "settled" && event.role === candidate.role);
+        expect(candidate.resource_use_digest).toBe(settledEvent?.resource_use_digest);
+      }
       if (rejectedRole) {
         expect(candidateSet.candidates.find((candidate) => candidate.role === rejectedRole)?.outcome).toBe("rejected");
       }

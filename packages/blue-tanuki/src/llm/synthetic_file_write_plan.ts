@@ -324,13 +324,23 @@ function expectedWorkerCandidate(requestId: string, role: typeof SYNTHETIC_AGENT
   });
 }
 
+function expectedSyntheticChildTaskDigest(
+  parentTaskIdentityDigest: string,
+  role: typeof SYNTHETIC_AGENT_ROLES[number],
+): string {
+  return createHash("sha256")
+    .update("blue-tanuki.agent.child-task.v1\0")
+    .update(parentTaskIdentityDigest).update("\0").update(role)
+    .digest("hex");
+}
+
 function validSyntheticAgentCandidateSet(
   value: Record<string, unknown> | undefined,
   contract: SyntheticAgentContract,
   requestId: string,
 ): boolean {
   const candidates = value?.candidates;
-  if (value?.schema_version !== "blue-tanuki.agent-candidate-set.v2" ||
+  if (value?.schema_version !== "blue-tanuki.agent-candidate-set.v3" ||
       value.parent_goal_digest !== contract.parent_goal_digest ||
       value.parent_task_identity_digest !== contract.parent_task_identity_digest ||
       value.criteria_digest !== contract.criteria_digest ||
@@ -340,15 +350,25 @@ function validSyntheticAgentCandidateSet(
 
   return SYNTHETIC_AGENT_ROLES.every((role, index) => {
     const candidate: unknown = candidates[index];
-    if (!isRecord(candidate) || candidate.role !== role) return false;
-    if (candidate.outcome === "unknown" || candidate.outcome === "rejected") {
-      const allowedReason = candidate.outcome === "unknown"
-        ? candidate.reason === "compute_outcome_unknown" || candidate.reason === "child_deadline_elapsed"
-        : candidate.reason === "invalid_child_output";
-      return allowedReason && Object.keys(candidate).sort().join(",") === "outcome,reason,role";
+    if (!isRecord(candidate) || candidate.role !== role ||
+        candidate.child_task_digest !== expectedSyntheticChildTaskDigest(contract.parent_task_identity_digest, role) ||
+        (candidate.resource_use_digest !== undefined && !isDigest(candidate.resource_use_digest))) return false;
+    const resourceUseKey = candidate.resource_use_digest === undefined ? [] : ["resource_use_digest"];
+    if (candidate.outcome === "unknown") {
+      const allowedReason = candidate.reason === "compute_outcome_unknown" ||
+        candidate.reason === "child_deadline_elapsed";
+      return allowedReason && Object.keys(candidate).sort().join(",") ===
+        ["child_task_digest", "outcome", "reason", "role", ...resourceUseKey].sort().join(",");
+    }
+    if (candidate.outcome === "rejected") {
+      return candidate.reason === "invalid_child_output" && isDigest(candidate.resource_use_digest) &&
+        Object.keys(candidate).sort().join(",") ===
+          ["child_task_digest", "outcome", "reason", "resource_use_digest", "role"].sort().join(",");
     }
     if (candidate.outcome !== "candidate" || typeof candidate.content !== "string" ||
-        Object.keys(candidate).sort().join(",") !== "content,outcome,role") return false;
+        !isDigest(candidate.resource_use_digest) ||
+        Object.keys(candidate).sort().join(",") !==
+          ["child_task_digest", "content", "outcome", "resource_use_digest", "role"].sort().join(",")) return false;
     try {
       return JSON.stringify(JSON.parse(candidate.content)) === expectedWorkerCandidate(requestId, role);
     } catch {

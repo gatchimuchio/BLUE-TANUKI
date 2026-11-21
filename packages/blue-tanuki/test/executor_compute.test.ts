@@ -485,8 +485,22 @@ describe("Executor compute boundary", () => {
     expect(backend.seen).toHaveLength(5);
     expect(backend.seen.slice(0, 4).flatMap((request) => request.messages.map((message) => message.content))
       .join("\n")).toContain("C child role=");
-    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("blue-tanuki.agent-candidate-set.v2");
-    expect(backend.seen[4]?.messages.at(-1)?.content).toContain("role candidate");
+    const candidateSetMessage = backend.seen[4]?.messages.at(-1)?.content ?? "";
+    expect(candidateSetMessage).toContain("blue-tanuki.agent-candidate-set.v3");
+    const candidateSet = JSON.parse(candidateSetMessage.slice(candidateSetMessage.indexOf("\n") + 1)) as {
+      schema_version: string;
+      parent_task_identity_digest: string;
+      candidates: Array<{ role: string; child_task_digest: string; resource_use_digest?: string }>;
+    };
+    expect(candidateSet.schema_version).toBe("blue-tanuki.agent-candidate-set.v3");
+    for (const candidate of candidateSet.candidates) {
+      const expectedChildDigest = createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+        .update(candidateSet.parent_task_identity_digest).update("\0").update(candidate.role).digest("hex");
+      expect(candidate.child_task_digest).toBe(expectedChildDigest);
+      expect(candidate.resource_use_digest).toMatch(/^[a-f0-9]{64}$/u);
+      const settledEvent = lifecycle.find((event) => event.state === "settled" && event.role === candidate.role);
+      expect(candidate.resource_use_digest).toBe(settledEvent?.resource_use_digest);
+    }
     expect(JSON.stringify(result.result)).not.toContain("agent-candidate-set");
     expect(lifecycle.filter((event) => event.state === "started")).toHaveLength(4);
     expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
@@ -525,15 +539,25 @@ describe("Executor compute boundary", () => {
     const parentMessage = requests[4]!.input.messages.at(-1)!.content;
     const candidateSet = JSON.parse(parentMessage.slice(parentMessage.indexOf("\n") + 1)) as {
       schema_version: string;
-      candidates: Array<{ role: string; outcome: string; content?: string; reason?: string }>;
+      parent_task_identity_digest: string;
+      candidates: Array<{ role: string; child_task_digest: string; resource_use_digest?: string;
+        outcome: string; content?: string; reason?: string }>;
     };
-    expect(candidateSet.schema_version).toBe("blue-tanuki.agent-candidate-set.v2");
-    expect(candidateSet.candidates).toEqual([
+    expect(candidateSet.schema_version).toBe("blue-tanuki.agent-candidate-set.v3");
+    expect(candidateSet.candidates).toMatchObject([
       { role: "division", outcome: "candidate", content: "role candidate" },
       { role: "independent_comparison", outcome: "candidate", content: "role candidate" },
       { role: "audit", outcome: "unknown", reason: "compute_outcome_unknown" },
       { role: "redundancy", outcome: "candidate", content: "role candidate" },
     ]);
+    for (const candidate of candidateSet.candidates) {
+      const expectedChildDigest = createHash("sha256").update("blue-tanuki.agent.child-task.v1\0")
+        .update(candidateSet.parent_task_identity_digest).update("\0").update(candidate.role).digest("hex");
+      expect(candidate.child_task_digest).toBe(expectedChildDigest);
+      expect(candidate.resource_use_digest).toMatch(/^[a-f0-9]{64}$/u);
+      const settledEvent = lifecycle.find((event) => event.state === "settled" && event.role === candidate.role);
+      expect(candidate.resource_use_digest).toBe(settledEvent?.resource_use_digest);
+    }
     expect(parentMessage).not.toContain("private provider failure detail");
     expect(lifecycle.filter((event) => event.state === "settled")).toHaveLength(4);
   });
