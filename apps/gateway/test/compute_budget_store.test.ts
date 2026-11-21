@@ -82,6 +82,30 @@ describe("GatewayComputeBudgetStore", () => {
     }
   });
 
+  it("returns reserved resources when settlement proves the provider was never invoked", () => {
+    const store = makeStore({
+      ...makePolicy(),
+      system: { max_tokens: 30, max_compute_ms: 60_000, max_cost: { amount: 0.3, currency: "USD" } },
+    });
+    try {
+      const reservation = reserve(store, "cancelled-before-invoke", "parent-cancel", "task-cancel", 20, 0.2);
+      const notInvoked: ComputeBudgetSettlement = {
+        state: "settled",
+        tokens_used: 0,
+        tokens_usage_status: "not_invoked",
+        compute_ms: 0,
+        cost: { status: "actual", amount: 0, currency: "USD", source: "not_invoked" },
+      };
+      store.settle(reservation.reservation_id, notInvoked);
+      expect(() => store.settle(reservation.reservation_id, notInvoked)).not.toThrow();
+      expect(() => reserve(store, "after-cancelled-call", "parent-after", "task-after", 20, 0.2)).not.toThrow();
+      expect(() => store.settle(reservation.reservation_id, { ...notInvoked, tokens_used: 1 }))
+        .toThrow("compute_budget_not_invoked_settlement_invalid");
+    } finally {
+      store.close();
+    }
+  });
+
   it("keeps same-window consumption when the owner changes policy generation", () => {
     const root = mkdtempSync(join(tmpdir(), "blue-compute-budget-generation-"));
     tempRoots.push(root);

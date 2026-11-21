@@ -163,6 +163,8 @@ export class GatewayComputeBudgetStore implements ComputeBudgetPort {
       let chargedTokens = row.reserved_tokens;
       if (settlement.tokens_usage_status === "provider_reported") {
         chargedTokens = settlement.tokens_used;
+      } else if (settlement.tokens_usage_status === "not_invoked") {
+        chargedTokens = 0;
       }
       let chargedComputeMs = settlement.state === "unknown"
         ? Math.max(row.reserved_compute_ms, settlement.compute_ms)
@@ -292,9 +294,15 @@ function validateReservation(
 function validateSettlement(settlement: ComputeBudgetSettlement): void {
   if ((settlement.state !== "settled" && settlement.state !== "unknown") ||
       !Number.isSafeInteger(settlement.tokens_used) || settlement.tokens_used < 0 ||
-      (settlement.tokens_usage_status !== "provider_reported" && settlement.tokens_usage_status !== "unknown") ||
+      (settlement.tokens_usage_status !== "provider_reported" && settlement.tokens_usage_status !== "not_invoked" &&
+        settlement.tokens_usage_status !== "unknown") ||
       !Number.isSafeInteger(settlement.compute_ms) || settlement.compute_ms < 0) {
     throw new Error("compute_budget_settlement_invalid");
+  }
+  if (settlement.tokens_usage_status === "not_invoked" &&
+      (settlement.state !== "settled" || settlement.tokens_used !== 0 || settlement.compute_ms !== 0 ||
+       settlement.cost.status !== "actual" || settlement.cost.amount !== 0)) {
+    throw new Error("compute_budget_not_invoked_settlement_invalid");
   }
   if (settlement.cost.status === "unknown") {
     if (!/^[a-z0-9_]{1,120}$/.test(settlement.cost.reason)) throw new Error("compute_budget_settlement_reason_invalid");

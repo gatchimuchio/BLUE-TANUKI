@@ -50,6 +50,81 @@ function computeRequest(): ComputeRequest<LLMRequest> {
 }
 
 describe("LLMComputeAdapter", () => {
+  it("does not acquire provider capacity for an already-aborted compute", async () => {
+    const backend = new CapturingBackend();
+    const controller = new AbortController();
+    controller.abort();
+    let acquisitions = 0;
+    const capacity: ComputeCapacityPort = {
+      async acquire() {
+        acquisitions += 1;
+        return { release() {} };
+      },
+    };
+
+    await expect(new LLMComputeAdapter(backend, undefined, capacity).compute(computeRequest(), controller.signal))
+      .rejects.toMatchObject({ kind: "cancelled" });
+    expect(acquisitions).toBe(0);
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("releases an acquired capacity lease when cancellation arrives while admission is pending", async () => {
+    const backend = new CapturingBackend();
+    const controller = new AbortController();
+    let resolveLease!: (lease: { release(): void }) => void;
+    let released = 0;
+    const capacity: ComputeCapacityPort = {
+      acquire() {
+        return new Promise((resolve) => { resolveLease = resolve; });
+      },
+    };
+    const pending = new LLMComputeAdapter(backend, undefined, capacity).compute(computeRequest(), controller.signal);
+    controller.abort();
+    resolveLease({ release() { released += 1; } });
+
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
+    expect(released).toBe(1);
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("returns a reservation when cancellation arrives before the backend is invoked", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequest();
+    request.budget_scope = { parent_task_identity_digest: "c".repeat(64), task_identity_digest: "d".repeat(64) };
+    let markReserveStarted!: () => void;
+    const reserveStarted = new Promise<void>((resolve) => { markReserveStarted = resolve; });
+    let resolveReservation!: (reservation: Awaited<ReturnType<ComputeBudgetPort["reserve"]>>) => void;
+    const reservationPending = new Promise<Awaited<ReturnType<ComputeBudgetPort["reserve"]>>>((resolve) => {
+      resolveReservation = resolve;
+    });
+    let settlement: Parameters<ComputeBudgetPort["settle"]>[1] | undefined;
+    const budget: ComputeBudgetPort = {
+      reserve() {
+        markReserveStarted();
+        return reservationPending;
+      },
+      settle(_id, value) { settlement = value; },
+    };
+    const controller = new AbortController();
+    const pending = new LLMComputeAdapter(registry, budget).compute(request, controller.signal);
+    await reserveStarted;
+    controller.abort();
+    resolveReservation({
+      reservation_id: "9".repeat(64), reserved_tokens: 128, reserved_compute_ms: 2_000,
+      reserved_cost: { amount: 0.25, currency: "USD", source: "CONFIG" },
+    });
+
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
+    expect(backend.seen).toHaveLength(0);
+    expect(settlement).toEqual({
+      state: "settled", tokens_used: 0, tokens_usage_status: "not_invoked", compute_ms: 0,
+      cost: { status: "actual", amount: 0, currency: "USD", source: "not_invoked" },
+    });
+  });
+
   it("acquires provider capacity before the provider and releases it after completion", async () => {
     const events: string[] = [];
     class OrderedBackend extends CapturingBackend {

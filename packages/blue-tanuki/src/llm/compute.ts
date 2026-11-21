@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { LLMFallbackAuthorizationSchema, type ComputeResourceUse, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 import {
   LLM_ROUTING_TRACE,
+  createLLMAbortError,
   normalizeLLMToolCallCandidates,
   type LLMBackend,
   type LLMErrorKind,
@@ -96,7 +97,7 @@ export interface ComputeBudgetReservation {
 export interface ComputeBudgetSettlement {
   state: "settled" | "unknown";
   tokens_used: number;
-  tokens_usage_status: "provider_reported" | "unknown";
+  tokens_usage_status: "provider_reported" | "not_invoked" | "unknown";
   compute_ms: number;
   cost: ComputeCost;
 }
@@ -220,11 +221,13 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);
+    throwIfComputeAborted(this.backend, signal);
     const timeoutMs = request.resource_limits.timeout_ms;
     const capacityLease = this.capacity
       ? await this.capacity.acquire({ timeout_ms: timeoutMs ?? 30_000, signal })
       : undefined;
     try {
+      throwIfComputeAborted(this.backend, signal);
       return await this.computeWithCapacity(request, signal, fallbackAuthorization);
     } finally {
       capacityLease?.release();
@@ -236,6 +239,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     signal: AbortSignal | undefined,
     fallbackAuthorization: LLMFallbackAuthorization | undefined,
   ): Promise<ComputeResult<LLMResponse>> {
+    throwIfComputeAborted(this.backend, signal);
     let reservation: ComputeBudgetReservation | undefined;
     let maximumCalls = 1;
     if (this.budget) {
@@ -262,6 +266,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       if (reservedComputeMs === undefined) {
         throw new Error("llm_compute_budget_compute_upper_bound_unavailable");
       }
+      throwIfComputeAborted(this.backend, signal);
       reservation = await this.budget.reserve({
         request_id: request.request_id,
         scope: request.budget_scope,
@@ -269,6 +274,32 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         reserved_compute_ms: reservedComputeMs,
         reserved_cost: maxCost,
       });
+      if (signal?.aborted) {
+        const notInvoked: ComputeBudgetSettlement = {
+          state: "settled",
+          tokens_used: 0,
+          tokens_usage_status: "not_invoked",
+          compute_ms: 0,
+          cost: { status: "actual", amount: 0, currency: reservation.reserved_cost.currency, source: "not_invoked" },
+        };
+        try {
+          await this.budget.settle(reservation.reservation_id, notInvoked);
+        } catch (error) {
+          const unknown: ComputeBudgetSettlement = {
+            state: "unknown",
+            tokens_used: 0,
+            tokens_usage_status: "unknown",
+            compute_ms: 0,
+            cost: { status: "unknown", reason: "not_invoked_settlement_failed" },
+          };
+          throw new LLMComputeResourceFailure(error, buildComputeResourceUse(request.request_id, {
+            reserved_tokens: reservation.reserved_tokens,
+            reserved_compute_ms: reservation.reserved_compute_ms,
+            reserved_cost: reservation.reserved_cost,
+          }, unknown, true));
+        }
+        throw createLLMAbortError(this.backend.name, signal);
+      }
     }
     const startedAt = performance.now();
     let response: LLMResponse;
@@ -400,6 +431,10 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       },
     };
   }
+}
+
+function throwIfComputeAborted(backend: LLMBackend, signal?: AbortSignal): void {
+  if (signal?.aborted) throw createLLMAbortError(backend.name, signal);
 }
 
 function buildComputeResourceUse(
