@@ -41,6 +41,7 @@ import {
   ComputeResourceUseSchema,
   FileSearchTargetVersionObservationSchema,
   FileWriteTargetVersionObservationSchema,
+  FileWriteMutationTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
   FileEditTargetVersionObservationSchema,
   MemoryPersonalizationTargetVersionObservationSchema,
@@ -4440,23 +4441,34 @@ ${planControl.question}`,
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "file.write" &&
-        operation_plan_binding_digest !== undefined) {
+        (operation_plan_binding_digest !== undefined || command.payload.arguments.mode === "overwrite" ||
+          command.payload.arguments.mode === "append")) {
       if (brokerTargetVersionObservation === undefined) {
-        throw new Error("HDS planned file.write target version observation is required");
+        throw new Error("HDS file.write target version observation is required");
       }
       const observation = FileWriteTargetVersionObservationSchema.parse(brokerTargetVersionObservation);
       const args = command.payload.arguments;
       const commandPath = args.path;
       const commandContent = args.content;
-      if (args.mode !== "create" || typeof commandPath !== "string" || typeof commandContent !== "string" ||
+      const commandMode = typeof args.mode === "string" ? args.mode : "create";
+      if (typeof commandPath !== "string" || typeof commandContent !== "string" ||
           Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key)) ||
           observation.command_digest !== operationPlanDigest(command) ||
           observation.target_identity_digest !== fileWriteTargetIdentityDigest(commandPath) ||
           observation.payload_digest !== fileWritePayloadDigest(commandContent)) {
         throw new Error("HDS file.write target version does not match the issued command");
       }
-      if (observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
-        throw new Error("HDS file.write target version does not match the current Operation Plan source");
+      if (observation.schema_version === "blue-tanuki.file-write-target-version.v1") {
+        if (operation_plan_binding_digest === undefined || commandMode !== "create" ||
+            observation.operation_plan_binding_digest !== operation_plan_binding_digest) {
+          throw new Error("HDS planned file.write target version does not match the current Operation Plan source");
+        }
+      } else {
+        const mutation = FileWriteMutationTargetVersionObservationSchema.parse(observation);
+        if ((commandMode !== "overwrite" && commandMode !== "append") || mutation.mode !== commandMode ||
+            operation_plan_binding_digest !== undefined || mutation.operation_plan_binding_digest !== undefined) {
+          throw new Error("HDS file.write mutation target version does not match the current command scope");
+        }
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
     } else if (command.type === "tool_call" && command.payload.tool_name === "file.delete" &&

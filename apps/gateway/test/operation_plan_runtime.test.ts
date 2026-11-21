@@ -2577,6 +2577,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
     await mkdir(workspace);
     vi.stubEnv("BLUE_TANUKI_FILE_ROOT", workspace);
     const hds = new HDSUpperController();
+    const executionEpoch = randomUUID();
+    const executionStore = new GatewayExecutionIntentStore(join(root, "execution-intents.sqlite"), executionEpoch);
     try {
       const origin = request("plan:compute synthetic noteを新規作成");
       const target = { kind: "file" as const, id: "notes.txt" };
@@ -2603,7 +2605,8 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       const planBindingDigest = hds.getExecutionOperationPlanBindingDigest(selected.command);
       if (!planBindingDigest) throw new Error("selected file.write plan source was unavailable");
       const tools = new ToolRegistry(); tools.register(fileWriteTool);
-      const authority = createExecutorApprovalAuthority();
+      const authority = createExecutorApprovalAuthority({ execution_store: executionStore,
+        execution_epoch: executionEpoch, require_hds_execution_binding: true });
       const executor = new Executor({ llm: { name: "fixture", call: async () => ({ content: "", model: "fixture", tokens_used: 0 }) },
         tools, approval_authority: authority });
       const observation = FileWriteTargetVersionObservationSchema.parse(await executor.inspectCommandTargetVersion(
@@ -2615,13 +2618,14 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
         .toThrow(/file.write target version does not match/);
       const binding = hds.createExecutionAuthorityBinding(selected.command, observation);
       expect(binding.broker_target_version_observation_digest).toBe(operationPlanDigest(observation));
-      expect(hds.beginOperationPlanAttempt(selected.command)).toBe(true);
       const approval = evaluateApproval(selected.command, [], { actor: "fixture-owner", default_mode: "full_access" });
       const proof = { source: "approval_gate" as const, decision: "allow" as const, approved_by: "fixture-owner",
         approved_at_ms: Date.now(), upstream_commit_hash: selected.command.upstream_decision.commit_hash,
         operation: approval.context.operation, risk: approval.risk, final_review_required: approval.final_review_required,
         reason: "synthetic create-only file plan fixture" };
       const approved = authority.approve(selected.command, proof, executorCommandDigest(selected.command), binding, observation);
+      const admission = executionAdmissionForCommand(selected.command, authority.receipt(approved));
+      expect(hds.beginOperationPlanAttempt(selected.command, admission)).toBe(true);
       const feedback = await executor.execute(approved);
       if (feedback.status !== "success") throw new Error(`planned file.write failed: ${feedback.error ?? "unknown"}`);
       expect(feedback.status).toBe("success");
@@ -2636,7 +2640,7 @@ describe("計画候補→明示step選択→実結果→改訂・復帰", () => 
       expect(review(hds, overwriteCandidate, "create-note").command).toBeNull();
       expect(hds.getAudit().verify()).toBe(true);
     } finally {
-      hds.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
+      hds.close(); executionStore.close(); vi.unstubAllEnvs(); await rm(root, { recursive: true, force: true });
     }
   });
 

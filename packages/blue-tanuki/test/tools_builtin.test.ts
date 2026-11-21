@@ -11,6 +11,7 @@ import {
   invokeFileSearch,
   inspectFileSearchTargetVersion,
   inspectFileWriteTargetVersion,
+  inspectFileWriteMutationTargetVersion,
   inspectFileWriteOutcomeState,
   invokeFileWrite,
   inspectFileDeleteTargetVersion,
@@ -296,31 +297,58 @@ describe("built-in tools", () => {
 
   it("file.write creates, appends, and overwrites only inside the sandbox", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-tool-"));
+    const env = { BLUE_TANUKI_FILE_ROOT: dir };
     try {
       await fs.mkdir(path.join(dir, "notes"));
       const created = await invokeFileWrite(
         { path: "notes/a.txt", content: "alpha\n" },
-        fileSearchEnv(dir),
+        { env },
       );
       expect(created).toMatchObject({
         path: "notes/a.txt",
         mode: "create",
         bytes_written: 6,
       });
-      await invokeFileWrite(
-        { path: "notes/a.txt", content: "beta\n", mode: "append" },
-        fileSearchEnv(dir),
-      );
+      const appendArgs = { path: "notes/a.txt", content: "beta\n", mode: "append" };
+      const appendEvidence = await inspectFileWriteMutationTargetVersion(appendArgs, {
+        env, command_digest: "a".repeat(64),
+      });
+      await invokeFileWrite(appendArgs, { env, command_digest: appendEvidence.command_digest,
+        expected_target_version: appendEvidence });
       expect(await fs.readFile(path.join(dir, "notes", "a.txt"), "utf8")).toBe(
         "alpha\nbeta\n",
       );
-      await invokeFileWrite(
-        { path: "notes/a.txt", content: "gamma\n", mode: "overwrite" },
-        fileSearchEnv(dir),
-      );
+      const overwriteArgs = { path: "notes/a.txt", content: "gamma\n", mode: "overwrite" };
+      const overwriteEvidence = await inspectFileWriteMutationTargetVersion(overwriteArgs, {
+        env, command_digest: "b".repeat(64),
+      });
+      await invokeFileWrite(overwriteArgs, { env, command_digest: overwriteEvidence.command_digest,
+        expected_target_version: overwriteEvidence });
       expect(await fs.readFile(path.join(dir, "notes", "a.txt"), "utf8")).toBe(
         "gamma\n",
       );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a direct file.write overwrite when the reviewed target version is stale", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-stale-write-"));
+    const env = { BLUE_TANUKI_FILE_ROOT: dir };
+    const targetPath = path.join(dir, "notes.txt");
+    const args = { path: "notes.txt", content: "reviewed replacement", mode: "overwrite", max_bytes: 128 };
+    try {
+      await fs.writeFile(targetPath, "initial content", "utf8");
+      const evidence = await inspectFileWriteMutationTargetVersion(args, { env, command_digest: "c".repeat(64) });
+      expect(evidence).toMatchObject({ schema_version: "blue-tanuki.file-write-target-version.v2",
+        mode: "overwrite", target_state: "present", used_for_authority: false, may_execute: false });
+      expect(JSON.stringify(evidence)).not.toContain("initial content");
+
+      await fs.writeFile(targetPath, "owner changed this after review", "utf8");
+      await expect(invokeFileWrite(args, { env, command_digest: evidence.command_digest,
+        expected_target_version: evidence })).rejects.toThrow(/target version changed/);
+      expect(await fs.readFile(targetPath, "utf8")).toBe("owner changed this after review");
+      await expect(invokeFileWrite(args, { env })).rejects.toThrow(/require Broker target version evidence/);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -442,7 +470,9 @@ describe("built-in tools", () => {
       await fs.symlink(privateDir, path.join(root, "alias"), "junction");
       for (const dir of ["private-state", "alias"]) {
         await expect(invokeFileSearch({ root: dir, query: "needle" }, fileSearchEnv(root))).rejects.toThrow(/secret-like/);
-        await expect(invokeFileWrite({ path: `${dir}/j-state.sqlite`, content: "changed", mode: "overwrite" }, fileSearchEnv(root)))
+        await expect(inspectFileWriteMutationTargetVersion({ path: `${dir}/j-state.sqlite`, content: "changed", mode: "overwrite" }, {
+          env: { BLUE_TANUKI_FILE_ROOT: root }, command_digest: "d".repeat(64),
+        }))
           .rejects.toThrow(/secret-like|private runtime/);
       }
       for (const sandbox of [privateDir, path.join(root, "alias")]) {
@@ -489,7 +519,9 @@ describe("built-in tools", () => {
       await expect(invokeFileSearch({ root: ".", file_path: "stop-ledger-alias.jsonl", query: "", max_results: 5 }, { env }))
         .rejects.toThrow(/HDS memory storage/);
 
-      await expect(invokeFileWrite({ path: "memory-alias.jsonl", content: "replacement", mode: "overwrite" }, { env }))
+      await expect(inspectFileWriteMutationTargetVersion({ path: "memory-alias.jsonl", content: "replacement", mode: "overwrite" }, {
+        env, command_digest: command,
+      }))
         .rejects.toThrow(/HDS memory storage/);
       await expect(inspectFileEditTargetVersion({ path: "memory-alias.jsonl", search: "PRIVATE", replace: "changed",
         expected_replacements: 1 }, { env, operation_plan_binding_digest: binding, command_digest: command }))
@@ -550,7 +582,9 @@ describe("built-in tools", () => {
         await expect(invokeFileSearch({ root: ".", file_path: `${requestedDirectory}/pack/review.txt`, query: "",
           max_results: 5 }, { env })).rejects.toThrow(denied);
       }
-      await expect(invokeFileWrite({ path: protectedFile, content: "changed", mode: "overwrite" }, { env })).rejects.toThrow(denied);
+      await expect(inspectFileWriteMutationTargetVersion({ path: protectedFile, content: "changed", mode: "overwrite" }, {
+        env, command_digest: planned.command_digest,
+      })).rejects.toThrow(denied);
       await expect(invokeFileWrite({ path: newPackFile, content: "changed", mode: "create" }, { env })).rejects.toThrow(denied);
       await expect(inspectFileEditTargetVersion({ path: protectedFile, search: "private", replace: "changed",
         expected_replacements: 1 }, planned)).rejects.toThrow(denied);
@@ -558,7 +592,12 @@ describe("built-in tools", () => {
 
       expect(await fs.readFile(path.join(sandbox, protectedFile), "utf8")).toBe("needle private fixture\n");
       await expect(fs.stat(path.join(sandbox, newPackFile))).rejects.toMatchObject({ code: "ENOENT" });
-      await invokeFileWrite({ path: ordinaryFile, content: "updated ordinary fixture\n", mode: "overwrite" }, { env });
+      const ordinaryWriteArgs = { path: ordinaryFile, content: "updated ordinary fixture\n", mode: "overwrite" };
+      const ordinaryWriteObservation = await inspectFileWriteMutationTargetVersion(ordinaryWriteArgs, {
+        env, command_digest: planned.command_digest,
+      });
+      await invokeFileWrite(ordinaryWriteArgs, { env, command_digest: planned.command_digest,
+        expected_target_version: ordinaryWriteObservation });
       expect(await fs.readFile(path.join(sandbox, ordinaryFile), "utf8")).toBe("updated ordinary fixture\n");
     } finally {
       await fs.rm(sandbox, { recursive: true, force: true });
@@ -595,12 +634,10 @@ describe("built-in tools", () => {
       await fs.mkdir(sandbox);
       await fs.mkdir(outside);
       await fs.symlink(outside, link, "junction");
-      await expect(
-        invokeFileWrite(
-          { path: "link-out/a.txt", content: "new", mode: "overwrite" },
-          fileSearchEnv(sandbox),
-        ),
-      ).rejects.toThrow(/symlink/);
+      await expect(inspectFileWriteMutationTargetVersion(
+        { path: "link-out/a.txt", content: "new", mode: "overwrite" },
+        { env: { BLUE_TANUKI_FILE_ROOT: sandbox }, command_digest: "e".repeat(64) },
+      )).rejects.toThrow(/symlink/);
     } finally {
       await fs.rm(parent, { recursive: true, force: true });
     }

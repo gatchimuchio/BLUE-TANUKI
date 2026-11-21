@@ -12,6 +12,7 @@ import {
   canonicalFileEditTargetVersionObservation,
   FileSearchTargetVersionObservationSchema,
   FileWriteTargetVersionObservationSchema,
+  FileWriteMutationTargetVersionObservationSchema,
   FileDeleteTargetVersionObservationSchema,
   FileEditTargetVersionObservationSchema,
   GitHubIssueCreateTargetVersionObservationSchema,
@@ -7244,9 +7245,39 @@ export async function invokeFileWrite(
     throw new Error(`file.write content exceeds max_bytes (${bytes} > ${maxBytes})`);
   }
 
-  if (opts.expected_target_version) {
+  if (opts.expected_target_version?.schema_version === "blue-tanuki.file-write-target-version.v2") {
+    const expected = FileWriteMutationTargetVersionObservationSchema.parse(opts.expected_target_version);
+    if ((modeRaw !== "overwrite" && modeRaw !== "append") || expected.mode !== modeRaw ||
+        !opts.command_digest || expected.command_digest !== opts.command_digest ||
+        expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest ||
+        expected.target_identity_digest !== fileWriteTargetIdentityDigest(stringArg(args, "path")!) ||
+        expected.payload_digest !== fileWritePayloadDigest(content) ||
+        Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key))) {
+      throw new Error("file.write mutation target evidence does not match the approved command");
+    }
+    if (opts.operation_plan_binding_digest !== undefined) {
+      throw new Error("file.write overwrite and append are not supported by Operation Plan");
+    }
+    const resolved = await resolveFileWriteMutationTargetVersion(args, {
+      env,
+      command_digest: opts.command_digest,
+    });
+    if (canonicalFileWriteTargetVersionObservation(resolved.observation) !==
+        canonicalFileWriteTargetVersionObservation(expected)) {
+      throw new Error("file.write target version changed; request fresh review");
+    }
+    ({ sandbox_root: sandboxRoot, filepath, relative_path } = resolved);
+
+    if (expected.target_state === "absent") {
+      await fs.writeFile(filepath, content, { encoding: "utf8", flag: "wx" });
+    } else {
+      await applyVersionedFileWriteMutation(filepath, content, maxBytes, expected);
+    }
+    return { path: relative_path, sandbox_root: sandboxRoot, mode: modeRaw, bytes_written: bytes };
+  } else if (opts.expected_target_version !== undefined) {
     const expected = FileWriteTargetVersionObservationSchema.parse(opts.expected_target_version);
-    if (modeRaw !== "create" || !opts.command_digest || !opts.operation_plan_binding_digest ||
+    if (expected.schema_version !== "blue-tanuki.file-write-target-version.v1" || modeRaw !== "create" ||
+        !opts.command_digest || !opts.operation_plan_binding_digest ||
         expected.command_digest !== opts.command_digest ||
         expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest) {
       throw new Error("file.write plan target evidence does not match the approved command");
@@ -7262,6 +7293,9 @@ export async function invokeFileWrite(
     }
     ({ sandbox_root: sandboxRoot, filepath, relative_path } = resolved);
   } else {
+    if (modeRaw !== "create") {
+      throw new Error("file.write overwrite and append require Broker target version evidence");
+    }
     sandboxRoot = await sandboxRootFromEnv(env);
     const resolved = await resolveSandboxFilePath(stringArg(args, "path")!, sandboxRoot, env);
     ({ filepath, relative_path } = resolved);
@@ -7346,6 +7380,151 @@ export async function inspectFileWriteTargetVersion(
   opts: Pick<FileWriteOptions, "env" | "command_digest" | "operation_plan_binding_digest"> = {},
 ): Promise<FileWriteTargetVersionObservation> {
   return (await resolveFileWriteTargetVersion(args, opts)).observation;
+}
+
+interface ResolvedFileWriteMutationTargetVersion {
+  sandbox_root: string;
+  filepath: string;
+  relative_path: string;
+  observation: ReturnType<typeof FileWriteMutationTargetVersionObservationSchema.parse>;
+}
+
+function fileWriteMutationStatIdentity(stat: {
+  dev: bigint; ino: bigint; size: bigint; mode: bigint; nlink: bigint; mtimeNs: bigint; ctimeNs: bigint;
+}): string {
+  return createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-write-mutation-file-identity.v2", stat.dev.toString(), stat.ino.toString(),
+    stat.size.toString(), stat.mode.toString(), stat.nlink.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString(),
+  ]), "utf8").digest("hex");
+}
+
+async function resolveFileWriteMutationTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileWriteOptions, "env" | "command_digest"> & { operation_plan_binding_digest?: string },
+): Promise<ResolvedFileWriteMutationTargetVersion> {
+  const pathArg = stringArg(args, "path")!;
+  const content = stringArg(args, "content")!;
+  const mode = stringArg(args, "mode", false) ?? "create";
+  if ((mode !== "overwrite" && mode !== "append") || !opts.command_digest ||
+      !/^[a-f0-9]{64}$/.test(opts.command_digest) ||
+      (opts.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest)) ||
+      Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key))) {
+    throw new Error("file.write mutation target resolver requires a bounded direct overwrite or append command");
+  }
+  assertPlannedFileWritePath(pathArg);
+  const env = opts.env ?? process.env;
+  const maxBytes = positiveIntArg(args, "max_bytes", 256_000, 1_000_000);
+  if (Buffer.byteLength(content, "utf8") > maxBytes) throw new Error("file.write content exceeds max_bytes");
+  const sandboxRoot = await sandboxRootFromEnv(env);
+  const requested = await resolveSandboxFilePath(pathArg, sandboxRoot, env);
+  const realParent = await fs.realpath(path.dirname(requested.filepath));
+  if (!isPathWithin(sandboxRoot, realParent)) throw new Error("file.write target parent escapes BLUE_TANUKI_FILE_ROOT");
+  const filepath = path.join(realParent, path.basename(requested.filepath));
+  const parentStat = await fs.stat(realParent, { bigint: true });
+  if (!parentStat.isDirectory()) throw new Error("file.write target parent must be a directory");
+  const rootStat = await fs.stat(sandboxRoot, { bigint: true });
+  const canonical_root_digest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-write-root-identity.v2", sandboxRoot, rootStat.dev.toString(), rootStat.ino.toString(),
+  ]), "utf8").digest("hex");
+  const parent_identity_digest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.file-write-parent-identity.v2", realParent, parentStat.dev.toString(), parentStat.ino.toString(),
+  ]), "utf8").digest("hex");
+
+  let target_state: "absent" | "present" = "absent";
+  let file_identity_digest: string | undefined;
+  let target_content_digest: string | undefined;
+  const beforeStat = await fs.lstat(filepath, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (beforeStat) {
+    if (!beforeStat.isFile() || beforeStat.isSymbolicLink() || beforeStat.nlink !== 1n) {
+      throw new Error("file.write overwrite and append require a regular, non-symlink, single-link file");
+    }
+    if (beforeStat.size > BigInt(maxBytes)) throw new Error("file.write existing target exceeds max_bytes");
+    const realTarget = await fs.realpath(filepath);
+    if (!isPathWithin(sandboxRoot, realTarget)) throw new Error("file.write target escapes BLUE_TANUKI_FILE_ROOT");
+    const handle = await fs.open(filepath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      const openedStat = await handle.stat({ bigint: true });
+      if (!openedStat.isFile() || fileWriteMutationStatIdentity(openedStat) !== fileWriteMutationStatIdentity(beforeStat)) {
+        throw new Error("file.write target changed while being observed");
+      }
+      const targetBuffer = await readBoundedFileHandle(handle, maxBytes);
+      const afterReadStat = await handle.stat({ bigint: true });
+      const afterReadPathStat = await fs.lstat(filepath, { bigint: true });
+      if (fileWriteMutationStatIdentity(afterReadStat) !== fileWriteMutationStatIdentity(openedStat) ||
+          fileWriteMutationStatIdentity(afterReadPathStat) !== fileWriteMutationStatIdentity(openedStat)) {
+        throw new Error("file.write target changed while being observed");
+      }
+      target_state = "present";
+      file_identity_digest = fileWriteMutationStatIdentity(openedStat);
+      target_content_digest = createHash("sha256").update(targetBuffer).digest("hex");
+    } finally {
+      await handle.close();
+    }
+  }
+
+  const observation = FileWriteMutationTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.file-write-target-version.v2",
+    target_identity_digest: fileWriteTargetIdentityDigest(pathArg),
+    payload_digest: fileWritePayloadDigest(content),
+    mode,
+    canonical_root_digest,
+    parent_identity_digest,
+    command_digest: opts.command_digest,
+    ...(opts.operation_plan_binding_digest ? { operation_plan_binding_digest: opts.operation_plan_binding_digest } : {}),
+    target_state,
+    ...(file_identity_digest ? { file_identity_digest } : {}),
+    ...(target_content_digest ? { target_content_digest } : {}),
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { sandbox_root: sandboxRoot, filepath, relative_path: requested.relative_path, observation };
+}
+
+export async function inspectFileWriteMutationTargetVersion(
+  args: Record<string, unknown>,
+  opts: Pick<FileWriteOptions, "env" | "command_digest"> & { operation_plan_binding_digest?: string } = {},
+): Promise<ReturnType<typeof FileWriteMutationTargetVersionObservationSchema.parse>> {
+  return (await resolveFileWriteMutationTargetVersion(args, opts)).observation;
+}
+
+async function applyVersionedFileWriteMutation(
+  filepath: string,
+  content: string,
+  maxBytes: number,
+  expected: ReturnType<typeof FileWriteMutationTargetVersionObservationSchema.parse>,
+): Promise<void> {
+  if (expected.target_state !== "present") throw new Error("file.write target version changed; request fresh review");
+  const handle = await fs.open(filepath, fsConstants.O_RDWR | (fsConstants.O_NOFOLLOW ?? 0));
+  try {
+    const openedStat = await handle.stat({ bigint: true });
+    if (!openedStat.isFile() || openedStat.nlink !== 1n ||
+        fileWriteMutationStatIdentity(openedStat) !== expected.file_identity_digest) {
+      throw new Error("file.write target version changed; request fresh review");
+    }
+    const currentBuffer = await readBoundedFileHandle(handle, maxBytes);
+    if (createHash("sha256").update(currentBuffer).digest("hex") !== expected.target_content_digest) {
+      throw new Error("file.write target version changed; request fresh review");
+    }
+    const pathStat = await fs.lstat(filepath, { bigint: true });
+    if (fileWriteMutationStatIdentity(pathStat) !== expected.file_identity_digest) {
+      throw new Error("file.write target version changed; request fresh review");
+    }
+    const writeBuffer = Buffer.from(content, "utf8");
+    const start = expected.mode === "overwrite" ? 0 : Number(openedStat.size);
+    if (expected.mode === "overwrite") await handle.truncate(0);
+    let written = 0;
+    while (written < writeBuffer.length) {
+      const { bytesWritten } = await handle.write(writeBuffer, written, writeBuffer.length - written, start + written);
+      if (bytesWritten <= 0) throw new Error("file.write target mutation stopped before all bytes were written");
+      written += bytesWritten;
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 export interface FileWriteOutcomeStateInspection {
@@ -7966,12 +8145,17 @@ export const fileWriteTool: Tool = {
   async inspect_target_version(args: Record<string, unknown>, options?: {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileWriteTargetVersionObservation> {
+    const mode = stringArg(args, "mode", false) ?? "create";
+    if (mode === "overwrite" || mode === "append") {
+      return await inspectFileWriteMutationTargetVersion(args, options);
+    }
     return await inspectFileWriteTargetVersion(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const targetVersion = context.target_version_observation;
     if (targetVersion === undefined) return await invokeFileWrite(args);
-    if (targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v1") {
+    if (targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v1" &&
+        targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v2") {
       throw new Error("file.write received unsupported Broker target version evidence");
     }
     if (typeof context.command_digest !== "string" || !/^[a-f0-9]{64}$/.test(context.command_digest)) {
@@ -7980,7 +8164,9 @@ export const fileWriteTool: Tool = {
     return await invokeFileWrite(args, {
       expected_target_version: targetVersion,
       command_digest: targetVersion.command_digest,
-      operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+      ...(targetVersion.operation_plan_binding_digest ? {
+        operation_plan_binding_digest: targetVersion.operation_plan_binding_digest,
+      } : {}),
     });
   },
 };

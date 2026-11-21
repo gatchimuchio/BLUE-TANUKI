@@ -4,7 +4,7 @@ import { z } from "zod";
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 
 /** 計画経由のfile.write create-onlyに対する非権威Broker観測。 */
-export const FileWriteTargetVersionObservationSchema = z.object({
+const FileWritePlannedCreateTargetVersionObservationSchema = z.object({
   schema_version: z.literal("blue-tanuki.file-write-target-version.v1"),
   target_identity_digest: DigestSchema,
   payload_digest: DigestSchema,
@@ -16,6 +16,38 @@ export const FileWriteTargetVersionObservationSchema = z.object({
   used_for_authority: z.literal(false),
   may_execute: z.literal(false),
 }).strict();
+
+const FileWriteMutationTargetVersionBase = {
+  schema_version: z.literal("blue-tanuki.file-write-target-version.v2"),
+  target_identity_digest: DigestSchema,
+  payload_digest: DigestSchema,
+  mode: z.enum(["overwrite", "append"]),
+  canonical_root_digest: DigestSchema,
+  parent_identity_digest: DigestSchema,
+  command_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema.optional(),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+};
+
+/** Existing-target file.write mutations bind the requested bytes and the observed file version without returning file contents. */
+export const FileWriteMutationTargetVersionObservationSchema = z.discriminatedUnion("target_state", [
+  z.object({
+    ...FileWriteMutationTargetVersionBase,
+    target_state: z.literal("absent"),
+  }).strict(),
+  z.object({
+    ...FileWriteMutationTargetVersionBase,
+    target_state: z.literal("present"),
+    file_identity_digest: DigestSchema,
+    target_content_digest: DigestSchema,
+  }).strict(),
+]);
+
+export const FileWriteTargetVersionObservationSchema = z.union([
+  FileWritePlannedCreateTargetVersionObservationSchema,
+  FileWriteMutationTargetVersionObservationSchema,
+]);
 
 export type FileWriteTargetVersionObservation = z.infer<typeof FileWriteTargetVersionObservationSchema>;
 

@@ -161,6 +161,57 @@ describe("Executor shared target resource lock", () => {
     }
   });
 
+  it("rejects the second direct overwrite when two reviewed commands target the same current file version", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-direct-write-lock-"));
+    const previousRoot = process.env.BLUE_TANUKI_FILE_ROOT;
+    process.env.BLUE_TANUKI_FILE_ROOT = root;
+    const hds = new HDSUpperController();
+    const tools = new ToolRegistry();
+    registerBuiltinTools(tools);
+    const authority = createExecutorApprovalAuthority();
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    try {
+      await fs.writeFile(path.join(root, "shared.txt"), "initial reviewed target", "utf8");
+      const commands = ["candidate-first", "candidate-second"].map((content, index) => {
+        const request = createGatewayInternalInboundRequest({
+          id: `direct-file-write-${index + 1}`,
+          channel: "webchat",
+          user: "fixture-owner",
+          content: `tool:file.write path=shared.txt content=${content} mode=overwrite`,
+          timestamp: index + 1,
+          metadata: { "blue_tanuki.operator_surface": "developer" },
+        });
+        const decision = hds.decide(request);
+        if (decision.command?.type !== "tool_call" || decision.command.payload.tool_name !== "file.write" ||
+            decision.log.commit.decision !== "ASSERT") {
+          throw new Error(`fixture HDS did not issue direct file.write: ${decision.log.commit.reason}`);
+        }
+        return decision.command;
+      });
+      const observations = await Promise.all(commands.map(async (command) => {
+        const observation = await executors[0]!.inspectCommandTargetVersion(command,
+          { BLUE_TANUKI_FILE_ROOT: root });
+        if (observation?.schema_version !== "blue-tanuki.file-write-target-version.v2") {
+          throw new Error("Broker did not inspect direct file.write mutation target");
+        }
+        return observation;
+      }));
+      const bindings = commands.map((command, index) => hds.createExecutionAuthorityBinding(command, observations[index]));
+      const executions = commands.map((command, index) => executors[index]!.execute(
+        approved(authority, command, observations[index], bindings[index]),
+      ));
+      const feedback = await Promise.all(executions);
+      expect(feedback.map((entry) => entry.status).sort()).toEqual(["failed", "success"]);
+      expect(feedback.find((entry) => entry.status === "failed")?.error).toMatch(/target version changed/);
+      expect(["candidate-first", "candidate-second"]).toContain(await fs.readFile(path.join(root, "shared.txt"), "utf8"));
+    } finally {
+      hds.close();
+      if (previousRoot === undefined) delete process.env.BLUE_TANUKI_FILE_ROOT;
+      else process.env.BLUE_TANUKI_FILE_ROOT = previousRoot;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("serializes concurrent file.write commands that resolve to the same physical target", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-target-lock-"));
     const previousRoot = process.env.BLUE_TANUKI_FILE_ROOT;
