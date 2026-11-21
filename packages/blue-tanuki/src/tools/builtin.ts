@@ -7247,7 +7247,7 @@ export async function invokeFileWrite(
 
   if (opts.expected_target_version?.schema_version === "blue-tanuki.file-write-target-version.v2") {
     const expected = FileWriteMutationTargetVersionObservationSchema.parse(opts.expected_target_version);
-    if ((modeRaw !== "overwrite" && modeRaw !== "append") || expected.mode !== modeRaw ||
+    if (expected.mode !== modeRaw ||
         !opts.command_digest || expected.command_digest !== opts.command_digest ||
         expected.operation_plan_binding_digest !== opts.operation_plan_binding_digest ||
         expected.target_identity_digest !== fileWriteTargetIdentityDigest(stringArg(args, "path")!) ||
@@ -7256,7 +7256,7 @@ export async function invokeFileWrite(
       throw new Error("file.write mutation target evidence does not match the approved command");
     }
     if (opts.operation_plan_binding_digest !== undefined) {
-      throw new Error("file.write overwrite and append are not supported by Operation Plan");
+      throw new Error("file.write direct target evidence cannot be used by Operation Plan");
     }
     const resolved = await resolveFileWriteMutationTargetVersion(args, {
       env,
@@ -7293,12 +7293,7 @@ export async function invokeFileWrite(
     }
     ({ sandbox_root: sandboxRoot, filepath, relative_path } = resolved);
   } else {
-    if (modeRaw !== "create") {
-      throw new Error("file.write overwrite and append require Broker target version evidence");
-    }
-    sandboxRoot = await sandboxRootFromEnv(env);
-    const resolved = await resolveSandboxFilePath(stringArg(args, "path")!, sandboxRoot, env);
-    ({ filepath, relative_path } = resolved);
+    throw new Error("file.write requires Broker target version evidence");
   }
 
   if (modeRaw === "create") {
@@ -7405,11 +7400,11 @@ async function resolveFileWriteMutationTargetVersion(
   const pathArg = stringArg(args, "path")!;
   const content = stringArg(args, "content")!;
   const mode = stringArg(args, "mode", false) ?? "create";
-  if ((mode !== "overwrite" && mode !== "append") || !opts.command_digest ||
+  if ((mode !== "create" && mode !== "overwrite" && mode !== "append") || !opts.command_digest ||
       !/^[a-f0-9]{64}$/.test(opts.command_digest) ||
-      (opts.operation_plan_binding_digest !== undefined && !/^[a-f0-9]{64}$/.test(opts.operation_plan_binding_digest)) ||
+      opts.operation_plan_binding_digest !== undefined ||
       Object.keys(args).some((key) => !["path", "content", "mode", "max_bytes"].includes(key))) {
-    throw new Error("file.write mutation target resolver requires a bounded direct overwrite or append command");
+    throw new Error("file.write mutation target resolver requires a bounded direct command");
   }
   assertPlannedFileWritePath(pathArg);
   const env = opts.env ?? process.env;
@@ -7438,6 +7433,7 @@ async function resolveFileWriteMutationTargetVersion(
     throw error;
   });
   if (beforeStat) {
+    if (mode === "create") throw new Error("file.write create target must be absent");
     if (!beforeStat.isFile() || beforeStat.isSymbolicLink() || beforeStat.nlink !== 1n) {
       throw new Error("file.write overwrite and append require a regular, non-symlink, single-link file");
     }
@@ -8146,14 +8142,16 @@ export const fileWriteTool: Tool = {
     env?: Env; operation_plan_binding_digest?: string; command_digest?: string;
   }): Promise<FileWriteTargetVersionObservation> {
     const mode = stringArg(args, "mode", false) ?? "create";
-    if (mode === "overwrite" || mode === "append") {
+    if (options?.operation_plan_binding_digest === undefined || mode !== "create") {
       return await inspectFileWriteMutationTargetVersion(args, options);
     }
     return await inspectFileWriteTargetVersion(args, options);
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     const targetVersion = context.target_version_observation;
-    if (targetVersion === undefined) return await invokeFileWrite(args);
+    if (targetVersion === undefined) {
+      throw new Error("file.write requires Broker target version evidence");
+    }
     if (targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v1" &&
         targetVersion.schema_version !== "blue-tanuki.file-write-target-version.v2") {
       throw new Error("file.write received unsupported Broker target version evidence");

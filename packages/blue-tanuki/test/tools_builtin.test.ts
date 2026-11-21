@@ -300,10 +300,12 @@ describe("built-in tools", () => {
     const env = { BLUE_TANUKI_FILE_ROOT: dir };
     try {
       await fs.mkdir(path.join(dir, "notes"));
-      const created = await invokeFileWrite(
-        { path: "notes/a.txt", content: "alpha\n" },
-        { env },
-      );
+      const createArgs = { path: "notes/a.txt", content: "alpha\n", mode: "create" };
+      const createEvidence = await inspectFileWriteMutationTargetVersion(createArgs, {
+        env, command_digest: "9".repeat(64),
+      });
+      const created = await invokeFileWrite(createArgs, { env, command_digest: createEvidence.command_digest,
+        expected_target_version: createEvidence });
       expect(created).toMatchObject({
         path: "notes/a.txt",
         mode: "create",
@@ -348,7 +350,7 @@ describe("built-in tools", () => {
       await expect(invokeFileWrite(args, { env, command_digest: evidence.command_digest,
         expected_target_version: evidence })).rejects.toThrow(/target version changed/);
       expect(await fs.readFile(targetPath, "utf8")).toBe("owner changed this after review");
-      await expect(invokeFileWrite(args, { env })).rejects.toThrow(/require Broker target version evidence/);
+      await expect(invokeFileWrite(args, { env })).rejects.toThrow(/requires Broker target version evidence/);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -534,8 +536,8 @@ describe("built-in tools", () => {
       })).rejects.toThrow(/HDS memory storage/);
 
       const absentMemoryEnv = { BLUE_TANUKI_FILE_ROOT: sandbox, BLUE_TANUKI_MEMORY_FILE: path.join(sandbox, "not-created.jsonl") };
-      await expect(invokeFileWrite({ path: "not-created.jsonl", content: "must not seed M", mode: "create" }, {
-        env: absentMemoryEnv,
+      await expect(inspectFileWriteMutationTargetVersion({ path: "not-created.jsonl", content: "must not seed M", mode: "create" }, {
+        env: absentMemoryEnv, command_digest: command,
       })).rejects.toThrow(/HDS memory storage/);
       expect(await fs.readFile(memoryFile, "utf8")).toBe("HDS_MEMORY_PRIVATE_SENTINEL\n");
       expect(await fs.readFile(personalizationFile, "utf8")).toBe("HDS_STOP_LEDGER_PRIVATE_SENTINEL\n");
@@ -585,7 +587,9 @@ describe("built-in tools", () => {
       await expect(inspectFileWriteMutationTargetVersion({ path: protectedFile, content: "changed", mode: "overwrite" }, {
         env, command_digest: planned.command_digest,
       })).rejects.toThrow(denied);
-      await expect(invokeFileWrite({ path: newPackFile, content: "changed", mode: "create" }, { env })).rejects.toThrow(denied);
+      await expect(inspectFileWriteMutationTargetVersion({ path: newPackFile, content: "changed", mode: "create" }, {
+        env, command_digest: planned.command_digest,
+      })).rejects.toThrow(denied);
       await expect(inspectFileEditTargetVersion({ path: protectedFile, search: "private", replace: "changed",
         expected_replacements: 1 }, planned)).rejects.toThrow(denied);
       await expect(inspectFileDeleteTargetVersion({ path: protectedFile, max_bytes: 128 }, planned)).rejects.toThrow(denied);
@@ -612,13 +616,19 @@ describe("built-in tools", () => {
       await fs.mkdir(sandbox);
       await fs.writeFile(path.join(sandbox, "a.txt"), "old", "utf8");
       await expect(
-        invokeFileWrite({ path: "a.txt", content: "new" }, fileSearchEnv(sandbox)),
-      ).rejects.toThrow(/exist|EEXIST/);
+        inspectFileWriteMutationTargetVersion({ path: "a.txt", content: "new" }, {
+          env: fileSearchEnv(sandbox).env, command_digest: "e".repeat(64),
+        }),
+      ).rejects.toThrow(/create target must be absent/);
       await expect(
-        invokeFileWrite({ path: outside, content: "x" }, fileSearchEnv(sandbox)),
-      ).rejects.toThrow(/BLUE_TANUKI_FILE_ROOT/);
+        inspectFileWriteMutationTargetVersion({ path: outside, content: "x" }, {
+          env: fileSearchEnv(sandbox).env, command_digest: "e".repeat(64),
+        }),
+      ).rejects.toThrow(/relative path|BLUE_TANUKI_FILE_ROOT/);
       await expect(
-        invokeFileWrite({ path: ".env", content: "TOKEN=x" }, fileSearchEnv(sandbox)),
+        inspectFileWriteMutationTargetVersion({ path: ".env", content: "TOKEN=x" }, {
+          env: fileSearchEnv(sandbox).env, command_digest: "e".repeat(64),
+        }),
       ).rejects.toThrow(/secret-like path/);
     } finally {
       await fs.rm(parent, { recursive: true, force: true });

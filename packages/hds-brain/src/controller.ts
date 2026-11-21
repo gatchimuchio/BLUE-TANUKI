@@ -4440,9 +4440,7 @@ ${planControl.question}`,
         throw new Error("HDS file.search target version does not match the current Operation Plan source");
       }
       brokerTargetVersionObservationDigest = operationPlanDigest(observation);
-    } else if (command.type === "tool_call" && command.payload.tool_name === "file.write" &&
-        (operation_plan_binding_digest !== undefined || command.payload.arguments.mode === "overwrite" ||
-          command.payload.arguments.mode === "append")) {
+    } else if (command.type === "tool_call" && command.payload.tool_name === "file.write") {
       if (brokerTargetVersionObservation === undefined) {
         throw new Error("HDS file.write target version observation is required");
       }
@@ -4465,7 +4463,7 @@ ${planControl.question}`,
         }
       } else {
         const mutation = FileWriteMutationTargetVersionObservationSchema.parse(observation);
-        if ((commandMode !== "overwrite" && commandMode !== "append") || mutation.mode !== commandMode ||
+        if (mutation.mode !== commandMode ||
             operation_plan_binding_digest !== undefined || mutation.operation_plan_binding_digest !== undefined) {
           throw new Error("HDS file.write mutation target version does not match the current command scope");
         }

@@ -705,13 +705,15 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: file.write target version does not match command");
       }
       if (observation.schema_version === "blue-tanuki.file-write-target-version.v1") {
-        if (!hds_binding?.operation_plan_binding_digest || args.mode !== "create" ||
+        if (!hds_binding?.operation_plan_binding_digest ||
+            (typeof args.mode === "string" ? args.mode : "create") !== "create" ||
             observation.operation_plan_binding_digest !== hds_binding.operation_plan_binding_digest) {
           throw new Error("Executor approval rejected: planned file.write target version does not match plan source");
         }
       } else {
         const mutation = FileWriteMutationTargetVersionObservationSchema.parse(observation);
-        if ((args.mode !== "overwrite" && args.mode !== "append") || mutation.mode !== args.mode ||
+        const mode = typeof args.mode === "string" ? args.mode : "create";
+        if (mutation.mode !== mode ||
             hds_binding?.operation_plan_binding_digest !== undefined ||
             mutation.operation_plan_binding_digest !== undefined) {
           throw new Error("Executor approval rejected: file.write mutation target version does not match command scope");
@@ -943,9 +945,9 @@ function approveCommandForExecution(
     throw new Error("Executor approval rejected: planned file.write target version evidence is required");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.write" &&
-      (snapshot.payload.arguments.mode === "overwrite" || snapshot.payload.arguments.mode === "append") &&
+      !hds_binding?.operation_plan_binding_digest &&
       target_version_observation?.schema_version !== "blue-tanuki.file-write-target-version.v2") {
-    throw new Error("Executor approval rejected: file.write overwrite and append require current target version evidence");
+    throw new Error("Executor approval rejected: direct file.write requires current target version evidence");
   }
   if (snapshot.type === "tool_call" && snapshot.payload.tool_name === "file.delete" &&
       target_version_observation?.schema_version !== "blue-tanuki.file-delete-target-version.v1") {
@@ -1479,8 +1481,6 @@ export class Executor {
     if (command.payload.tool_name === "file.write") {
       const args = command.payload.arguments;
       const mode = typeof args.mode === "string" ? args.mode : "create";
-      const requiresTargetVersion = operationPlanBindingDigest !== undefined || mode === "overwrite" || mode === "append";
-      if (!requiresTargetVersion) return undefined;
       if (operationPlanBindingDigest !== undefined && mode !== "create") {
         throw new Error("file.write overwrite and append are not supported by Operation Plan");
       }
@@ -1501,7 +1501,7 @@ export class Executor {
           observation.payload_digest !== fileWritePayloadDigest(args.content)) {
         throw new Error("file.write target version resolver returned evidence for another command");
       }
-      if (mode === "create") {
+      if (operationPlanBindingDigest !== undefined) {
         if (observation.schema_version !== "blue-tanuki.file-write-target-version.v1" ||
             observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
           throw new Error("file.write target version resolver returned evidence for another plan source");
@@ -1509,7 +1509,7 @@ export class Executor {
       } else {
         const mutation = FileWriteMutationTargetVersionObservationSchema.parse(observation);
         if (mutation.mode !== mode || mutation.operation_plan_binding_digest !== undefined ||
-            operationPlanBindingDigest !== undefined) {
+            observation.schema_version !== "blue-tanuki.file-write-target-version.v2") {
           throw new Error("file.write mutation target version resolver returned evidence for another command scope");
         }
       }

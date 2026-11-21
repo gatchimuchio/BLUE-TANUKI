@@ -21,7 +21,7 @@ const FileWriteMutationTargetVersionBase = {
   schema_version: z.literal("blue-tanuki.file-write-target-version.v2"),
   target_identity_digest: DigestSchema,
   payload_digest: DigestSchema,
-  mode: z.enum(["overwrite", "append"]),
+  mode: z.enum(["create", "overwrite", "append"]),
   canonical_root_digest: DigestSchema,
   parent_identity_digest: DigestSchema,
   command_digest: DigestSchema,
@@ -30,7 +30,7 @@ const FileWriteMutationTargetVersionBase = {
   may_execute: z.literal(false),
 };
 
-/** Existing-target file.write mutations bind the requested bytes and the observed file version without returning file contents. */
+/** 直接file.writeを要求データと対象版のdigestだけへ結び、本文を返さない。 */
 export const FileWriteMutationTargetVersionObservationSchema = z.discriminatedUnion("target_state", [
   z.object({
     ...FileWriteMutationTargetVersionBase,
@@ -38,6 +38,7 @@ export const FileWriteMutationTargetVersionObservationSchema = z.discriminatedUn
   }).strict(),
   z.object({
     ...FileWriteMutationTargetVersionBase,
+    mode: z.enum(["overwrite", "append"]),
     target_state: z.literal("present"),
     file_identity_digest: DigestSchema,
     target_content_digest: DigestSchema,

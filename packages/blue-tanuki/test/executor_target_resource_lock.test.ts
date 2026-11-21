@@ -9,7 +9,7 @@ import { createGatewayInternalInboundRequest, OperationPlanCheckpointSchema, req
   type ExecuteCommand, type FileWriteTargetVersionObservation, type ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import { createExecutorApprovalAuthority, Executor, executorCommandDigest } from "../src/executor.js";
 import { StubBackend } from "../src/llm/stub.js";
-import { registerBuiltinTools } from "../src/tools/builtin.js";
+import { inspectFileWriteMutationTargetVersion, registerBuiltinTools } from "../src/tools/builtin.js";
 import { ToolRegistry, type Tool } from "../src/tools/registry.js";
 import { inspectShellExecTargetVersion } from "../src/tools/shell_exec.js";
 
@@ -188,6 +188,8 @@ describe("Executor shared target resource lock", () => {
         }
         return decision.command;
       });
+      expect(() => hds.createExecutionAuthorityBinding(commands[0]!))
+        .toThrow(/HDS file.write target version observation is required/);
       const observations = await Promise.all(commands.map(async (command) => {
         const observation = await executors[0]!.inspectCommandTargetVersion(command,
           { BLUE_TANUKI_FILE_ROOT: root });
@@ -204,6 +206,60 @@ describe("Executor shared target resource lock", () => {
       expect(feedback.map((entry) => entry.status).sort()).toEqual(["failed", "success"]);
       expect(feedback.find((entry) => entry.status === "failed")?.error).toMatch(/target version changed/);
       expect(["candidate-first", "candidate-second"]).toContain(await fs.readFile(path.join(root, "shared.txt"), "utf8"));
+    } finally {
+      hds.close();
+      if (previousRoot === undefined) delete process.env.BLUE_TANUKI_FILE_ROOT;
+      else process.env.BLUE_TANUKI_FILE_ROOT = previousRoot;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the second direct create when two reviewed commands target the same absent file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-direct-create-lock-"));
+    const previousRoot = process.env.BLUE_TANUKI_FILE_ROOT;
+    process.env.BLUE_TANUKI_FILE_ROOT = root;
+    const hds = new HDSUpperController();
+    const tools = new ToolRegistry();
+    registerBuiltinTools(tools);
+    const authority = createExecutorApprovalAuthority();
+    const executors = [0, 1].map(() => new Executor({ approval_authority: authority, tools, llm: new StubBackend() }));
+    try {
+      const commands = ["candidate-first", "candidate-second"].map((content, index) => {
+        const request = createGatewayInternalInboundRequest({
+          id: `direct-file-create-${index + 1}`,
+          channel: "webchat",
+          user: "fixture-owner",
+          content: `tool:file.write path=shared.txt content=${content} mode=create`,
+          timestamp: index + 1,
+          metadata: { "blue_tanuki.operator_surface": "developer" },
+        });
+        const decision = hds.decide(request);
+        if (decision.command?.type !== "tool_call" || decision.command.payload.tool_name !== "file.write" ||
+            decision.log.commit.decision !== "ASSERT") {
+          throw new Error(`fixture HDS did not issue direct file.write create: ${decision.log.commit.reason}`);
+        }
+        return decision.command;
+      });
+      const observations = await Promise.all(commands.map(async (command) => {
+        const observation = await executors[0]!.inspectCommandTargetVersion(command,
+          { BLUE_TANUKI_FILE_ROOT: root });
+        if (observation?.schema_version !== "blue-tanuki.file-write-target-version.v2" ||
+            observation.mode !== "create" || observation.target_state !== "absent") {
+          throw new Error("Broker did not inspect the absent direct file.write create target");
+        }
+        return observation;
+      }));
+      const bindings = commands.map((command, index) => hds.createExecutionAuthorityBinding(command, observations[index]));
+      expect(() => approved(authority, commands[0]!))
+        .toThrow(/direct file.write requires current target version evidence/);
+      const feedback = await Promise.all(commands.map((command, index) => executors[index]!.execute(
+        approved(authority, command, observations[index], bindings[index]),
+      )));
+      expect(feedback.map((entry) => entry.status).sort()).toEqual(["failed", "success"]);
+      expect(feedback.find((entry) => entry.status === "failed")?.error).toMatch(/create target must be absent|target version changed/);
+      const written = await fs.readFile(path.join(root, "shared.txt"), "utf8");
+      expect(["candidate-first", "candidate-second"]).toContain(written);
+      expect(written).toBe(commands.find((command, index) => feedback[index]?.status === "success")?.payload.arguments.content);
     } finally {
       hds.close();
       if (previousRoot === undefined) delete process.env.BLUE_TANUKI_FILE_ROOT;
@@ -250,18 +306,25 @@ describe("Executor shared target resource lock", () => {
     const makeCommand = (id: string): ExecuteCommand => ({
       id,
       type: "tool_call",
-      payload: { tool_name: "file.write", arguments: { path: "shared.txt" } },
+      payload: { tool_name: "file.write", arguments: { path: "shared.txt", content: "reviewed replacement", mode: "overwrite" } },
       constraints: {
         allowed_tools: ["file.write"],
         allowed_capabilities: [...(tools.get("file.write")?.required_capabilities ?? [])],
       },
       upstream_decision: upstream,
     });
-    const firstCommand = approved(authority, makeCommand("target-lock-write-1"));
-    const secondCommand = approved(authority, makeCommand("target-lock-write-2"));
     let executions: Promise<unknown>[] = [];
 
     try {
+      const makeApprovedCommand = async (id: string) => {
+        const command = makeCommand(id);
+        const observation = await inspectFileWriteMutationTargetVersion(command.payload.arguments, {
+          env: { BLUE_TANUKI_FILE_ROOT: root }, command_digest: operationPlanDigest(command),
+        });
+        return approved(authority, command, observation);
+      };
+      const firstCommand = await makeApprovedCommand("target-lock-write-1");
+      const secondCommand = await makeApprovedCommand("target-lock-write-2");
       const firstExecution = executors[0]!.execute(firstCommand);
       const secondExecution = executors[1]!.execute(secondCommand);
       executions = [firstExecution, secondExecution];
@@ -339,7 +402,7 @@ describe("Executor shared target resource lock", () => {
       const makeFileCommand = (id: string): ExecuteCommand => ({
         id,
         type: "tool_call",
-        payload: { tool_name: "file.write", arguments: { path: "shared.txt" } },
+        payload: { tool_name: "file.write", arguments: { path: "shared.txt", content: "updated-before-error", mode: "overwrite" } },
         constraints: {
           allowed_tools: ["file.write"],
           allowed_capabilities: [...(tools.get("file.write")?.required_capabilities ?? [])],
@@ -347,6 +410,9 @@ describe("Executor shared target resource lock", () => {
         upstream_decision: upstream,
       });
       const fileCommand = makeFileCommand("workspace-lock-file");
+      const fileObservation = await inspectFileWriteMutationTargetVersion(fileCommand.payload.arguments, {
+        env: { BLUE_TANUKI_FILE_ROOT: root }, command_digest: operationPlanDigest(fileCommand),
+      });
       activeHds = new HDSUpperController();
       const shellRequest = createGatewayInternalInboundRequest({
         id: "workspace-lock-shell-request",
@@ -370,7 +436,7 @@ describe("Executor shared target resource lock", () => {
         isolationProviderAvailable: async () => true,
       });
       const hdsBinding = activeHds.createExecutionAuthorityBinding(shellCommand, shellObservation);
-      const fileExecution = executors[0]!.execute(approved(authority, fileCommand));
+      const fileExecution = executors[0]!.execute(approved(authority, fileCommand, fileObservation));
       executions = [fileExecution];
       await fileStarted;
       const shellExecution = executors[1]!.execute(approved(authority, shellCommand, shellObservation, hdsBinding));
