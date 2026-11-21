@@ -336,9 +336,72 @@ export const AgentDelegationResultEvidenceV2Schema = z.object({
 }).strict();
 export type AgentDelegationResultEvidenceV2 = z.infer<typeof AgentDelegationResultEvidenceV2Schema>;
 
+const AgentDelegationChildResultEvidenceV3UnionSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use: ComputeResourceUseSchema,
+    /** Digest of the exact trimmed candidate text sent to parent C; it proves identity, not meaning. */
+    candidate_content_digest: AgentDelegationResultEvidenceDigestSchema,
+    outcome: z.literal("candidate"),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema.optional(),
+    resource_use: ComputeResourceUseSchema.optional(),
+    outcome: z.literal("unknown"),
+    reason: z.enum(["compute_outcome_unknown", "child_deadline_elapsed"]),
+  }).strict(),
+  z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use_digest: AgentDelegationResultEvidenceDigestSchema,
+    resource_use: ComputeResourceUseSchema,
+    outcome: z.literal("rejected"),
+    reason: z.literal("invalid_child_output"),
+  }).strict(),
+]);
+const AgentDelegationChildResultEvidenceV3Schema = AgentDelegationChildResultEvidenceV3UnionSchema.superRefine((child, context) => {
+  if (child.outcome === "unknown" &&
+      ((child.resource_use_digest === undefined) !== (child.resource_use === undefined))) {
+    context.addIssue({ code: "custom", message: "agent_delegation_resource_use_pair_mismatch" });
+  }
+});
+
+/** Digest-bound child candidate identity; raw child text remains outside J/M evidence. */
+export const AgentDelegationResultEvidenceV3Schema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-delegation-result-evidence.v3"),
+  parent_command_digest: AgentDelegationResultEvidenceDigestSchema,
+  contract_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_goal_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_task_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_budget_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  criteria_digest: AgentDelegationResultEvidenceDigestSchema,
+  termination_digest: AgentDelegationResultEvidenceDigestSchema,
+  children: z.tuple([
+    AgentDelegationChildResultEvidenceV3Schema,
+    AgentDelegationChildResultEvidenceV3Schema,
+    AgentDelegationChildResultEvidenceV3Schema,
+    AgentDelegationChildResultEvidenceV3Schema,
+  ]).superRefine((children, context) => {
+    const expectedRoles: AgentWorkerRole[] = ["division", "independent_comparison", "audit", "redundancy"];
+    children.forEach((child, index) => {
+      if (child.role !== expectedRoles[index]) {
+        context.addIssue({ code: "custom", path: [index, "role"], message: "agent_delegation_result_role_order_mismatch" });
+      }
+    });
+  }),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+export type AgentDelegationResultEvidenceV3 = z.infer<typeof AgentDelegationResultEvidenceV3Schema>;
+
 export const AgentDelegationResultEvidenceSchema = z.discriminatedUnion("schema_version", [
   AgentDelegationResultEvidenceV1Schema,
   AgentDelegationResultEvidenceV2Schema,
+  AgentDelegationResultEvidenceV3Schema,
 ]);
 export type AgentDelegationResultEvidence = z.infer<typeof AgentDelegationResultEvidenceSchema>;
 

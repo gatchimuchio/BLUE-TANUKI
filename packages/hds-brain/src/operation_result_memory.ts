@@ -799,8 +799,9 @@ export function verifyShellExecResultMemoryCommit(observation: ShellExecObservat
 /** M receives digest-bound child execution facts and J's parent-plan decision, never child text or child authority. */
 export function agentDelegationIntegrationObservation(integration: AgentDelegationIntegration) {
   if (stableDigest(integration.evidence) !== integration.evidence_digest) return null;
+  const bindsCandidateContent = integration.evidence.schema_version === "blue-tanuki.agent-delegation-result-evidence.v3";
   return {
-    schema_version: "agent-delegation-integration-observation.v1",
+    schema_version: bindsCandidateContent ? "agent-delegation-integration-observation.v2" : "agent-delegation-integration-observation.v1",
     record_type: "agent_delegation_integration_observation",
     parent_command_digest: integration.evidence.parent_command_digest,
     contract_digest: integration.evidence.contract_digest,
@@ -821,6 +822,7 @@ export function agentDelegationIntegrationObservation(integration: AgentDelegati
       outcome: child.outcome,
       ...(child.resource_use_digest ? { resource_use_digest: child.resource_use_digest } : {}),
       ...(child.resource_use ? { resource_use: child.resource_use } : {}),
+      ...("candidate_content_digest" in child ? { candidate_content_digest: child.candidate_content_digest } : {}),
       ...("reason" in child ? { reason: child.reason } : {}),
     })),
     used_for_authority: false,

@@ -5837,6 +5837,7 @@ export class OperationPlanLedger {
       used_for_authority: false,
       may_execute: false,
     });
+    if (integration.evidence.schema_version !== "blue-tanuki.agent-delegation-result-evidence.v3") return false;
     if (operationPlanDigest(integration.evidence) !== integration.evidence_digest) return false;
     const parent = integration.evidence.parent_command_digest;
     const existing = (this.state.agent_delegation_integrations ?? []).find((entry) =>

@@ -4,7 +4,7 @@ import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
 import { GoalCompletionRulesSchema } from "./goal_completion.js";
-import { AgentDelegationResultEvidenceV2Schema, ComputeResourceUseSchema } from "./types.js";
+import { AgentDelegationResultEvidenceV2Schema, AgentDelegationResultEvidenceV3Schema, ComputeResourceUseSchema } from "./types.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -873,7 +873,8 @@ export const OperationPlanReflectionCandidateSchema = z.object({
 /** J's parent-plan retention result and child execution evidence, with its durable M delivery state. */
 export const OperationPlanAgentDelegationIntegrationSchema = z.object({
   schema_version: z.literal("operation-plan-agent-delegation-integration.v1"),
-  evidence: AgentDelegationResultEvidenceV2Schema,
+  // Keep reading already-persisted v2 evidence; new J integration accepts v3 only.
+  evidence: z.union([AgentDelegationResultEvidenceV2Schema, AgentDelegationResultEvidenceV3Schema]),
   evidence_digest: Digest,
   parent_result_digest: Digest.optional(),
   parent_plan_decision: z.enum(["candidate_retained", "candidate_rejected", "no_candidate", "compute_failed"]),

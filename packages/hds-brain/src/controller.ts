@@ -24,7 +24,7 @@ import type {
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
 } from "@blue-tanuki/protocol";
-import { AgentDelegationResultEvidenceV2Schema, ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema,
+import { AgentDelegationResultEvidenceV3Schema, ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema,
   getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -3844,7 +3844,7 @@ ${planControl.question}`,
     const issuedExecution = this.issuedExecutionCommandsById.get(fb.command_id)?.command;
     const rawAgentDelegationEvidence = fb.agent_delegation_result_evidence;
     const agentDelegationEvidenceParse = rawAgentDelegationEvidence === undefined
-      ? undefined : AgentDelegationResultEvidenceV2Schema.safeParse(rawAgentDelegationEvidence);
+      ? undefined : AgentDelegationResultEvidenceV3Schema.safeParse(rawAgentDelegationEvidence);
     const issuedAgentDelegation = issuedExecution?.type === "llm_call"
       ? issuedExecution.payload.agent_delegation : undefined;
     const parsedAgentDelegationEvidence = agentDelegationEvidenceParse?.success
