@@ -12,6 +12,7 @@ import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool
   type ExecutionIntentStore } from "@blue-tanuki/core";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore, inspectExecutionIntentRecoveryLedger } from "../src/execution_intent_store.js";
+import { agentWorkerLifecycleHistoryInput, recoverPendingAgentWorkerLifecycleHistory } from "../src/agent_worker_lifecycle_history.js";
 import { recoverPendingToolLifecycleHistory } from "../src/tool_lifecycle_history.js";
 import { recoverPendingTaskCancellationHistory, taskCancellationHistoryInput } from "../src/task_cancellation_history.js";
 
@@ -198,6 +199,82 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
         status: "verified", used_for_authority: false, execution_eligible: false,
       });
       expect(recovered[0]?.event).not.toHaveProperty("content");
+    } finally {
+      try { store.close(); } catch { /* closed before reopening */ }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("Agent worker lifecycle履歴は再起動後に重複なく再投影し、永続確認後だけackする", () => {
+    const root = mkdtempSync(join(tmpdir(), "blue-agent-worker-history-recovery-"));
+    const filepath = join(root, "execution-intents", "executor.sqlite");
+    const epoch = randomUUID();
+    let store = new GatewayExecutionIntentStore(filepath, epoch);
+    try {
+      const source = command("agent-history-parent-command");
+      const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: epoch });
+      authority.approve(source, proof(source));
+      const event = {
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v1" as const,
+        parent_command_id: source.id,
+        parent_command_digest: createHash("sha256")
+          .update("blue-tanuki.agent.parent-command.v1\0").update(source.id).digest("hex"),
+        child_task_digest: "c".repeat(64),
+        role: "audit" as const,
+        state: "settled" as const,
+        observed_at_ms: Date.now(),
+        used_for_authority: false as const,
+        may_execute: false as const,
+      };
+      const lifecycleEventId = randomUUID();
+      store.recordAgentWorkerLifecycleEvidence(lifecycleEventId, event);
+      const secondEvent = { ...event, child_task_digest: "d".repeat(64), role: "division" as const,
+        state: "started" as const, observed_at_ms: event.observed_at_ms + 1 };
+      const secondLifecycleEventId = randomUUID();
+      store.recordAgentWorkerLifecycleEvidence(secondLifecycleEventId, secondEvent);
+      expect(store.pendingAgentWorkerLifecycleEvidence()).toEqual([
+        { lifecycle_event_id: lifecycleEventId, event }, { lifecycle_event_id: secondLifecycleEventId, event: secondEvent },
+      ]);
+      store.close();
+
+      store = new GatewayExecutionIntentStore(filepath, epoch);
+      const memoryHistory = new CompleteHistoryStore();
+      expect(recoverPendingAgentWorkerLifecycleHistory({ execution_store: store, complete_history: memoryHistory,
+        complete_history_persistent: false, append_history: (input) => memoryHistory.append(input) }))
+        .toMatchObject({ recovered: 0, still_pending: 2, issues: [] });
+      expect(memoryHistory.all()).toHaveLength(2);
+      expect(store.pendingAgentWorkerLifecycleEvidence()).toHaveLength(2);
+
+      const historyFile = join(root, "complete-history.jsonl");
+      let history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(history.append(agentWorkerLifecycleHistoryInput({ lifecycle_event_id: lifecycleEventId, event })))
+        .not.toBeNull();
+      history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(recoverPendingAgentWorkerLifecycleHistory({ execution_store: store, complete_history: history,
+        complete_history_persistent: true, append_history: (input) => history.append(input) }))
+        .toMatchObject({ recovered: 2, still_pending: 0, issues: [] });
+      expect(history.all()).toHaveLength(2);
+      expect(store.pendingAgentWorkerLifecycleEvidence()).toEqual([]);
+      store.close();
+
+      store = new GatewayExecutionIntentStore(filepath, epoch);
+      history = new CompleteHistoryStore({ filepath: historyFile });
+      expect(recoverPendingAgentWorkerLifecycleHistory({ execution_store: store, complete_history: history,
+        complete_history_persistent: true, append_history: (input) => history.append(input) }))
+        .toMatchObject({ recovered: 0, still_pending: 0, issues: [] });
+      expect(history.all()).toHaveLength(2);
+      expect(history.all()[0]).toMatchObject({ kind: "audit_history", command_id: source.id, source: "executor_agent_worker",
+        payload: { lifecycle_event_id: lifecycleEventId, child_task_digest: event.child_task_digest, role: "audit",
+          state: "settled", used_for_authority: false, may_execute: false } });
+      expect(history.all()[0]?.payload).not.toHaveProperty("content");
+      expect(history.all()[1]).toMatchObject({ payload: { lifecycle_event_id: secondLifecycleEventId,
+        child_task_digest: secondEvent.child_task_digest, role: "division", state: "started" } });
+      expect(history.verify()).toBe(true);
+      expect(store.pendingAgentWorkerLifecycleEvidence()).toEqual([]);
+      expect(store.verifyEvents()).toBe(true);
+      expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
+        status: "verified", used_for_authority: false, execution_eligible: false,
+      });
     } finally {
       try { store.close(); } catch { /* closed before reopening */ }
       rmSync(root, { recursive: true, force: true });

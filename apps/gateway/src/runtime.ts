@@ -59,6 +59,7 @@ import {
 } from "./document_organization_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "./document_organization_checkpoint_store.js";
 import { GatewayExecutionIntentStore } from "./execution_intent_store.js";
+import { recoverPendingAgentWorkerLifecycleHistory } from "./agent_worker_lifecycle_history.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcileStartupExecutionState } from "./reconcile_execution_results.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
@@ -396,6 +397,19 @@ async function runCliWithExecutionStore(
     ...(completeHistoryFile ? { filepath: completeHistoryFile } : {}),
     ...(completeHistoryMaxEntries ? { max_entries: completeHistoryMaxEntries } : {}),
   });
+  try {
+    const recovery = recoverPendingAgentWorkerLifecycleHistory({ execution_store: executionStore, complete_history: completeHistory,
+      complete_history_persistent: Boolean(completeHistoryFile), append_history: (entry) => completeHistory.append(entry) });
+    for (const issue of recovery.issues) gatewayLog.error("agent worker lifecycle history recovery incomplete", { ...issue });
+    if (recovery.recovered > 0 || recovery.still_pending > 0) gatewayLog.info("agent worker lifecycle history recovery", {
+      recovered: recovery.recovered, still_pending: recovery.still_pending,
+      history_persistence: completeHistoryFile ? "file" : "memory", used_for_authority: false,
+    });
+  } catch (error) {
+    gatewayLog.error("agent worker lifecycle history recovery unavailable", {
+      error: error instanceof Error ? error.message : String(error), used_for_authority: false,
+    });
+  }
   const executor = new Executor({
     llm,
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
@@ -419,41 +433,18 @@ async function runCliWithExecutionStore(
         return false;
       }
       try {
-        const entry = completeHistory.append({
-          kind: "audit_history",
-          command_id: event.parent_command_id,
-          actor: "executor",
-          source: "executor_agent_worker",
-          timestamp: event.observed_at_ms,
-          payload: {
-            lifecycle_event_id: lifecycleEventId,
-            schema_version: event.schema_version,
-            parent_command_digest: event.parent_command_digest,
-            child_task_digest: event.child_task_digest,
-            role: event.role,
-            state: event.state,
-            observed_at_ms: event.observed_at_ms,
-            ...(event.output_observed ? { output_observed: true } : {}),
-            ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
-            ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
-            used_for_authority: false,
-            may_execute: false,
-          },
-        });
-        if (!entry) gatewayLog.error("agent worker lifecycle history projection unavailable; durable evidence retained", {
-          lifecycle_event_id: lifecycleEventId,
-          command_id: event.parent_command_id,
-          child_task_digest: event.child_task_digest,
-          state: event.state,
-          durable_store: "execution_intent_ledger",
-        });
+        const recovery = recoverPendingAgentWorkerLifecycleHistory({ execution_store: executionStore,
+          complete_history: completeHistory, complete_history_persistent: Boolean(completeHistoryFile),
+          append_history: (entry) => completeHistory.append(entry) });
+        for (const issue of recovery.issues) gatewayLog.error("agent worker lifecycle history projection incomplete", { ...issue });
         return true;
-      } catch {
+      } catch (error) {
         gatewayLog.error("agent worker lifecycle history projection unavailable; durable evidence retained", {
           lifecycle_event_id: lifecycleEventId,
           command_id: event.parent_command_id,
           child_task_digest: event.child_task_digest,
           state: event.state,
+          error: error instanceof Error ? error.message : String(error),
           durable_store: "execution_intent_ledger",
         });
         return true;
