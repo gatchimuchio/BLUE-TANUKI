@@ -4,7 +4,8 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
 import { standaloneRecoveryDatabaseUrl } from "@blue-tanuki/hds-brain";
-import { parseCronEventResultReceipt, type CronEventResultReceipt } from "./cron_event_result_receipt.js";
+import { parseCronEventResultReceipt, type CronGoalPurposeBindingObservationStatus, type CronTaskIdentityObservationStatus,
+  type StoredCronEventResultReceipt } from "./cron_event_result_receipt.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -65,15 +66,21 @@ export interface CronEventRequestMatch {
 
 export interface CronEventResultReceiptSummary {
   readonly receipt_digest: string;
-  readonly plan_match_status: CronEventResultReceipt["plan_match_status"];
+  readonly plan_match_status: StoredCronEventResultReceipt["plan_match_status"];
   readonly plan_id_digest: string | null;
   readonly plan_revision_digest: string | null;
-  readonly task_outcome_status: CronEventResultReceipt["task_outcome_status"];
+  readonly task_outcome_status: StoredCronEventResultReceipt["task_outcome_status"];
   readonly task_outcome_reason_digest: string | null;
-  readonly result_memory_status: CronEventResultReceipt["result_memory_status"];
+  readonly result_memory_status: StoredCronEventResultReceipt["result_memory_status"];
   readonly result_memory_receipt_count: number;
   readonly result_memory_receipt_set_digest: string | null;
-  readonly final_output_status: CronEventResultReceipt["final_output_status"];
+  readonly task_identity_status: CronTaskIdentityObservationStatus;
+  readonly task_identity_digest: string | null;
+  readonly goal_purpose_binding_status: CronGoalPurposeBindingObservationStatus;
+  readonly goal_ref_digest: string | null;
+  readonly goal_purpose_version: number | null;
+  readonly goal_purpose_digest: string | null;
+  readonly final_output_status: StoredCronEventResultReceipt["final_output_status"];
   readonly final_output_count: number;
   readonly latest_final_output_digest: string | null;
   readonly observed_at_ms: number;
@@ -332,7 +339,8 @@ function validApprovalRow(row: CronApprovalRow): boolean {
     nonnegativeSafeInteger(row.created_at_ms) && nonnegativeSafeInteger(row.updated_at_ms);
 }
 
-function resultReceiptSummary(receipt: CronEventResultReceipt): CronEventResultReceiptSummary {
+function resultReceiptSummary(receipt: StoredCronEventResultReceipt): CronEventResultReceiptSummary {
+  const current = receipt.schema_version === "blue-tanuki.cron-event-result-receipt.v2";
   return {
     receipt_digest: receipt.receipt_digest,
     plan_match_status: receipt.plan_match_status,
@@ -343,6 +351,12 @@ function resultReceiptSummary(receipt: CronEventResultReceipt): CronEventResultR
     result_memory_status: receipt.result_memory_status,
     result_memory_receipt_count: receipt.result_memory_receipt_count,
     result_memory_receipt_set_digest: receipt.result_memory_receipt_set_digest,
+    task_identity_status: current ? receipt.task_identity_status : "not_observed",
+    task_identity_digest: current ? receipt.task_identity_digest : null,
+    goal_purpose_binding_status: current ? receipt.goal_purpose_binding_status : "not_observed",
+    goal_ref_digest: current ? receipt.goal_ref_digest : null,
+    goal_purpose_version: current ? receipt.goal_purpose_version : null,
+    goal_purpose_digest: current ? receipt.goal_purpose_digest : null,
     final_output_status: receipt.final_output_status,
     final_output_count: receipt.final_output_count,
     latest_final_output_digest: receipt.latest_final_output_digest,
@@ -537,7 +551,7 @@ export function inspectCronEventRecoveryLedger(options: {
     let unverifiedResultReceiptCount = 0;
     let unverifiedResultReceiptDueToEventLimitCount = 0;
     let orphanResultReceiptCandidateCount = 0;
-    const resultReceiptMatches = new Map<string, { row_count: number; unverified: boolean; receipt?: CronEventResultReceipt }>();
+    const resultReceiptMatches = new Map<string, { row_count: number; unverified: boolean; receipt?: StoredCronEventResultReceipt }>();
     for (const row of resultReceiptRows) {
       let decoded: unknown;
       try { decoded = typeof row.receipt_json === "string" ? JSON.parse(row.receipt_json) : undefined; } catch { decoded = undefined; }

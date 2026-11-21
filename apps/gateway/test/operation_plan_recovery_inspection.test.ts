@@ -580,7 +580,7 @@ describe("J OperationPlan recovery inspection", () => {
     const report = inspectGatewayRecoveryState({ BLUE_TANUKI_STATE_ROOT: stateRoot });
     const projection = projectGatewayRecoveryInspectionForOperator(report);
     expect(projection).toMatchObject({
-      schema_version: 15,
+      schema_version: 16,
       boundary_valid: true,
       operation_plan_schema_residuals: [{ plan_id_digest: planIdDigest, record_digest: recordDigest }],
       omitted_operation_plan_schema_residual_count: 0,
@@ -799,6 +799,8 @@ describe("J OperationPlan recovery inspection", () => {
     });
     const plan = checkpoint.plans[0]!;
     const revision = plan.revisions.at(-1)!;
+    const taskIdentityDigest = sha256("synthetic-cron-task-identity");
+    const goalPurposeDigest = sha256("synthetic-cron-purpose");
     const resultReceipt = createCronEventResultReceipt(event, {
       schema_version: "operation-plan-projection.v1",
       used_for_authority: false,
@@ -809,6 +811,9 @@ describe("J OperationPlan recovery inspection", () => {
         request_id: event.event_id,
         plan_id: operationPlanDigest(plan.revisions[0]!.plan.plan_id),
         revision_digest: revision.digest,
+        task_identity_digest: taskIdentityDigest,
+        goal_purpose_binding_status: "current",
+        goal_purpose_binding: { goal_ref: "synthetic-cron-goal-ref", purpose_version: 2, purpose_digest: goalPurposeDigest },
         task_outcome: { status: "in_progress", reason_code: "awaiting_step_review", used_for_authority: false, may_execute: false },
         bindings: plan.bindings.map((binding) => ({ revision_digest: binding.revision_digest, memory_status: "not_recorded" })),
       }],
@@ -832,6 +837,12 @@ describe("J OperationPlan recovery inspection", () => {
       cron_result_receipt_status: "verified",
       cron_result_receipt_digest: resultReceipt.receipt_digest,
       cron_task_outcome_status: "in_progress",
+      cron_task_identity_status: "observed",
+      cron_task_identity_digest: taskIdentityDigest,
+      cron_goal_purpose_binding_status: "current",
+      cron_goal_ref_digest: sha256(JSON.stringify({ schema_version: "blue-tanuki.cron-goal-ref.v1", goal_ref: "synthetic-cron-goal-ref" })),
+      cron_goal_purpose_version: 2,
+      cron_goal_purpose_digest: goalPurposeDigest,
       cron_result_memory_receipt_count: 0,
       cron_result_memory_receipt_set_digest: null,
       cron_final_output_status: "not_observed",
@@ -842,10 +853,15 @@ describe("J OperationPlan recovery inspection", () => {
     expect(report.used_for_authority).toBe(false);
     expect(report.may_execute).toBe(false);
     const projection = projectGatewayRecoveryInspectionForOperator(report);
-    expect(projection.schema_version).toBe(15);
+    expect(projection.schema_version).toBe(16);
     expect(projection.operation_plan_correlations[0]).toMatchObject({
       cron_result_receipt_status: "verified",
       cron_task_outcome_status: "in_progress",
+      cron_task_identity_status: "observed",
+      cron_task_identity_digest: taskIdentityDigest,
+      cron_goal_purpose_binding_status: "current",
+      cron_goal_purpose_version: 2,
+      cron_goal_purpose_digest: goalPurposeDigest,
       cron_final_output_status: "not_observed",
       cron_final_output_digest: null,
     });

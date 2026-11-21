@@ -11,6 +11,8 @@ describe("Cron event result observation receipt", () => {
     const event = createCronEventIdentity(source, 4, sha256("private-synthetic-payload"));
     const planId = sha256("private-plan-id");
     const revisionDigest = sha256("private-plan-revision");
+    const taskIdentityDigest = sha256("private-task-identity");
+    const purposeDigest = sha256("private-purpose-version");
     const memoryReceiptDigest = sha256("private-memory-receipt");
     const renderedOutputDigest = sha256("private rendered output");
     const receipt = createCronEventResultReceipt(event, {
@@ -23,6 +25,9 @@ describe("Cron event result observation receipt", () => {
         request_id: event.event_id,
         plan_id: planId,
         revision_digest: revisionDigest,
+        task_identity_digest: taskIdentityDigest,
+        goal_purpose_binding_status: "current",
+        goal_purpose_binding: { goal_ref: "private-goal-reference", purpose_version: 7, purpose_digest: purposeDigest },
         task_outcome: { status: "in_progress", reason_code: "awaiting_step_review", used_for_authority: false, may_execute: false },
         bindings: [{
           revision_digest: revisionDigest,
@@ -44,6 +49,12 @@ describe("Cron event result observation receipt", () => {
       plan_match_status: "matched",
       plan_id_digest: planId,
       plan_revision_digest: revisionDigest,
+      task_identity_status: "observed",
+      task_identity_digest: taskIdentityDigest,
+      goal_purpose_binding_status: "current",
+      goal_ref_digest: sha256(JSON.stringify({ schema_version: "blue-tanuki.cron-goal-ref.v1", goal_ref: "private-goal-reference" })),
+      goal_purpose_version: 7,
+      goal_purpose_digest: purposeDigest,
       task_outcome_status: "in_progress",
       result_memory_status: "receipts_observed",
       result_memory_receipt_count: 1,
@@ -56,10 +67,23 @@ describe("Cron event result observation receipt", () => {
     });
     expect(parseCronEventResultReceipt(receipt)).toEqual(receipt);
     const serialized = JSON.stringify(receipt);
-    for (const raw of [event.event_id, source, "private-synthetic-payload", "private rendered output"]) {
+    for (const raw of [event.event_id, source, "private-synthetic-payload", "private rendered output", "private-goal-reference", "private-task-identity"]) {
       expect(serialized).not.toContain(raw);
     }
     expect(parseCronEventResultReceipt({ ...receipt, task_outcome_status: "achieved" })).toBeNull();
+
+    const partialGoalLineage = {
+      ...receipt,
+      goal_purpose_binding_status: "not_configured" as const,
+      goal_purpose_version: null,
+      goal_purpose_digest: null,
+    };
+    const partialBase = { ...partialGoalLineage } as Record<string, unknown>;
+    delete partialBase.receipt_digest;
+    expect(parseCronEventResultReceipt({
+      ...partialBase,
+      receipt_digest: sha256(JSON.stringify(partialBase)),
+    })).toBeNull();
   });
 
   it("labels a missing plan as unobserved rather than achieved", () => {
@@ -78,10 +102,28 @@ describe("Cron event result observation receipt", () => {
     expect(receipt).toMatchObject({
       plan_match_status: "not_found",
       task_outcome_status: "unobserved",
+      task_identity_status: "not_observed",
+      task_identity_digest: null,
+      goal_purpose_binding_status: "not_observed",
       result_memory_status: "not_observed",
       final_output_status: "not_observed",
     });
     expect(parseCronEventResultReceipt(receipt)).toEqual(receipt);
+  });
+
+  it("keeps historical v1 receipts readable without fabricating task lineage", () => {
+    const event = createCronEventIdentity("synthetic-legacy-receipt", 8, sha256("legacy-payload"));
+    const current = createCronEventResultReceipt(event, {
+      schema_version: "operation-plan-projection.v1", used_for_authority: false, raw_payload_exposed: false,
+      recovery_refresh_status: "ready",
+      result_memory: { configured: false, status: "not_configured", used_for_authority: false }, plans: [],
+    }, { entries: [], chain_valid: true, skipped_count: 0 }, 901);
+    const legacyBase = { ...current, schema_version: "blue-tanuki.cron-event-result-receipt.v1" as const };
+    for (const key of ["task_identity_status", "task_identity_digest", "goal_purpose_binding_status", "goal_ref_digest",
+      "goal_purpose_version", "goal_purpose_digest"] as const) delete (legacyBase as Record<string, unknown>)[key];
+    delete (legacyBase as Record<string, unknown>).receipt_digest;
+    const legacy = { ...legacyBase, receipt_digest: sha256(JSON.stringify(legacyBase)) };
+    expect(parseCronEventResultReceipt(legacy)).toEqual(legacy);
   });
 
   it("does not treat a pending J refresh or unavailable M projection as a verified absence", () => {

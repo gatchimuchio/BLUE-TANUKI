@@ -3,7 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync as DatabaseType } from "node:sqlite";
-import { parseCronEventResultReceipt, type CronEventResultReceipt } from "./cron_event_result_receipt.js";
+import { parseCronEventResultReceipt, type CronEventResultReceipt, type StoredCronEventResultReceipt } from "./cron_event_result_receipt.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -447,7 +447,7 @@ export class GatewayCronEventStore {
   }
 
   /** Read-only access to the digest-only job observation attached during event settlement. */
-  resultReceipt(event: CronEventIdentity): CronEventResultReceipt | null {
+  resultReceipt(event: CronEventIdentity): StoredCronEventResultReceipt | null {
     validateEvent(event);
     const row = this.db.prepare(`SELECT request_id_digest,source_digest,sequence,payload_digest,receipt_json,receipt_digest,observed_at_ms
       FROM cron_event_result_receipt WHERE event_id=?`).get(event.event_id) as {
@@ -955,7 +955,7 @@ function validateEvent(event: CronEventIdentity): void {
   }
 }
 
-function receiptMatchesEvent(receipt: CronEventResultReceipt, event: CronEventIdentity): boolean {
+function receiptMatchesEvent(receipt: StoredCronEventResultReceipt, event: CronEventIdentity): boolean {
   const parsed = parseCronEventResultReceipt(receipt);
   return parsed !== null && parsed.event_id_digest === sha256(event.event_id) &&
     parsed.request_id_digest === sha256(event.event_id) && parsed.source_digest === sha256(event.source) &&

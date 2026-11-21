@@ -164,6 +164,12 @@ export interface OperationPlanBrokerCorrelation {
   readonly cron_result_receipt_status: "not_applicable" | "verified" | "not_recorded" | "not_available" | "unverified" | "event_unmatched";
   readonly cron_result_receipt_digest: string | null;
   readonly cron_task_outcome_status: CronEventResultReceiptSummary["task_outcome_status"] | null;
+  readonly cron_task_identity_status: CronEventResultReceiptSummary["task_identity_status"] | null;
+  readonly cron_task_identity_digest: string | null;
+  readonly cron_goal_purpose_binding_status: CronEventResultReceiptSummary["goal_purpose_binding_status"] | null;
+  readonly cron_goal_ref_digest: string | null;
+  readonly cron_goal_purpose_version: number | null;
+  readonly cron_goal_purpose_digest: string | null;
   readonly cron_result_memory_receipt_count: number | null;
   readonly cron_result_memory_receipt_set_digest: string | null;
   readonly cron_final_output_status: CronEventResultReceiptSummary["final_output_status"] | null;
@@ -212,7 +218,7 @@ export interface RecoveryLedgerBoundaryObservation {
 }
 
 export interface GatewayRecoveryOperatorProjection {
-  readonly schema_version: 15;
+  readonly schema_version: 16;
   readonly surface: "recovery_inspection_operator";
   readonly mode: "read_only";
   readonly status: "verified" | "residuals_present" | "invalid_report";
@@ -286,6 +292,12 @@ export interface GatewayRecoveryOperatorProjection {
     readonly cron_result_receipt_status: OperationPlanBrokerCorrelation["cron_result_receipt_status"];
     readonly cron_result_receipt_digest: string | null;
     readonly cron_task_outcome_status: OperationPlanBrokerCorrelation["cron_task_outcome_status"];
+    readonly cron_task_identity_status: OperationPlanBrokerCorrelation["cron_task_identity_status"];
+    readonly cron_task_identity_digest: string | null;
+    readonly cron_goal_purpose_binding_status: OperationPlanBrokerCorrelation["cron_goal_purpose_binding_status"];
+    readonly cron_goal_ref_digest: string | null;
+    readonly cron_goal_purpose_version: number | null;
+    readonly cron_goal_purpose_digest: string | null;
     readonly cron_result_memory_receipt_count: number | null;
     readonly cron_result_memory_receipt_set_digest: string | null;
     readonly cron_final_output_status: OperationPlanBrokerCorrelation["cron_final_output_status"];
@@ -447,6 +459,14 @@ function projectOperatorOperationPlanCorrelations(
     const cronResultReceiptDigest = value.cron_result_receipt_digest === null ? null : fixedDigest(value.cron_result_receipt_digest);
     const cronTaskOutcomeStatus = value.cron_task_outcome_status === null ? null
       : fixedEnum(value.cron_task_outcome_status, ["achieved", "in_progress", "held", "unobserved", "unverified"] as const);
+    const cronTaskIdentityStatus = value.cron_task_identity_status === null ? null
+      : fixedEnum(value.cron_task_identity_status, ["observed", "not_observed", "unverified"] as const);
+    const cronTaskIdentityDigest = value.cron_task_identity_digest === null ? null : fixedDigest(value.cron_task_identity_digest);
+    const cronGoalPurposeBindingStatus = value.cron_goal_purpose_binding_status === null ? null
+      : fixedEnum(value.cron_goal_purpose_binding_status, ["not_configured", "required", "current", "stale", "not_observed", "unverified"] as const);
+    const cronGoalRefDigest = value.cron_goal_ref_digest === null ? null : fixedDigest(value.cron_goal_ref_digest);
+    const cronGoalPurposeVersion = value.cron_goal_purpose_version === null ? null : fixedCount(value.cron_goal_purpose_version);
+    const cronGoalPurposeDigest = value.cron_goal_purpose_digest === null ? null : fixedDigest(value.cron_goal_purpose_digest);
     const cronResultMemoryReceiptCount = value.cron_result_memory_receipt_count === null ? null : fixedCount(value.cron_result_memory_receipt_count);
     const cronResultMemoryReceiptSetDigest = value.cron_result_memory_receipt_set_digest === null ? null
       : fixedDigest(value.cron_result_memory_receipt_set_digest);
@@ -461,12 +481,27 @@ function projectOperatorOperationPlanCorrelations(
         (cronEventCorrelation === "matched") !== (cronEventDeliveryState !== null) || !cronResultReceiptStatus ||
         (value.cron_result_receipt_digest !== null && !cronResultReceiptDigest) ||
         (value.cron_task_outcome_status !== null && !cronTaskOutcomeStatus) ||
+        (value.cron_task_identity_status !== null && !cronTaskIdentityStatus) ||
+        (value.cron_task_identity_digest !== null && !cronTaskIdentityDigest) ||
+        (value.cron_goal_purpose_binding_status !== null && !cronGoalPurposeBindingStatus) ||
+        (value.cron_goal_ref_digest !== null && !cronGoalRefDigest) ||
+        (value.cron_goal_purpose_version !== null && cronGoalPurposeVersion === null) ||
+        (value.cron_goal_purpose_digest !== null && !cronGoalPurposeDigest) ||
         (value.cron_result_memory_receipt_count !== null && cronResultMemoryReceiptCount === null) ||
         (value.cron_result_memory_receipt_set_digest !== null && !cronResultMemoryReceiptSetDigest) ||
         (value.cron_final_output_status !== null && !cronFinalOutputStatus) ||
         (value.cron_final_output_digest !== null && !cronFinalOutputDigest) ||
         (cronResultReceiptStatus === "verified") !== (cronResultReceiptDigest !== null) ||
         (cronResultReceiptStatus === "verified") !== (cronTaskOutcomeStatus !== null) ||
+        (cronResultReceiptStatus === "verified") !== (cronTaskIdentityStatus !== null) ||
+        (cronResultReceiptStatus === "verified") !== (cronGoalPurposeBindingStatus !== null) ||
+        ((cronTaskIdentityStatus === "observed") !== (cronTaskIdentityDigest !== null)) ||
+        ((cronGoalPurposeBindingStatus === "current" || cronGoalPurposeBindingStatus === "stale") !==
+          (cronGoalRefDigest !== null && cronGoalPurposeVersion !== null && cronGoalPurposeDigest !== null)) ||
+        ((cronGoalPurposeBindingStatus === "current" || cronGoalPurposeBindingStatus === "stale") &&
+          cronGoalPurposeVersion !== null && cronGoalPurposeVersion < 1) ||
+        (cronResultReceiptStatus !== "verified" && (cronTaskIdentityDigest !== null || cronGoalRefDigest !== null ||
+          cronGoalPurposeVersion !== null || cronGoalPurposeDigest !== null)) ||
         (cronResultReceiptStatus === "verified") !== (cronResultMemoryReceiptCount !== null) ||
         (cronResultReceiptStatus === "verified") !== (cronFinalOutputStatus !== null) ||
         (cronResultMemoryReceiptCount !== null && (cronResultMemoryReceiptCount === 0) !== (cronResultMemoryReceiptSetDigest === null)) ||
@@ -491,6 +526,12 @@ function projectOperatorOperationPlanCorrelations(
       cron_result_receipt_status: cronResultReceiptStatus,
       cron_result_receipt_digest: cronResultReceiptDigest,
       cron_task_outcome_status: cronTaskOutcomeStatus,
+      cron_task_identity_status: cronTaskIdentityStatus,
+      cron_task_identity_digest: cronTaskIdentityDigest,
+      cron_goal_purpose_binding_status: cronGoalPurposeBindingStatus,
+      cron_goal_ref_digest: cronGoalRefDigest,
+      cron_goal_purpose_version: cronGoalPurposeVersion,
+      cron_goal_purpose_digest: cronGoalPurposeDigest,
       cron_result_memory_receipt_count: cronResultMemoryReceiptCount,
       cron_result_memory_receipt_set_digest: cronResultMemoryReceiptSetDigest,
       cron_final_output_status: cronFinalOutputStatus,
@@ -1222,7 +1263,7 @@ export function projectGatewayRecoveryInspectionForOperator(value: unknown): Gat
     unlinked_document_checkpoint_count: null,
   };
   return {
-    schema_version: 15,
+    schema_version: 16,
     surface: "recovery_inspection_operator",
     mode: "read_only",
     status: boundaryValid && sourceStatus ? sourceStatus : "invalid_report",
@@ -1865,11 +1906,19 @@ function correlateCronResultReceipt(
   matches: readonly CronEventRequestMatch[],
 ): Pick<OperationPlanBrokerCorrelation,
   "cron_result_receipt_status" | "cron_result_receipt_digest" | "cron_task_outcome_status" |
+  "cron_task_identity_status" | "cron_task_identity_digest" | "cron_goal_purpose_binding_status" |
+  "cron_goal_ref_digest" | "cron_goal_purpose_version" | "cron_goal_purpose_digest" |
   "cron_result_memory_receipt_count" | "cron_result_memory_receipt_set_digest" | "cron_final_output_status" | "cron_final_output_digest"> {
   const unavailable = (status: OperationPlanBrokerCorrelation["cron_result_receipt_status"]) => ({
     cron_result_receipt_status: status,
     cron_result_receipt_digest: null,
     cron_task_outcome_status: null,
+    cron_task_identity_status: null,
+    cron_task_identity_digest: null,
+    cron_goal_purpose_binding_status: null,
+    cron_goal_ref_digest: null,
+    cron_goal_purpose_version: null,
+    cron_goal_purpose_digest: null,
     cron_result_memory_receipt_count: null,
     cron_result_memory_receipt_set_digest: null,
     cron_final_output_status: null,
@@ -1889,6 +1938,12 @@ function correlateCronResultReceipt(
     cron_result_receipt_status: "verified",
     cron_result_receipt_digest: match.result_receipt.receipt_digest,
     cron_task_outcome_status: match.result_receipt.task_outcome_status,
+    cron_task_identity_status: match.result_receipt.task_identity_status,
+    cron_task_identity_digest: match.result_receipt.task_identity_digest,
+    cron_goal_purpose_binding_status: match.result_receipt.goal_purpose_binding_status,
+    cron_goal_ref_digest: match.result_receipt.goal_ref_digest,
+    cron_goal_purpose_version: match.result_receipt.goal_purpose_version,
+    cron_goal_purpose_digest: match.result_receipt.goal_purpose_digest,
     cron_result_memory_receipt_count: match.result_receipt.result_memory_receipt_count,
     cron_result_memory_receipt_set_digest: match.result_receipt.result_memory_receipt_set_digest,
     cron_final_output_status: match.result_receipt.final_output_status,

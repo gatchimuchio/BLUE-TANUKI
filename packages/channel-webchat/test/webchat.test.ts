@@ -5126,7 +5126,7 @@ describe("WebChatChannel — Recovery surface", () => {
         inspectLedgerState: async () => {
           inspectionReads += 1;
           return {
-            schema_version: 15,
+            schema_version: 16,
             surface: "recovery_inspection_operator",
             mode: "read_only",
             status: "residuals_present",
@@ -5217,6 +5217,12 @@ describe("WebChatChannel — Recovery surface", () => {
               cron_result_receipt_status: "event_unmatched",
               cron_result_receipt_digest: null,
               cron_task_outcome_status: null,
+              cron_task_identity_status: null,
+              cron_task_identity_digest: null,
+              cron_goal_purpose_binding_status: null,
+              cron_goal_ref_digest: null,
+              cron_goal_purpose_version: null,
+              cron_goal_purpose_digest: null,
               cron_result_memory_receipt_count: null,
               cron_result_memory_receipt_set_digest: null,
               cron_final_output_status: null,
@@ -5356,7 +5362,7 @@ describe("WebChatChannel — Recovery surface", () => {
       expect(inspection.status).toBe(200);
       expect(inspection.headers.get("cache-control")).toBe("no-store");
       expect(JSON.parse(inspection.text)).toMatchObject({
-        schema_version: 15,
+        schema_version: 16,
         surface: "recovery_inspection_operator",
         mode: "read_only",
         status: "residuals_present",
@@ -5408,6 +5414,12 @@ describe("WebChatChannel — Recovery surface", () => {
           cron_approval_correlation: "cron_unverified",
           cron_event_correlation: "not_in_retained_event_history",
           cron_event_delivery_state: null,
+          cron_task_identity_status: null,
+          cron_task_identity_digest: null,
+          cron_goal_purpose_binding_status: null,
+          cron_goal_ref_digest: null,
+          cron_goal_purpose_version: null,
+          cron_goal_purpose_digest: null,
         }],
         external_backup_restore_point: "not_examined",
         used_for_authority: false,

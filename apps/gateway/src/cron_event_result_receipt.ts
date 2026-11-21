@@ -6,9 +6,11 @@ const EVENT_ID = /^cron-[a-f0-9]{64}$/;
 export type CronTaskOutcomeObservationStatus = "achieved" | "in_progress" | "held" | "unobserved" | "unverified";
 export type CronFinalOutputObservationStatus = "observed" | "not_observed" | "not_observed_due_to_limit" | "unverified";
 export type CronResultMemoryObservationStatus = "receipts_observed" | "no_receipt_observed" | "not_observed" | "unverified";
+export type CronTaskIdentityObservationStatus = "observed" | "not_observed" | "unverified";
+export type CronGoalPurposeBindingObservationStatus =
+  | "not_configured" | "required" | "current" | "stale" | "not_observed" | "unverified";
 
-export interface CronEventResultReceipt {
-  readonly schema_version: "blue-tanuki.cron-event-result-receipt.v1";
+interface CronEventResultReceiptFields {
   readonly event_id_digest: string;
   readonly request_id_digest: string;
   readonly source_digest: string;
@@ -30,6 +32,24 @@ export interface CronEventResultReceipt {
   readonly may_execute: false;
   readonly receipt_digest: string;
 }
+
+/** Current digest-only receipt, including the J task and goal-purpose lineage observed at the same revision as M. */
+export interface CronEventResultReceipt extends CronEventResultReceiptFields {
+  readonly schema_version: "blue-tanuki.cron-event-result-receipt.v2";
+  readonly task_identity_status: CronTaskIdentityObservationStatus;
+  readonly task_identity_digest: string | null;
+  readonly goal_purpose_binding_status: CronGoalPurposeBindingObservationStatus;
+  readonly goal_ref_digest: string | null;
+  readonly goal_purpose_version: number | null;
+  readonly goal_purpose_digest: string | null;
+}
+
+/** Historical receipt shape remains readable; it did not capture task/goal lineage. */
+export interface LegacyCronEventResultReceipt extends CronEventResultReceiptFields {
+  readonly schema_version: "blue-tanuki.cron-event-result-receipt.v1";
+}
+
+export type StoredCronEventResultReceipt = CronEventResultReceipt | LegacyCronEventResultReceipt;
 
 export interface CronResultEventIdentity {
   readonly source: string;
@@ -63,7 +83,7 @@ export function createCronEventResultReceipt(
   const plan = observePlan(operationPlans, event.event_id);
   const output = observeFinalOutput(finalOutputHistory, event.event_id);
   const base = {
-    schema_version: "blue-tanuki.cron-event-result-receipt.v1" as const,
+    schema_version: "blue-tanuki.cron-event-result-receipt.v2" as const,
     ...identity,
     ...plan,
     ...output,
@@ -75,16 +95,20 @@ export function createCronEventResultReceipt(
 }
 
 /** Validate a stored receipt and its own content digest before it enters recovery projections. */
-export function parseCronEventResultReceipt(value: unknown): CronEventResultReceipt | null {
+export function parseCronEventResultReceipt(value: unknown): StoredCronEventResultReceipt | null {
   if (!isRecord(value)) return null;
-  const allowed = [
+  const common = [
     "schema_version", "event_id_digest", "request_id_digest", "source_digest", "sequence", "payload_digest",
     "plan_match_status", "plan_id_digest", "plan_revision_digest", "task_outcome_status", "task_outcome_reason_digest",
     "result_memory_status", "result_memory_receipt_count", "result_memory_receipt_set_digest", "final_output_status",
     "final_output_count", "latest_final_output_digest", "observed_at_ms", "used_for_authority", "may_execute", "receipt_digest",
   ];
+  const lineage = ["task_identity_status", "task_identity_digest", "goal_purpose_binding_status", "goal_ref_digest",
+    "goal_purpose_version", "goal_purpose_digest"];
+  const isLegacy = value.schema_version === "blue-tanuki.cron-event-result-receipt.v1";
+  const allowed = isLegacy ? common : [...common, ...lineage];
   if (Object.keys(value).length !== allowed.length || Object.keys(value).some((key) => !allowed.includes(key)) ||
-      value.schema_version !== "blue-tanuki.cron-event-result-receipt.v1" ||
+      (!isLegacy && value.schema_version !== "blue-tanuki.cron-event-result-receipt.v2") ||
       !isDigest(value.event_id_digest) || !isDigest(value.request_id_digest) || !isDigest(value.source_digest) ||
       value.event_id_digest !== value.request_id_digest || !nonnegativeSafeInteger(value.sequence) ||
       !isDigest(value.payload_digest) || !isOneOf(value.plan_match_status, ["matched", "not_found", "ambiguous", "unverified"]) ||
@@ -96,10 +120,39 @@ export function parseCronEventResultReceipt(value: unknown): CronEventResultRece
       !isOneOf(value.final_output_status, ["observed", "not_observed", "not_observed_due_to_limit", "unverified"]) ||
       !nonnegativeSafeInteger(value.final_output_count) || !nullableDigest(value.latest_final_output_digest) ||
       !nonnegativeSafeInteger(value.observed_at_ms) || value.used_for_authority !== false || value.may_execute !== false ||
-      !isDigest(value.receipt_digest) || !receiptFieldsConsistent(value)) return null;
-  const receipt = value as unknown as CronEventResultReceipt;
+      !isDigest(value.receipt_digest) || !receiptFieldsConsistent(value) ||
+      (!isLegacy && !lineageFieldsConsistent(value))) return null;
+  const receipt = value as unknown as StoredCronEventResultReceipt;
   const { receipt_digest, ...base } = receipt;
   return sha256(JSON.stringify(base)) === receipt_digest ? receipt : null;
+}
+
+function lineageFieldsConsistent(value: Record<string, unknown>): boolean {
+  const taskStatus = value.task_identity_status;
+  const taskDigest = value.task_identity_digest;
+  const goalStatus = value.goal_purpose_binding_status;
+  const goalRefDigest = value.goal_ref_digest;
+  const purposeVersion = value.goal_purpose_version;
+  const purposeDigest = value.goal_purpose_digest;
+  if (!isOneOf(taskStatus, ["observed", "not_observed", "unverified"]) ||
+      !nullableDigest(taskDigest) || (taskStatus === "observed") !== (taskDigest !== null) ||
+      !isOneOf(goalStatus, ["not_configured", "required", "current", "stale", "not_observed", "unverified"]) ||
+      !nullableDigest(goalRefDigest) || (purposeVersion !== null && !positiveSafeInteger(purposeVersion)) ||
+      !nullableDigest(purposeDigest)) return false;
+  const goalBound = goalStatus === "current" || goalStatus === "stale";
+  const goalLineageComplete = goalRefDigest !== null && purposeVersion !== null && purposeDigest !== null;
+  const goalLineageAbsent = goalRefDigest === null && purposeVersion === null && purposeDigest === null;
+  if (goalBound ? !goalLineageComplete : !goalLineageAbsent) return false;
+  if (value.plan_match_status === "not_found") {
+    return taskStatus === "not_observed" && taskDigest === null && goalStatus === "not_observed" &&
+      goalRefDigest === null && purposeVersion === null && purposeDigest === null;
+  }
+  if (value.plan_match_status === "ambiguous" || value.plan_match_status === "unverified") {
+    return taskStatus === "unverified" && taskDigest === null && goalStatus === "unverified" &&
+      goalRefDigest === null && purposeVersion === null && purposeDigest === null;
+  }
+  if (value.plan_match_status === "matched" && (taskStatus === "not_observed" || goalStatus === "not_observed")) return false;
+  return true;
 }
 
 function receiptFieldsConsistent(value: Record<string, unknown>): boolean {
@@ -127,11 +180,15 @@ function receiptFieldsConsistent(value: Record<string, unknown>): boolean {
 
 function observePlan(operationPlans: unknown, eventId: string): Pick<CronEventResultReceipt,
   "plan_match_status" | "plan_id_digest" | "plan_revision_digest" | "task_outcome_status" |
-  "task_outcome_reason_digest" | "result_memory_status" | "result_memory_receipt_count" | "result_memory_receipt_set_digest"> {
+  "task_outcome_reason_digest" | "result_memory_status" | "result_memory_receipt_count" | "result_memory_receipt_set_digest" |
+  "task_identity_status" | "task_identity_digest" | "goal_purpose_binding_status" | "goal_ref_digest" |
+  "goal_purpose_version" | "goal_purpose_digest"> {
   const invalid = {
     plan_match_status: "unverified" as const, plan_id_digest: null, plan_revision_digest: null,
     task_outcome_status: "unverified" as const, task_outcome_reason_digest: null,
     result_memory_status: "unverified" as const, result_memory_receipt_count: 0, result_memory_receipt_set_digest: null,
+    task_identity_status: "unverified" as const, task_identity_digest: null,
+    goal_purpose_binding_status: "unverified" as const, goal_ref_digest: null, goal_purpose_version: null, goal_purpose_digest: null,
   };
   if (!isRecord(operationPlans) || operationPlans.schema_version !== "operation-plan-projection.v1" ||
       operationPlans.used_for_authority !== false || operationPlans.raw_payload_exposed !== false ||
@@ -143,7 +200,8 @@ function observePlan(operationPlans: unknown, eventId: string): Pick<CronEventRe
       (operationPlans.result_memory.configured === true && operationPlans.result_memory.status === "not_configured")) return invalid;
   const matches = operationPlans.plans.filter((plan) => isRecord(plan) && plan.request_id === eventId);
   if (matches.length === 0) {
-    return { ...invalid, plan_match_status: "not_found", task_outcome_status: "unobserved", result_memory_status: "not_observed" };
+    return { ...invalid, plan_match_status: "not_found", task_outcome_status: "unobserved", result_memory_status: "not_observed",
+      task_identity_status: "not_observed", goal_purpose_binding_status: "not_observed" };
   }
   if (matches.length !== 1 || !isRecord(matches[0])) {
     return { ...invalid, plan_match_status: "ambiguous" };
@@ -158,6 +216,7 @@ function observePlan(operationPlans: unknown, eventId: string): Pick<CronEventRe
         isOneOf(binding.memory_status, ["receipt_confirmed", "memory_commit_pending", "not_recorded"]))) {
     return invalid;
   }
+  const lineage = observePlanLineage(plan);
   const currentBindings = plan.bindings.filter((binding) => isRecord(binding) && binding.revision_digest === plan.revision_digest);
   if (operationPlans.result_memory.status !== "receipt_confirmed") {
     return {
@@ -166,6 +225,7 @@ function observePlan(operationPlans: unknown, eventId: string): Pick<CronEventRe
       plan_revision_digest: plan.revision_digest,
       task_outcome_status: task.status,
       task_outcome_reason_digest: sha256(task.reason_code),
+      ...lineage,
       result_memory_status: operationPlans.result_memory.status === "pending_or_unavailable" ? "unverified" : "not_observed",
       result_memory_receipt_count: 0,
       result_memory_receipt_set_digest: null,
@@ -188,10 +248,41 @@ function observePlan(operationPlans: unknown, eventId: string): Pick<CronEventRe
     plan_revision_digest: plan.revision_digest,
     task_outcome_status: task.status,
     task_outcome_reason_digest: sha256(task.reason_code),
+    ...lineage,
     result_memory_status: sortedReceiptDigests.length > 0 ? "receipts_observed" : pendingReceipt ? "not_observed" : "no_receipt_observed",
     result_memory_receipt_count: sortedReceiptDigests.length,
     result_memory_receipt_set_digest: sortedReceiptDigests.length > 0 ? sha256(JSON.stringify(sortedReceiptDigests)) : null,
   };
+}
+
+function observePlanLineage(plan: Record<string, unknown>): Pick<CronEventResultReceipt,
+  "task_identity_status" | "task_identity_digest" | "goal_purpose_binding_status" | "goal_ref_digest" |
+  "goal_purpose_version" | "goal_purpose_digest"> {
+  const taskIdentityDigest = isDigest(plan.task_identity_digest) ? plan.task_identity_digest : null;
+  const rawGoalStatus = plan.goal_purpose_binding_status;
+  const validGoalStatus = isOneOf(rawGoalStatus, ["not_configured", "required", "current", "stale"]);
+  const binding = plan.goal_purpose_binding;
+  if (!validGoalStatus) {
+    return { task_identity_status: taskIdentityDigest ? "observed" : "unverified", task_identity_digest: taskIdentityDigest,
+      goal_purpose_binding_status: "unverified", goal_ref_digest: null, goal_purpose_version: null, goal_purpose_digest: null };
+  }
+  if (rawGoalStatus === "not_configured" || rawGoalStatus === "required") {
+    if (binding !== undefined) {
+      return { task_identity_status: taskIdentityDigest ? "observed" : "unverified", task_identity_digest: taskIdentityDigest,
+        goal_purpose_binding_status: "unverified", goal_ref_digest: null, goal_purpose_version: null, goal_purpose_digest: null };
+    }
+    return { task_identity_status: taskIdentityDigest ? "observed" : "unverified", task_identity_digest: taskIdentityDigest,
+      goal_purpose_binding_status: rawGoalStatus, goal_ref_digest: null, goal_purpose_version: null, goal_purpose_digest: null };
+  }
+  if (!isRecord(binding) || typeof binding.goal_ref !== "string" || binding.goal_ref.trim().length === 0 ||
+      binding.goal_ref.length > 512 || !positiveSafeInteger(binding.purpose_version) || !isDigest(binding.purpose_digest)) {
+    return { task_identity_status: taskIdentityDigest ? "observed" : "unverified", task_identity_digest: taskIdentityDigest,
+      goal_purpose_binding_status: "unverified", goal_ref_digest: null, goal_purpose_version: null, goal_purpose_digest: null };
+  }
+  return { task_identity_status: taskIdentityDigest ? "observed" : "unverified", task_identity_digest: taskIdentityDigest,
+    goal_purpose_binding_status: rawGoalStatus, goal_ref_digest: sha256(JSON.stringify({
+      schema_version: "blue-tanuki.cron-goal-ref.v1", goal_ref: binding.goal_ref,
+    })), goal_purpose_version: binding.purpose_version, goal_purpose_digest: binding.purpose_digest };
 }
 
 function observeFinalOutput(snapshot: CronFinalOutputHistorySnapshot, eventId: string): Pick<CronEventResultReceipt,
@@ -239,6 +330,10 @@ function nullableDigest(value: unknown): value is string | null {
 
 function nonnegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function positiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function isOneOf<const T extends readonly string[]>(value: unknown, choices: T): value is T[number] {
