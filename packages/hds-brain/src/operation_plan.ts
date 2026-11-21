@@ -14,6 +14,7 @@ import {
   type OperationPlanComputeSourceObservation, type OperationPlanComputeSourceObservationReference,
   type OperationPlanGatewayReceiptRecheckEvidence, OperationPlanGatewayReceiptRecheckEvidenceSchema,
   OperationPlanShellExecResultObservationSchema, type OperationPlanShellExecResultObservation,
+  OperationPlanAgentDelegationIntegrationSchema, type OperationPlanAgentDelegationIntegration,
   SettingsWriteArgumentsSchema,
   RuntimeScheduleCreateArgumentsSchema, RuntimeScheduleUpdatePlanArgumentsSchema, runtimeSchedulePayloadHash,
   RuntimeScheduleDeleteArgumentsSchema, runtimeScheduleDeleteResult,
@@ -81,7 +82,8 @@ import { goalCompletionRulesDigest } from "./goal_completion_rules_digest.js";
 import type { GoalEvaluationRulesReference } from "./goal_projection.js";
 import { buildResultMemoryCommit, resultMemoryEligible, resultMemoryIdentity, browserReadResultObservation, resultObservation,
   verifyResultMemoryCommit, receiptForResultCommit, buildShellExecResultMemoryCommit, shellExecResultMemoryIdentity, shellExecResultMemoryObservation,
-  verifyShellExecResultMemoryCommit } from "./operation_result_memory.js";
+  verifyShellExecResultMemoryCommit, agentDelegationIntegrationMemoryIdentity, buildAgentDelegationIntegrationMemoryCommit,
+  verifyAgentDelegationIntegrationMemoryCommit, receiptForAgentDelegationIntegrationCommit } from "./operation_result_memory.js";
 import { buildReceiptMemoryCommit, receiptForReceiptMemoryCommit, receiptMemoryIdentity, receiptMemoryObservation,
   verifyReceiptMemoryCommit } from "./operation_receipt_memory.js";
 import type { ResultObservationCitation, ResultObservationProjection } from "./operation_result_reflection.js";
@@ -2554,6 +2556,17 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
     }
     shellResultCommands.add(observation.command_id_digest);
   }
+  const delegationParents = new Set<string>();
+  for (const integration of state.agent_delegation_integrations ?? []) {
+    const parent = integration.evidence.parent_command_digest;
+    if (delegationParents.has(parent) || operationPlanDigest(integration.evidence) !== integration.evidence_digest ||
+        (integration.memory_commit && (!memoryAvailable || !verifyAgentDelegationIntegrationMemoryCommit(integration))) ||
+        (integration.memory_receipt && (!integration.memory_commit ||
+          !receiptForAgentDelegationIntegrationCommit(integration.memory_receipt, integration.memory_commit)))) {
+      throw new Error("plan_checkpoint_agent_delegation_integration_mismatch");
+    }
+    delegationParents.add(parent);
+  }
   return state;
 }
 
@@ -3227,7 +3240,8 @@ function containsMcpSensitiveKey(value: unknown): boolean {
 
 /** J所有の計画・版・単回試行。LLM、I/O作用、Approvalの代行は行わない。 */
 export class OperationPlanLedger {
-  private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [], shell_exec_result_observations: [] };
+  private state: OperationPlanCheckpoint = { schema_version: "operation-plan-state.v1", plans: [], shell_exec_result_observations: [],
+    agent_delegation_integrations: [] };
   private savedDigest: string | null = null;
   private readonly issuedBindings = new WeakMap<ExecuteCommand, string>();
   private readonly issuedBindingIds = new Set<string>();
@@ -5807,6 +5821,40 @@ export class OperationPlanLedger {
     return true;
   }
 
+  /** J records the parent plan decision and digest-only child evidence for a durable M receipt. */
+  canRecordAgentDelegationIntegration(parentCommandDigest: string): boolean {
+    return !(this.state.agent_delegation_integrations ?? []).some((entry) =>
+      entry.evidence.parent_command_digest === parentCommandDigest) &&
+      (this.state.agent_delegation_integrations?.length ?? 0) < 64;
+  }
+
+  recordAgentDelegationIntegration(input: Omit<OperationPlanAgentDelegationIntegration,
+    "schema_version" | "memory_commit" | "memory_receipt" | "used_for_authority" | "may_execute">): boolean {
+    if (this.recoveryRefreshPending) return false;
+    const integration = OperationPlanAgentDelegationIntegrationSchema.parse({
+      schema_version: "operation-plan-agent-delegation-integration.v1",
+      ...input,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    if (operationPlanDigest(integration.evidence) !== integration.evidence_digest) return false;
+    const parent = integration.evidence.parent_command_digest;
+    const existing = (this.state.agent_delegation_integrations ?? []).find((entry) =>
+      entry.evidence.parent_command_digest === parent);
+    if (existing) {
+      const { memory_commit: _commit, memory_receipt: _receipt, ...saved } = existing;
+      const { memory_commit: _incomingCommit, memory_receipt: _incomingReceipt, ...incoming } = integration;
+      return operationPlanDigest(saved) === operationPlanDigest(incoming);
+    }
+    if ((this.state.agent_delegation_integrations?.length ?? 0) >= 64) return false;
+    this.memoryReady = false;
+    this.change((state) => {
+      state.agent_delegation_integrations ??= [];
+      state.agent_delegation_integrations.push(integration);
+    });
+    return true;
+  }
+
   private recoveryHoldAllowsResultMemoryReconciliation(hold: {
     readonly reason: OperationPlanRecoveryHoldReason;
     readonly provenance: OperationPlanRecoveryHoldProvenance;
@@ -5825,7 +5873,12 @@ export class OperationPlanLedger {
   reconcileMemory(): boolean {
     if (this.recoveryRefreshPending) return false;
     if (this.memoryQuiesced) return false;
-    if (!this.resultMemory) return (this.state.shell_exec_result_observations?.length ?? 0) === 0;
+    if (!this.resultMemory) {
+      const hasPendingDelivery = (this.state.shell_exec_result_observations?.length ?? 0) > 0 ||
+        (this.state.agent_delegation_integrations?.length ?? 0) > 0;
+      this.memoryReady = !hasPendingDelivery;
+      return !hasPendingDelivery;
+    }
     this.memoryReady = false;
     try {
       if (this.port && operationPlanDigest(this.port.load()) !== this.savedDigest && this.savedDigest !== null) return false;
@@ -5876,6 +5929,59 @@ export class OperationPlanLedger {
             const target = state.shell_exec_result_observations?.find((entry) =>
               entry.command_id_digest === observation!.command_id_digest);
             if (!target) throw new Error("plan_shell_result_observation_missing");
+            target.memory_receipt = receipt;
+          });
+        }
+      }
+      for (const original of this.state.agent_delegation_integrations ?? []) {
+        let integration = this.state.agent_delegation_integrations?.find((entry) =>
+          entry.evidence.parent_command_digest === original.evidence.parent_command_digest);
+        if (!integration) return false;
+        if (!integration.memory_commit) {
+          const lifecycle = this.resultMemory.snapshot();
+          const identity = agentDelegationIntegrationMemoryIdentity(integration);
+          const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+          if (!lifecycle || lifecycle.status !== "ready" || !stored || stored.exists) return false;
+          const commit = buildAgentDelegationIntegrationMemoryCommit(integration, stored.revision);
+          this.change((state) => {
+            const target = state.agent_delegation_integrations?.find((entry) =>
+              entry.evidence.parent_command_digest === integration!.evidence.parent_command_digest);
+            if (!target) throw new Error("plan_agent_delegation_integration_missing");
+            target.memory_commit = commit;
+          });
+          integration = this.state.agent_delegation_integrations?.find((entry) =>
+            entry.evidence.parent_command_digest === original.evidence.parent_command_digest);
+        }
+        if (!integration?.memory_commit || !verifyAgentDelegationIntegrationMemoryCommit(integration)) return false;
+        const commit = integration.memory_commit;
+        const lifecycle = this.resultMemory.snapshot();
+        if (!lifecycle) return false;
+        const existing = lifecycle.pending.find((entry) => entry.update_id === commit.update_id);
+        if (!existing) {
+          const staged = this.resultMemory.stage(commit);
+          if (!staged.ok || staged.status === "blocked") return false;
+        }
+        let reconciled = this.resultMemory.reconcile(commit.update_id);
+        if (!reconciled.ok) return false;
+        if (reconciled.status === "memory_commit_pending") {
+          const applied = this.resultMemory.apply(commit);
+          if (!applied.ok) return false;
+          reconciled = this.resultMemory.reconcile(commit.update_id);
+        }
+        if (!reconciled.ok || reconciled.status !== "ready" ||
+            !receiptForAgentDelegationIntegrationCommit(reconciled.receipt, commit)) return false;
+        const identity = agentDelegationIntegrationMemoryIdentity(integration);
+        const expectedValue = commit.changes[0]?.operation === "upsert" ? commit.changes[0].value : null;
+        const stored = this.resultMemory.readMemoryRecord(identity.record_id);
+        if (!stored?.exists || operationPlanDigest(stored.value) !== operationPlanDigest(expectedValue)) return false;
+        if (integration.memory_receipt) {
+          if (operationPlanDigest(integration.memory_receipt) !== operationPlanDigest(reconciled.receipt)) return false;
+        } else {
+          const receipt = reconciled.receipt;
+          this.change((state) => {
+            const target = state.agent_delegation_integrations?.find((entry) =>
+              entry.evidence.parent_command_digest === integration!.evidence.parent_command_digest);
+            if (!target) throw new Error("plan_agent_delegation_integration_missing");
             target.memory_receipt = receipt;
           });
         }
@@ -8025,6 +8131,13 @@ export class OperationPlanLedger {
       const commit = observation.memory_commit;
       if (commit && commit.update_id === reference.update_id && commit.j_event_id === reference.j_event_id &&
           commit.content_digest === reference.content_digest && verifyShellExecResultMemoryCommit(observation)) {
+        return Object.freeze({ ...reference });
+      }
+    }
+    for (const integration of this.state.agent_delegation_integrations ?? []) {
+      const commit = integration.memory_commit;
+      if (commit && commit.update_id === reference.update_id && commit.j_event_id === reference.j_event_id &&
+          commit.content_digest === reference.content_digest && verifyAgentDelegationIntegrationMemoryCommit(integration)) {
         return Object.freeze({ ...reference });
       }
     }

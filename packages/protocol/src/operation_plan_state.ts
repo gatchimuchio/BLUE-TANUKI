@@ -4,7 +4,7 @@ import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
 import { GoalCompletionRulesSchema } from "./goal_completion.js";
-import { ComputeResourceUseSchema } from "./types.js";
+import { AgentDelegationResultEvidenceV2Schema, ComputeResourceUseSchema } from "./types.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -870,10 +870,38 @@ export const OperationPlanReflectionCandidateSchema = z.object({
     interpretation: z.string().trim().min(1).max(800), uncertainty: z.string().trim().min(1).max(800) }).strict()).min(1).max(8),
 }).strict();
 
+/** J's parent-plan retention result and child execution evidence, with its durable M delivery state. */
+export const OperationPlanAgentDelegationIntegrationSchema = z.object({
+  schema_version: z.literal("operation-plan-agent-delegation-integration.v1"),
+  evidence: AgentDelegationResultEvidenceV2Schema,
+  evidence_digest: Digest,
+  parent_result_digest: Digest.optional(),
+  parent_plan_decision: z.enum(["candidate_retained", "candidate_rejected", "no_candidate", "compute_failed"]),
+  per_child_adoption: z.literal("not_evaluated"),
+  candidate_plan_id_digest: Digest.optional(),
+  rejection_reason_digest: Digest.optional(),
+  memory_commit: MemoryCommitV2Schema.optional(),
+  memory_receipt: MemoryUpdateReceiptV1Schema.optional(),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((integration, context) => {
+  if ((integration.parent_plan_decision === "candidate_retained") !== (integration.candidate_plan_id_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "agent_delegation_candidate_plan_binding_mismatch" });
+  }
+  if ((integration.parent_plan_decision === "candidate_rejected") !== (integration.rejection_reason_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "agent_delegation_candidate_rejection_binding_mismatch" });
+  }
+  if (integration.memory_receipt !== undefined && integration.memory_commit === undefined) {
+    context.addIssue({ code: "custom", message: "agent_delegation_memory_receipt_without_commit" });
+  }
+});
+export type OperationPlanAgentDelegationIntegration = z.infer<typeof OperationPlanAgentDelegationIntegrationSchema>;
+
 const OperationPlanCheckpointSharedShape = {
   schema_version: z.literal("operation-plan-state.v1"),
   waits: z.array(OperationPlanWaitStateSchema).max(256).optional(),
   shell_exec_result_observations: z.array(OperationPlanShellExecResultObservationSchema).max(256).optional(),
+  agent_delegation_integrations: z.array(OperationPlanAgentDelegationIntegrationSchema).max(64).optional(),
 };
 
 /** The validated schema for one plan record inside the J checkpoint. */

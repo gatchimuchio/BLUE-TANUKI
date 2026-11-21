@@ -3,12 +3,13 @@ import { Buffer } from "node:buffer";
 import {
   MCP_CALL_POTENTIAL_EFFECTS, MEMORY_COMMIT_V2_SCHEMA_VERSION, memoryCommitContentDigest, parseMemoryCommitV2,
   parseMemoryUpdateReceipt, type MemoryCommitV2, type MemoryCommitJsonValue,
-  type MemoryUpdateReceiptV1, type OperationPlanCheckpoint,
+  type MemoryUpdateReceiptV1, type OperationPlanAgentDelegationIntegration, type OperationPlanCheckpoint,
 } from "@blue-tanuki/protocol";
 
 type Plan = OperationPlanCheckpoint["plans"][number];
 type Binding = Plan["bindings"][number];
 type ShellExecObservation = NonNullable<OperationPlanCheckpoint["shell_exec_result_observations"]>[number];
+type AgentDelegationIntegration = OperationPlanAgentDelegationIntegration;
 const BROWSER_READ_CONTEXT_MAX_CHARS = 8_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -793,4 +794,74 @@ export function verifyShellExecResultMemoryCommit(observation: ShellExecObservat
   if (!parsed.ok) return false;
   return parsed.content_digest === buildShellExecResultMemoryCommit(observation,
     parsed.commit.expected_version).content_digest;
+}
+
+/** M receives digest-bound child execution facts and J's parent-plan decision, never child text or child authority. */
+export function agentDelegationIntegrationObservation(integration: AgentDelegationIntegration) {
+  if (stableDigest(integration.evidence) !== integration.evidence_digest) return null;
+  return {
+    schema_version: "agent-delegation-integration-observation.v1",
+    record_type: "agent_delegation_integration_observation",
+    parent_command_digest: integration.evidence.parent_command_digest,
+    contract_digest: integration.evidence.contract_digest,
+    parent_goal_digest: integration.evidence.parent_goal_digest,
+    parent_task_identity_digest: integration.evidence.parent_task_identity_digest,
+    parent_budget_identity_digest: integration.evidence.parent_budget_identity_digest,
+    criteria_digest: integration.evidence.criteria_digest,
+    termination_digest: integration.evidence.termination_digest,
+    evidence_digest: integration.evidence_digest,
+    ...(integration.parent_result_digest ? { parent_result_digest: integration.parent_result_digest } : {}),
+    parent_plan_decision: integration.parent_plan_decision,
+    per_child_adoption: integration.per_child_adoption,
+    ...(integration.candidate_plan_id_digest ? { candidate_plan_id_digest: integration.candidate_plan_id_digest } : {}),
+    ...(integration.rejection_reason_digest ? { rejection_reason_digest: integration.rejection_reason_digest } : {}),
+    children: integration.evidence.children.map((child) => ({
+      role: child.role,
+      child_task_digest: child.child_task_digest,
+      outcome: child.outcome,
+      ...(child.resource_use_digest ? { resource_use_digest: child.resource_use_digest } : {}),
+      ...(child.resource_use ? { resource_use: child.resource_use } : {}),
+      ...("reason" in child ? { reason: child.reason } : {}),
+    })),
+    used_for_authority: false,
+    may_execute: false,
+  } as const;
+}
+
+export function agentDelegationIntegrationMemoryIdentity(integration: AgentDelegationIntegration) {
+  const id = stableDigest(["agent-delegation-integration-memory.v1", integration.evidence.parent_command_digest]);
+  return { update_id: `agent-delegation-update:${id}`, j_event_id: `agent-delegation-decision:${id}`,
+    record_id: `agent-delegation-decision:${id}` };
+}
+
+export function buildAgentDelegationIntegrationMemoryCommit(
+  integration: AgentDelegationIntegration,
+  expected_version: number,
+): MemoryCommitV2 {
+  const observation = agentDelegationIntegrationObservation(integration);
+  if (!observation) throw new Error("plan_agent_delegation_evidence_digest_mismatch");
+  const id = agentDelegationIntegrationMemoryIdentity(integration);
+  const content = { schema_version: MEMORY_COMMIT_V2_SCHEMA_VERSION, expected_version,
+    update_id: id.update_id, j_event_id: id.j_event_id,
+    changes: [{ operation: "upsert" as const, record_id: id.record_id,
+      value: observation as unknown as MemoryCommitJsonValue }],
+  };
+  return { ...content, content_digest: memoryCommitContentDigest(content) };
+}
+
+export function verifyAgentDelegationIntegrationMemoryCommit(integration: AgentDelegationIntegration): boolean {
+  if (!integration.memory_commit) return false;
+  const parsed = parseMemoryCommitV2(integration.memory_commit);
+  if (!parsed.ok) return false;
+  return parsed.content_digest === buildAgentDelegationIntegrationMemoryCommit(integration,
+    parsed.commit.expected_version).content_digest;
+}
+
+export function receiptForAgentDelegationIntegrationCommit(
+  receipt: MemoryUpdateReceiptV1,
+  commit: MemoryCommitV2,
+): boolean {
+  const parsed = parseMemoryUpdateReceipt(receipt);
+  return parsed.ok && parsed.receipt.update_id === commit.update_id &&
+    parsed.receipt.content_digest === commit.content_digest && parsed.receipt.previous_revision === commit.expected_version;
 }

@@ -3899,6 +3899,7 @@ ${planControl.question}`,
     let waitCandidatePlanIdDigest: string | undefined;
     let planCandidateEvent: "candidate_retained" | "candidate_rejected" | undefined;
     let planCandidateRejectionReason: string | undefined;
+    let agentDelegationCandidatePlanIdDigest: string | undefined;
     const resultAudit: { digest?: string; status: "not_present" | "recorded" | "unavailable" } = fb.result === undefined ? { status: "not_present" } : (() => {
       try { return { digest: sha256(fb.result), status: "recorded" as const }; }
       catch { return { status: "unavailable" as const }; }
@@ -4226,6 +4227,10 @@ ${planControl.question}`,
           if (issued.command.payload.agent_delegation && !agentDelegationEvidence) {
             throw new Error("plan_agent_delegation_result_evidence_unverified");
           }
+          if (issued.command.payload.agent_delegation && agentDelegationEvidence &&
+              !this.operationPlans.canRecordAgentDelegationIntegration(agentDelegationEvidence.parent_command_digest)) {
+            throw new Error("plan_agent_delegation_integration_capacity_unavailable");
+          }
           const citationReview = this.audit.list().map((entry) => entry.log)
             .find((entry) => isMemoryCitationReviewLog(entry) && entry.command_id === fb.command_id &&
               entry.request_id === sourceLog?.request_id &&
@@ -4282,6 +4287,7 @@ ${planControl.question}`,
           waitComputeOutcome = issued.wait_resume ? "candidate_retained" : waitComputeOutcome;
           resourceReviewOutcome = issued.resource_review ? "candidate_retained" : resourceReviewOutcome;
           waitCandidatePlanIdDigest = retainedPlanIdDigest;
+          agentDelegationCandidatePlanIdDigest = retainedPlanIdDigest;
           planCandidateEvent = "candidate_retained";
         } else {
           waitComputeOutcome = issued.wait_resume ? "candidate_rejected" : waitComputeOutcome;
@@ -4334,6 +4340,30 @@ ${planControl.question}`,
       }
     }
     if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id, planCandidateRejectionReason);
+    if (issuedAgentDelegation && agentDelegationEvidence) {
+      const decision = fb.status !== "success" ? "compute_failed" as const
+        : planCandidateEvent === "candidate_retained" ? "candidate_retained" as const
+          : planCandidateEvent === "candidate_rejected" ? "candidate_rejected" as const : "no_candidate" as const;
+      const recorded = this.operationPlans.recordAgentDelegationIntegration({
+        evidence: agentDelegationEvidence,
+        evidence_digest: operationPlanDigest(agentDelegationEvidence),
+        ...(resultAudit.digest ? { parent_result_digest: resultAudit.digest } : {}),
+        parent_plan_decision: decision,
+        per_child_adoption: "not_evaluated",
+        ...(decision === "candidate_retained" && agentDelegationCandidatePlanIdDigest
+          ? { candidate_plan_id_digest: agentDelegationCandidatePlanIdDigest } : {}),
+        ...(decision === "candidate_rejected"
+          ? { rejection_reason_digest: sha256(planCandidateRejectionReason ?? "plan_candidate_rejected") } : {}),
+      });
+      const receiptConfirmed = recorded && this.operationPlans.reconcileMemory();
+      this.audit.append({ kind: "operation_plan", event: "agent_delegation_integration_memory_status",
+        request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
+        projection_digest: operationPlanDigest(this.operationPlans.projection()),
+        proposal_digest: operationPlanDigest(agentDelegationEvidence),
+        target_digest: agentDelegationEvidence.parent_command_digest,
+        reason: receiptConfirmed ? "receipt_confirmed" : "receipt_pending_or_unavailable",
+        used_for_authority: false, timestamp: this.nowMs() });
+    }
     if (sourceLog && this.operationPlans.isBound(fb.command_id)) {
       this.operationPlans.recordResult(fb);
       this.planEvent("result_observed", fb.command_id);
