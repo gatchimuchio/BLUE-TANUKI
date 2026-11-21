@@ -1583,6 +1583,9 @@ export async function invokeComposioExecute(
       "Composio connected account is missing, not PRIVATE ACTIVE, disabled, outside the configured owner/toolkit, or has unknown/mismatched PostHog auth scheme or region; mutation_sent=false",
     );
   }
+  if (composioSchemaDigest(selectedAccount) !== parsedObservation.data.account_state_sha256) {
+    throw new Error("Composio connected account changed after owner review; mutation_sent=false");
+  }
   const currentAction = await assertComposioInputSchemaUnchanged({
     toolkit,
     tool,
