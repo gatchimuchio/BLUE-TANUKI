@@ -118,6 +118,7 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion, googleCalendarCreateEventId } from "./tools/google_write.js";
+import { parseBrowserFormGetArguments } from "./tools/browser_form_submission.js";
 import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
@@ -335,6 +336,17 @@ async function acquireTargetResourceLock(key: string): Promise<() => void> {
 async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "tool_call" }>,
   observation: BrokerTargetVersionObservation | undefined): Promise<string | undefined> {
   const { tool_name, arguments: args } = command.payload;
+  if (tool_name === "browser.automation" && args.action === "form_submit") {
+    // A GET form submission still has an unclassified external effect. Serialize submissions to
+    // the same normalized action endpoint while the one-shot L3 receipt and form-state precondition
+    // are consumed by the real adapter; never place URL or field contents in the lock key.
+    const request = parseBrowserFormGetArguments(args);
+    const targetDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.browser-form-get-resource-lock.v1",
+      request.action_url,
+    ]), "utf8").digest("hex");
+    return `browser-form-get:${targetDigest}`;
+  }
   if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
     // Validate the exact target first; shell.exec has a root-wide write set, so both share one workspace mutex.
     await brokerFileResourceLockDigest(tool_name, args);
