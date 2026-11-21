@@ -376,6 +376,27 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     const settingsObservation = SettingsWriteTargetVersionObservationSchema.parse(observation);
     return `gateway-settings:${settingsObservation.target_identity_digest}`;
   }
+  if (tool_name === "mcp.call" &&
+      observation?.schema_version === "blue-tanuki.mcp-call-target-version.v1") {
+    const mcpObservation = McpCallTargetVersionObservationSchema.parse(observation);
+    // MCP target observations bind a connection, not a resource identity. Serialize all tool calls on
+    // that reviewed connection instead of deriving a lock from untrusted argument content.
+    if ((mcpObservation.request_kind ?? "tool_call") === "tool_call") {
+      return `mcp-connection:${mcpObservation.connection_digest}`;
+    }
+  }
+  if (tool_name === "composio.execute" &&
+      observation?.schema_version === "blue-tanuki.composio-action-target-version.v1") {
+    const composioObservation = ComposioActionTargetVersionObservationSchema.parse(observation);
+    // Composio observations expose a connected-account identity, but no canonical object identity.
+    // Serialize actions for the account without placing account or action payload content in the key.
+    const accountDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.composio-account-resource-lock.v1",
+      composioObservation.user_id_sha256,
+      composioObservation.connected_account_id_sha256,
+    ]), "utf8").digest("hex");
+    return `composio-account:${accountDigest}`;
+  }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
       ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(args.operation))) {
     return `gmail:${observation.target_identity_digest}`;
