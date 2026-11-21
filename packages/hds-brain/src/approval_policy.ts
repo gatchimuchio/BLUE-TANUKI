@@ -20,6 +20,7 @@ export type ApprovalOperation =
   | "tool.file.delete"
   | "tool.shell.exec"
   | "tool.network.http"
+  | "network.expose"
   | "browser.snapshot"
   | "browser.automation"
   | "channel.send"
@@ -126,6 +127,7 @@ export const FINAL_REVIEW_OPERATION_LIST = [
   "tool.file.delete",
   "tool.shell.exec",
   "external.send",
+  "network.expose",
   "credential.access",
   "settings.write",
   "schedule.create",
@@ -253,6 +255,8 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
     if (command.payload.tool_name === "recovery.reset_connector") return "recovery.reset_connector";
     if (command.payload.tool_name === "recovery.factory_reset") return "recovery.factory_reset";
   }
+  if (hasAny(caps, ["network:listen"])) return "network.expose";
+  if (hasAny(caps, ["external:send", "email:send", "slack:send", "discord:send"])) return "external.send";
   if (hasAny(caps, ["credential:read", "credential.access", "secrets:read"])) return "credential.access";
   if (hasAny(caps, ["payment:charge", "billing:write"])) return "payment.charge";
   if (hasAny(caps, ["schedule:read"])) return "schedule.list";
@@ -283,7 +287,6 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
     return "tool.file.read";
   }
   if (hasAny(caps, ["network:http", "http.fetch"]) || hasPrefix(caps, "network:")) return "tool.network.http";
-  if (hasAny(caps, ["external:send", "email:send", "slack:send", "discord:send"])) return "external.send";
   if (command.type === "llm_call") return "llm.call";
   if (command.type === "channel_send") return "channel.send";
   if (command.type === "tool_call") {
@@ -304,7 +307,7 @@ export function operationFromCommand(command: ExecuteCommand, caps: readonly Too
 export function riskForOperation(op: ApprovalOperation, caps: readonly ToolCapability[] = []): ApprovalRisk {
   if (op === "tool.call" || op === "unknown") return "high";
   if (["credential.access", "payment.charge"].includes(op)) return "high";
-  if (["tool.file.delete", "tool.shell.exec", "external.send", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "recovery.restore", "recovery.reset_provider", "recovery.reset_connector", "recovery.factory_reset", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
+  if (["tool.file.delete", "tool.shell.exec", "external.send", "network.expose", "settings.write", "schedule.create", "schedule.update", "schedule.delete", "schedule.resolve_event", "recovery.restore", "recovery.reset_provider", "recovery.reset_connector", "recovery.factory_reset", "browser.automation", "github.write", "google.write"].includes(op)) return "high";
   if (
     ["tool.file.write", "tool.file.edit", "tool.network.http", "browser.snapshot", "channel.send"].includes(op) ||
     hasPrefix(caps, "network:")
