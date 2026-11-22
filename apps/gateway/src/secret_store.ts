@@ -480,6 +480,38 @@ export function resolveLLMSecretRefs(
   return resolveSecretRefs(env, opts, LLM_SECRET_KEYS);
 }
 
+/** Validate LLM reference shape and key/platform binding without reading secret bytes. */
+export function validateLLMSecretReferences(
+  env: Env,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  for (const key of LLM_SECRET_KEYS) {
+    if (env[key]) continue;
+    const referenceKey = secretRefKey(key);
+    const ref = env[referenceKey];
+    if (!ref) continue;
+    if (ref.startsWith(SECRET_REF_PREFIX)) {
+      if (platform !== "win32") throw new Error(`${referenceKey} requires Windows DPAPI secret storage`);
+      const secretPath = pathFromRef(ref);
+      let matchesKey = false;
+      try {
+        matchesKey = dpapiCredentialFileMatchesKey(secretPath, key);
+      } catch {
+        // Do not expose local secret-store paths in configuration errors.
+      }
+      if (!matchesKey) throw new Error(`${referenceKey} does not match the protected secret key`);
+      continue;
+    }
+    if (ref.startsWith(OS_KEYRING_REF_PREFIX) || ref.startsWith(OS_KEYRING_REF_V2_PREFIX)) {
+      if (osKeyringEntryId(ref, platform, key) === null) {
+        throw new Error(`${referenceKey} does not match this platform or secret key`);
+      }
+      continue;
+    }
+    throw new Error(`${referenceKey} uses an unsupported secret ref format`);
+  }
+}
+
 export function resolveConnectorSecretRefs(
   env: Env,
   opts: ResolveOptions = {},

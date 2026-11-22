@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { LLMRegistry } from "@blue-tanuki/core";
 import {
   buildLLMBackendFromEnv,
@@ -65,6 +67,45 @@ describe("buildLLMBackendFromEnv", () => {
         OPENROUTER_MODEL: "openrouter/model",
       }),
     ).toThrow(process.platform === "win32" ? /unsupported secret ref path/ : /Windows DPAPI/);
+  });
+
+  it("reads a configured provider credential from the current environment for each local request", async () => {
+    const authorization: string[] = [];
+    const server = createServer((request, response) => {
+      request.resume();
+      request.once("end", () => {
+        authorization.push(request.headers.authorization ?? "");
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          model: "local-fixture-model",
+          choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+        }));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+    const env = {
+      LLM_BACKEND: "openai-compatible",
+      OPENAI_COMPAT_ENDPOINT: `http://127.0.0.1:${port}/v1`,
+      OPENAI_COMPAT_MODEL: "local-fixture-model",
+      OPENAI_COMPAT_API_KEY: "first-synthetic-key",
+    };
+    try {
+      const llm = buildLLMBackendFromEnv(env);
+      env.OPENAI_COMPAT_API_KEY = "second-synthetic-key";
+      await llm.call({ messages: [{ role: "user", content: "synthetic local request" }] });
+      env.OPENAI_COMPAT_API_KEY = "third-synthetic-key";
+      await llm.call({ messages: [{ role: "user", content: "synthetic local request" }] });
+
+      expect(authorization).toEqual(["Bearer second-synthetic-key", "Bearer third-synthetic-key"]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   });
 
   it("fails closed when OpenRouter is selected without an API key", () => {

@@ -8,14 +8,18 @@ import {
   validateLLMImageInputs,
   validateLLMAudioInputs,
   type LLMBackend,
+  type LLMProviderCredentialAction,
+  type LLMProviderCredentialResolver,
   type LLMRequest,
   type LLMResponse,
+  resolveLLMProviderCredential,
 } from "./base.js";
 import type { TransientAudioInput } from "@blue-tanuki/protocol";
 import { fetchWithProviderTimeout, readProviderJson } from "./fetch_timeout.js";
 
 export interface OpenAICompatibleBackendOptions {
   apiKey?: string;
+  credential_resolver?: LLMProviderCredentialResolver;
   defaultModel: string;
   endpoint: string;
   headers?: Record<string, string>;
@@ -215,6 +219,10 @@ export class OpenAICompatibleBackend implements LLMBackend {
   constructor(private readonly opts: OpenAICompatibleBackendOptions) {
     if (!opts.defaultModel) throw new Error("OpenAICompatibleBackend: defaultModel is required");
     if (!opts.endpoint) throw new Error("OpenAICompatibleBackend: endpoint is required");
+    if (opts.credential_resolver && (opts.apiKey !== undefined ||
+        Object.keys(opts.headers ?? {}).some((key) => key.toLowerCase() === "authorization"))) {
+      throw new Error("OpenAICompatibleBackend: per-call credentials cannot be combined with static authorization");
+    }
     this.name = opts.name ?? "openai-compatible";
     this.endpoint = normalizeEndpoint(opts.endpoint);
     const imageModels = opts.image_capable_models ?? [];
@@ -257,6 +265,20 @@ export class OpenAICompatibleBackend implements LLMBackend {
       return this.audioTranscriptionCapableModels.has(model ?? this.opts.defaultModel);
     }
     return capability === LLM_IMAGE_INPUT_CAPABILITY && this.imageCapableModels.has(model ?? this.opts.defaultModel);
+  }
+
+  private async headersForCredential(action: LLMProviderCredentialAction, endpoint: string): Promise<Record<string, string>> {
+    const headers = { ...this.headers };
+    if (this.opts.credential_resolver) {
+      const credential = await resolveLLMProviderCredential(
+        this.name,
+        endpoint,
+        action,
+        this.opts.credential_resolver,
+      );
+      headers.Authorization = `Bearer ${credential}`;
+    }
+    return headers;
   }
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
@@ -336,7 +358,7 @@ export class OpenAICompatibleBackend implements LLMBackend {
       this.endpoint,
       {
         method: "POST",
-        headers: this.headers,
+        headers: await this.headersForCredential("llm.text.generate", this.endpoint),
         body: JSON.stringify(body),
       },
       req.timeout_ms,
@@ -370,13 +392,14 @@ export class OpenAICompatibleBackend implements LLMBackend {
     form.set("file", new Blob([Buffer.from(audio.data)], { type: audioFormatMime(audio.format) }), `voice.${audio.format}`);
     form.set("model", model);
     form.set("response_format", "json");
-    const headers = { ...this.headers };
+    const endpoint = normalizeTranscriptionEndpoint(this.endpoint);
+    const headers = await this.headersForCredential("llm.audio.transcription", endpoint);
     for (const key of Object.keys(headers)) {
       if (key.toLowerCase() === "content-type") delete headers[key];
     }
     return fetchWithProviderTimeout(
       this.name,
-      normalizeTranscriptionEndpoint(this.endpoint),
+      endpoint,
       { method: "POST", headers, body: form },
       req.timeout_ms,
       async (response) => {

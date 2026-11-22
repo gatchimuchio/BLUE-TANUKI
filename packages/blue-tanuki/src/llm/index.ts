@@ -9,6 +9,9 @@ export type {
   LLMErrorKind,
   LLMErrorClassification,
   LLMProviderErrorOptions,
+  LLMProviderCredentialAction,
+  LLMProviderCredentialResolver,
+  LLMProviderCredentialUse,
   LLMToolCallCandidate,
 } from "./base.js";
 export {

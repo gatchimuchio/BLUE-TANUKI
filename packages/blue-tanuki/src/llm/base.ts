@@ -103,6 +103,19 @@ export interface LLMBackend {
   call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
 }
 
+export type LLMProviderCredentialAction = "llm.text.generate" | "llm.audio.transcription";
+
+export interface LLMProviderCredentialUse {
+  provider: string;
+  endpoint: string;
+  action: LLMProviderCredentialAction;
+}
+
+/** Resolves a credential for one provider action and its concrete endpoint. */
+export type LLMProviderCredentialResolver = (
+  use: LLMProviderCredentialUse,
+) => string | undefined | Promise<string | undefined>;
+
 export function backendSupportsCapability(
   backend: LLMBackend,
   capability: string,
@@ -339,6 +352,29 @@ export class LLMProviderError extends Error {
       this.cause = options.cause;
     }
   }
+}
+
+/** Resolve a per-call credential without retaining resolver errors that may contain secret-store paths. */
+export async function resolveLLMProviderCredential(
+  provider: string,
+  endpoint: string,
+  action: LLMProviderCredentialAction,
+  resolver: LLMProviderCredentialResolver,
+): Promise<string> {
+  let credential: string | undefined;
+  try {
+    credential = await resolver({ provider, endpoint, action });
+  } catch {
+    // Secret-store errors may contain local paths or provider credential details.
+  }
+  if (typeof credential !== "string" || credential.trim().length === 0) {
+    throw new LLMProviderError("Provider credential is unavailable.", {
+      provider,
+      kind: "auth",
+      retryable: false,
+    });
+  }
+  return credential;
 }
 
 export function classifyLLMError(error: unknown): LLMErrorClassification {

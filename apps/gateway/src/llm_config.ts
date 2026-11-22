@@ -7,6 +7,8 @@ import {
   StubBackend,
   type LLMBackend,
   type LLMFallbackProfile,
+  type LLMProviderCredentialAction,
+  type LLMProviderCredentialResolver,
   type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
@@ -14,8 +16,10 @@ import { LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS 
 import {
   hasLLMSecretMaterial,
   LLM_SECRET_KEYS,
-  resolveLLMSecretRefs,
+  resolveSecretMaterial,
   secretRefKey,
+  validateLLMSecretReferences,
+  type LlmSecretKey,
 } from "./secret_store.js";
 
 type Env = Record<string, string | undefined>;
@@ -26,6 +30,7 @@ interface ProviderSpec {
   endpoint: string;
   model: string;
   apiKey?: string;
+  credentialKey?: LlmSecretKey;
   headers: Record<string, string>;
   aliases: string[];
 }
@@ -217,8 +222,12 @@ function parseProvidersJson(raw: string | undefined, env: Env, configurationOnly
       throw new Error(`LLM_PROVIDERS_JSON[${index}].model is required`);
     }
     const apiKeyEnv = stringOrUndefined(obj.api_key_env);
+    const inlineApiKey = stringOrUndefined(obj.api_key);
+    const credentialKey = !inlineApiKey && apiKeyEnv
+      ? LLM_SECRET_KEYS.find((key) => apiKeyEnv === key || apiKeyEnv === secretRefKey(key))
+      : undefined;
     const apiKey = configurationOnly ? undefined :
-      (stringOrUndefined(obj.api_key) ?? (apiKeyEnv ? envValue(env, apiKeyEnv) : undefined));
+      (inlineApiKey ?? (credentialKey ? undefined : (apiKeyEnv ? envValue(env, apiKeyEnv) : undefined)));
     const headersEnv = stringOrUndefined(obj.headers_env);
     const headersFromEnv = headersEnv
       ? parseHeadersJson(envValue(env, headersEnv))
@@ -236,6 +245,7 @@ function parseProvidersJson(raw: string | undefined, env: Env, configurationOnly
       endpoint,
       model,
       apiKey,
+      credentialKey,
       headers: configurationOnly ? {} : { ...headersFromEnv, ...inlineHeaders },
       aliases: stringArray(obj.aliases, `LLM_PROVIDERS_JSON[${index}].aliases`),
     };
@@ -246,6 +256,38 @@ function wantsBackend(env: Env, name: string): boolean {
   return (envValue(env, "LLM_BACKEND", "LLM_DEFAULT_BACKEND") ?? "stub")
     .trim()
     .toLowerCase() === name;
+}
+
+function credentialResolverFor(
+  env: Env,
+  key: LlmSecretKey,
+  provider: string,
+  configuredEndpoint: string,
+  allowedActions: readonly LLMProviderCredentialAction[],
+): LLMProviderCredentialResolver | undefined {
+  if (!hasLLMSecretMaterial(env, key)) return undefined;
+  let configuredOrigin: string;
+  try {
+    configuredOrigin = new URL(configuredEndpoint).origin;
+  } catch {
+    return undefined;
+  }
+  const acceptedActions = new Set(allowedActions);
+  return (use) => {
+    if (use.provider !== provider || !acceptedActions.has(use.action)) return undefined;
+    let requestedOrigin: string;
+    try {
+      requestedOrigin = new URL(use.endpoint).origin;
+    } catch {
+      return undefined;
+    }
+    if (requestedOrigin !== configuredOrigin) return undefined;
+    const direct = env[key];
+    if (direct) return direct;
+    const reference = env[secretRefKey(key)];
+    if (!reference) return undefined;
+    return resolveSecretMaterial({ [secretRefKey(key)]: reference }, key);
+  };
 }
 
 function parsePositiveIntEnv(
@@ -280,7 +322,12 @@ function parseTemperatureEnv(env: Env): number | undefined {
 }
 
 export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
-  return buildLLMRegistry(resolveLLMSecretRefs(env));
+  validateLLMSecretReferences(env);
+  const configEnv = { ...env };
+  for (const key of LLM_SECRET_KEYS) {
+    configEnv[key] = hasLLMSecretMaterial(env, key) ? "configured-credential-placeholder" : undefined;
+  }
+  return buildLLMRegistry(configEnv, false, env);
 }
 
 /** Non-callable cost and routing projection. OS secret references are never opened. */
@@ -302,7 +349,11 @@ export function inspectLLMRegistryConfiguration(env: Env): {
   };
 }
 
-function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegistry {
+function buildLLMRegistry(
+  resolvedEnv: Env,
+  configurationOnly = false,
+  credentialEnv: Env = resolvedEnv,
+): LLMRegistry {
   const imageCapableModels = parseImageCapableModelsJson(
     envValue(resolvedEnv, "BLUE_TANUKI_LLM_IMAGE_CAPABLE_MODELS_JSON"),
   );
@@ -339,6 +390,15 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
   }
 
   const anthropicKey = envValue(resolvedEnv, "ANTHROPIC_API_KEY");
+  const anthropicEndpoint = envValue(resolvedEnv, "ANTHROPIC_ENDPOINT") ??
+    SETTINGS_WRITE_ACTIVATION_DESTINATIONS.anthropic;
+  const anthropicCredentialResolver = credentialResolverFor(
+    credentialEnv,
+    "ANTHROPIC_API_KEY",
+    "anthropic",
+    anthropicEndpoint,
+    ["llm.text.generate"],
+  );
   if (
     anthropicKey ||
     wantsBackend(resolvedEnv, "anthropic") ||
@@ -349,10 +409,10 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
         anthropicKey ?? "",
         envValue(resolvedEnv, "ANTHROPIC_MODEL", "LLM_MODEL") ??
           "claude-opus-4-7",
-        envValue(resolvedEnv, "ANTHROPIC_ENDPOINT") ??
-          SETTINGS_WRITE_ACTIVATION_DESTINATIONS.anthropic,
+        anthropicEndpoint,
         envValue(resolvedEnv, "ANTHROPIC_API_VERSION") ?? "2023-06-01",
         imageModelsFor("anthropic"),
+        configurationOnly ? undefined : anthropicCredentialResolver,
       ),
       ["claude"],
     );
@@ -376,6 +436,8 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
     "OPENAI_API_KEY",
     "LLM_API_KEY",
   );
+  const openaiCredentialKey = (["OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"] as const)
+    .find((key) => hasLLMSecretMaterial(credentialEnv, key));
   const wantsNativeOpenAI =
     wantsBackend(resolvedEnv, "openai") ||
     Boolean(envValue(resolvedEnv, "OPENAI_API_KEY"));
@@ -391,12 +453,17 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
       openaiEndpoint ??
       (wantsNativeOpenAI ? SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai : "");
     const headers = parseHeadersJson(envValue(resolvedEnv, "OPENAI_COMPAT_HEADERS_JSON", "LLM_HEADERS_JSON"));
+    const credentialResolver = openaiCredentialKey
+      ? credentialResolverFor(credentialEnv, openaiCredentialKey, "openai-compatible", endpoint,
+        ["llm.text.generate", "llm.audio.transcription"])
+      : undefined;
     registry.register(
       new OpenAICompatibleBackend({
         name: "openai-compatible",
         endpoint,
         defaultModel: openaiModel ?? "",
-        apiKey: openaiKey,
+        apiKey: configurationOnly || credentialResolver ? undefined : openaiKey,
+        credential_resolver: configurationOnly ? undefined : credentialResolver,
         headers: configurationOnly ? {} : headers,
         image_capable_models: imageModelsFor("openai-compatible"),
         audio_transcription_capable_models: audioModelsFor("openai-compatible"),
@@ -412,6 +479,10 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
     envValue(resolvedEnv, "OPENROUTER_ENDPOINT") ?? SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openrouter;
   const openrouterSelected = wantsBackend(resolvedEnv, "openrouter");
   const wantsOpenRouter = openrouterSelected || Boolean(openrouterKey && openrouterModel);
+  const openrouterCredentialResolver = hasLLMSecretMaterial(credentialEnv, "OPENROUTER_API_KEY")
+    ? credentialResolverFor(credentialEnv, "OPENROUTER_API_KEY", "openrouter", openrouterEndpoint,
+      ["llm.text.generate", "llm.audio.transcription"])
+    : undefined;
   if (wantsOpenRouter) {
     if (!openrouterModel) {
       throw new Error("openrouter requires OPENROUTER_MODEL or LLM_MODEL");
@@ -429,7 +500,8 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
         name: "openrouter",
         endpoint: openrouterEndpoint,
         defaultModel: openrouterModel,
-        apiKey: openrouterKey,
+        apiKey: configurationOnly || openrouterCredentialResolver ? undefined : openrouterKey,
+        credential_resolver: configurationOnly ? undefined : openrouterCredentialResolver,
         headers: openrouterHeaders,
         image_capable_models: imageModelsFor("openrouter"),
         audio_transcription_capable_models: audioModelsFor("openrouter"),
@@ -448,7 +520,11 @@ function buildLLMRegistry(resolvedEnv: Env, configurationOnly = false): LLMRegis
         name: provider.name,
         endpoint: provider.endpoint,
         defaultModel: provider.model,
-        apiKey: provider.apiKey,
+        apiKey: provider.credentialKey && !configurationOnly ? undefined : provider.apiKey,
+        credential_resolver: provider.credentialKey && !configurationOnly
+          ? credentialResolverFor(credentialEnv, provider.credentialKey, provider.name, provider.endpoint,
+            ["llm.text.generate", "llm.audio.transcription"])
+          : undefined,
         headers: provider.headers,
         image_capable_models: imageModelsFor(provider.name.trim().toLowerCase()),
         audio_transcription_capable_models: audioModelsFor(provider.name.trim().toLowerCase()),

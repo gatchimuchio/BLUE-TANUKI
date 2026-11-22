@@ -6,8 +6,10 @@ import {
   validateLLMImageInputs,
   validateLLMAudioInputs,
   type LLMBackend,
+  type LLMProviderCredentialResolver,
   type LLMRequest,
   type LLMResponse,
+  resolveLLMProviderCredential,
 } from "./base.js";
 import { fetchWithProviderTimeout, readProviderJson } from "./fetch_timeout.js";
 
@@ -114,8 +116,9 @@ export class AnthropicBackend implements LLMBackend {
     private readonly endpoint: string = "https://api.anthropic.com/v1/messages",
     private readonly apiVersion: string = "2023-06-01",
     imageCapableModels: readonly string[] = [],
+    private readonly credentialResolver?: LLMProviderCredentialResolver,
   ) {
-    if (!apiKey) throw new Error("AnthropicBackend: apiKey is required");
+    if (!apiKey && !credentialResolver) throw new Error("AnthropicBackend: apiKey is required");
     if (!Array.isArray(imageCapableModels) || imageCapableModels.length > 64 ||
         imageCapableModels.some((model) => typeof model !== "string" || !model.trim() || model.length > 200) ||
         new Set(imageCapableModels).size !== imageCapableModels.length) {
@@ -179,6 +182,14 @@ export class AnthropicBackend implements LLMBackend {
     };
     if (system) body.system = system;
     if (req.temperature !== undefined) body.temperature = req.temperature;
+    const apiKey = this.credentialResolver
+      ? await resolveLLMProviderCredential(
+        this.name,
+        this.endpoint,
+        "llm.text.generate",
+        this.credentialResolver,
+      )
+      : this.apiKey;
 
     return fetchWithProviderTimeout(
       this.name,
@@ -187,7 +198,7 @@ export class AnthropicBackend implements LLMBackend {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": this.apiKey,
+          "x-api-key": apiKey,
           "anthropic-version": this.apiVersion,
         },
         body: JSON.stringify(body),

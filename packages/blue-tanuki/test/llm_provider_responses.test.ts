@@ -41,6 +41,88 @@ afterEach(() => {
 });
 
 describe("LLM provider structured responses", () => {
+  it("resolves OpenAI-compatible credentials for each call and binds them to provider host and action", async () => {
+    const uses: Array<{ provider: string; endpoint: string; action: string }> = [];
+    const credentials = ["fixture-credential-one", "fixture-credential-two"];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      model: "fixture-model",
+      choices: [{ finish_reason: "stop", message: { content: "observed" } }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const backend = new OpenAICompatibleBackend({
+      name: "fixture-provider",
+      defaultModel: "fixture-model",
+      endpoint: "https://fixture.invalid/v1",
+      credential_resolver: (use) => {
+        uses.push(use);
+        return credentials[uses.length - 1];
+      },
+    });
+
+    await backend.call(request);
+    await backend.call(request);
+
+    expect(uses).toEqual([
+      { provider: "fixture-provider", endpoint: "https://fixture.invalid/v1/chat/completions", action: "llm.text.generate" },
+      { provider: "fixture-provider", endpoint: "https://fixture.invalid/v1/chat/completions", action: "llm.text.generate" },
+    ]);
+    expect(fetchMock.mock.calls.map((call) => new Headers(call[1]?.headers).get("authorization"))).toEqual([
+      "Bearer fixture-credential-one",
+      "Bearer fixture-credential-two",
+    ]);
+  });
+
+  it("resolves an Anthropic credential for the configured provider action at call time", async () => {
+    const uses: Array<{ provider: string; endpoint: string; action: string }> = [];
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({
+      id: "message-fixture",
+      model: "fixture-model",
+      role: "assistant",
+      content: [{ type: "text", text: "observed" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const backend = new AnthropicBackend(
+      "",
+      "fixture-model",
+      "https://fixture.invalid/v1/messages",
+      "2023-06-01",
+      [],
+      (use) => {
+        uses.push(use);
+        return "fixture-anthropic-key";
+      },
+    );
+
+    await backend.call(request);
+
+    expect(uses).toEqual([{
+      provider: "anthropic",
+      endpoint: "https://fixture.invalid/v1/messages",
+      action: "llm.text.generate",
+    }]);
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-api-key")).toBe("fixture-anthropic-key");
+  });
+
+  it("does not send a request when per-call credential resolution fails and redacts resolver details", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const backend = new OpenAICompatibleBackend({
+      name: "fixture-provider",
+      defaultModel: "fixture-model",
+      endpoint: "https://fixture.invalid/v1",
+      credential_resolver: () => { throw new Error("C:\\secret\\credential.dpapi"); },
+    });
+
+    await expect(backend.call(request)).rejects.toMatchObject({
+      message: "Provider credential is unavailable.",
+      kind: "auth",
+      retryable: false,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(Object.entries(SETTINGS_WRITE_ACTIVATION_DESTINATIONS))(
     "never follows an HTTP redirect from the fixed %s destination",
     async (provider, destination) => {
