@@ -5638,7 +5638,8 @@ export class OperationPlanLedger {
     return (this.state.agent_delegation_integrations ?? []).some((integration) =>
       integration.parent_plan_decision === "candidate_retained" &&
       integration.candidate_plan_id_digest === planIdDigest &&
-      integration.per_child_adoption === "not_evaluated");
+      integration.per_child_adoption === "not_evaluated" &&
+      integration.evidence.children.some((child) => child.outcome === "candidate"));
   }
 
   canExecute(command: ExecuteCommand): boolean {
