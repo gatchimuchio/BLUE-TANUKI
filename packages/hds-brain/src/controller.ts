@@ -6697,17 +6697,37 @@ ${planControl.question}`,
     const planningTermination = "各子taskは一回の有限な候補応答で停止する。子は再委任・再試行・tool利用・作用を行わない。親計算は子候補を照合して最終候補を一つ返した時点で停止する。";
     const planningBudgetScope = planCompute?.requested && isGatewayInternalInboundRequest(req) &&
       req.metadata?.["blue_tanuki.operator_surface"] === "developer" ? computeBudgetScope(req) : undefined;
+    // Bind the child clauses to this exact parent/task/criterion context without copying criterion content into the contract.
+    const parentGoalDigest = createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
+      .update(planCompute?.parent_context?.goal ?? req.content).update("\0")
+      .update(JSON.stringify(planCompute?.purpose?.binding ?? null)).digest("hex");
+    const delegationContextDigest = planningBudgetScope ? createHash("sha256")
+      .update("blue-tanuki.agent.parent-context.v1\0")
+      .update(parentGoalDigest).update("\0")
+      .update(JSON.stringify({
+        task_identity_digest: planningBudgetScope.task_identity_digest,
+        parent_budget_identity_digest: planningBudgetScope.parent_task_identity_digest,
+        request_content_digest: createHash("sha256").update("blue-tanuki.agent.parent-task-content.v1\0")
+          .update(req.content).digest("hex"),
+        request_goal_criteria: log.frame.candidate_goal_criteria,
+        parent_plan: planCompute?.parent_context ? {
+          task_identity_digest: planCompute.parent_context.task_identity_digest,
+          plan_id_digest: planCompute.parent_context.plan_id_digest,
+          revision_digest: planCompute.parent_context.revision_digest,
+        } : null,
+      })).digest("hex") : undefined;
+    const parentBoundClauseDigest = (kind: "criterion" | "termination", clause: string): string =>
+      createHash("sha256").update(`blue-tanuki.agent.parent-${kind}.v1\0`)
+        .update(delegationContextDigest ?? "unbound").update("\0").update(clause).digest("hex");
     const agentDelegation: AgentDelegationContract | undefined = planningBudgetScope && planCompute?.requested
       && !planComputeBrowserReadMessage && !planCompute.resource_review
       ? {
           schema_version: "blue-tanuki.agent-delegation.v1",
-          parent_goal_digest: createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
-            .update(planCompute.parent_context?.goal ?? req.content).update("\0")
-            .update(JSON.stringify(planCompute.purpose?.binding ?? null)).digest("hex"),
+          parent_goal_digest: parentGoalDigest,
           parent_task_identity_digest: planningBudgetScope.task_identity_digest,
           parent_budget_identity_digest: planningBudgetScope.parent_task_identity_digest,
-          criteria_digest: createHash("sha256").update(planningCriteria).digest("hex"),
-          termination_digest: createHash("sha256").update(planningTermination).digest("hex"),
+          criteria_digest: parentBoundClauseDigest("criterion", planningCriteria),
+          termination_digest: parentBoundClauseDigest("termination", planningTermination),
           roles: delegationRoles,
           max_child_tasks: 4,
           max_delegation_depth: 1,
