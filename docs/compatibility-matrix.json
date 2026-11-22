@@ -21,7 +21,7 @@
     "teams": {
       "status": "first-party-preview",
       "target_release": "v1.0-preview",
-      "notes": "Preview adapter combines Microsoft Graph chatMessage send with a loopback-only Microsoft 365 Agents SDK JWT ingress, exact owner admission grants, and a Gateway-owned digest-only replay inbox. Synthetic auth-rejection/admission tests do not establish a valid JWT tenant route, HDS runtime, or Teams API operation. Remains preview pending the next inbound-to-reply consumer, owner-run tenant evidence, and validate:channels promotion evidence."
+      "notes": "Preview adapter combines Microsoft Graph chatMessage send with a loopback-only Microsoft 365 Agents SDK JWT ingress, exact owner admission grants, and a Gateway-owned digest-only replay inbox. Static source inspection confirms admitted messages reach the shared Gateway inbound handler and OutboundDispatcher, with chat/channel reply targets carried to Graph. Synthetic auth-rejection/admission tests do not establish a valid JWT tenant route, HDS runtime, or Teams API operation. Remains preview pending owner-run tenant evidence and validate:channels promotion evidence."
     },
     "line": {
       "status": "first-party-preview",
