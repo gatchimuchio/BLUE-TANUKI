@@ -1691,6 +1691,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (lines.length !== 6 + itemCount + 2 || lines[6 + itemCount] !== footer[0] || lines[7 + itemCount] !== footer[1]) return null;
         const effectsAllowed = new Set(["observe", "read", "write", "delete", "external_send", "process_spawn",
           "browser_action", "settings_change", "credential_access", "schedule_change", "rollback"]);
+        const unreviewedReasonCodes = new Set(["action_not_in_reviewed_registry",
+          "provider_definition_differs_from_reviewed_entry", "ambiguous_reviewed_registry_entries",
+          "reviewed_effects_not_supported_by_executor", "reviewed_registry_entry_invalid",
+          "action_or_schema_not_in_reviewed_registry"]);
         const tools = [];
         const seen = new Set();
         if (count === 0) {
@@ -1716,8 +1720,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   JSON.stringify(providerVersion) !== match[3]) || seen.has(slug.toLowerCase())) return null;
             seen.add(slug.toLowerCase());
             let registry;
-            if (match[8] === "unreviewed") {
-              registry = { status: "unreviewed", effects: [] };
+            const unreviewed = /^unreviewed(?::([a-z0-9_]+))?$/.exec(match[8]);
+            if (unreviewed) {
+              const reasonCode = unreviewed[1] || "action_or_schema_not_in_reviewed_registry";
+              if (!unreviewedReasonCodes.has(reasonCode)) return null;
+              registry = { status: "unreviewed", reason_code: reasonCode, effects: [] };
             } else {
               const reviewed = reviewedPattern.exec(match[8]);
               if (!reviewed) return null;
@@ -1797,7 +1804,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.type = "button";
           button.className = "secondary";
           button.disabled = !eligible;
-          const reason = !selectionReady ? "Connectors再読込が必要" : !reviewed ? "review registry未登録" :
+          const registryReasonLabels = {
+            action_not_in_reviewed_registry: "review registry未登録",
+            provider_definition_differs_from_reviewed_entry: "review済み定義とProvider schemaが不一致",
+            ambiguous_reviewed_registry_entries: "review registryの一致が複数あり未確定",
+            reviewed_effects_not_supported_by_executor: "登録effectsをexecutorが未対応",
+            reviewed_registry_entry_invalid: "review registry entryが不正",
+            action_or_schema_not_in_reviewed_registry: "review registry照合理由が旧形式"
+          };
+          const reason = !selectionReady ? "Connectors再読込が必要" : !reviewed ?
+            (registryReasonLabels[tool.action_effect_registry.reason_code] || "review registry照合不可") :
             !nonDeprecated ? "deprecated状態未確定または非推奨" : !allowlisted ? "現在のaction allowlist外またはrevoked" : "実行候補に選択";
           button.textContent = reason + ": " + parsed.toolkit + "/" + tool.slug + " · " + tool.name +
             " · catalog version=" + (tool.provider_version === null ? "unknown" : JSON.stringify(tool.provider_version)) +

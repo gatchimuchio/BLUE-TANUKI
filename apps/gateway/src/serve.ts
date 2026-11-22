@@ -724,7 +724,7 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
     for (const tool of projection.tools) {
       const registry = tool.action_effect_registry.status === "reviewed"
         ? `reviewed:${JSON.stringify(tool.action_effect_registry.registry_entry_id)} effects=${JSON.stringify(tool.action_effect_registry.effects)}`
-        : "unreviewed";
+        : `unreviewed:${tool.action_effect_registry.reason_code}`;
       const providerVersion = "provider_version" in tool
         ? ` provider-version=${JSON.stringify(tool.provider_version)}` : "";
       const line = `- ${JSON.stringify(tool.slug)} name=${JSON.stringify(tool.name.slice(0, 96))}${providerVersion} deprecated=${tool.is_deprecated ?? "unknown"} input=${tool.input_schema_sha256} output=${tool.output_schema_sha256} action=${tool.action_definition_sha256} registry=${registry}`;

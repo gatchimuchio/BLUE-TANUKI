@@ -202,6 +202,13 @@ export interface ComposioActionEffectRegistry {
   entries: readonly ComposioActionEffectRegistryEntry[];
 }
 
+type ComposioActionEffectRegistryUnreviewedReasonCode =
+  | "action_not_in_reviewed_registry"
+  | "provider_definition_differs_from_reviewed_entry"
+  | "ambiguous_reviewed_registry_entries"
+  | "reviewed_effects_not_supported_by_executor"
+  | "reviewed_registry_entry_invalid";
+
 const COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION = "1.1.0";
 
 /** Runtime default is intentionally empty until a real provider action is reviewed in source. */
@@ -270,6 +277,61 @@ export function resolveComposioActionEffectRegistryBinding(params: {
     ...bindingBase,
     binding_sha256: operationPlanDigest(bindingBase),
   });
+}
+
+function composioActionEffectRegistryProjection(params: {
+  toolkit: string;
+  tool: string;
+  inputSchemaSha256: string;
+  outputSchemaSha256: string;
+  actionDefinitionSha256: string;
+}, registry: ComposioActionEffectRegistry): ComposioActionEffectRegistryBinding | {
+  status: "unreviewed";
+  registry_version: string;
+  effects: readonly [];
+  reason_code: ComposioActionEffectRegistryUnreviewedReasonCode;
+} {
+  const toolkit = params.toolkit.trim().toLowerCase();
+  const tool = params.tool.trim().toLowerCase();
+  const matchingIdentity = registry.entries.filter((entry) =>
+    entry.toolkit.toLowerCase() === toolkit && entry.tool.toLowerCase() === tool);
+  const unreviewed = (reasonCode: ComposioActionEffectRegistryUnreviewedReasonCode) => ({
+    status: "unreviewed" as const,
+    registry_version: registry.version,
+    effects: [] as const,
+    reason_code: reasonCode,
+  });
+  if (matchingIdentity.length === 0) return unreviewed("action_not_in_reviewed_registry");
+
+  const digests = [params.inputSchemaSha256, params.outputSchemaSha256, params.actionDefinitionSha256];
+  if (!digests.every((digest) => /^[a-f0-9]{64}$/.test(digest))) {
+    return unreviewed("provider_definition_differs_from_reviewed_entry");
+  }
+  const exactEntries = matchingIdentity.filter((entry) =>
+    entry.input_schema_sha256 === params.inputSchemaSha256 &&
+    entry.output_schema_sha256 === params.outputSchemaSha256 &&
+    entry.action_definition_sha256 === params.actionDefinitionSha256);
+  if (exactEntries.length === 0) return unreviewed("provider_definition_differs_from_reviewed_entry");
+  if (exactEntries.length !== 1) return unreviewed("ambiguous_reviewed_registry_entries");
+
+  const entry = exactEntries[0];
+  if (!entry) return unreviewed("reviewed_registry_entry_invalid");
+  if (!Array.isArray(entry.effects) || entry.effects.length === 0 || new Set(entry.effects).size !== entry.effects.length) {
+    return unreviewed("reviewed_registry_entry_invalid");
+  }
+  const operationEffects = new Set(requireToolOperationDescriptor("composio.execute").effects);
+  if (entry.effects.some((effect) => !operationEffects.has(effect))) {
+    return unreviewed("reviewed_effects_not_supported_by_executor");
+  }
+  try {
+    const binding = resolveComposioActionEffectRegistryBinding(params, {
+      version: registry.version,
+      entries: [entry],
+    });
+    return binding ?? unreviewed("reviewed_registry_entry_invalid");
+  } catch {
+    return unreviewed("reviewed_registry_entry_invalid");
+  }
 }
 
 function envValue(env: Env, name: string): string | undefined {
@@ -1197,7 +1259,7 @@ function catalogToolProjection(
   const actionDefinitionSha256 = composioSchemaDigest(projection);
   const inputSchemaSha256 = composioSchemaDigest(inputParameters);
   const outputSchemaSha256 = composioSchemaDigest(outputParameters);
-  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
+  const actionEffectRegistryBinding = composioActionEffectRegistryProjection({
     toolkit,
     tool: slug,
     inputSchemaSha256,
@@ -1209,12 +1271,7 @@ function catalogToolProjection(
     input_schema_sha256: inputSchemaSha256,
     output_schema_sha256: outputSchemaSha256,
     action_definition_sha256: actionDefinitionSha256,
-    action_effect_registry: actionEffectRegistryBinding ?? {
-      status: "unreviewed",
-      registry_version: actionEffectRegistry.version,
-      effects: [],
-      reason_code: "action_or_schema_not_in_reviewed_registry",
-    },
+    action_effect_registry: actionEffectRegistryBinding,
   };
 }
 

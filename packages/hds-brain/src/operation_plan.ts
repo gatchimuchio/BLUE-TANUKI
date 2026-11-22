@@ -241,6 +241,27 @@ interface OperationPlanSavedResultReturnProjectionBase {
   readonly may_execute: false;
 };
 
+type ComposioSearchRegistryUnreviewedReasonCode =
+  | "action_not_in_reviewed_registry"
+  | "provider_definition_differs_from_reviewed_entry"
+  | "ambiguous_reviewed_registry_entries"
+  | "reviewed_effects_not_supported_by_executor"
+  | "reviewed_registry_entry_invalid"
+  | "action_or_schema_not_in_reviewed_registry";
+
+const COMPOSIO_SEARCH_REGISTRY_UNREVIEWED_REASON_CODES = new Set<string>([
+  "action_not_in_reviewed_registry",
+  "provider_definition_differs_from_reviewed_entry",
+  "ambiguous_reviewed_registry_entries",
+  "reviewed_effects_not_supported_by_executor",
+  "reviewed_registry_entry_invalid",
+  "action_or_schema_not_in_reviewed_registry",
+]);
+
+function isComposioSearchRegistryUnreviewedReasonCode(value: unknown): value is ComposioSearchRegistryUnreviewedReasonCode {
+  return typeof value === "string" && COMPOSIO_SEARCH_REGISTRY_UNREVIEWED_REASON_CODES.has(value);
+}
+
 type ComposioSearchSavedRegistrySummary =
   | {
     readonly status: "reviewed";
@@ -254,7 +275,7 @@ type ComposioSearchSavedRegistrySummary =
     readonly status: "unreviewed";
     readonly registry_version: string;
     readonly effects: readonly [];
-    readonly reason_code: "action_or_schema_not_in_reviewed_registry";
+    readonly reason_code: ComposioSearchRegistryUnreviewedReasonCode;
   };
 
 type ComposioSearchSavedToolSummaryBase = {
@@ -3071,9 +3092,9 @@ function composioSearchRegistrySummary(value: unknown, action: {
     return Object.keys(value).sort().join(",") === "effects,reason_code,registry_version,status" &&
       typeof value.registry_version === "string" && value.registry_version.length > 0 && value.registry_version.length <= 80 &&
       Array.isArray(value.effects) && value.effects.length === 0 &&
-      value.reason_code === "action_or_schema_not_in_reviewed_registry"
+      isComposioSearchRegistryUnreviewedReasonCode(value.reason_code)
       ? { status: "unreviewed", registry_version: value.registry_version, effects: [],
-        reason_code: "action_or_schema_not_in_reviewed_registry" }
+        reason_code: value.reason_code }
       : undefined;
   }
   const registryKeys = "action_definition_sha256,binding_sha256,effects,input_schema_sha256,output_schema_sha256,registry_entry_id,registry_entry_sha256,registry_version,schema_version,status,tool,toolkit";
@@ -3253,9 +3274,9 @@ function composioSearchStoredRegistrySummary(value: unknown, action: {
     return Object.keys(value).sort().join(",") === "effects,reason_code,registry_version,status" &&
       typeof value.registry_version === "string" && value.registry_version.length > 0 && value.registry_version.length <= 80 &&
       Array.isArray(value.effects) && value.effects.length === 0 &&
-      value.reason_code === "action_or_schema_not_in_reviewed_registry"
+      isComposioSearchRegistryUnreviewedReasonCode(value.reason_code)
       ? { status: "unreviewed", registry_version: value.registry_version, effects: [],
-        reason_code: "action_or_schema_not_in_reviewed_registry" }
+        reason_code: value.reason_code }
       : undefined;
   }
   if (Object.keys(value).sort().join(",") !== "binding_sha256,effects,registry_entry_id,registry_entry_sha256,registry_version,status" ||
