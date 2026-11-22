@@ -469,6 +469,30 @@ export type OperationPlanSavedResultReturnProjection =
     readonly provider_result_digest: string;
     readonly operation_plan_binding_digest: string;
     readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v17";
+    readonly operation: "composio.connect";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly command_digest: string;
+    readonly auth_config_id_sha256: string;
+    readonly user_id_sha256: string;
+    readonly auth_config_state_sha256: string;
+    readonly request_payload_digest: string;
+    readonly connected_account_id_sha256: string;
+    readonly link_expires_at_ms: number;
+    readonly handoff_digest: string;
+    readonly handoff_result_digest: string;
+    readonly redirect_url_sha256: string;
+    readonly provider_http_status: number;
+    readonly external_call_performed: true;
+    readonly external_mutation_sent: true;
+    readonly automatic_retry: false;
+    readonly provider_request_id_digest: string | null;
+    readonly provider_result_digest: string;
+    readonly operation_plan_binding_digest: string;
+    readonly source_is_untrusted: true;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -1741,6 +1765,17 @@ export function operationPlanResultValidationMatches(
       expected.toolkit === identity.toolkit && expected.query_digest === identity.queryDigest &&
       expected.limit === identity.limit && composioSearchResultProjection(step, output) !== undefined;
   }
+  if (validation.method === "composio_connect_result_matches") {
+    const identity = composioConnectPlanIdentity(step);
+    const projection = composioConnectStoredResultProjection(step, output);
+    const expected = validation.expected;
+    return step.operation === "composio.connect" && step.adapter === "composio" && identity !== undefined &&
+      !!binding?.operation_plan_binding_digest && !!binding.executor_command_digest &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") === "auth_config_id,schema_version,toolkit" &&
+      expected.schema_version === "blue-tanuki.composio-connect-result-validation.v1" &&
+      expected.toolkit === identity.toolkit && expected.auth_config_id === identity.authConfigId &&
+      projection !== undefined && projection.command_digest === binding.executor_command_digest;
+  }
   if (validation.method === "composio_accounts_result_matches") {
     const identity = composioAccountsPlanIdentity(step);
     const expected = validation.expected;
@@ -2905,7 +2940,7 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
     return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
       operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
   }
-  return ["github.write", "mcp.call", "composio.search", "composio.accounts", "composio.disconnect", "composio.execute",
+  return ["github.write", "mcp.call", "composio.search", "composio.accounts", "composio.connect", "composio.disconnect", "composio.execute",
     "file.search", "file.edit", "file.write", "file.delete"]
     .includes(step.operation);
 }
@@ -3270,6 +3305,91 @@ function composioDisconnectPlanIdentity(step: OperationStep): {
   };
 }
 
+function composioConnectPlanIdentity(step: OperationStep): {
+  toolkit: string;
+  authConfigId: string;
+  authConfigIdDigest: string;
+} | undefined {
+  const parameters = step.parameters;
+  if (step.operation !== "composio.connect" || step.adapter !== "composio" || !parameters ||
+      Object.keys(parameters).sort().join(",") !== "auth_config_id,toolkit" ||
+      typeof parameters.toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(parameters.toolkit) ||
+      typeof parameters.auth_config_id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(parameters.auth_config_id)) return undefined;
+  return {
+    toolkit: parameters.toolkit,
+    authConfigId: parameters.auth_config_id,
+    authConfigIdDigest: createHash("sha256").update(parameters.auth_config_id, "utf8").digest("hex"),
+  };
+}
+
+function composioConnectRequestPayloadDigest(identity: { toolkit: string; authConfigIdDigest: string }, userIdDigest: string): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.composio-connect-request.v1",
+    toolkit: identity.toolkit.toLowerCase(),
+    auth_config_id_sha256: identity.authConfigIdDigest,
+    user_id_sha256: userIdDigest,
+  });
+}
+
+function composioConnectStoredResultProjection(step: OperationStep, value: unknown): {
+  readonly toolkit: string;
+  readonly command_digest: string;
+  readonly auth_config_id_sha256: string;
+  readonly user_id_sha256: string;
+  readonly auth_config_state_sha256: string;
+  readonly request_payload_digest: string;
+  readonly connected_account_id_sha256: string;
+  readonly link_expires_at_ms: number;
+  readonly handoff_digest: string;
+  readonly handoff_result_digest: string;
+  readonly redirect_url_sha256: string;
+  readonly provider_http_status: number;
+  readonly provider_request_id_digest: string | null;
+} | undefined {
+  const identity = composioConnectPlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value) || Object.keys(value).sort().join(",") !==
+      "auth_config_id_sha256,auth_config_state_sha256,automatic_retry,command_digest,connected_account_id_sha256,external_call_performed,external_mutation_sent,handoff_digest,link_expires_at_ms,may_execute,operation,provider,provider_http_status,provider_request_id_digest,redirect_url_sha256,request_payload_digest,result_digest,schema_version,toolkit,used_for_authority,user_id_sha256") return undefined;
+  const { result_digest: resultDigest, ...result } = value;
+  const digests = ["command_digest", "auth_config_id_sha256", "user_id_sha256", "auth_config_state_sha256",
+    "request_payload_digest", "connected_account_id_sha256", "handoff_digest", "redirect_url_sha256"];
+  if (value.schema_version !== "blue-tanuki.composio-connect-result.v1" || value.provider !== "composio" ||
+      value.operation !== "connect" || value.toolkit !== identity.toolkit ||
+      value.auth_config_id_sha256 !== identity.authConfigIdDigest ||
+      digests.some((key) => typeof value[key] !== "string" || !/^[a-f0-9]{64}$/.test(value[key] as string)) ||
+      value.request_payload_digest !== composioConnectRequestPayloadDigest(identity, value.user_id_sha256 as string) ||
+      !Number.isSafeInteger(value.link_expires_at_ms) || (value.link_expires_at_ms as number) <= 0 ||
+      typeof value.provider_http_status !== "number" || !Number.isSafeInteger(value.provider_http_status) ||
+      value.provider_http_status < 200 || value.provider_http_status >= 300 ||
+      value.external_call_performed !== true || value.external_mutation_sent !== true || value.automatic_retry !== false ||
+      (value.provider_request_id_digest !== null && (typeof value.provider_request_id_digest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.provider_request_id_digest))) ||
+      value.used_for_authority !== false || value.may_execute !== false ||
+      typeof resultDigest !== "string" || !/^[a-f0-9]{64}$/.test(resultDigest) || operationPlanDigest(result) !== resultDigest ||
+      value.handoff_digest !== operationPlanDigest({
+        schema_version: "blue-tanuki.composio-connect-handoff.v1",
+        command_digest: value.command_digest,
+        request_payload_digest: value.request_payload_digest,
+        connected_account_id_sha256: value.connected_account_id_sha256,
+        redirect_url_sha256: value.redirect_url_sha256,
+        expires_at_ms: value.link_expires_at_ms,
+      })) return undefined;
+  return {
+    toolkit: identity.toolkit,
+    command_digest: value.command_digest as string,
+    auth_config_id_sha256: identity.authConfigIdDigest,
+    user_id_sha256: value.user_id_sha256 as string,
+    auth_config_state_sha256: value.auth_config_state_sha256 as string,
+    request_payload_digest: value.request_payload_digest as string,
+    connected_account_id_sha256: value.connected_account_id_sha256 as string,
+    link_expires_at_ms: value.link_expires_at_ms as number,
+    handoff_digest: value.handoff_digest as string,
+    handoff_result_digest: resultDigest,
+    redirect_url_sha256: value.redirect_url_sha256 as string,
+    provider_http_status: value.provider_http_status as number,
+    provider_request_id_digest: value.provider_request_id_digest as string | null,
+  };
+}
+
 function composioDisconnectStoredResultProjection(step: OperationStep, value: unknown): {
   readonly toolkit: string;
   readonly connected_account_id_sha256: string;
@@ -3507,6 +3627,30 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         schema_version: "blue-tanuki.composio-accounts-result-validation.v1",
         toolkit: identity.toolkit,
         limit: identity.limit,
+      });
+  }
+  if (step.operation === "composio.connect") {
+    const identity = composioConnectPlanIdentity(step);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return identity !== undefined && step.target.kind === "external_service" &&
+      step.target.id === "composio" && step.target.scope === identity.authConfigId &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.adapter_is_authority === false && step.command_generated_by_adapter_only === false &&
+      step.effects.length === 3 && [...step.effects].sort().join(",") === "credential_access,external_send,write" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required &&
+      step.permission.hds_brain_authority_required && preparation !== undefined &&
+      preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false &&
+      preparation.compensation.reason === "Composio hosted link creation cannot be reversed by this request; no account deletion is requested" &&
+      preparation.validation.length === 1 && validation?.check_id === "composio-connect-result" &&
+      validation.method === "composio_connect_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest({
+        schema_version: "blue-tanuki.composio-connect-result-validation.v1",
+        toolkit: identity.toolkit,
+        auth_config_id: identity.authConfigId,
       });
   }
   if (step.operation === "composio.disconnect") {
@@ -7442,6 +7586,44 @@ export class OperationPlanLedger {
       };
     }
     if (!result) throw new Error("plan_saved_result_result_unavailable");
+    if (step.operation === "composio.connect") {
+      const connectProjection = composioConnectStoredResultProjection(step, result.output);
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest || !binding.executor_command_digest ||
+          !binding.execution_admission?.task_identity_digest ||
+          binding.execution_admission.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          binding.revision_digest !== current.digest || binding.result_observed_at_ms === undefined ||
+          binding.result_observed_at_ms !== result.observed_at_ms || !connectProjection ||
+          connectProjection.command_digest !== binding.command_digest || !hasConnectedPlanTarget(step) ||
+          validations.length !== 1 || !operationPlanResultValidationMatches(validations[0]!, step, result.output, binding) ||
+          operationPlanDigest(result.target) !== operationPlanDigest(step.target) ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.operation !== "composio.connect" || committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" || committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_composio_connect_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v17",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id),
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms, operation: "composio.connect", status: "verified",
+        ...connectProjection, operation_plan_binding_digest: binding.operation_plan_binding_digest,
+        external_call_performed: true, external_mutation_sent: true, automatic_retry: false,
+        provider_result_digest: connectProjection.handoff_result_digest,
+        source_is_untrusted: true, used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
     if (step.operation === "composio.disconnect") {
       const disconnectProjection = composioDisconnectStoredResultProjection(step, result.output);
       const validations = step.preparation?.validation ?? [];

@@ -4,9 +4,11 @@ import { requireToolOperationDescriptor, ComposioActionEffectRegistryBindingSche
   ComposioActionTargetVersionObservationSchema, type ComposioActionEffectRegistryBinding,
   type ComposioActionTargetVersionObservation, type ComposioActionContentReview,
   ComposioDisconnectTargetVersionObservationSchema, ComposioDisconnectContentReviewSchema,
-  type ComposioDisconnectTargetVersionObservation, type ComposioDisconnectContentReview } from "@blue-tanuki/protocol";
+  type ComposioDisconnectTargetVersionObservation, type ComposioDisconnectContentReview,
+  ComposioConnectTargetVersionObservationSchema, ComposioConnectContentReviewSchema,
+  type ComposioConnectTargetVersionObservation, type ComposioConnectContentReview } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
-import { assertToolExecutionNotCancelled, type Tool, type ToolContext } from "./registry.js";
+import { assertToolExecutionNotCancelled, type ComposioConnectHandoffReservation, type Tool, type ToolContext } from "./registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -115,6 +117,28 @@ export interface ComposioDisconnectTarget {
   maxBytes: number;
 }
 
+export interface ComposioAuthConfigTarget {
+  api_base_url: string;
+  path: string;
+  method: "GET";
+  auth_config_id: string;
+  toolkit: string;
+  api_key: string;
+  maxBytes: number;
+}
+
+export interface ComposioConnectTarget {
+  api_base_url: string;
+  path: string;
+  method: "POST";
+  auth_config_id: string;
+  toolkit: string;
+  user_id: string;
+  body: { auth_config_id: string; user_id: string };
+  api_key: string;
+  maxBytes: number;
+}
+
 export interface ComposioExecuteResponse {
   status: number;
   ok: boolean;
@@ -131,12 +155,16 @@ export interface ComposioOptions {
   operationPlanBindingDigest?: string;
   targetVersionObservation?: ComposioActionTargetVersionObservation;
   disconnectTargetVersionObservation?: ComposioDisconnectTargetVersionObservation;
+  connectTargetVersionObservation?: ComposioConnectTargetVersionObservation;
+  connectHandoff?: ComposioConnectHandoffReservation;
   requireTargetVersionObservation?: boolean;
   request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   searchRequest?: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   accountsRequest?: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   scopesRequest?: (target: ComposioScopesTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   disconnectRequest?: (target: ComposioDisconnectTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  authConfigRequest?: (target: ComposioAuthConfigTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  connectRequest?: (target: ComposioConnectTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -345,6 +373,19 @@ export function composioDisconnectRequestPayloadDigest(params: {
   });
 }
 
+export function composioConnectRequestPayloadDigest(params: {
+  toolkit: string;
+  authConfigId: string;
+  userId: string;
+}): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.composio-connect-request.v1",
+    toolkit: params.toolkit.toLowerCase(),
+    auth_config_id_sha256: composioIdentityDigest(params.authConfigId),
+    user_id_sha256: composioIdentityDigest(params.userId),
+  });
+}
+
 function assertConfigured(env: Env): string {
   const key = envValue(env, "COMPOSIO_API_KEY");
   if (!key) {
@@ -518,7 +559,7 @@ interface ComposioHttpRequestTarget {
   body?: Record<string, unknown>;
   api_key: string;
   maxBytes: number;
-  operation: "search" | "execute" | "accounts" | "scopes" | "disconnect";
+  operation: "search" | "execute" | "accounts" | "scopes" | "disconnect" | "auth_config" | "connect";
 }
 
 async function defaultComposioApiRequest(
@@ -622,7 +663,11 @@ async function defaultComposioApiRequest(
             ? "scope_status"
           : target.operation === "disconnect"
             ? "disconnect_status"
-            : "catalog_status";
+            : target.operation === "connect"
+              ? "connection_link_status"
+              : target.operation === "auth_config"
+                ? "auth_config_status"
+                : "catalog_status";
       req.destroy(
         new Error(
           `composio.${target.operation} timed out after ${COMPOSIO_EXECUTE_TIMEOUT_MS}ms; ${outcomeLabel}=not_confirmed`,
@@ -685,6 +730,20 @@ async function defaultComposioDisconnectRequest(
     ...target,
     operation: "disconnect",
   }, signal);
+}
+
+async function defaultComposioAuthConfigRequest(
+  target: ComposioAuthConfigTarget,
+  signal?: AbortSignal,
+): Promise<ComposioExecuteResponse> {
+  return await defaultComposioApiRequest({ ...target, operation: "auth_config" }, signal);
+}
+
+async function defaultComposioConnectRequest(
+  target: ComposioConnectTarget,
+  signal?: AbortSignal,
+): Promise<ComposioExecuteResponse> {
+  return await defaultComposioApiRequest({ ...target, operation: "connect" }, signal);
 }
 
 function catalogResponseError(response: ComposioExecuteResponse): Error {
@@ -1620,6 +1679,342 @@ export async function invokeComposioDisconnect(
   return { ...result, result_digest: operationPlanDigest(result) };
 }
 
+interface ComposioAuthConfigProjection {
+  authConfigId: string;
+  toolkit: string;
+  authScheme: "API_KEY" | "BASIC" | "BEARER" | "BEARER_TOKEN" | "CUSTOM" | "DCR_OAUTH" | "NO_AUTH" | "OAUTH1" | "OAUTH2";
+  status: "ENABLED";
+  isComposioManaged: boolean;
+  scopes: string[];
+  scopesReported: boolean;
+  restrictedTools: string[];
+  restrictedToolsReported: boolean;
+  lastUpdatedAt: string | null;
+  stateDigest: string;
+}
+
+interface ComposioConnectInspection {
+  toolkit: string;
+  authConfigId: string;
+  userId: string;
+  requestPayloadDigest: string;
+  authConfig: ComposioAuthConfigProjection;
+  observation: ComposioConnectTargetVersionObservation;
+}
+
+function assertComposioConnectArguments(args: Record<string, unknown>): { toolkit: string; authConfigId: string } {
+  if (Object.keys(args).sort().join(",") !== "auth_config_id,toolkit") {
+    throw new Error("composio.connect accepts only toolkit and auth_config_id");
+  }
+  const toolkit = stringArg(args, "toolkit")!.toLowerCase();
+  const authConfigId = stringArg(args, "auth_config_id")!;
+  if (!/^[a-z0-9][a-z0-9_-]{0,119}$/.test(toolkit) || authConfigId.length > 200 ||
+      !/^[A-Za-z0-9_-]{1,200}$/.test(authConfigId)) {
+    throw new Error("composio.connect toolkit or auth_config_id is outside the supported format");
+  }
+  return { toolkit, authConfigId };
+}
+
+function parseComposioScopes(value: unknown): { scopes: string[]; reported: boolean } {
+  if (typeof value === "string") {
+    const scopes = value.split(",").map((scope) => scope.trim()).filter(Boolean);
+    if (scopes.length > 100 || scopes.some((scope) => scope.length > 200 || /[\u0000-\u001f\u007f]/.test(scope)) ||
+        new Set(scopes).size !== scopes.length) throw new Error("Composio auth config scopes exceed the safe review boundary");
+    return { scopes: scopes.sort(), reported: true };
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 100 || value.some((scope) => typeof scope !== "string" || scope.length < 1 || scope.length > 200 ||
+        scope.trim() !== scope || /[\u0000-\u001f\u007f]/.test(scope)) || new Set(value).size !== value.length) {
+      throw new Error("Composio auth config scopes exceed the safe review boundary");
+    }
+    return { scopes: [...value as string[]].sort(), reported: true };
+  }
+  return { scopes: [], reported: false };
+}
+
+function projectComposioAuthConfig(value: unknown, expectedToolkit: string, expectedId: string): ComposioAuthConfigProjection {
+  if (!isRecord(value)) throw new Error("Composio auth config response is not an object");
+  const toolkit = isRecord(value.toolkit) ? value.toolkit.slug : undefined;
+  const authConfigId = value.id;
+  const authSchemeValue = value.auth_scheme;
+  const authSchemes = new Set(["API_KEY", "BASIC", "BEARER", "BEARER_TOKEN", "CUSTOM", "DCR_OAUTH", "NO_AUTH", "OAUTH1", "OAUTH2"]);
+  if (authConfigId !== expectedId || toolkit !== expectedToolkit || typeof authSchemeValue !== "string" ||
+      !authSchemes.has(authSchemeValue) || value.status !== "ENABLED" || typeof value.is_composio_managed !== "boolean") {
+    throw new Error("Composio auth config does not match the selected enabled toolkit");
+  }
+  const credentials = isRecord(value.credentials) ? value.credentials : undefined;
+  const rawScopes = credentials && Object.hasOwn(credentials, "scopes") ? credentials.scopes : value.scopes;
+  const scopeProjection = parseComposioScopes(rawScopes);
+  const rawRestricted = value.restrict_to_following_tools;
+  if (rawRestricted !== undefined && rawRestricted !== null && (!Array.isArray(rawRestricted) || rawRestricted.length > 500 ||
+      rawRestricted.some((tool) => typeof tool !== "string" || tool.length < 1 || tool.length > 160 ||
+        tool.trim() !== tool || /[\u0000-\u001f\u007f]/.test(tool)))) {
+    throw new Error("Composio auth config restricted tool list is outside the safe review boundary");
+  }
+  const restrictedTools = Array.isArray(rawRestricted) ? [...new Set(rawRestricted as string[])].sort() : [];
+  if (Array.isArray(rawRestricted) && restrictedTools.length !== rawRestricted.length) {
+    throw new Error("Composio auth config restricted tool list contains duplicates");
+  }
+  const lastUpdatedAt = typeof value.last_updated_at === "string" && value.last_updated_at.length <= 80 &&
+    !/[\u0000-\u001f\u007f]/.test(value.last_updated_at) ? value.last_updated_at : null;
+  const safeState = {
+    schema_version: "blue-tanuki.composio-auth-config-state.v1",
+    auth_config_id_sha256: composioIdentityDigest(expectedId),
+    toolkit: expectedToolkit,
+    auth_scheme: authSchemeValue,
+    status: "ENABLED",
+    is_composio_managed: value.is_composio_managed,
+    scopes: scopeProjection.scopes,
+    scopes_reported: scopeProjection.reported,
+    restricted_tools: restrictedTools,
+    restricted_tools_reported: Array.isArray(rawRestricted),
+    last_updated_at: lastUpdatedAt,
+  };
+  return {
+    authConfigId: expectedId,
+    toolkit: expectedToolkit,
+    authScheme: authSchemeValue as ComposioAuthConfigProjection["authScheme"],
+    status: "ENABLED",
+    isComposioManaged: value.is_composio_managed,
+    scopes: scopeProjection.scopes,
+    scopesReported: scopeProjection.reported,
+    restrictedTools,
+    restrictedToolsReported: Array.isArray(rawRestricted),
+    lastUpdatedAt,
+    stateDigest: operationPlanDigest(safeState),
+  };
+}
+
+async function readComposioAuthConfig(params: {
+  apiBaseUrl: string;
+  apiKey: string;
+  authConfigId: string;
+  toolkit: string;
+  maxBytes: number;
+  request: (target: ComposioAuthConfigTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  signal?: AbortSignal;
+}): Promise<ComposioAuthConfigProjection> {
+  assertToolExecutionNotCancelled(params.signal, "composio.connect");
+  const response = await params.request({
+    api_base_url: params.apiBaseUrl,
+    path: `/api/${COMPOSIO_API_VERSION}/auth_configs/${encodeURIComponent(params.authConfigId)}`,
+    method: "GET",
+    auth_config_id: params.authConfigId,
+    toolkit: params.toolkit,
+    api_key: params.apiKey,
+    maxBytes: params.maxBytes,
+  }, params.signal);
+  if (!response.ok || response.truncated || !response.content_type?.toLowerCase().includes("application/json")) {
+    throw new Error(`Composio auth config could not be confirmed (HTTP ${response.status}); no connection link was created`);
+  }
+  return projectComposioAuthConfig(parseJsonOrText(response.body), params.toolkit, params.authConfigId);
+}
+
+async function inspectComposioConnect(args: Record<string, unknown>, opts: ComposioOptions): Promise<ComposioConnectInspection> {
+  const env = opts.env ?? process.env;
+  if (composioDryRun(env) || !composioLiveExecutionEnabled(env)) {
+    throw new Error("composio.connect requires dry-run disabled and explicit live execution opt-in");
+  }
+  if (!opts.commandDigest || !/^[a-f0-9]{64}$/.test(opts.commandDigest) ||
+      !opts.operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(opts.operationPlanBindingDigest)) {
+    throw new Error("composio.connect requires the exact HDS command and Operation Plan binding");
+  }
+  const { toolkit, authConfigId } = assertComposioConnectArguments(args);
+  assertToolkitAllowed(toolkit, composioAllowedToolkits(env));
+  const apiKey = assertConfigured(env);
+  const userId = envValue(env, "COMPOSIO_USER_ID");
+  if (!userId) throw new Error("COMPOSIO_USER_ID is required for composio.connect");
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const authConfig = await readComposioAuthConfig({
+    apiBaseUrl, apiKey, authConfigId, toolkit, maxBytes: DEFAULT_MAX_BYTES,
+    request: opts.authConfigRequest ?? defaultComposioAuthConfigRequest, signal: opts.signal,
+  });
+  const requestPayloadDigest = composioConnectRequestPayloadDigest({ toolkit, authConfigId, userId });
+  const observation = ComposioConnectTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.composio-connect-target-version.v1",
+    toolkit,
+    auth_config_id_sha256: composioIdentityDigest(authConfigId),
+    user_id_sha256: composioIdentityDigest(userId),
+    auth_config_state_sha256: authConfig.stateDigest,
+    request_payload_digest: requestPayloadDigest,
+    command_digest: opts.commandDigest,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest,
+    target_state: "available",
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { toolkit, authConfigId, userId, requestPayloadDigest, authConfig, observation };
+}
+
+export async function inspectComposioConnectTargetVersion(
+  args: Record<string, unknown>, opts: ComposioOptions,
+): Promise<ComposioConnectTargetVersionObservation> {
+  return (await inspectComposioConnect(args, opts)).observation;
+}
+
+export async function inspectComposioConnectContentReview(
+  args: Record<string, unknown>, opts: ComposioOptions,
+): Promise<ComposioConnectContentReview> {
+  const inspection = await inspectComposioConnect(args, opts);
+  const { toolkit, authConfigId, requestPayloadDigest, authConfig, observation } = inspection;
+  const base = {
+    kind: "composio_connect" as const,
+    operation: "composio.connect" as const,
+    command_digest: opts.commandDigest!,
+    request_payload_digest: requestPayloadDigest,
+    target_version_digest: operationPlanDigest(observation),
+    target_version_observation: observation,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest!,
+    toolkit,
+    auth_config_id: authConfigId,
+    auth_config_id_sha256: observation.auth_config_id_sha256,
+    user_id_sha256: observation.user_id_sha256,
+    auth_scheme: authConfig.authScheme,
+    auth_config_status: "ENABLED" as const,
+    is_composio_managed: authConfig.isComposioManaged,
+    scopes: authConfig.scopes,
+    scopes_reported: authConfig.scopesReported,
+    restricted_tools: authConfig.restrictedTools,
+    restricted_tools_reported: authConfig.restrictedToolsReported,
+    auth_config_last_updated_at: authConfig.lastUpdatedAt,
+    effect: "create_one_hosted_connection_link_for_owner_and_toolkit" as const,
+    no_store: true as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+    provider_metadata_used_for_authority: false as const,
+  };
+  return ComposioConnectContentReviewSchema.parse({ ...base, review_digest: operationPlanDigest(base) });
+}
+
+function safeComposioConnectUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length < 1 || value.length > 4_096 || /[\u0000-\u0020\u007f]/.test(value)) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "connect.composio.dev" ||
+        url.username || url.password || url.port || url.hash || !url.pathname.startsWith("/link/") ||
+        url.pathname.length > 2_048) return undefined;
+    return url.toString();
+  } catch { return undefined; }
+}
+
+export async function invokeComposioConnect(args: Record<string, unknown>, opts: ComposioOptions = {}): Promise<unknown> {
+  const env = opts.env ?? process.env;
+  const { toolkit, authConfigId } = assertComposioConnectArguments(args);
+  const apiKey = assertConfigured(env);
+  const userId = envValue(env, "COMPOSIO_USER_ID");
+  if (!userId) throw new Error("COMPOSIO_USER_ID is required for composio.connect");
+  const expected = opts.connectTargetVersionObservation;
+  if (!opts.requireTargetVersionObservation || !expected || !opts.commandDigest || !opts.operationPlanBindingDigest ||
+      !opts.connectHandoff || expected.schema_version !== "blue-tanuki.composio-connect-target-version.v1" ||
+      expected.command_digest !== opts.commandDigest || expected.operation_plan_binding_digest !== opts.operationPlanBindingDigest) {
+    throw new Error("composio.connect requires the approved target binding and a reserved one-time handoff");
+  }
+  assertToolkitAllowed(toolkit, composioAllowedToolkits(env));
+  if (composioDryRun(env) || !composioLiveExecutionEnabled(env)) {
+    throw new Error("composio.connect requires dry-run disabled and explicit live execution opt-in");
+  }
+  const requestPayloadDigest = composioConnectRequestPayloadDigest({ toolkit, authConfigId, userId });
+  if (expected.toolkit !== toolkit || expected.auth_config_id_sha256 !== composioIdentityDigest(authConfigId) ||
+      expected.user_id_sha256 !== composioIdentityDigest(userId) || expected.request_payload_digest !== requestPayloadDigest) {
+    throw new Error("composio.connect target identity changed after owner review; external mutation sent=false");
+  }
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const freshConfig = await readComposioAuthConfig({
+    apiBaseUrl, apiKey, authConfigId, toolkit, maxBytes: DEFAULT_MAX_BYTES,
+    request: opts.authConfigRequest ?? defaultComposioAuthConfigRequest, signal: opts.signal,
+  });
+  const freshObservation = ComposioConnectTargetVersionObservationSchema.parse({
+    ...expected,
+    auth_config_state_sha256: freshConfig.stateDigest,
+  });
+  if (operationPlanDigest(freshObservation) !== operationPlanDigest(expected)) {
+    throw new Error("Composio auth config changed after owner review; external mutation sent=false; refresh the review");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "composio.connect");
+  let response: ComposioExecuteResponse;
+  try {
+    response = await (opts.connectRequest ?? defaultComposioConnectRequest)({
+      api_base_url: apiBaseUrl,
+      path: `/api/${COMPOSIO_API_VERSION}/connected_accounts/link`,
+      method: "POST",
+      auth_config_id: authConfigId,
+      toolkit,
+      user_id: userId,
+      body: { auth_config_id: authConfigId, user_id: userId },
+      api_key: apiKey,
+      maxBytes: DEFAULT_MAX_BYTES,
+    }, opts.signal);
+  } catch {
+    throw new Error("composio.connect outcome_unknown; automatic_retry=false; inspect connected accounts before creating another link");
+  }
+  if (!response.ok) {
+    const rejected = [400, 401, 403, 404, 409, 422].includes(response.status);
+    throw new Error(rejected
+      ? `composio.connect provider_rejected HTTP ${response.status}; automatic_retry=false; no account access is enabled`
+      : `composio.connect outcome_unknown HTTP ${response.status}; automatic_retry=false; inspect connected accounts before creating another link`);
+  }
+  if (response.truncated || !response.content_type?.toLowerCase().includes("application/json")) {
+    throw new Error("composio.connect outcome_unknown; automatic_retry=false; provider response was not safely parseable");
+  }
+  const data = parseJsonOrText(response.body);
+  const redirectUrl = isRecord(data) ? safeComposioConnectUrl(data.redirect_url) : undefined;
+  const connectedAccountId = isRecord(data) && typeof data.connected_account_id === "string" &&
+    data.connected_account_id.length <= 256 && data.connected_account_id.trim() === data.connected_account_id &&
+    !/[\u0000-\u001f\u007f]/.test(data.connected_account_id) ? data.connected_account_id : undefined;
+  const expiresAt = isRecord(data) && typeof data.expires_at === "string" ? Date.parse(data.expires_at) : Number.NaN;
+  const now = Date.now();
+  if (!redirectUrl || !connectedAccountId || !Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + 86_400_000) {
+    throw new Error("composio.connect outcome_unknown; automatic_retry=false; link response could not be safely validated");
+  }
+  if (opts.signal?.aborted) {
+    throw new Error("composio.connect outcome_unknown; automatic_retry=false; link was created but handoff was withheld after cancellation");
+  }
+  const redirectUrlDigest = composioIdentityDigest(redirectUrl);
+  const connectedAccountIdDigest = composioIdentityDigest(connectedAccountId);
+  const handoffDigest = operationPlanDigest({
+    schema_version: "blue-tanuki.composio-connect-handoff.v1",
+    command_digest: opts.commandDigest,
+    request_payload_digest: requestPayloadDigest,
+    connected_account_id_sha256: connectedAccountIdDigest,
+    redirect_url_sha256: redirectUrlDigest,
+    expires_at_ms: expiresAt,
+  });
+  const safeResult = {
+    schema_version: "blue-tanuki.composio-connect-result.v1",
+    provider: "composio",
+    operation: "connect",
+    toolkit,
+    command_digest: opts.commandDigest,
+    auth_config_id_sha256: expected.auth_config_id_sha256,
+    user_id_sha256: expected.user_id_sha256,
+    auth_config_state_sha256: expected.auth_config_state_sha256,
+    connected_account_id_sha256: connectedAccountIdDigest,
+    request_payload_digest: requestPayloadDigest,
+    link_expires_at_ms: expiresAt,
+    handoff_digest: handoffDigest,
+    redirect_url_sha256: redirectUrlDigest,
+    provider_http_status: response.status,
+    provider_request_id_digest: response.request_id ? composioIdentityDigest(response.request_id) : null,
+    external_call_performed: true,
+    external_mutation_sent: true,
+    automatic_retry: false,
+    used_for_authority: false,
+    may_execute: false,
+  };
+  const resultDigest = operationPlanDigest(safeResult);
+  const result = { ...safeResult, result_digest: resultDigest };
+  const published = opts.connectHandoff.publish({
+    handoff_digest: handoffDigest,
+    result_digest: resultDigest,
+    redirect_url: redirectUrl,
+    expires_at_ms: expiresAt,
+  });
+  if (!published) {
+    throw new Error("composio.connect outcome_unknown; automatic_retry=false; link was created but the one-time handoff could not be retained");
+  }
+  return { ...result, result_digest: resultDigest };
+}
+
 export async function invokeComposioSearch(
   args: Record<string, unknown>,
   opts: ComposioOptions = {},
@@ -2026,6 +2421,49 @@ export const composioDisconnectTool: Tool = {
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { disconnectTargetVersionObservation: observation } : {}),
+      operationPlanBindingDigest: observation?.operation_plan_binding_digest,
+      requireTargetVersionObservation: true,
+    });
+  },
+};
+
+export const composioConnectTool: Tool = {
+  name: "composio.connect",
+  adapter_version: "1.0.0-rc.1",
+  description:
+    "Creates one hosted Composio connection link for the configured owner and explicitly selected allowlisted toolkit. Requires an exact Operation Plan binding, fresh no-store L3 review, explicit live opt-in, and a reserved one-time owner handoff. The raw link is never returned in tool output or persisted; unknown outcomes are never retried automatically.",
+  required_capabilities: requireToolOperationDescriptor("composio.connect").required_capabilities,
+  async inspect_target_version(args, inspectOptions) {
+    if (!inspectOptions?.command_digest || !inspectOptions.operation_plan_binding_digest) {
+      throw new Error("composio.connect inspection requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioConnectTargetVersion(args, {
+      env: composioToolEnvironment(inspectOptions.env ?? process.env),
+      ...(inspectOptions.signal ? { signal: inspectOptions.signal } : {}),
+      commandDigest: inspectOptions.command_digest,
+      operationPlanBindingDigest: inspectOptions.operation_plan_binding_digest,
+    });
+  },
+  async inspect_content_review(args, reviewOptions) {
+    if (!reviewOptions?.command_digest || !reviewOptions.operation_plan_binding_digest) {
+      throw new Error("composio.connect owner review requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioConnectContentReview(args, {
+      env: composioToolEnvironment(reviewOptions.env ?? process.env),
+      ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
+      commandDigest: reviewOptions.command_digest,
+      operationPlanBindingDigest: reviewOptions.operation_plan_binding_digest,
+    });
+  },
+  async invoke(args, context) {
+    const observation = context.target_version_observation === undefined
+      ? undefined : ComposioConnectTargetVersionObservationSchema.parse(context.target_version_observation);
+    return await invokeComposioConnect(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key),
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
+      ...(observation ? { connectTargetVersionObservation: observation } : {}),
+      ...(context.composio_connect_handoff ? { connectHandoff: context.composio_connect_handoff } : {}),
       operationPlanBindingDigest: observation?.operation_plan_binding_digest,
       requireTargetVersionObservation: true,
     });

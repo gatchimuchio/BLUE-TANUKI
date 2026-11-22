@@ -34,6 +34,7 @@ import {
   RuntimeScheduleDeleteProposalSchema,
   RuntimeScheduleDeleteReviewSchema,
   RuntimeSessionInputSchema,
+  ComposioConnectContentReviewSchema,
   SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_CREDENTIAL_ROTATION_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
@@ -281,6 +282,14 @@ function sendLaunchHandoffJson(res: ServerResponse, status: number, body: Record
 }
 
 const RESUME_GLOBAL_KEY = "*";
+
+interface ComposioConnectHandoffEntry {
+  state: "reserved" | "ready";
+  expires_at_ms: number;
+  handoff_digest?: string;
+  result_digest?: string;
+  redirect_url?: string;
+}
 
 function goalPurposeRepairBinding(value: Record<string, unknown>): WebChatGoalPurposeRepairRequest | null {
   const { backup_id, manifest_sha256, repair_sha256 } = value;
@@ -1011,6 +1020,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   private readonly resumeApprovalTokenStore: ResumeApprovalTokenStore | null;
   private readonly resumeApprovalTokenTtlMs: number;
   private readonly controlCenterLaunchHandoffs = new Map<string, ControlCenterLaunchHandoff>();
+  private readonly composioConnectHandoffs = new Map<string, ComposioConnectHandoffEntry>();
   private readonly buckets: {
     inbound: TokenBucket | null;
     resume: TokenBucket | null;
@@ -1162,6 +1172,67 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         }),
       };
     }
+  }
+
+  /** Reserve bounded volatile capacity before creating a provider link; URL bytes never enter durable state. */
+  reserveComposioConnectHandoff(): {
+    publish(input: { handoff_digest: string; result_digest: string; redirect_url: string; expires_at_ms: number }): boolean;
+    release(): void;
+  } | undefined {
+    const now = Date.now();
+    for (const [key, entry] of this.composioConnectHandoffs) {
+      if (entry.expires_at_ms <= now) this.composioConnectHandoffs.delete(key);
+    }
+    if (this.composioConnectHandoffs.size >= 32) return undefined;
+    const reservationKey = randomBytes(24).toString("hex");
+    this.composioConnectHandoffs.set(reservationKey, { state: "reserved", expires_at_ms: now + 60_000 });
+    let released = false;
+    return {
+      publish: (input) => {
+        if (released || !/^[a-f0-9]{64}$/.test(input.handoff_digest) || !/^[a-f0-9]{64}$/.test(input.result_digest) ||
+            !Number.isSafeInteger(input.expires_at_ms) || input.expires_at_ms <= Date.now()) return false;
+        const current = this.composioConnectHandoffs.get(reservationKey);
+        if (!current || current.state !== "reserved" || current.expires_at_ms <= Date.now()) return false;
+        let url: URL;
+        try { url = new URL(input.redirect_url); } catch { return false; }
+        if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "connect.composio.dev" || url.username ||
+            url.password || url.port || url.hash || !url.pathname.startsWith("/link/") || input.redirect_url.length > 4_096) return false;
+        if ([...this.composioConnectHandoffs.values()].some((entry) => entry.state === "ready" &&
+            entry.handoff_digest === input.handoff_digest)) return false;
+        this.composioConnectHandoffs.set(reservationKey, {
+          state: "ready",
+          expires_at_ms: Math.min(input.expires_at_ms, Date.now() + 5 * 60_000),
+          handoff_digest: input.handoff_digest,
+          result_digest: input.result_digest,
+          redirect_url: url.toString(),
+        });
+        return true;
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        const current = this.composioConnectHandoffs.get(reservationKey);
+        if (current?.state === "reserved") this.composioConnectHandoffs.delete(reservationKey);
+      },
+    };
+  }
+
+  private takeComposioConnectHandoff(content: string): { url: string; handoff_digest: string; result_digest: string } | undefined {
+    const handoff = content.match(/^handoff_digest: ([a-f0-9]{64})$/mu)?.[1];
+    const result = content.match(/^handoff_result_digest: ([a-f0-9]{64})$/mu)?.[1];
+    if (!handoff || !result) return undefined;
+    const now = Date.now();
+    for (const [key, entry] of this.composioConnectHandoffs) {
+      if (entry.expires_at_ms <= now) {
+        this.composioConnectHandoffs.delete(key);
+        continue;
+      }
+      if (entry.state === "ready" && entry.handoff_digest === handoff && entry.result_digest === result && entry.redirect_url) {
+        this.composioConnectHandoffs.delete(key);
+        return { url: entry.redirect_url, handoff_digest: handoff, result_digest: result };
+      }
+    }
+    return undefined;
   }
 
   async issueResumeApprovalToken(
@@ -1477,6 +1548,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         "cache-control": "no-store",
         "content-security-policy": "frame-ancestors 'none'",
         "x-frame-options": "DENY",
+        "referrer-policy": "no-referrer",
       });
       res.end(renderControlCenterHtml());
       return;
@@ -2998,6 +3070,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         return;
       if (this.opts.approval?.requiresApprovalEndpoint?.(request_id) ||
           this.opts.approval?.requiresLocalDailyBriefRead?.(request_id) ||
+          this.opts.approval?.requiresLocalComposioConnectReview?.(request_id) ||
           (verdict === "approve" && this.opts.approval?.requiresNativeCredentialApproval?.(request_id))) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_endpoint_required" }));
@@ -3439,13 +3512,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const scheduleCreateReview = this.opts.approval.requiresLocalRuntimeScheduleCreate?.(command_id) === true;
       const scheduleDeleteReview = this.opts.approval.requiresLocalRuntimeScheduleDelete?.(command_id) === true;
       const scheduleUpdateReview = this.opts.approval.requiresLocalRuntimeScheduleUpdate?.(command_id) === true;
-      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview) &&
+      const composioConnectReview = this.opts.approval.requiresLocalComposioConnectReview?.(command_id) === true;
+      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview || composioConnectReview) &&
           (url.search || !isLocalControlCenterBrowserRequest(req))) {
         res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "same_origin_local_control_center_required" }));
         return;
       }
-      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview) &&
+      if ((dailyBriefReview || scheduleCreateReview || scheduleDeleteReview || scheduleUpdateReview || composioConnectReview) &&
           !hasAuxiliaryOwnerToken(req, this.opts.owner_token)) {
         res.writeHead(401, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "unauthorized" }));
@@ -3472,7 +3546,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (scheduleCreateReview !== (content.kind === "schedule_create") ||
           scheduleDeleteReview !== (content.kind === "schedule_delete") ||
-          scheduleUpdateReview !== (content.kind === "schedule_update")) {
+          scheduleUpdateReview !== (content.kind === "schedule_update") ||
+          composioConnectReview !== (content.kind === "composio_connect")) {
         res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
         return;
@@ -3503,6 +3578,16 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
           return;
         }
         content = parsed.data;
+      }
+      if (content.kind === "composio_connect") {
+        const { command_id: reviewedCommandId, ...reviewPayload } = content;
+        const parsed = ComposioConnectContentReviewSchema.safeParse(reviewPayload);
+        if (!parsed.success || reviewedCommandId !== command_id) {
+          res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "approval_content_review_unavailable" }));
+          return;
+        }
+        content = { ...parsed.data, command_id };
       }
       if (content.kind === "settings_write" && (!validSettingsWriteReview(content, command_id) ||
           ((content.google_read_registration !== undefined || content.github_write_registration !== undefined ||
@@ -3800,7 +3885,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     const scheduleDeleteApproval = this.opts.approval?.requiresLocalRuntimeScheduleDelete?.(approval_id) === true;
     const scheduleCreateApproval = this.opts.approval?.requiresLocalRuntimeScheduleCreate?.(approval_id) === true;
     const scheduleUpdateApproval = this.opts.approval?.requiresLocalRuntimeScheduleUpdate?.(approval_id) === true;
-    if (scheduleDeleteApproval || scheduleCreateApproval || scheduleUpdateApproval) {
+    const composioConnectApproval = this.opts.approval?.requiresLocalComposioConnectReview?.(approval_id) === true;
+    if (scheduleDeleteApproval || scheduleCreateApproval || scheduleUpdateApproval || composioConnectApproval) {
       res.setHeader("cache-control", "no-store");
       if (url.search || !isLocalControlCenterBrowserRequest(req)) {
         res.writeHead(403, { "content-type": "application/json" });
@@ -3819,7 +3905,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       }
       if (!this.resumeApprovalTokenStore || !this.opts.approval?.validateContentReview || !this.opts.approval.reviewContent) {
         res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: scheduleCreateApproval ? "schedule_create_approval_unavailable" :
+        res.end(JSON.stringify({ error: composioConnectApproval ? "composio_connect_approval_unavailable" : scheduleCreateApproval ? "schedule_create_approval_unavailable" :
           scheduleDeleteApproval ? "schedule_delete_approval_unavailable" : "schedule_update_approval_unavailable" }));
         return;
       }
@@ -4799,6 +4885,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "no-store");
     res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("referrer-policy", "no-referrer");
     const send = (status: number, body: Record<string, unknown>) => {
       res.writeHead(status);
       res.end(JSON.stringify(body));
@@ -4848,6 +4935,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     res.setHeader("content-type", "application/json; charset=utf-8");
     res.setHeader("cache-control", "no-store");
     res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("referrer-policy", "no-referrer");
     const send = (status: number, body: Record<string, unknown>) => {
       res.writeHead(status);
       res.end(JSON.stringify(body));
@@ -4900,8 +4988,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     if (typeof content !== "string" || !content.trim() || Buffer.byteLength(content, "utf8") > 64 * 1024) {
       return send(404, unavailable);
     }
+    const connectHandoff = this.takeComposioConnectHandoff(content);
     send(200, { status: "available", result_ref,
       content_sha256: createHash("sha256").update(content, "utf8").digest("hex"), content,
+      ...(connectHandoff ? { composio_connect_handoff: connectHandoff } : {}),
       used_for_authority: false, may_execute: false });
   }
 

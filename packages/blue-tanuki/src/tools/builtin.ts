@@ -112,6 +112,7 @@ import {
   composioExecuteTool,
   composioDisconnectTool,
   composioSearchTool,
+  composioConnectTool,
 } from "./composio.js";
 import {
   isHdsMemoryArtifact,
@@ -8432,6 +8433,7 @@ export function registerBuiltinTools(registry: {
   registry.register(composioScopesTool);
   registry.register(composioExecuteTool);
   registry.register(composioDisconnectTool);
+  registry.register(composioConnectTool);
   registry.register(browserReadTool);
   registry.register(browserSnapshotTool);
   registry.register(browserAutomationTool);

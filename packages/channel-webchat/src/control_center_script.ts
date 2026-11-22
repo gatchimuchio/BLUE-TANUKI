@@ -98,6 +98,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         composioAccountsCandidateSubmissionId: null,
         composioAccountsStatusMessage: null,
         composioAccountsStatusTone: "warn",
+        composioConnectCandidateTask: null,
+        composioConnectCandidateSubmissionId: null,
+        composioConnectStatusMessage: null,
+        composioConnectStatusTone: "warn",
         composioDisconnectCandidateTask: null,
         composioDisconnectCandidateSubmissionId: null,
         composioDisconnectStatusMessage: null,
@@ -2044,7 +2048,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!response.ok || !hasNoStore(response)) throw new Error("saved result unavailable");
           const result = await response.json();
           if (!isCurrent()) return;
-          if (!isObject(result) || Object.keys(result).length !== 6 || result.status !== "available" ||
+          const resultKeys = isObject(result) ? Object.keys(result).sort().join(",") : "";
+          const baseResultKeys = "content,content_sha256,may_execute,result_ref,status,used_for_authority";
+          const handoffResultKeys = "composio_connect_handoff,content,content_sha256,may_execute,result_ref,status,used_for_authority";
+          if (!isObject(result) || (resultKeys !== baseResultKeys && resultKeys !== handoffResultKeys) || result.status !== "available" ||
               result.result_ref !== step.resultRef || result.used_for_authority !== false || result.may_execute !== false ||
               typeof result.content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(result.content_sha256) ||
               typeof result.content !== "string" || result.content.length < 1 || result.content.length > 64 * 1024) {
@@ -2058,12 +2065,29 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             return byte.toString(16).padStart(2, "0");
           }).join("");
           if (actualDigest !== result.content_sha256) throw new Error("saved result digest mismatch");
+          if (result.composio_connect_handoff !== undefined) {
+            const handoff = result.composio_connect_handoff;
+            const expectedHandoff = result.content.match(/^handoff_digest: ([a-f0-9]{64})$/m)?.[1];
+            const expectedResult = result.content.match(/^handoff_result_digest: ([a-f0-9]{64})$/m)?.[1];
+            let link;
+            try { link = new URL(handoff?.url); } catch { throw new Error("connection handoff URL invalid"); }
+            if (!isObject(handoff) || Object.keys(handoff).sort().join(",") !== "handoff_digest,result_digest,url" ||
+                handoff.handoff_digest !== expectedHandoff || handoff.result_digest !== expectedResult ||
+                typeof handoff.url !== "string" || handoff.url.length > 4_096 || link.protocol !== "https:" ||
+                link.hostname.toLowerCase() !== "connect.composio.dev" || link.username || link.password || link.port ||
+                link.hash || !link.pathname.startsWith("/link/")) throw new Error("connection handoff is not bound to the saved result");
+            ownerTokenInput.value = "";
+            window.location.assign(link.toString());
+            return;
+          }
           const pane = byId("owner-task-saved-result");
           pane.textContent = result.content;
           pane.hidden = false;
           renderComposioAccountsSavedResultChoices(result.content);
           renderComposioSearchSavedResultChoices(result.content);
-          status.textContent = "工程 " + String(step.index) + " · 保存時点の確認結果";
+          status.textContent = /^handoff_digest: [a-f0-9]{64}$/m.test(result.content)
+            ? "この接続リンクは初回のローカル照会でのみ一度だけ開けます。リンクが表示されない場合は期限切れ・使用済み・再起動後のため、account一覧で接続状態を確認し、結果不明のまま再送しないでください。"
+            : "工程 " + String(step.index) + " · 保存時点の確認結果";
         } catch {
           if (isCurrent()) status.textContent = "保存済み結果を表示できませんでした。依頼状態を再確認してください。";
         } finally {
@@ -5738,11 +5762,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const status = byId("composio-discovery-status");
         const prepareAccountsButton = byId("prepare-composio-accounts");
         const accountsStatus = byId("composio-accounts-status");
+        const authConfigIdInput = byId("composio-connect-auth-config-id");
+        const prepareConnectButton = byId("prepare-composio-connect");
+        const connectStatus = byId("composio-connect-status");
         const disconnectIdInput = byId("composio-disconnect-account-id");
         const prepareDisconnectButton = byId("prepare-composio-disconnect");
         const disconnectStatus = byId("composio-disconnect-plan-status");
         status.className = "badge warn";
         accountsStatus.className = "badge warn";
+        connectStatus.className = "badge warn";
         disconnectStatus.className = "badge warn";
         const snapshot = state.connectorsSnapshot;
         const previousSelection = toolkitSelect.value;
@@ -5771,6 +5799,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         prepareButton.disabled = !ready || state.composioExecuteSubmitting === true || !toolkitSelect.value || !queryInput.value.trim() || queryInput.value.length > 500;
         const accountsReady = ready && snapshot.user_id_set === true;
         prepareAccountsButton.disabled = !accountsReady || state.composioExecuteSubmitting === true || !toolkitSelect.value;
+        authConfigIdInput.disabled = !accountsReady || state.composioExecuteSubmitting === true || !toolkitSelect.value;
+        const authConfigId = authConfigIdInput.value;
+        prepareConnectButton.disabled = !accountsReady || state.composioExecuteSubmitting === true || !toolkitSelect.value ||
+          !/^[A-Za-z0-9_-]{1,200}$/.test(authConfigId);
         disconnectIdInput.disabled = !accountsReady || state.composioExecuteSubmitting === true || !toolkitSelect.value;
         const connectedAccountId = disconnectIdInput.value;
         prepareDisconnectButton.disabled = !accountsReady || state.composioExecuteSubmitting === true || !toolkitSelect.value || !connectedAccountId ||
@@ -5793,6 +5825,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         else if (!toolkits.length) disconnectStatus.textContent = "No allowlisted toolkit is configured. Add and load a toolkit before preparing a disconnect plan.";
         else if (!connectedAccountId) disconnectStatus.textContent = "Enter the exact connected account ID. Candidate creation does not contact Composio.";
         else disconnectStatus.textContent = "Ready to request one unexecuted composio.disconnect plan. Runtime use requires live opt-in and a current no-store L3 review.";
+        if (state.composioConnectStatusMessage) {
+          connectStatus.textContent = state.composioConnectStatusMessage;
+          connectStatus.className = "badge " + state.composioConnectStatusTone;
+        } else if (!snapshot) connectStatus.textContent = "Load Connectors to check the configured API key, owner identity, and allowlist.";
+        else if (!configured) connectStatus.textContent = "Composio API key is not configured. No connection plan can be prepared.";
+        else if (snapshot.user_id_set !== true) connectStatus.textContent = "Composio owner identity is not configured. No connection plan can be prepared.";
+        else if (!toolkits.length) connectStatus.textContent = "No allowlisted toolkit is configured. Add and load a toolkit before preparing a connection plan.";
+        else if (!authConfigId) connectStatus.textContent = "Enter the exact auth config ID. Candidate creation does not contact Composio.";
+        else connectStatus.textContent = "Ready to request one unexecuted composio.connect plan. No Composio request will be made here.";
         renderComposioExecuteControls();
         if (state.composioDiscoveryStatusMessage) {
           status.textContent = state.composioDiscoveryStatusMessage;
@@ -8651,6 +8692,84 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function prepareComposioConnect() {
+        const button = byId("prepare-composio-connect");
+        button.disabled = true;
+        let requestSubmissionId = null;
+        let requestAttempted = false;
+        try {
+          const snapshot = state.connectorsSnapshot;
+          if (!snapshot || snapshot.api_key_configured !== true || snapshot.user_id_set !== true) {
+            throw new Error("Load Connectors with a configured Composio API key and owner identity before preparing a connection plan");
+          }
+          const toolkit = byId("composio-discovery-toolkit").value;
+          const allowedToolkits = typeof snapshot.allowed_toolkits === "string"
+            ? snapshot.allowed_toolkits.split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+            : [];
+          if (!toolkit || !allowedToolkits.includes(toolkit)) {
+            throw new Error("Select a toolkit from the currently loaded Composio allowlist");
+          }
+          const authConfigId = byId("composio-connect-auth-config-id").value;
+          if (!/^[A-Za-z0-9_-]{1,200}$/.test(authConfigId)) {
+            throw new Error("Enter one exact auth config ID using letters, digits, underscore, or hyphen");
+          }
+          const args = { toolkit: toolkit, auth_config_id: authConfigId };
+          const task = [
+            "Create one unexecuted Operation Plan candidate with exactly one built-in composio.connect call and the exact arguments JSON below.",
+            "Do not call Composio, make a network request, read the auth config, create a link, execute the plan, or perform another external action. Do not add credentials, user identity, a second toolkit, action, or permission.",
+            "This only prepares a candidate. If later selected and separately approved under current live configuration and owner-only no-store L3 review, runtime will create one hosted connection link for the configured owner and selected toolkit. The raw link is handed to the owner once from volatile memory, never saved. Opening a link does not confirm the account connection; verify it later through a separate account-list result. Unknown outcomes must not be resent automatically.",
+            "Exact composio.connect arguments JSON: " + JSON.stringify(args)
+          ].join("\\n");
+          const ownerTokenInput = byId("owner-task-token");
+          const ownerToken = ownerTokenInput.value.trim();
+          const goalSelect = byId("owner-task-goal-ref");
+          const goalRef = goalSelect.value;
+          const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
+          state.chatUser = byId("chat-user").value.trim() || "owner";
+          if (!ownerToken) throw new Error("Operation Plan候補の作成にはOwner Taskのowner tokenが必要です");
+          if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+            throw new Error("候補の受付状態を確認するため、WebChatへ接続してください");
+          }
+          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 1) {
+            throw new Error("Owner Taskから現在の委任目的を読み込み、選択してください");
+          }
+          const candidateFingerprint = JSON.stringify([task, goalRef, purposeVersion, state.chatUser]);
+          if (!state.composioConnectCandidateTask || state.composioConnectCandidateTask !== candidateFingerprint) {
+            state.composioConnectCandidateTask = candidateFingerprint;
+            state.composioConnectCandidateSubmissionId = crypto.randomUUID();
+          }
+          const submissionId = state.composioConnectCandidateSubmissionId;
+          requestSubmissionId = submissionId;
+          requestAttempted = true;
+          const result = await postOwnerTaskCompute(ownerToken, {
+            user: state.chatUser, task: task, goal_ref: goalRef, purpose_version: purposeVersion,
+            submission_id: submissionId
+          });
+          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          state.composioConnectStatusMessage = "Plan candidate request accepted: " +
+            (result.request_id || submissionId) + ". No Composio request or link creation was made.";
+          state.composioConnectStatusTone = "good";
+          byId("owner-task-status").textContent = result.status === "already_in_progress" || result.status === "already_accepted"
+            ? "このComposio connection候補は既に受付済みです。重複起動していません"
+            : "Composio connection linkの未実行Plan候補を受付済み。Provider作用は未実行です";
+          byId("owner-task-status").className = "badge good";
+          appendChat("owner", task);
+          appendChat("accepted", result.request_id || "Composio connection候補を受付済み", result.request_id);
+          byId("composio-connect-auth-config-id").value = "";
+          state.composioConnectCandidateTask = null;
+          state.composioConnectCandidateSubmissionId = null;
+        } catch (error) {
+          const message = error && typeof error.message === "string" ? error.message : "Composio connection plan request failed";
+          state.composioConnectStatusMessage = message +
+            (requestAttempted && requestSubmissionId ? " Request ID retained: " + requestSubmissionId + ". If the outcome is unknown, check Tasks/Runtime before changing the request." : "");
+          state.composioConnectStatusTone = "bad";
+          byId("owner-task-status").textContent = message;
+          byId("owner-task-status").className = "badge bad";
+        } finally {
+          renderComposioDiscoveryControls();
+        }
+      }
+
       async function prepareComposioExecute() {
         const button = byId("prepare-composio-execute");
         button.disabled = true;
@@ -9934,6 +10053,87 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "Composio actionを再確認";
+          return;
+        }
+        if (review.kind === "composio_connect") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const observedTarget = isObject(review.target_version_observation) ? review.target_version_observation : {};
+          const cacheControl = response.headers.get("cache-control") || "";
+          if (review.command_id !== commandId || review.operation !== "composio.connect" || review.no_store !== true ||
+              !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) || review.used_for_authority !== false ||
+              review.may_execute !== false || review.provider_metadata_used_for_authority !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              observedTarget.schema_version !== "blue-tanuki.composio-connect-target-version.v1" ||
+              observedTarget.target_state !== "available" || observedTarget.used_for_authority !== false ||
+              observedTarget.may_execute !== false || observedTarget.toolkit !== review.toolkit ||
+              observedTarget.auth_config_id_sha256 !== review.auth_config_id_sha256 ||
+              observedTarget.user_id_sha256 !== review.user_id_sha256 ||
+              observedTarget.request_payload_digest !== review.request_payload_digest ||
+              observedTarget.command_digest !== review.command_digest ||
+              observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
+              !isDigest(observedTarget.auth_config_state_sha256) ||
+              typeof review.toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(review.toolkit) ||
+              typeof review.auth_config_id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(review.auth_config_id) ||
+              !isDigest(review.auth_config_id_sha256) || !isDigest(review.user_id_sha256) ||
+              !isDigest(review.auth_config_state_sha256) || review.auth_config_status !== "ENABLED" ||
+              !Array.isArray(review.scopes) || review.scopes.length > 100 ||
+              !review.scopes.every(function (scope) { return typeof scope === "string" && scope.length > 0 && scope.length <= 200; }) ||
+              !Array.isArray(review.restricted_tools) || review.restricted_tools.length > 500 ||
+              typeof review.restricted_tools_reported !== "boolean" ||
+              !review.restricted_tools.every(function (tool) { return typeof tool === "string" && tool.length > 0 && tool.length <= 160; }) ||
+              review.effect !== "create_one_hosted_connection_link_for_owner_and_toolkit") {
+            throw new Error("Composio connection review is not bound to one enabled auth config and current HDS plan");
+          }
+          const authConfigDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(review.auth_config_id));
+          const actualAuthConfigDigest = Array.from(new Uint8Array(authConfigDigest), function (byte) {
+            return byte.toString(16).padStart(2, "0");
+          }).join("");
+          const reviewBody = Object.assign({}, review);
+          delete reviewBody.command_id;
+          delete reviewBody.review_digest;
+          if (actualAuthConfigDigest !== review.auth_config_id_sha256 ||
+              await digestObject(observedTarget) !== review.target_version_digest ||
+              await digestObject(reviewBody) !== review.review_digest) {
+            throw new Error("Composio connection review digest verification failed; approval remains unavailable");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Composio account connection linkの高リスク・L3最終確認";
+          view.appendChild(heading);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は選択した有効なauth configとtoolkitについて接続用URLを一件作成します。URLは一回限りの揮発handoffでownerへ返し、保存・履歴・LLMへ渡しません。リンクを開いただけでは接続完了ではありません。結果不明時は自動再送しません。";
+          view.appendChild(note);
+          [
+            ["toolkit", review.toolkit],
+            ["auth config ID", review.auth_config_id],
+            ["auth scheme / Composio managed", review.auth_scheme + " / " + String(review.is_composio_managed)],
+            ["config status / scopes reported", review.auth_config_status + " / " + String(review.scopes_reported)],
+            ["scopes", review.scopes.join("・") || "(none reported)"],
+            ["restricted tools", (review.restricted_tools_reported ? "reported: " : "not reported: ") + (review.restricted_tools.join("・") || "(none)")],
+            ["auth config state digest", review.auth_config_state_sha256],
+            ["auth config identity digest", review.auth_config_id_sha256],
+            ["owner identity digest", review.user_id_sha256],
+            ["effect", review.effect],
+            ["Operation Plan binding", review.operation_plan_binding_digest],
+            ["target version digest", review.target_version_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "Composio connectionを再確認";
           return;
         }
         if (review.kind === "composio_disconnect") {
@@ -13767,6 +13967,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("prepare-composio-discovery").addEventListener("click", prepareComposioDiscovery);
       byId("prepare-composio-accounts").addEventListener("click", prepareComposioAccounts);
+      byId("prepare-composio-connect").addEventListener("click", prepareComposioConnect);
       byId("prepare-composio-disconnect").addEventListener("click", prepareComposioDisconnect);
       byId("prepare-composio-execute").addEventListener("click", prepareComposioExecute);
       byId("composio-execute-payload").addEventListener("input", function () {
@@ -13781,6 +13982,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.composioDisconnectStatusMessage = null;
         state.composioDisconnectCandidateTask = null;
         state.composioDisconnectCandidateSubmissionId = null;
+        renderComposioDiscoveryControls();
+      });
+      byId("composio-connect-auth-config-id").addEventListener("input", function () {
+        state.composioConnectCandidateTask = null;
+        state.composioConnectCandidateSubmissionId = null;
+        state.composioConnectStatusMessage = null;
         renderComposioDiscoveryControls();
       });
       byId("composio-discovery-toolkit").addEventListener("change", function () {
@@ -13799,6 +14006,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.composioDisconnectStatusMessage = null;
         state.composioDisconnectCandidateTask = null;
         state.composioDisconnectCandidateSubmissionId = null;
+        state.composioConnectStatusMessage = null;
+        state.composioConnectCandidateTask = null;
+        state.composioConnectCandidateSubmissionId = null;
         renderComposioDiscoveryControls();
       });
       byId("composio-discovery-query").addEventListener("input", function () {

@@ -135,3 +135,52 @@ export const ComposioDisconnectContentReviewSchema = z.object({
 }).strict();
 
 export type ComposioDisconnectContentReview = z.infer<typeof ComposioDisconnectContentReviewSchema>;
+
+/** Non-authority binding for one hosted Composio connection-link request. */
+export const ComposioConnectTargetVersionObservationSchema = z.object({
+  schema_version: z.literal("blue-tanuki.composio-connect-target-version.v1"),
+  toolkit: z.string().min(1).max(120),
+  auth_config_id_sha256: DigestSchema,
+  user_id_sha256: DigestSchema,
+  auth_config_state_sha256: DigestSchema,
+  request_payload_digest: DigestSchema,
+  command_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema,
+  target_state: z.literal("available"),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+
+export type ComposioConnectTargetVersionObservation =
+  z.infer<typeof ComposioConnectTargetVersionObservationSchema>;
+
+/** Exact no-store owner review for creating one hosted Composio connection link. */
+export const ComposioConnectContentReviewSchema = z.object({
+  kind: z.literal("composio_connect"),
+  operation: z.literal("composio.connect"),
+  command_digest: DigestSchema,
+  review_digest: DigestSchema,
+  request_payload_digest: DigestSchema,
+  target_version_digest: DigestSchema,
+  target_version_observation: ComposioConnectTargetVersionObservationSchema,
+  operation_plan_binding_digest: DigestSchema,
+  toolkit: z.string().min(1).max(120),
+  auth_config_id: z.string().min(1).max(200),
+  auth_config_id_sha256: DigestSchema,
+  user_id_sha256: DigestSchema,
+  auth_scheme: z.enum(["API_KEY", "BASIC", "BEARER", "BEARER_TOKEN", "CUSTOM", "DCR_OAUTH", "NO_AUTH", "OAUTH1", "OAUTH2"]),
+  auth_config_status: z.literal("ENABLED"),
+  is_composio_managed: z.boolean(),
+  scopes: z.array(z.string().min(1).max(200)).max(100),
+  scopes_reported: z.boolean(),
+  restricted_tools: z.array(z.string().min(1).max(160)).max(500),
+  restricted_tools_reported: z.boolean(),
+  auth_config_last_updated_at: z.string().max(80).nullable(),
+  effect: z.literal("create_one_hosted_connection_link_for_owner_and_toolkit"),
+  no_store: z.literal(true),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+  provider_metadata_used_for_authority: z.literal(false),
+}).strict();
+
+export type ComposioConnectContentReview = z.infer<typeof ComposioConnectContentReviewSchema>;

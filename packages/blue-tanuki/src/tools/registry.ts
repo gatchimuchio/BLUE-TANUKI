@@ -14,7 +14,8 @@ import type { SettingsWriteActivation, SettingsWriteCredentialRotationReview, Se
   SettingsWriteGoogleReadCredentialReview, SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation,
   SettingsWriteTelegramBotCredentialReview } from "@blue-tanuki/protocol";
 import type { ComposioActionTargetVersionObservation, ComposioActionContentReview,
-  ComposioDisconnectTargetVersionObservation, ComposioDisconnectContentReview } from "@blue-tanuki/protocol";
+  ComposioDisconnectTargetVersionObservation, ComposioDisconnectContentReview,
+  ComposioConnectTargetVersionObservation, ComposioConnectContentReview } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
@@ -24,7 +25,12 @@ export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation 
   GoogleDriveTrashTargetVersionObservation |
   GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation |
   McpCallTargetVersionObservation | ComposioActionTargetVersionObservation |
-  ComposioDisconnectTargetVersionObservation | SettingsWriteTargetVersionObservation;
+  ComposioDisconnectTargetVersionObservation | ComposioConnectTargetVersionObservation | SettingsWriteTargetVersionObservation;
+
+export interface ComposioConnectHandoffReservation {
+  publish(input: { handoff_digest: string; result_digest: string; redirect_url: string; expires_at_ms: number }): boolean;
+  release(): void;
+}
 
 /** No-store projection of one exact, plan-bound GitHub issue.create payload. */
 export interface GitHubIssueCreateContentReview {
@@ -970,7 +976,7 @@ export interface GoogleDriveFileTrashContentReview {
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | GmailMessageTrashContentReview |
   GmailMessageModifyContentReview |
   FileEditDiffContentReview | FileDeleteTargetContentReview | ComposioActionContentReview |
-  ComposioDisconnectContentReview |
+  ComposioDisconnectContentReview | ComposioConnectContentReview |
   MemoryPersonalizationStopContentReview | SettingsWriteContentReview | McpCallContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |
@@ -1021,6 +1027,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** 組込みComposio toolだけが受け取る一時的な接続資格。 */
   composio_api_key?: string;
+  /** no-store URLを一度だけ渡すため、Executorがcomposio.connectだけへ注入する。 */
+  composio_connect_handoff?: ComposioConnectHandoffReservation;
   /** 選択されたGoogleの組込み読取toolだけが受け取る一時的な接続資格。 */
   google_read_access_token?: string;
   /** 組込みgithub.writeが許可済みリポジトリでだけ使う資格参照の解決口。 */

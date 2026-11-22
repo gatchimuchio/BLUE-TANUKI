@@ -44,6 +44,8 @@ import {
   ComposioActionContentReviewSchema,
   ComposioDisconnectTargetVersionObservationSchema,
   ComposioDisconnectContentReviewSchema,
+  ComposioConnectTargetVersionObservationSchema,
+  ComposioConnectContentReviewSchema,
   MCP_CALL_POTENTIAL_EFFECTS,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
@@ -102,7 +104,7 @@ import {
   type ComputeInputSource,
   type ComputeRequest,
 } from "./llm/compute.js";
-import type { BrokerTargetVersionObservation, GmailDraftContentReview, Tool, ToolContentReview, ToolRegistry,
+import type { BrokerTargetVersionObservation, ComposioConnectHandoffReservation, GmailDraftContentReview, Tool, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
 import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVersion, assertGitHubPullRequestUpdateTargetVersion,
   assertGitHubIssueCloseTargetVersion,
@@ -133,6 +135,7 @@ import {
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
   composioDisconnectRequestPayloadDigest, composioDisconnectTool,
+  composioConnectRequestPayloadDigest, composioConnectTool,
   resolveComposioActionEffectRegistryBinding, composioToolEnvironment, composioAccountsTool, composioExecuteTool,
   composioScopesTool, composioSearchTool } from "./tools/composio.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -173,6 +176,8 @@ export interface ExecutorDeps {
   tools: ToolRegistry;
   /** Gatewayが保護参照を解決する。資格値を受け取るのはComposio組込みの経路だけ。 */
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
+  /** Owner-only WebChat reserves bounded volatile capacity before one Composio link mutation. */
+  reserve_composio_connect_handoff?: () => ComposioConnectHandoffReservation | undefined;
   /** Googleの組込み読取経路向けに、Gatewayで指定した資格参照だけを解決する。 */
   resolve_google_read_access_token?: (key: GoogleReadTokenKey, secretRef: string) => string | undefined;
   /** Gatewayが組込みgithub.writeで使うOS保護資格参照を解決する。 */
@@ -411,6 +416,16 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
       composioObservation.connected_account_id_sha256,
     ]), "utf8").digest("hex");
     return `composio-account:${accountDigest}`;
+  }
+  if (tool_name === "composio.connect" &&
+      observation?.schema_version === "blue-tanuki.composio-connect-target-version.v1") {
+    const composioObservation = ComposioConnectTargetVersionObservationSchema.parse(observation);
+    const configDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.composio-auth-config-resource-lock.v1",
+      composioObservation.user_id_sha256,
+      composioObservation.auth_config_id_sha256,
+    ]), "utf8").digest("hex");
+    return `composio-auth-config:${configDigest}`;
   }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
       ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(args.operation))) {
@@ -1028,6 +1043,14 @@ function approveCommandForExecution(
       const observation = ComposioDisconnectTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       target_version_observation = Object.freeze(assertComposioDisconnectTargetVersionBinding(
         snapshot.payload.arguments, observation, operationPlanDigest(snapshot), bindingDigest, process.env));
+    } else if (snapshot.payload.tool_name === "composio.connect") {
+      const bindingDigest = hds_binding?.operation_plan_binding_digest;
+      if (!bindingDigest) {
+        throw new Error("Executor approval rejected: composio.connect requires a selected Operation Plan binding");
+      }
+      const observation = ComposioConnectTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      target_version_observation = Object.freeze(assertComposioConnectTargetVersionBinding(
+        snapshot.payload.arguments, observation, operationPlanDigest(snapshot), bindingDigest, process.env));
     } else if (snapshot.payload.tool_name === "memory.personalization.stop") {
       const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const args = snapshot.payload.arguments;
@@ -1357,6 +1380,32 @@ function assertComposioDisconnectTargetVersionBinding(
   return observation;
 }
 
+function assertComposioConnectTargetVersionBinding(
+  args: Record<string, unknown>,
+  rawObservation: unknown,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+  env: Readonly<Record<string, string | undefined>>,
+): ReturnType<typeof ComposioConnectTargetVersionObservationSchema.parse> {
+  const observation = ComposioConnectTargetVersionObservationSchema.parse(rawObservation);
+  const toolkit = typeof args.toolkit === "string" ? args.toolkit.trim().toLowerCase() : "";
+  const authConfigId = typeof args.auth_config_id === "string" ? args.auth_config_id.trim() : "";
+  const userId = env.COMPOSIO_USER_ID?.trim() ?? "";
+  if (Object.keys(args).sort().join(",") !== "auth_config_id,toolkit" ||
+      !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(toolkit) || !/^[A-Za-z0-9_-]{1,200}$/.test(authConfigId) || !userId) {
+    throw new Error("composio.connect binding requires exactly one allowlisted toolkit, auth config, and configured owner");
+  }
+  const requestPayloadDigest = composioConnectRequestPayloadDigest({ toolkit, authConfigId, userId });
+  if (observation.toolkit !== toolkit || observation.auth_config_id_sha256 !== composioIdentityDigest(authConfigId) ||
+      observation.user_id_sha256 !== composioIdentityDigest(userId) ||
+      observation.request_payload_digest !== requestPayloadDigest || observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest ||
+      observation.used_for_authority !== false || observation.may_execute !== false) {
+    throw new Error("composio.connect target version does not match the selected auth config, owner, or Operation Plan");
+  }
+  return observation;
+}
+
 /**
  * Executor: the top-level dispatcher for BLUE-TANUKI.
  *
@@ -1486,6 +1535,23 @@ export class Executor {
         command_digest: operationPlanDigest(command),
       });
       return Object.freeze(assertComposioDisconnectTargetVersionBinding(command.payload.arguments, observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
+    }
+    if (command.payload.tool_name === "composio.connect") {
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) return undefined;
+      if (!operationPlanBindingDigest) throw new Error("composio.connect requires a selected Operation Plan binding");
+      const tool = this.deps.tools.get("composio.connect");
+      if (tool !== composioConnectTool || !tool.inspect_target_version) {
+        throw new Error("composio.connect target inspection requires the registered built-in adapter");
+      }
+      const observation = await inspectTargetVersion(tool, command.payload.arguments, {
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+        ...(signal ? { signal } : {}),
+      });
+      return Object.freeze(assertComposioConnectTargetVersionBinding(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
     }
     if (command.payload.tool_name === "github.write") {
@@ -2025,6 +2091,47 @@ export class Executor {
           review.may_execute !== false || review.provider_metadata_used_for_authority !== false ||
           !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("composio.disconnect content review returned evidence for another account or Operation Plan");
+      }
+      return Object.freeze(review);
+    }
+    if (command.payload.tool_name === "composio.connect") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("composio.connect content review requires a selected Operation Plan binding");
+      }
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) {
+        throw new Error("composio.connect content review requires explicit live execution opt-in");
+      }
+      const tool = this.deps.tools.get("composio.connect");
+      if (tool !== composioConnectTool || !tool.inspect_content_review) {
+        throw new Error("composio.connect content review requires the registered built-in adapter");
+      }
+      const review = ComposioConnectContentReviewSchema.parse(await tool.inspect_content_review(command.payload.arguments, {
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
+        ...(signal ? { signal } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      }));
+      assertNotCancelled();
+      const args = command.payload.arguments;
+      const toolkit = typeof args.toolkit === "string" ? args.toolkit.trim().toLowerCase() : "";
+      const authConfigId = typeof args.auth_config_id === "string" ? args.auth_config_id.trim() : "";
+      const observation = assertComposioConnectTargetVersionBinding(args, review.target_version_observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv);
+      const { review_digest, ...reviewBase } = review;
+      if (!toolkit || !authConfigId || review.kind !== "composio_connect" || review.operation !== "composio.connect" ||
+          review.toolkit !== toolkit || review.auth_config_id !== authConfigId ||
+          review.auth_config_id_sha256 !== observation.auth_config_id_sha256 ||
+          review.user_id_sha256 !== observation.user_id_sha256 ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.target_version_digest !== operationPlanDigest(observation) ||
+          review.request_payload_digest !== observation.request_payload_digest ||
+          review.auth_config_status !== "ENABLED" || review.effect !== "create_one_hosted_connection_link_for_owner_and_toolkit" ||
+          review.no_store !== true || review.used_for_authority !== false || review.may_execute !== false ||
+          review.provider_metadata_used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review_digest) ||
+          operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("composio.connect content review returned evidence for another auth config or Operation Plan");
       }
       return Object.freeze(review);
     }
@@ -3417,11 +3524,18 @@ export class Executor {
         before_action_dispatch?.();
       } : undefined;
       let filesystemAdapterDispatched = false;
+      const connectHandoff = payload.tool_name === "composio.connect"
+        ? this.deps.reserve_composio_connect_handoff?.() : undefined;
+      if (payload.tool_name === "composio.connect" && (tool !== composioConnectTool || !connectHandoff)) {
+        connectHandoff?.release();
+        throw new Error("composio.connect requires the registered adapter and a reserved volatile owner handoff slot");
+      }
       const invocation = Promise.resolve().then(() => {
         if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
         before_action_dispatch?.();
         const composioApiKey = tool === composioSearchTool || tool === composioAccountsTool ||
-          tool === composioScopesTool || tool === composioExecuteTool || tool === composioDisconnectTool
+          tool === composioScopesTool || tool === composioExecuteTool || tool === composioDisconnectTool ||
+          tool === composioConnectTool
           ? this.resolveComposioApiKey(process.env) : undefined;
         const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
         if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
@@ -3437,6 +3551,7 @@ export class Executor {
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
           ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
+          ...(connectHandoff ? { composio_connect_handoff: connectHandoff } : {}),
           ...(googleReadAccessToken !== undefined ? { google_read_access_token: googleReadAccessToken } : {}),
           ...(githubCredentialResolver ? { resolve_github_write_credential: (secretRef: string) => {
             const token = githubCredentialResolver(secretRef);
@@ -3452,6 +3567,7 @@ export class Executor {
           on_execution_lifecycle: observeLifecycle,
         });
       });
+      if (connectHandoff) void invocation.then(() => connectHandoff.release(), () => connectHandoff.release());
       if (acquiredTargetLocks.length > 0) {
         adapterOwnsTargetLock = true;
         // Keep the target serialized until the real adapter promise settles, even if

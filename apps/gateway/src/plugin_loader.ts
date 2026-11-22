@@ -75,6 +75,7 @@ const BUILTIN_TOOL_PERMISSIONS = [
   "tool:composio.accounts",
   "tool:composio.execute",
   "tool:composio.disconnect",
+  "tool:composio.connect",
   "tool:browser.read",
   "tool:browser.snapshot",
   "tool:browser.automation",

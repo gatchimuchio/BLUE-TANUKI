@@ -379,14 +379,17 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="">Load Connectors first</option>
               </select>
               <input id="composio-discovery-query" type="search" maxlength="500" autocomplete="off" placeholder="Search query (max 500 characters)" disabled />
+              <input id="composio-connect-auth-config-id" type="text" maxlength="200" autocomplete="off" placeholder="Exact auth config ID for connection (max 200 characters)" disabled />
               <input id="composio-disconnect-account-id" type="text" maxlength="200" autocomplete="off" placeholder="Exact connected account ID for revoke (max 200 characters)" disabled />
             </div>
             <div class="action-row">
               <button id="prepare-composio-discovery" class="primary" type="button" disabled>Prepare Composio search plan</button>
               <button id="prepare-composio-accounts" type="button" disabled>Prepare connected account list plan</button>
+              <button id="prepare-composio-connect" type="button" disabled>Prepare connection link plan</button>
               <button id="prepare-composio-disconnect" type="button" disabled>Prepare connected account revoke plan</button>
             </div>
-            <p class="muted">候補作成はComposioへ接続せず、provider操作を実行しません。検索・account一覧は設定済み範囲のbuilt-in <code>composio.search</code>／<code>composio.accounts</code> を使う未実行Plan候補を依頼します。実行時は通常の現在権限とPlan承認が必要です。接続解除候補は入力した一件のaccount IDと選択toolkitだけを含むbuilt-in <code>composio.disconnect</code> の未実行Planです。実行時は明示live opt-inとno-store L3最終確認が必須で、Provider token revokeはbest-effort、accountは削除しません。結果不明時は自動再送せず、状態再確認を要します。資格情報や秘密を入力しないでください。</p>
+            <p id="composio-connect-status" class="badge warn" role="status">Load Connectors and enter one exact auth config ID to prepare a connection candidate.</p>
+            <p class="muted">候補作成はComposioへ接続せず、provider操作を実行しません。検索・account一覧は設定済み範囲のbuilt-in <code>composio.search</code>／<code>composio.accounts</code> を使う未実行Plan候補を依頼します。接続候補は選択toolkitと入力auth config IDだけを含むbuilt-in <code>composio.connect</code> の未実行Planです。実行時は明示live opt-in、Owner限定no-store L3最終確認、URLの一回限りの揮発handoffが必須です。リンクを開いただけでは接続完了にならず、後でaccount一覧から別途確認します。接続解除候補は入力した一件のaccount IDと選択toolkitだけを含むbuilt-in <code>composio.disconnect</code> の未実行Planです。実行時は明示live opt-inとno-store L3最終確認が必須で、Provider token revokeはbest-effort、accountは削除しません。結果不明時は自動再送せず、状態再確認を要します。資格情報や秘密を入力しないでください。</p>
             <div class="screen-card">
               <h4>Composio execute candidate</h4>
               <div class="status-grid">

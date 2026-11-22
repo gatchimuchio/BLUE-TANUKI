@@ -313,6 +313,8 @@ export function resultMemoryEligible(b: Binding): boolean {
     !!b.result_digest && b.result_observed_at_ms !== undefined) ||
     (b.operation === "composio.accounts" && !!b.execution_admission?.task_identity_digest &&
       !!b.operation_plan_binding_digest && !!b.delivery_digest && !!b.result_digest && b.result_observed_at_ms !== undefined) ||
+    (b.operation === "composio.connect" && !!b.execution_admission?.task_identity_digest &&
+      !!b.operation_plan_binding_digest && !!b.delivery_digest && !!b.result_digest && b.result_observed_at_ms !== undefined) ||
     ((b.operation === "composio.search" || b.operation === "composio.execute") &&
       !!b.execution_admission?.task_identity_digest && !!b.operation_plan_binding_digest && !!b.delivery_digest &&
       !!b.result_digest && b.result_observed_at_ms !== undefined) ||
@@ -375,7 +377,7 @@ export function resultObservation(p: Plan, b: Binding) {
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
       !result) throw new Error("plan_memory_observation_not_eligible");
   if (b.operation === "mcp.call") return mcpCallResultObservation(p, b, result);
-  if (b.operation === "composio.accounts" || b.operation === "composio.disconnect" || b.operation === "composio.execute" ||
+  if (b.operation === "composio.accounts" || b.operation === "composio.connect" || b.operation === "composio.disconnect" || b.operation === "composio.execute" ||
       b.operation === "composio.search" ||
       b.operation === "file.write" ||
       b.operation === "file.delete" || b.operation === "file.edit") {

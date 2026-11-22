@@ -380,6 +380,7 @@ interface PendingApproval {
   content_review_mcp_target_version_digest?: string;
   content_review_composio_target_version_digest?: string;
   content_review_composio_disconnect_target_version_digest?: string;
+  content_review_composio_connect_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
@@ -767,6 +768,25 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
       "token数はProvider応答の報告値で、upstream token revocationはbest effortです。現在の状態は再取得していません。",
       "この結果照会はComposioへ再接続せず、disconnectを再実行しません。unknown時の自動再送もしません。",
+    ].join("\n");
+  }
+  if (projection.schema_version === "operation-plan-saved-result-return.v17") {
+    return [
+      "保存済みComposio connection link作成結果です。J/M receiptを照合済みです。raw URLは保存・表示していません。リンク作成はaccount接続完了を意味しません。",
+      `toolkit: ${JSON.stringify(projection.toolkit)}`,
+      `auth config digest: ${projection.auth_config_id_sha256}`,
+      `owner user digest: ${projection.user_id_sha256}`,
+      `auth config state digest: ${projection.auth_config_state_sha256}`,
+      `connected account digest: ${projection.connected_account_id_sha256}`,
+      `link expires at: ${new Date(projection.link_expires_at_ms).toISOString()}`,
+      `redirect URL digest: ${projection.redirect_url_sha256}`,
+      `provider HTTP status: ${projection.provider_http_status}`,
+      `provider request digest: ${projection.provider_request_id_digest ?? "not reported"}`,
+      `operation plan binding digest: ${projection.operation_plan_binding_digest}`,
+      `handoff_digest: ${projection.handoff_digest}`,
+      `handoff_result_digest: ${projection.handoff_result_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "Ownerがこの保存結果をローカルControl Centerから初回照会した場合だけ、期限内ならraw linkを一度だけ揮発handoffします。利用後はcomposio.accountsで接続状態を別途確認してください。結果不明時は再送しません。",
     ].join("\n");
   }
   const header = [
@@ -2451,6 +2471,7 @@ async function serveWithOwnerLease(
     expected_mcp_call_target_version_digest?: string;
     expected_composio_action_target_version_digest?: string;
     expected_composio_disconnect_target_version_digest?: string;
+    expected_composio_connect_target_version_digest?: string;
     browser_form_input_review_digest?: string;
     browser_form_input_operation_plan_binding_digest?: string;
     browser_form_submit_receipt_pending?: PendingApproval;
@@ -2956,13 +2977,14 @@ async function serveWithOwnerLease(
       recordApprovalHistory("approval_approved", cmd, log, origin, actor, evaluation);
     }
     if (isComposioExecuteCommand(cmd) ||
-        cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect") {
+        cmd.type === "tool_call" && (cmd.payload.tool_name === "composio.disconnect" || cmd.payload.tool_name === "composio.connect")) {
       hds.onAuthorityEvent("composio_execution_requested", {
         request_id: log.request_id,
         command_id: cmd.id,
         actor,
         reason: cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect"
-          ? "composio_disconnect_pre_executor" : "composio_execute_pre_executor",
+          ? "composio_disconnect_pre_executor" : cmd.type === "tool_call" && cmd.payload.tool_name === "composio.connect"
+            ? "composio_connect_pre_executor" : "composio_execute_pre_executor",
         evaluation: executionEvaluation ?? undefined,
       });
       recordCompleteHistory({
@@ -3261,6 +3283,19 @@ async function serveWithOwnerLease(
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedDisconnectTargetVersionDigest !== opts.expected_composio_disconnect_target_version_digest) {
         const reason = "composio_disconnect_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_composio_connect_target_version_digest) {
+      const observedComposioConnectTargetVersionDigest = cmd.type === "tool_call" && cmd.payload.tool_name === "composio.connect" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.composio-connect-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation) : undefined;
+      if (observedComposioConnectTargetVersionDigest !== opts.expected_composio_connect_target_version_digest) {
+        const reason = "composio_connect_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -3645,7 +3680,7 @@ async function serveWithOwnerLease(
     if (planBound) gatewayLog.info("saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
     if ((isComposioExecuteCommand(cmd) ||
-        cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect") &&
+        cmd.type === "tool_call" && (cmd.payload.tool_name === "composio.disconnect" || cmd.payload.tool_name === "composio.connect")) &&
         !failureMemoryGateChangedBeforeExecution) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
@@ -3654,7 +3689,8 @@ async function serveWithOwnerLease(
           command_id: cmd.id,
           actor,
           reason: `${cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect"
-            ? "composio_disconnect" : "composio_execute"}_post_executor:${fb.status}`,
+            ? "composio_disconnect" : cmd.type === "tool_call" && cmd.payload.tool_name === "composio.connect"
+              ? "composio_connect" : "composio_execute"}_post_executor:${fb.status}`,
           evaluation: executionEvaluation ?? undefined,
         },
       );
@@ -4305,6 +4341,8 @@ async function serveWithOwnerLease(
       command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "settings.write" ||
       command.payload.tool_name === "mcp.call" ||
       command.payload.tool_name === "composio.disconnect" ||
+      (command.payload.tool_name === "composio.connect" && !composioDryRun(process.env) &&
+        composioLiveExecutionEnabled(process.env)) ||
       (command.payload.tool_name === "composio.execute" && !composioDryRun(process.env) &&
         composioLiveExecutionEnabled(process.env)) ||
       (command.payload.tool_name === "google.calendar.write" &&
@@ -5046,6 +5084,8 @@ async function serveWithOwnerLease(
           ? { expected_composio_action_target_version_digest: pending.content_review_composio_target_version_digest } : {}),
         ...(pending.content_review_composio_disconnect_target_version_digest
           ? { expected_composio_disconnect_target_version_digest: pending.content_review_composio_disconnect_target_version_digest } : {}),
+        ...(pending.content_review_composio_connect_target_version_digest
+          ? { expected_composio_connect_target_version_digest: pending.content_review_composio_connect_target_version_digest } : {}),
       });
       if (r.status === "failure_memory_gate_changed" || r.status === "canonical_state_restore_archive_changed" ||
           r.status === "canonical_state_restore_archive_binding_required") {
@@ -5725,12 +5765,19 @@ async function serveWithOwnerLease(
       },
       approval: {
         list: async () => pendingApprovalSnapshot(),
-        requiresApprovalEndpoint: (id: string) => Boolean(pendingApprovals.get(id)?.goal_purpose_adoption ||
-          pendingApprovals.get(id)?.goal_purpose_repair || pendingApprovals.get(id)?.daily_brief_read ||
-          isRuntimeScheduleCreateCommand(pendingApprovals.get(id)?.command) ||
-          isRuntimeScheduleUpdateCommand(pendingApprovals.get(id)?.command) ||
-          runtimeScheduleDeleteArguments(pendingApprovals.get(id)?.command)),
+        requiresApprovalEndpoint: (id: string) => {
+          const pending = pendingApprovals.get(id);
+          const command = pending?.command;
+          return Boolean(pending?.goal_purpose_adoption || pending?.goal_purpose_repair || pending?.daily_brief_read ||
+            command?.type === "tool_call" && command.payload.tool_name === "composio.connect" ||
+            isRuntimeScheduleCreateCommand(command) || isRuntimeScheduleUpdateCommand(command) ||
+            runtimeScheduleDeleteArguments(command));
+        },
         requiresLocalDailyBriefRead: (id: string) => Boolean(pendingApprovals.get(id)?.daily_brief_read),
+        requiresLocalComposioConnectReview: (id: string) => {
+          const command = pendingApprovals.get(id)?.command;
+          return command?.type === "tool_call" && command.payload.tool_name === "composio.connect";
+        },
         requiresLocalRuntimeScheduleCreate: (id: string) => isRuntimeScheduleCreateCommand(pendingApprovals.get(id)?.command),
         requiresLocalRuntimeScheduleDelete: (id: string) => Boolean(runtimeScheduleDeleteArguments(pendingApprovals.get(id)?.command)),
         requiresLocalRuntimeScheduleUpdate: (id: string) => isRuntimeScheduleUpdateCommand(pendingApprovals.get(id)?.command),
@@ -7373,6 +7420,23 @@ async function serveWithOwnerLease(
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "composio.connect" &&
+        !composioDryRun(process.env) && composioLiveExecutionEnabled(process.env) &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "composio_connect" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: snapshot.review_digest,
+          content_review_composio_connect_target_version_digest: snapshot.target_version_digest });
+        return { ...snapshot, command_id };
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -7828,6 +7892,29 @@ async function serveWithOwnerLease(
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
           current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_composio_disconnect_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return signal?.aborted ? "cancelled" : "unavailable";
+      }
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "composio.connect") {
+      if (composioDryRun(process.env) || !composioLiveExecutionEnabled(process.env)) return "not_required";
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_composio_connect_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = await executor.inspectCommandContentReview(pending.command, undefined,
+          operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
+        return current && "kind" in current && current.kind === "composio_connect" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_composio_connect_target_version_digest
           ? "valid" : "stale";
       } catch {
         return signal?.aborted ? "cancelled" : "unavailable";
@@ -9087,6 +9174,7 @@ async function serveWithOwnerLease(
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
+    reserve_composio_connect_handoff: () => webchat.reserveComposioConnectHandoff(),
     resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
     on_agent_worker_lifecycle: (event: AgentWorkerLifecycleEvent) => {
