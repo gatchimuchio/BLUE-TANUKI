@@ -813,8 +813,11 @@ export function verifyShellExecResultMemoryCommit(observation: ShellExecObservat
 export function agentDelegationIntegrationObservation(integration: AgentDelegationIntegration) {
   if (stableDigest(integration.evidence) !== integration.evidence_digest) return null;
   const bindsCandidateContent = integration.evidence.schema_version === "blue-tanuki.agent-delegation-result-evidence.v3";
+  const childAdoptionReview = integration.schema_version === "operation-plan-agent-delegation-integration.v2"
+    ? integration.child_adoption : undefined;
   return {
-    schema_version: bindsCandidateContent ? "agent-delegation-integration-observation.v2" : "agent-delegation-integration-observation.v1",
+    schema_version: childAdoptionReview ? "agent-delegation-integration-observation.v3"
+      : bindsCandidateContent ? "agent-delegation-integration-observation.v2" : "agent-delegation-integration-observation.v1",
     record_type: "agent_delegation_integration_observation",
     parent_command_digest: integration.evidence.parent_command_digest,
     contract_digest: integration.evidence.contract_digest,
@@ -829,7 +832,7 @@ export function agentDelegationIntegrationObservation(integration: AgentDelegati
     per_child_adoption: integration.per_child_adoption,
     ...(integration.candidate_plan_id_digest ? { candidate_plan_id_digest: integration.candidate_plan_id_digest } : {}),
     ...(integration.rejection_reason_digest ? { rejection_reason_digest: integration.rejection_reason_digest } : {}),
-    children: integration.evidence.children.map((child) => ({
+    children: integration.evidence.children.map((child, index) => ({
       role: child.role,
       child_task_digest: child.child_task_digest,
       outcome: child.outcome,
@@ -837,6 +840,7 @@ export function agentDelegationIntegrationObservation(integration: AgentDelegati
       ...(child.resource_use ? { resource_use: child.resource_use } : {}),
       ...("candidate_content_digest" in child ? { candidate_content_digest: child.candidate_content_digest } : {}),
       ...("reason" in child ? { reason: child.reason } : {}),
+      ...(childAdoptionReview ? { adoption_review: childAdoptionReview[index] } : {}),
     })),
     used_for_authority: false,
     may_execute: false,

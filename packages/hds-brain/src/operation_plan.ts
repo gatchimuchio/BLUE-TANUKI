@@ -6669,8 +6669,10 @@ export class OperationPlanLedger {
     return (this.state.agent_delegation_integrations ?? []).some((integration) =>
       integration.parent_plan_decision === "candidate_retained" &&
       integration.candidate_plan_id_digest === planIdDigest &&
-      integration.per_child_adoption === "not_evaluated" &&
-      integration.evidence.children.some((child) => child.outcome === "candidate"));
+      integration.evidence.children.some((child, index) => child.outcome === "candidate" &&
+        (integration.per_child_adoption !== "evaluated" ||
+          !("child_adoption" in integration) ||
+          integration.child_adoption[index]?.adoption !== "eligible_for_parent_candidate_review")));
   }
 
   canExecute(command: ExecuteCommand): boolean {
@@ -6871,16 +6873,18 @@ export class OperationPlanLedger {
       (this.state.agent_delegation_integrations?.length ?? 0) < 64;
   }
 
-  recordAgentDelegationIntegration(input: Omit<OperationPlanAgentDelegationIntegration,
+  recordAgentDelegationIntegration(input: Omit<Extract<OperationPlanAgentDelegationIntegration,
+    { schema_version: "operation-plan-agent-delegation-integration.v2" }>,
     "schema_version" | "memory_commit" | "memory_receipt" | "used_for_authority" | "may_execute">): boolean {
     if (this.recoveryRefreshPending) return false;
     const integration = OperationPlanAgentDelegationIntegrationSchema.parse({
-      schema_version: "operation-plan-agent-delegation-integration.v1",
+      schema_version: "operation-plan-agent-delegation-integration.v2",
       ...input,
       used_for_authority: false,
       may_execute: false,
     });
-    if (integration.evidence.schema_version !== "blue-tanuki.agent-delegation-result-evidence.v3") return false;
+    if (integration.schema_version !== "operation-plan-agent-delegation-integration.v2" ||
+        integration.evidence.schema_version !== "blue-tanuki.agent-delegation-result-evidence.v3") return false;
     if (operationPlanDigest(integration.evidence) !== integration.evidence_digest) return false;
     const parent = integration.evidence.parent_command_digest;
     const existing = (this.state.agent_delegation_integrations ?? []).find((entry) =>

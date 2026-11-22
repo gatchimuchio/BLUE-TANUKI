@@ -4,7 +4,8 @@ import { ExecutionAdmissionSchema } from "./execution_result_delivery.js";
 import { MemoryCommitV2Schema, MemoryUpdateReceiptV1Schema } from "./状態更新契約.js";
 import { GoalCriteriaProjectionSchema } from "./goal_criteria.js";
 import { GoalCompletionRulesSchema } from "./goal_completion.js";
-import { AgentDelegationResultEvidenceV2Schema, AgentDelegationResultEvidenceV3Schema, ComputeResourceUseSchema } from "./types.js";
+import { AgentDelegationResultEvidenceV2Schema, AgentDelegationResultEvidenceV3Schema, AgentWorkerRoleSchema,
+  ComputeResourceUseSchema } from "./types.js";
 
 const Id = z.string().min(1).max(200);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -870,8 +871,8 @@ export const OperationPlanReflectionCandidateSchema = z.object({
     interpretation: z.string().trim().min(1).max(800), uncertainty: z.string().trim().min(1).max(800) }).strict()).min(1).max(8),
 }).strict();
 
-/** J's parent-plan retention result and child execution evidence, with its durable M delivery state. */
-export const OperationPlanAgentDelegationIntegrationSchema = z.object({
+/** Previously persisted digest-only J/M record; kept readable without inventing adoption. */
+const OperationPlanAgentDelegationIntegrationV1Schema = z.object({
   schema_version: z.literal("operation-plan-agent-delegation-integration.v1"),
   // Keep reading already-persisted v2 evidence; new J integration accepts v3 only.
   evidence: z.union([AgentDelegationResultEvidenceV2Schema, AgentDelegationResultEvidenceV3Schema]),
@@ -896,6 +897,110 @@ export const OperationPlanAgentDelegationIntegrationSchema = z.object({
     context.addIssue({ code: "custom", message: "agent_delegation_memory_receipt_without_commit" });
   }
 });
+
+/** J's explicit, digest-only per-child assessment. Child text and quotes are never retained. */
+export const OperationPlanAgentDelegationChildAdoptionSchema = z.object({
+  role: AgentWorkerRoleSchema,
+  child_task_digest: Digest,
+  outcome: z.enum(["candidate", "unknown", "rejected"]),
+  adoption: z.enum(["eligible_for_parent_candidate_review", "held", "rejected", "not_applicable"]),
+  candidate_content_digest: Digest.optional(),
+  resource_use_digest: Digest.optional(),
+  evidence_status: z.enum(["exact_spans_present", "missing", "citation_mismatch", "source_unavailable",
+    "report_invalid", "candidate_digest_mismatch", "not_applicable"]),
+  supporting_evidence_digests: z.array(Digest).max(8),
+  counterevidence_digests: z.array(Digest).max(8),
+  unknown_count: z.number().int().nonnegative().max(8),
+  unknowns_digest: Digest.optional(),
+  cost_status: z.enum(["actual", "estimated", "unknown", "not_applicable"]),
+  resource_status: z.enum(["usage_within_limits", "cost_unknown", "usage_unknown", "usage_over_limit", "not_applicable"]),
+  reason_code: z.enum([
+    "verified_for_parent_candidate_review",
+    "candidate_report_missing",
+    "candidate_report_invalid",
+    "candidate_digest_mismatch",
+    "parent_task_source_unavailable",
+    "supporting_evidence_missing",
+    "supporting_evidence_mismatch",
+    "counterevidence_present",
+    "unknowns_present",
+    "resource_cost_unknown",
+    "resource_usage_unknown",
+    "resource_limit_exceeded",
+    "child_result_not_a_candidate",
+  ]),
+}).strict().superRefine((assessment, context) => {
+  const eligible = assessment.adoption === "eligible_for_parent_candidate_review";
+  const notApplicable = assessment.adoption === "not_applicable";
+  if (assessment.outcome === "candidate" && (notApplicable || !assessment.candidate_content_digest || !assessment.resource_use_digest)) {
+    context.addIssue({ code: "custom", message: "agent_child_candidate_assessment_binding_missing" });
+  }
+  if (assessment.outcome !== "candidate" && (!notApplicable || assessment.candidate_content_digest !== undefined ||
+      assessment.evidence_status !== "not_applicable" || assessment.resource_status !== "not_applicable" ||
+      assessment.cost_status !== "not_applicable" || assessment.supporting_evidence_digests.length !== 0 ||
+      assessment.counterevidence_digests.length !== 0 || assessment.unknown_count !== 0 ||
+      assessment.unknowns_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "agent_child_non_candidate_assessment_not_applicable" });
+  }
+  if (eligible && (assessment.evidence_status !== "exact_spans_present" ||
+      assessment.supporting_evidence_digests.length === 0 || assessment.counterevidence_digests.length !== 0 ||
+      assessment.unknown_count !== 0 || assessment.unknowns_digest !== undefined ||
+      assessment.cost_status === "unknown" || assessment.resource_status !== "usage_within_limits")) {
+    context.addIssue({ code: "custom", message: "agent_child_candidate_eligibility_evidence_incomplete" });
+  }
+  if ((assessment.unknown_count === 0) !== (assessment.unknowns_digest === undefined)) {
+    context.addIssue({ code: "custom", message: "agent_child_unknown_digest_mismatch" });
+  }
+});
+export type OperationPlanAgentDelegationChildAdoption = z.infer<typeof OperationPlanAgentDelegationChildAdoptionSchema>;
+
+/** New J/M record; it retains only verified quote digests, resource measurements, and fixed decision codes. */
+const OperationPlanAgentDelegationIntegrationV2Schema = z.object({
+  schema_version: z.literal("operation-plan-agent-delegation-integration.v2"),
+  evidence: AgentDelegationResultEvidenceV3Schema,
+  evidence_digest: Digest,
+  parent_result_digest: Digest.optional(),
+  parent_plan_decision: z.enum(["candidate_retained", "candidate_rejected", "no_candidate", "compute_failed"]),
+  per_child_adoption: z.literal("evaluated"),
+  child_adoption: z.tuple([
+    OperationPlanAgentDelegationChildAdoptionSchema,
+    OperationPlanAgentDelegationChildAdoptionSchema,
+    OperationPlanAgentDelegationChildAdoptionSchema,
+    OperationPlanAgentDelegationChildAdoptionSchema,
+  ]),
+  candidate_plan_id_digest: Digest.optional(),
+  rejection_reason_digest: Digest.optional(),
+  memory_commit: MemoryCommitV2Schema.optional(),
+  memory_receipt: MemoryUpdateReceiptV1Schema.optional(),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((integration, context) => {
+  if ((integration.parent_plan_decision === "candidate_retained") !== (integration.candidate_plan_id_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "agent_delegation_candidate_plan_binding_mismatch" });
+  }
+  if ((integration.parent_plan_decision === "candidate_rejected") !== (integration.rejection_reason_digest !== undefined)) {
+    context.addIssue({ code: "custom", message: "agent_delegation_candidate_rejection_binding_mismatch" });
+  }
+  if (integration.memory_receipt !== undefined && integration.memory_commit === undefined) {
+    context.addIssue({ code: "custom", message: "agent_delegation_memory_receipt_without_commit" });
+  }
+  integration.child_adoption.forEach((assessment, index) => {
+    const child = integration.evidence.children[index];
+    if (!child || assessment.role !== child.role || assessment.child_task_digest !== child.child_task_digest ||
+        assessment.outcome !== child.outcome ||
+        (child.outcome === "candidate" && (assessment.candidate_content_digest !== child.candidate_content_digest ||
+          assessment.resource_use_digest !== child.resource_use_digest))) {
+      context.addIssue({ code: "custom", path: ["child_adoption", index],
+        message: "agent_child_adoption_result_binding_mismatch" });
+    }
+  });
+});
+
+/** J's parent-plan retention result and child execution evidence, with its durable M delivery state. */
+export const OperationPlanAgentDelegationIntegrationSchema = z.union([
+  OperationPlanAgentDelegationIntegrationV1Schema,
+  OperationPlanAgentDelegationIntegrationV2Schema,
+]);
 export type OperationPlanAgentDelegationIntegration = z.infer<typeof OperationPlanAgentDelegationIntegrationSchema>;
 
 const OperationPlanCheckpointSharedShape = {

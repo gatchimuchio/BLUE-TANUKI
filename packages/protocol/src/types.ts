@@ -405,6 +405,60 @@ export const AgentDelegationResultEvidenceSchema = z.discriminatedUnion("schema_
 ]);
 export type AgentDelegationResultEvidence = z.infer<typeof AgentDelegationResultEvidenceSchema>;
 
+/** Cの子候補報告。引用とunknownはJの照合入力であり、実行権限や事実認定ではない。 */
+export const AgentDelegationChildCandidateReportSchema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-child-candidate-report.v1"),
+  candidate: z.string().trim().min(1).max(16_000),
+  evidence: z.array(z.object({
+    source: z.literal("parent_task"),
+    quote: z.string().trim().min(1).max(800),
+  }).strict()).max(8),
+  counterevidence: z.array(z.object({
+    source: z.literal("parent_task"),
+    quote: z.string().trim().min(1).max(800),
+  }).strict()).max(8),
+  unknowns: z.array(z.string().trim().min(1).max(800)).max(8),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((report, context) => {
+  for (const [name, entries] of [["evidence", report.evidence], ["counterevidence", report.counterevidence]] as const) {
+    const quotes = entries.map((entry) => entry.quote);
+    if (new Set(quotes).size !== quotes.length) {
+      context.addIssue({ code: "custom", path: [name], message: "agent_child_candidate_duplicate_quote" });
+    }
+  }
+  if (new Set(report.unknowns).size !== report.unknowns.length) {
+    context.addIssue({ code: "custom", path: ["unknowns"], message: "agent_child_candidate_duplicate_unknown" });
+  }
+});
+export type AgentDelegationChildCandidateReport = z.infer<typeof AgentDelegationChildCandidateReportSchema>;
+
+/** 一時的なJ照合入力。Controllerは本文を監査/Mへ転記せず、評価digestだけを残す。 */
+export const AgentDelegationCandidateReviewPacketSchema = z.object({
+  schema_version: z.literal("blue-tanuki.agent-delegation-candidate-review-packet.v1"),
+  parent_command_digest: AgentDelegationResultEvidenceDigestSchema,
+  contract_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_goal_digest: AgentDelegationResultEvidenceDigestSchema,
+  parent_task_identity_digest: AgentDelegationResultEvidenceDigestSchema,
+  criteria_digest: AgentDelegationResultEvidenceDigestSchema,
+  termination_digest: AgentDelegationResultEvidenceDigestSchema,
+  children: z.array(z.object({
+    role: AgentWorkerRoleSchema,
+    child_task_digest: AgentDelegationResultEvidenceDigestSchema,
+    candidate_content_digest: AgentDelegationResultEvidenceDigestSchema,
+    report: AgentDelegationChildCandidateReportSchema,
+  }).strict()).max(4),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict().superRefine((packet, context) => {
+  const roles = packet.children.map((child) => child.role);
+  const tasks = packet.children.map((child) => child.child_task_digest);
+  if (new Set(roles).size !== roles.length || new Set(tasks).size !== tasks.length) {
+    context.addIssue({ code: "custom", message: "agent_delegation_review_packet_duplicate_child" });
+  }
+});
+export type AgentDelegationCandidateReviewPacket = z.infer<typeof AgentDelegationCandidateReviewPacketSchema>;
+
 export const LLMComputeContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-context.v1"),
   projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
@@ -864,6 +918,8 @@ export const ExecuteFeedbackSchema = z.object({
   llm_failure: LLMCallFailureSchema.optional(),
   compute_resource_use: ComputeResourceUseSchema.optional(),
   agent_delegation_result_evidence: AgentDelegationResultEvidenceSchema.optional(),
+  /** 一時的な子報告照合入力。HDSは評価後、候補本文/引用を永続化しない。 */
+  agent_delegation_candidate_review: AgentDelegationCandidateReviewPacketSchema.optional(),
   llm_tool_candidates: z.array(LLMToolCallCandidateSchema).max(32).optional(),
   /** C output is deliberately unchecked until HDS applies the source-bound review contract. */
   skeptical_review: z.unknown().optional(),

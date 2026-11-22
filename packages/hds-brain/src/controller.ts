@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AgentDelegationCandidateReviewPacket,
+  OperationPlanAgentDelegationChildAdoption,
   GoalGovernanceAuthorization,
   GoalGovernanceEvent,
   GoalGovernanceConfig,
@@ -24,7 +26,8 @@ import type {
   FailureLearningDevelopmentHandoff,
   AgentDelegationContract,
 } from "@blue-tanuki/protocol";
-import { AgentDelegationResultEvidenceV3Schema, ExecutionAdmissionSchema, ExecutionGoalVersionBindingSchema,
+import { AgentDelegationCandidateReviewPacketSchema, AgentDelegationResultEvidenceV3Schema, ExecutionAdmissionSchema,
+  ExecutionGoalVersionBindingSchema, OperationPlanAgentDelegationChildAdoptionSchema,
   getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
@@ -1283,6 +1286,8 @@ export class HDSUpperController {
     compute_parent_plan?: OperationPlanComputeParent;
     compute_memory_interpretation_dependencies?: OperationPlanMemoryInterpretationDependency[];
     resource_review?: { readonly wait_id: string; readonly task_identity_digest: string };
+    /** Ephemeral source text for J's exact-quote check; never enters audit or M. */
+    agent_delegation_parent_task?: string;
     wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
       readonly reason: "reply" | "deadline" | "recovery" };
   }>();
@@ -2285,8 +2290,13 @@ ${planControl.question}`,
           // revalidation sees the same authenticated origin as initial compute.
           const retainedOrigin = createGatewayInternalInboundRequest({ ...issuedOrigin,
             metadata: issuedOrigin.metadata as GatewayInternalAuthorityMetadata });
+          const delegationParentTask = command.type === "llm_call" && command.payload.agent_delegation
+            ? verifiedAgentDelegationParentTask(command,
+              planComputeParentContext?.goal ?? req.content, planComputePurpose?.binding)
+            : undefined;
           this.issuedLLM.set(command.id, { command: structuredClone(command),
             origin: retainedOrigin,
+            ...(delegationParentTask ? { agent_delegation_parent_task: delegationParentTask } : {}),
             ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}),
             ...(planComputeResourceReview ? { resource_review: {
               wait_id: planComputeResourceReview.wait_id,
@@ -2487,7 +2497,11 @@ ${planControl.question}`,
       if (command.type === "llm_call") this.issuedLLMFeedbackCommands.add(command.id);
       if (command.type === "llm_call" && isGatewayInternalInboundRequest(req) &&
           req.metadata?.["blue_tanuki.operator_surface"] === "developer") {
+        const delegationParentTask = command.type === "llm_call" && command.payload.agent_delegation
+          ? verifiedAgentDelegationParentTask(command, req.content, purposeBinding)
+          : undefined;
         this.issuedLLM.set(command.id, { command: structuredClone(command), origin: structuredClone(req),
+          ...(delegationParentTask ? { agent_delegation_parent_task: delegationParentTask } : {}),
           ...(failureReviewProjection ? { failure_review_projection: failureReviewProjection } : {}) });
       }
       return {
@@ -3879,6 +3893,116 @@ ${planControl.question}`,
     const agentDelegationEvidence = agentDelegationEvidenceMatches ? parsedAgentDelegationEvidence : undefined;
     const agentDelegationEvidenceContractStatus = rawAgentDelegationEvidence === undefined
       ? "not_present" as const : agentDelegationEvidence ? "passed" as const : "failed" as const;
+    const rawAgentDelegationCandidateReview = fb.agent_delegation_candidate_review;
+    const agentDelegationCandidateReviewParse = rawAgentDelegationCandidateReview === undefined
+      ? undefined : AgentDelegationCandidateReviewPacketSchema.safeParse(rawAgentDelegationCandidateReview);
+    const parsedAgentDelegationCandidateReview: AgentDelegationCandidateReviewPacket | undefined =
+      agentDelegationCandidateReviewParse?.success ? agentDelegationCandidateReviewParse.data : undefined;
+    const candidateEvidenceChildren = agentDelegationEvidence?.children.filter((child) => child.outcome === "candidate") ?? [];
+    const agentDelegationCandidateReviewMatches = Boolean(parsedAgentDelegationCandidateReview && issuedAgentDelegation &&
+      agentDelegationEvidence &&
+      parsedAgentDelegationCandidateReview.parent_command_digest === agentDelegationEvidence.parent_command_digest &&
+      parsedAgentDelegationCandidateReview.contract_digest === operationPlanDigest(issuedAgentDelegation) &&
+      parsedAgentDelegationCandidateReview.parent_goal_digest === agentDelegationEvidence.parent_goal_digest &&
+      parsedAgentDelegationCandidateReview.parent_task_identity_digest === agentDelegationEvidence.parent_task_identity_digest &&
+      parsedAgentDelegationCandidateReview.criteria_digest === agentDelegationEvidence.criteria_digest &&
+      parsedAgentDelegationCandidateReview.termination_digest === agentDelegationEvidence.termination_digest &&
+      parsedAgentDelegationCandidateReview.children.length === candidateEvidenceChildren.length &&
+      parsedAgentDelegationCandidateReview.children.every((review, index) => {
+        const child = candidateEvidenceChildren[index];
+        return child?.outcome === "candidate" && review.role === child.role &&
+          review.child_task_digest === child.child_task_digest &&
+          review.candidate_content_digest === child.candidate_content_digest;
+      }));
+    const agentDelegationCandidateReview = agentDelegationCandidateReviewMatches
+      ? parsedAgentDelegationCandidateReview : undefined;
+    const agentDelegationCandidateReviewContractStatus = rawAgentDelegationCandidateReview === undefined
+      ? "not_present" as const
+      : agentDelegationCandidateReview ? "passed" as const : "failed" as const;
+    const agentDelegationParentTask = issued?.command.id === fb.command_id
+      ? issued.agent_delegation_parent_task : undefined;
+    const agentDelegationChildAdoption = agentDelegationEvidence?.children.map((child) => {
+      if (child.outcome !== "candidate") {
+        return OperationPlanAgentDelegationChildAdoptionSchema.parse({
+          role: child.role,
+          child_task_digest: child.child_task_digest,
+          outcome: child.outcome,
+          adoption: "not_applicable",
+          evidence_status: "not_applicable",
+          supporting_evidence_digests: [],
+          counterevidence_digests: [],
+          unknown_count: 0,
+          cost_status: "not_applicable",
+          resource_status: "not_applicable",
+          reason_code: "child_result_not_a_candidate",
+        });
+      }
+      const review = agentDelegationCandidateReview?.children.find((entry) =>
+        entry.role === child.role && entry.child_task_digest === child.child_task_digest);
+      const report = review?.report;
+      const sourceAvailable = typeof agentDelegationParentTask === "string" && agentDelegationParentTask.length > 0;
+      const candidateDigestMatches = report !== undefined && createHash("sha256")
+        .update("blue-tanuki.agent.child-candidate-content.v1\0").update(report.candidate, "utf8").digest("hex") ===
+          child.candidate_content_digest;
+      const evidenceDigests = (quotes: readonly { readonly quote: string }[]) => quotes.map(({ quote }) =>
+        createHash("sha256").update("blue-tanuki.agent.child-task-quote.v1\0").update(quote, "utf8").digest("hex"));
+      const supportingEvidenceDigests = report ? evidenceDigests(report.evidence) : [];
+      const counterevidenceDigests = report ? evidenceDigests(report.counterevidence) : [];
+      const quoteMismatch = Boolean(report && sourceAvailable &&
+        [...report.evidence, ...report.counterevidence].some(({ quote }) => !agentDelegationParentTask!.includes(quote)));
+      const unknownsDigest = report && report.unknowns.length > 0
+        ? createHash("sha256").update("blue-tanuki.agent.child-unknowns.v1\0")
+          .update(JSON.stringify(report.unknowns), "utf8").digest("hex") : undefined;
+      const resource = child.resource_use;
+      const usageOverLimit = resource.charged_tokens > issuedAgentDelegation!.child_resource_limits.max_tokens ||
+        resource.charged_compute_ms > issuedAgentDelegation!.child_resource_limits.timeout_ms;
+      const resourceStatus = usageOverLimit ? "usage_over_limit" as const
+        : resource.tokens_usage_status === "unknown" ? "usage_unknown" as const
+          : resource.cost_status === "unknown" ? "cost_unknown" as const : "usage_within_limits" as const;
+      const assessment: OperationPlanAgentDelegationChildAdoption = {
+        role: child.role,
+        child_task_digest: child.child_task_digest,
+        outcome: "candidate" as const,
+        candidate_content_digest: child.candidate_content_digest,
+        resource_use_digest: child.resource_use_digest,
+        evidence_status: !report ? (agentDelegationCandidateReviewContractStatus === "not_present"
+          ? "missing" as const : "report_invalid" as const)
+          : !sourceAvailable ? "source_unavailable" as const
+            : !candidateDigestMatches ? "candidate_digest_mismatch" as const
+              : quoteMismatch ? "citation_mismatch" as const
+                : report.evidence.length === 0 ? "missing" as const : "exact_spans_present" as const,
+        supporting_evidence_digests: supportingEvidenceDigests,
+        counterevidence_digests: counterevidenceDigests,
+        unknown_count: report?.unknowns.length ?? 0,
+        ...(unknownsDigest ? { unknowns_digest: unknownsDigest } : {}),
+        cost_status: resource.cost_status,
+        resource_status: resourceStatus,
+        adoption: "held" as const,
+        reason_code: "candidate_report_missing" as const,
+      };
+      if (!report) assessment.reason_code = agentDelegationCandidateReviewContractStatus === "not_present"
+        ? "candidate_report_missing" : "candidate_report_invalid";
+      else if (!sourceAvailable) assessment.reason_code = "parent_task_source_unavailable";
+      else if (!candidateDigestMatches) {
+        assessment.adoption = "rejected";
+        assessment.reason_code = "candidate_digest_mismatch";
+      } else if (quoteMismatch) {
+        assessment.adoption = "rejected";
+        assessment.reason_code = "supporting_evidence_mismatch";
+      } else if (report.evidence.length === 0) assessment.reason_code = "supporting_evidence_missing";
+      else if (report.counterevidence.length > 0) assessment.reason_code = "counterevidence_present";
+      else if (report.unknowns.length > 0) assessment.reason_code = "unknowns_present";
+      else if (usageOverLimit) {
+        assessment.adoption = "rejected";
+        assessment.reason_code = "resource_limit_exceeded";
+      } else if (resource.tokens_usage_status === "unknown") assessment.reason_code = "resource_usage_unknown";
+      else if (resource.cost_status === "unknown") assessment.reason_code = "resource_cost_unknown";
+      else {
+        assessment.adoption = "eligible_for_parent_candidate_review";
+        assessment.reason_code = "verified_for_parent_candidate_review";
+      }
+      return OperationPlanAgentDelegationChildAdoptionSchema.parse(assessment);
+    });
     const rawResourceUse = fb.compute_resource_use;
     const resourceUseParse = rawResourceUse === undefined
       ? undefined : ComputeResourceUseSchema.safeParse(rawResourceUse);
@@ -4159,6 +4283,16 @@ ${planControl.question}`,
           agent_delegation_result_evidence_digest: sha256(agentDelegationEvidence),
           agent_delegation_result_evidence: agentDelegationEvidence,
         } : {}),
+        agent_delegation_candidate_review_contract_status: agentDelegationCandidateReviewContractStatus,
+        ...(agentDelegationChildAdoption ? { agent_delegation_child_adoption: agentDelegationChildAdoption.map((assessment) => ({
+          role: assessment.role,
+          outcome: assessment.outcome,
+          adoption: assessment.adoption,
+          evidence_status: assessment.evidence_status,
+          cost_status: assessment.cost_status,
+          resource_status: assessment.resource_status,
+          reason_code: assessment.reason_code,
+        })) } : {}),
         compute_resource_use_contract_status: computeResourceUseContractStatus,
         ...(computeResourceUse ? { compute_resource_use_digest: sha256(computeResourceUse) } : {}),
         metrics: fb.metrics,
@@ -4340,7 +4474,7 @@ ${planControl.question}`,
       }
     }
     if (planCandidateEvent) this.planEvent(planCandidateEvent, fb.command_id, planCandidateRejectionReason);
-    if (issuedAgentDelegation && agentDelegationEvidence) {
+    if (issuedAgentDelegation && agentDelegationEvidence && agentDelegationChildAdoption) {
       const decision = fb.status !== "success" ? "compute_failed" as const
         : planCandidateEvent === "candidate_retained" ? "candidate_retained" as const
           : planCandidateEvent === "candidate_rejected" ? "candidate_rejected" as const : "no_candidate" as const;
@@ -4349,7 +4483,10 @@ ${planControl.question}`,
         evidence_digest: operationPlanDigest(agentDelegationEvidence),
         ...(resultAudit.digest ? { parent_result_digest: resultAudit.digest } : {}),
         parent_plan_decision: decision,
-        per_child_adoption: "not_evaluated",
+        per_child_adoption: "evaluated",
+        child_adoption: agentDelegationChildAdoption as [OperationPlanAgentDelegationChildAdoption,
+          OperationPlanAgentDelegationChildAdoption, OperationPlanAgentDelegationChildAdoption,
+          OperationPlanAgentDelegationChildAdoption],
         ...(decision === "candidate_retained" && agentDelegationCandidatePlanIdDigest
           ? { candidate_plan_id_digest: agentDelegationCandidatePlanIdDigest } : {}),
         ...(decision === "candidate_rejected"
@@ -6949,6 +7086,18 @@ function computeBudgetScope(req: InboundRequest): {
       .digest("hex"),
     task_identity_digest: taskIdentityDigest,
   };
+}
+
+/** Keep only task text whose exact goal binding matches the issued delegation contract. */
+function verifiedAgentDelegationParentTask(
+  command: ExecuteCommand,
+  parentTask: string,
+  purposeBinding: unknown,
+): string | undefined {
+  if (command.type !== "llm_call" || !command.payload.agent_delegation) return undefined;
+  const digest = createHash("sha256").update("blue-tanuki.agent.parent-goal.v1\0")
+    .update(parentTask).update("\0").update(JSON.stringify(purposeBinding ?? null)).digest("hex");
+  return digest === command.payload.agent_delegation.parent_goal_digest ? parentTask : undefined;
 }
 
 function assessLLMToolCandidates(
