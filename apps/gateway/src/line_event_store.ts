@@ -18,6 +18,14 @@ export interface LineOutboundDeliveryInput {
   readonly expires_at_ms: number;
 }
 
+export interface LineReplyAttemptInput {
+  readonly delivery_id: string;
+  readonly request_id: string;
+  readonly target: string;
+  readonly text: string;
+  readonly expires_at_ms: number;
+}
+
 export interface LineOutboundDeliveryClaim extends LineOutboundDeliveryInput {
   readonly payload_digest: string;
   readonly attempt_count: number;
@@ -69,7 +77,21 @@ interface LineOutboundRow {
   updated_at_ms: number;
 }
 
-/** Durable LINE replay inbox and private outbound queue. Payloads exist only while a send is pending. */
+interface LineReplyAttemptRow {
+  delivery_id: string;
+  request_id_digest: string;
+  payload_digest: string;
+  target_digest: string;
+  delivery_state: "dispatching" | "delivered" | "not_delivered" | "outcome_unknown";
+  expires_at_ms: number;
+  retry_after_ms: number | null;
+  external_request_id: string | null;
+  error_code: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+/** Durable LINE replay inbox, push outbox, and digest-only one-shot reply receipts. */
 export class GatewayLineEventStore {
   private readonly db: DatabaseType;
   private readonly destinationScopeDigest: string;
@@ -123,6 +145,21 @@ export class GatewayLineEventStore {
           OR (delivery_state IN ('delivered','not_delivered','outcome_unknown','retry_exhausted')
             AND target IS NULL AND text IS NULL))
       ) STRICT;`);
+      this.db.exec(`CREATE TABLE IF NOT EXISTS line_reply_attempt (
+        delivery_scope_digest TEXT NOT NULL CHECK(length(delivery_scope_digest) = 64),
+        delivery_id TEXT NOT NULL,
+        request_id_digest TEXT NOT NULL CHECK(length(request_id_digest) = 64),
+        payload_digest TEXT NOT NULL CHECK(length(payload_digest) = 64),
+        target_digest TEXT NOT NULL CHECK(length(target_digest) = 64),
+        delivery_state TEXT NOT NULL CHECK(delivery_state IN ('dispatching','delivered','not_delivered','outcome_unknown')),
+        expires_at_ms INTEGER NOT NULL CHECK(expires_at_ms >= 0),
+        retry_after_ms INTEGER CHECK(retry_after_ms IS NULL OR retry_after_ms >= 0),
+        external_request_id TEXT,
+        error_code TEXT,
+        created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0),
+        updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+        PRIMARY KEY(delivery_scope_digest,delivery_id)
+      ) STRICT;`);
       const integrity = this.db.prepare("PRAGMA quick_check(1)").get() as Record<string, unknown> | undefined;
       if (!integrity || Object.values(integrity)[0] !== "ok") throw new Error("line_inbox_integrity_check_failed");
       this.transaction(() => {
@@ -141,6 +178,14 @@ export class GatewayLineEventStore {
         this.db.prepare(`UPDATE line_outbound_delivery SET delivery_state='outcome_unknown',target=NULL,text=NULL,
           error_code='credential_scope_changed',updated_at_ms=?
           WHERE delivery_scope_digest<>? AND delivery_state IN ('queued','dispatching','retry_wait')`)
+          .run(now, this.deliveryScopeDigest);
+        this.db.prepare(`UPDATE line_reply_attempt SET delivery_state='outcome_unknown',
+          error_code='interrupted_reply_attempt',updated_at_ms=?
+          WHERE delivery_scope_digest=? AND delivery_state='dispatching'`)
+          .run(now, this.deliveryScopeDigest);
+        this.db.prepare(`UPDATE line_reply_attempt SET delivery_state='outcome_unknown',
+          error_code='credential_scope_changed',updated_at_ms=?
+          WHERE delivery_scope_digest<>? AND delivery_state='dispatching'`)
           .run(now, this.deliveryScopeDigest);
         this.expirePendingDeliveries(now);
       });
@@ -322,6 +367,61 @@ export class GatewayLineEventStore {
     });
   }
 
+  beginReplyAttempt(input: LineReplyAttemptInput, nowMs = Date.now()): boolean {
+    validateReplyAttemptInput(input, nowMs);
+    this.assertDestination();
+    const payloadDigest = sha256(JSON.stringify([
+      "line-one-time-reply.v1", input.target, input.text, input.expires_at_ms,
+    ]));
+    const requestIdDigest = sha256(input.request_id);
+    const targetDigest = sha256(input.target);
+    return this.transaction(() => {
+      const current = this.db.prepare(`SELECT request_id_digest,payload_digest FROM line_reply_attempt
+        WHERE delivery_scope_digest=? AND delivery_id=?`)
+        .get(this.deliveryScopeDigest, input.delivery_id) as { request_id_digest: string; payload_digest: string } | undefined;
+      if (current) {
+        if (current.payload_digest !== payloadDigest || current.request_id_digest !== requestIdDigest) {
+          throw new Error("line_reply_attempt_identity_conflict");
+        }
+        return false;
+      }
+      this.db.prepare(`INSERT INTO line_reply_attempt
+        (delivery_scope_digest,delivery_id,request_id_digest,payload_digest,target_digest,delivery_state,expires_at_ms,created_at_ms,updated_at_ms)
+        VALUES (?,?,?,?,?, 'dispatching',?,?,?)`)
+        .run(this.deliveryScopeDigest, input.delivery_id, requestIdDigest, payloadDigest, targetDigest,
+          input.expires_at_ms, nowMs, nowMs);
+      return true;
+    });
+  }
+
+  settleReplyAttempt(
+    deliveryId: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown",
+    result: { readonly external_request_id?: string; readonly error_code?: string; readonly retry_after_ms?: number } = {},
+    nowMs = Date.now(),
+  ): void {
+    validateDeliveryIdentity(deliveryId, nowMs);
+    validateOutboundSettlement(state, result);
+    this.transaction(() => {
+      const update = this.db.prepare(`UPDATE line_reply_attempt SET delivery_state=?,retry_after_ms=COALESCE(?,retry_after_ms),
+        external_request_id=?,error_code=?,updated_at_ms=?
+        WHERE delivery_scope_digest=? AND delivery_id=? AND delivery_state='dispatching'`)
+        .run(state, result.retry_after_ms ?? null, result.external_request_id ?? null,
+          result.error_code ?? null, nowMs, this.deliveryScopeDigest, deliveryId);
+      if (Number(update.changes) === 1) return;
+      const current = this.db.prepare(`SELECT delivery_state,retry_after_ms,external_request_id,error_code
+        FROM line_reply_attempt WHERE delivery_scope_digest=? AND delivery_id=?`)
+        .get(this.deliveryScopeDigest, deliveryId) as {
+          delivery_state: string; retry_after_ms: number | null; external_request_id: string | null; error_code: string | null;
+        } | undefined;
+      if (!current || current.delivery_state !== state || current.external_request_id !== (result.external_request_id ?? null) ||
+          current.error_code !== (result.error_code ?? null) ||
+          result.retry_after_ms !== undefined && current.retry_after_ms !== result.retry_after_ms) {
+        throw new Error("line_reply_attempt_settlement_conflict");
+      }
+    });
+  }
+
   status(deliveryId: string): LineOutboundDeliveryStatus | null {
     validateDeliveryIdentity(deliveryId, 0);
     this.assertOpen();
@@ -329,7 +429,22 @@ export class GatewayLineEventStore {
       expires_at_ms,retry_after_ms,external_request_id,error_code,channel,target,text,created_at_ms,updated_at_ms
       FROM line_outbound_delivery WHERE delivery_scope_digest=? AND delivery_id=?`)
       .get(this.deliveryScopeDigest, deliveryId) as LineOutboundRow | undefined;
-    if (!row) return null;
+    if (!row) {
+      const reply = this.db.prepare(`SELECT delivery_id,request_id_digest,payload_digest,delivery_state,expires_at_ms,retry_after_ms,
+        external_request_id,error_code,created_at_ms,updated_at_ms
+        FROM line_reply_attempt WHERE delivery_scope_digest=? AND delivery_id=?`)
+        .get(this.deliveryScopeDigest, deliveryId) as LineReplyAttemptRow | undefined;
+      if (!reply) return null;
+      validateReplyAttemptRow(reply);
+      return { delivery_id: reply.delivery_id, payload_digest: reply.payload_digest, delivery_state: reply.delivery_state,
+        attempt_count: 1,
+        not_before_ms: reply.retry_after_ms === null ? reply.created_at_ms :
+          Math.min(Number.MAX_SAFE_INTEGER, reply.created_at_ms + reply.retry_after_ms),
+        expires_at_ms: reply.expires_at_ms,
+        ...(reply.retry_after_ms === null ? {} : { retry_after_ms: reply.retry_after_ms }),
+        ...(reply.external_request_id === null ? {} : { external_request_id: reply.external_request_id }),
+        ...(reply.error_code === null ? {} : { error_code: reply.error_code }) };
+    }
     validateOutboundRow(row);
     return { delivery_id: row.delivery_id, payload_digest: row.payload_digest, delivery_state: row.delivery_state,
       attempt_count: row.attempt_count, not_before_ms: row.not_before_ms, expires_at_ms: row.expires_at_ms,
@@ -423,6 +538,15 @@ function validateOutboundInput(input: LineOutboundDeliveryInput, nowMs: number):
       input.expires_at_ms <= nowMs) throw new Error("line_outbound_delivery_payload_invalid");
 }
 
+function validateReplyAttemptInput(input: LineReplyAttemptInput, nowMs: number): void {
+  validateDeliveryIdentity(input.delivery_id, nowMs);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(input.request_id) ||
+      !isValidLineTarget(input.target) || typeof input.text !== "string" || input.text.length === 0 ||
+      input.text.length > 1_000_000 || !Number.isSafeInteger(input.expires_at_ms) || input.expires_at_ms <= nowMs) {
+    throw new Error("line_reply_attempt_payload_invalid");
+  }
+}
+
 function validateDeliveryIdentity(deliveryId: string, nowMs: number): void {
   if (typeof deliveryId !== "string" ||
       !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu.test(deliveryId)) {
@@ -459,6 +583,21 @@ function validateOutboundRow(row: LineOutboundRow): void {
       !Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0 ||
       !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0 || !payloadValid) {
     throw new Error("line_outbound_row_invalid");
+  }
+}
+
+function validateReplyAttemptRow(row: LineReplyAttemptRow): void {
+  if (!/^[a-f0-9-]{36}$/iu.test(row.delivery_id) || !DIGEST.test(row.request_id_digest) ||
+      !DIGEST.test(row.payload_digest) || !DIGEST.test(row.target_digest) ||
+      !["dispatching", "delivered", "not_delivered", "outcome_unknown"].includes(row.delivery_state) ||
+      !Number.isSafeInteger(row.expires_at_ms) || row.expires_at_ms < row.created_at_ms ||
+      (row.retry_after_ms !== null && (!Number.isSafeInteger(row.retry_after_ms) || row.retry_after_ms < 0)) ||
+      (row.external_request_id !== null && (row.external_request_id.length === 0 || row.external_request_id.length > 512 ||
+        /[\u0000-\u001f\u007f]/u.test(row.external_request_id))) ||
+      (row.error_code !== null && !/^[a-z0-9_.-]{1,96}$/u.test(row.error_code)) ||
+      !Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0 ||
+      !Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
+    throw new Error("line_reply_attempt_row_invalid");
   }
 }
 

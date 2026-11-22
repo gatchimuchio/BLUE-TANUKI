@@ -13,6 +13,13 @@ import type { ChannelDeliveryErrorKind } from "./delivery_error.js";
  * HDS-BRAIN's `decide()`.
  */
 /** Volatile adapter bytes correlated to exactly one canonical inbound request. */
+export interface InboundLineReplyContext {
+  /** One-use provider token; kept as bytes so the router can zeroize it. */
+  readonly reply_token: Uint8Array | null;
+  /** Local deadline derived from the signed webhook receipt time. */
+  readonly expires_at_ms: number;
+}
+
 export interface InboundEphemeralContext {
   readonly request_id: string;
   readonly ephemeral_images: readonly TransientImageInput[];
@@ -20,6 +27,8 @@ export interface InboundEphemeralContext {
   /** Require an audio-task-capable C model; do not degrade an owner task to transcription-only. */
   readonly require_audio_task_compute?: boolean;
   readonly ephemeral_canvas_artifact?: TransientCanvasArtifactInput;
+  /** LINE's one-use reply capability; never copy into request metadata or durable history. */
+  readonly ephemeral_line_reply?: InboundLineReplyContext;
 }
 
 export type InboundHandler = (req: InboundRequest, context?: InboundEphemeralContext) => Promise<void>;

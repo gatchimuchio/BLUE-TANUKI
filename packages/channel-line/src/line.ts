@@ -5,8 +5,10 @@ import type {
 } from "@blue-tanuki/protocol";
 import {
   classifyChannelDeliveryError,
+  takeOutboundLineReplyContext,
   type InboundChannel,
   type InboundHandler,
+  type OutboundLineReplyContext,
   type OutboundChannel,
   type SendContext,
   type SendMeta,
@@ -134,49 +136,7 @@ export class LineChannel implements InboundChannel, OutboundChannel {
     this.started = true;
 
     try {
-      await this.transport.start(async (m) => {
-        if (!isValidInboundMessage(m) || m.destination !== this.opts.channel_destination) {
-          this.log("[line] rejected inbound event with invalid identity");
-          return;
-        }
-        if (!this.opts.inbound_grants?.some((grant) => lineGrantMatches(grant, m))) {
-          this.log("[line] rejected inbound event without an exact owner grant");
-          return;
-        }
-        const inbox = this.opts.inbox;
-        if (!inbox) {
-          this.log("[line] rejected inbound event because durable admission is unavailable");
-          return;
-        }
-        const eventId = m.webhook_event_id;
-        const payloadDigest = lineInboundPayloadDigest(m);
-        let claim: LineEventClaim;
-        try {
-          claim = inbox.claim(eventId, payloadDigest);
-        } catch {
-          this.log("[line] rejected inbound event because durable admission failed");
-          return;
-        }
-        if (claim.status !== "accepted") {
-          this.log(`[line] suppressed inbound event status=${claim.status}`);
-          return;
-        }
-
-        let deliveryState: "handler_returned" | "outcome_unknown" = "handler_returned";
-        try {
-          await handler(normalizeLineInbound(m));
-        } catch {
-          deliveryState = "outcome_unknown";
-          throw new Error("line_inbound_handler_failed");
-        } finally {
-          try {
-            inbox.settle(eventId, payloadDigest, deliveryState);
-          } catch {
-            this.log("[line] inbound settlement failed; replay remains blocked");
-            throw new Error("line_inbound_settlement_failed");
-          }
-        }
-      });
+      await this.transport.start(async (m) => this.handleInboundMessage(m, handler));
       this.silent = false;
       this.log("[line] active");
       for (const pending of this.opts.delivery_store.pending()) {
@@ -210,6 +170,7 @@ export class LineChannel implements InboundChannel, OutboundChannel {
   async send(payload: ChannelSendPayload, meta: SendMeta, context?: SendContext): Promise<SendResult> {
     if (context?.signal?.aborted) return { delivered: false, delivery_status: "not_delivered",
       error: "channel_send_cancelled_before_dispatch", error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    const lineReplyContext = takeOutboundLineReplyContext(payload);
     this.counter += 1;
     const at = Date.now();
     if (this.silent || !this.transport) {
@@ -238,6 +199,8 @@ export class LineChannel implements InboundChannel, OutboundChannel {
         next_action,
       };
     }
+
+    if (lineReplyContext) return this.sendOneTimeReply(payload, meta, lineReplyContext, context?.signal);
 
     const deliveryId = randomUUID();
     const now = Date.now();
@@ -291,6 +254,154 @@ export class LineChannel implements InboundChannel, OutboundChannel {
       retry_after_ms: r.retry_after_ms ?? details!.retry_after_ms,
       next_action: lineNextAction(r),
     };
+  }
+
+  private async handleInboundMessage(m: LineInboundMessage, handler: InboundHandler): Promise<void> {
+    let replyContextTransferred = false;
+    try {
+      if (!isValidInboundMessage(m) || m.destination !== this.opts.channel_destination) {
+        this.log("[line] rejected inbound event with invalid identity");
+        return;
+      }
+      if (!this.opts.inbound_grants?.some((grant) => lineGrantMatches(grant, m))) {
+        this.log("[line] rejected inbound event without an exact owner grant");
+        return;
+      }
+      const inbox = this.opts.inbox;
+      if (!inbox) {
+        this.log("[line] rejected inbound event because durable admission is unavailable");
+        return;
+      }
+      const eventId = m.webhook_event_id;
+      const payloadDigest = lineInboundPayloadDigest(m);
+      let claim: LineEventClaim;
+      try {
+        claim = inbox.claim(eventId, payloadDigest);
+      } catch {
+        this.log("[line] rejected inbound event because durable admission failed");
+        return;
+      }
+      if (claim.status !== "accepted") {
+        this.log(`[line] suppressed inbound event status=${claim.status}`);
+        return;
+      }
+
+      const request = normalizeLineInbound(m);
+      const replyToken = m.reply_token instanceof Uint8Array ? m.reply_token : null;
+      const ephemeralContext = {
+        request_id: request.id,
+        ephemeral_images: [],
+        ephemeral_line_reply: {
+          reply_token: replyToken,
+          expires_at_ms: Number.isSafeInteger(m.reply_expires_at_ms) ? m.reply_expires_at_ms! : 0,
+        },
+      } as const;
+      replyContextTransferred = true;
+      let deliveryState: "handler_returned" | "outcome_unknown" = "handler_returned";
+      try {
+        await handler(request, ephemeralContext);
+      } catch {
+        deliveryState = "outcome_unknown";
+        throw new Error("line_inbound_handler_failed");
+      } finally {
+        replyToken?.fill(0);
+        try {
+          inbox.settle(eventId, payloadDigest, deliveryState);
+        } catch {
+          this.log("[line] inbound settlement failed; replay remains blocked");
+          throw new Error("line_inbound_settlement_failed");
+        }
+      }
+    } finally {
+      if (!replyContextTransferred && m.reply_token instanceof Uint8Array) m.reply_token.fill(0);
+    }
+  }
+
+  private async sendOneTimeReply(
+    payload: ChannelSendPayload,
+    meta: SendMeta,
+    replyContext: OutboundLineReplyContext,
+    callerSignal?: AbortSignal,
+  ): Promise<SendResult> {
+    const at = Date.now();
+    const replyToken = replyContext.reply_token;
+    const deliveryId = randomUUID();
+    const store = this.opts.delivery_store;
+    const transport = this.transport;
+    const buildFailure = (error: string, errorCode: string): SendResult => {
+      const external_id = `line-reply-${meta.command_id}-${this.counter}`;
+      this.history.push({ payload, meta, at, external_id, ok: false, error, error_kind: "non_recoverable",
+        error_code: errorCode, next_action: lineReplyNextAction("not_delivered") });
+      return { delivered: false, delivery_status: "not_delivered", error, error_kind: "non_recoverable",
+        error_code: errorCode, next_action: lineReplyNextAction("not_delivered") };
+    };
+
+    if (!replyToken || replyToken.byteLength === 0 || !Number.isSafeInteger(replyContext.expires_at_ms) ||
+        replyContext.expires_at_ms <= at || replyContext.expires_at_ms > at + 60_000) {
+      return buildFailure("line_reply_token_missing_or_expired", "reply_token_expired");
+    }
+    if (!store?.beginReplyAttempt || !store.settleReplyAttempt) {
+      return buildFailure("line_reply_receipt_store_unavailable", "reply_receipt_unavailable");
+    }
+    if (!meta.request_id) return buildFailure("line_reply_request_correlation_missing", "reply_request_id_missing");
+    if (!transport?.replyMessage) return buildFailure("line_reply_transport_unavailable", "reply_transport_unavailable");
+    if (callerSignal?.aborted || this.lifecycleAbort.signal.aborted) {
+      return buildFailure("channel_send_cancelled_before_dispatch", "cancelled_before_dispatch");
+    }
+
+    try {
+      const started = store.beginReplyAttempt({
+        delivery_id: deliveryId,
+        request_id: meta.request_id,
+        target: payload.target,
+        text: payload.content,
+        expires_at_ms: replyContext.expires_at_ms,
+      }, at);
+      if (!started) return buildFailure("line_reply_attempt_already_recorded", "reply_attempt_already_recorded");
+    } catch {
+      return buildFailure("line_reply_receipt_store_unavailable", "reply_receipt_unavailable");
+    }
+
+    let result: LinePostResult;
+    try {
+      const signal = callerSignal
+        ? AbortSignal.any([callerSignal, this.lifecycleAbort.signal])
+        : this.lifecycleAbort.signal;
+      result = await transport.replyMessage({
+        reply_token: replyToken,
+        text: payload.content,
+        expires_at_ms: replyContext.expires_at_ms,
+      }, signal);
+    } catch {
+      result = { ok: false, delivery_status: "unknown", error: "line_reply_transport_outcome_unknown",
+        error_kind: "non_recoverable", error_code: "reply_outcome_unknown" };
+    }
+
+    const state = result.ok ? "delivered" : result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown";
+    try {
+      store.settleReplyAttempt(deliveryId, state, {
+        ...(result.request_id ? { external_request_id: result.request_id } : {}),
+        ...(result.error_code ? { error_code: result.error_code } : {}),
+        ...(result.retry_after_ms === undefined ? {} : { retry_after_ms: result.retry_after_ms }),
+      });
+    } catch {
+      result = { ok: false, delivery_status: "unknown", error: "line_reply_receipt_settlement_unknown",
+        error_kind: "non_recoverable", error_code: "reply_receipt_settlement_unknown" };
+    }
+
+    const external_id = result.request_id ?? `line-reply-${meta.command_id}-${this.counter}`;
+    const next_action = result.ok ? undefined : lineReplyNextAction(result.delivery_status ?? "unknown");
+    this.history.push({ payload, meta, at, external_id, ok: result.ok, error: result.error,
+      error_kind: result.ok ? undefined : "non_recoverable",
+      error_code: result.error_code ?? (result.ok ? undefined : "reply_not_delivered"),
+      retry_after_ms: result.retry_after_ms, next_action });
+    if (result.ok) {
+      this.log(`[line] reply sent request_id=${external_id} commit=${meta.upstream_commit_hash.slice(0, 8)}`);
+      return { delivered: true, delivery_status: "delivered", external_id };
+    }
+    return { delivered: false, delivery_status: result.delivery_status ?? "unknown",
+      error: result.error ?? "line_reply_failed", error_kind: "non_recoverable",
+      error_code: result.error_code ?? "reply_not_delivered", retry_after_ms: result.retry_after_ms, next_action };
   }
 
   getHistory(): readonly SentRecord[] {
@@ -554,6 +665,9 @@ async function sleepWithSignal(ms: number, signal: AbortSignal, sleep?: (ms: num
 }
 
 function lineNextAction(result: LinePostResult): string {
+  if (result.error_code?.startsWith("reply_")) {
+    return lineReplyNextAction(result.delivery_status ?? "unknown");
+  }
   if (result.delivery_status === "unknown") {
     return "LINE delivery remains unresolved. Review the Gateway delivery record before creating a new send for the same reply.";
   }
@@ -585,6 +699,13 @@ function lineNextAction(result: LinePostResult): string {
     return "Check LINE_LIVE_TARGET. Use a LINE userId, groupId, or roomId reachable by the bot.";
   }
   return "Inspect LINE channel access token, Messaging API settings, and target reachability before retrying.";
+}
+
+function lineReplyNextAction(status: "delivered" | "not_delivered" | "unknown"): string {
+  if (status === "unknown") {
+    return "LINE one-use reply outcome is unknown. Do not retry this reply or substitute a push; reconcile the recorded attempt before any separately authorized action.";
+  }
+  return "LINE one-use reply was not delivered. No push fallback or retry was attempted; any later push requires a separate current authorization.";
 }
 
 function truncate(s: string, n: number): string {

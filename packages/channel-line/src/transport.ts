@@ -14,6 +14,10 @@ export interface LineInboundMessage {
   webhook_event_id: string;
   event_timestamp_ms: number;
   is_redelivery: boolean;
+  /** Opaque, one-use token kept only in zeroizable memory; never persisted or logged. */
+  reply_token?: Uint8Array | null;
+  /** Conservative local expiry derived from receipt of the signed webhook. */
+  reply_expires_at_ms?: number;
 }
 
 export type LineInboundHandler = (m: LineInboundMessage) => Promise<void>;
@@ -87,12 +91,30 @@ export interface LineOutboundDeliveryStore {
     now_ms?: number,
   ): void;
   status(delivery_id: string): LineOutboundDeliveryStatus | null;
+  /** Persist a digest-only, one-shot reply attempt before any provider request. */
+  beginReplyAttempt?(input: LineReplyAttemptInput, now_ms?: number): boolean;
+  settleReplyAttempt?(
+    delivery_id: string,
+    state: "delivered" | "not_delivered" | "outcome_unknown",
+    result?: { readonly external_request_id?: string; readonly error_code?: string; readonly retry_after_ms?: number },
+    now_ms?: number,
+  ): void;
+}
+
+export interface LineReplyAttemptInput {
+  readonly delivery_id: string;
+  readonly request_id: string;
+  readonly target: string;
+  readonly text: string;
+  readonly expires_at_ms: number;
 }
 
 export interface LineTransport {
   start(handler: LineInboundHandler): Promise<void>;
   stop(): Promise<void>;
   postMessage(args: { target: string; text: string; retry_key: string }, signal?: AbortSignal): Promise<LinePostResult>;
+  /** One-use reply. Deliberately has no retry-key support. */
+  replyMessage?(args: { reply_token: Uint8Array; text: string; expires_at_ms: number }, signal?: AbortSignal): Promise<LinePostResult>;
 }
 
 interface LineMessagingTransportOptions {
@@ -108,6 +130,7 @@ interface LineMessagingTransportOptions {
 }
 
 const LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push";
+const LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply";
 const DEFAULT_LINE_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_LINE_WEBHOOK_HOST = "127.0.0.1";
 const DEFAULT_LINE_WEBHOOK_PORT = 3980;
@@ -318,6 +341,135 @@ export class LineMessagingTransport implements LineTransport {
     };
   }
 
+  async replyMessage(
+    args: { reply_token: Uint8Array; text: string; expires_at_ms: number },
+    callerSignal?: AbortSignal,
+  ): Promise<LinePostResult> {
+    const now = Date.now();
+    if (!(args.reply_token instanceof Uint8Array) || args.reply_token.byteLength === 0 ||
+        !Number.isSafeInteger(args.expires_at_ms) || args.expires_at_ms <= now ||
+        args.expires_at_ms > now + 60_000) {
+      return { ok: false, delivery_status: "not_delivered", error: "line_reply_token_missing_or_expired",
+        error_kind: "non_recoverable", error_code: "reply_token_expired" };
+    }
+    if (typeof args.text !== "string" || args.text.length === 0 || args.text.length > 1_000_000) {
+      return { ok: false, delivery_status: "not_delivered", error: "line_reply_text_invalid",
+        error_kind: "non_recoverable", error_code: "reply_text_invalid" };
+    }
+    if (!this.opts.channel_access_token?.trim()) {
+      return { ok: false, delivery_status: "not_delivered", error: "line_channel_access_token_unset",
+        error_kind: "non_recoverable", error_code: "line_not_configured" };
+    }
+    let replyToken: string;
+    try {
+      replyToken = new TextDecoder("utf-8", { fatal: true }).decode(args.reply_token);
+    } catch {
+      return { ok: false, delivery_status: "not_delivered", error: "line_reply_token_encoding_invalid",
+        error_kind: "non_recoverable", error_code: "reply_token_invalid" };
+    }
+    if (!replyToken || replyToken.length > 4096 || /[\u0000-\u001f\u007f]/u.test(replyToken)) {
+      return { ok: false, delivery_status: "not_delivered", error: "line_reply_token_invalid",
+        error_kind: "non_recoverable", error_code: "reply_token_invalid" };
+    }
+    const fetchImpl = this.opts.fetch ?? globalThis.fetch;
+    if (!fetchImpl) {
+      return { ok: false, delivery_status: "not_delivered", error: "fetch_unavailable",
+        error_kind: "non_recoverable", error_code: "fetch_unavailable" };
+    }
+    const timeoutMs = this.opts.request_timeout_ms ?? DEFAULT_LINE_REQUEST_TIMEOUT_MS;
+    if (callerSignal?.aborted) {
+      return { ok: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+        error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+    }
+    const controller = new AbortController();
+    let abortSource: "caller" | "timeout" | undefined;
+    const abortForCaller = (): void => {
+      if (abortSource !== undefined) return;
+      abortSource = "caller";
+      controller.abort();
+    };
+    if (callerSignal) {
+      callerSignal.addEventListener("abort", abortForCaller, { once: true });
+      if (callerSignal.aborted) {
+        callerSignal.removeEventListener("abort", abortForCaller);
+        return { ok: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
+          error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
+      }
+    }
+    const timer = setTimeout(() => {
+      if (abortSource !== undefined) return;
+      abortSource = "timeout";
+      controller.abort();
+    }, timeoutMs);
+    const requestBody = Buffer.from(JSON.stringify({
+      replyToken,
+      messages: [{ type: "text", text: args.text }],
+    }), "utf8");
+    replyToken = "";
+    let res: Response;
+    try {
+      if (Date.now() >= args.expires_at_ms) {
+        return { ok: false, delivery_status: "not_delivered", error: "line_reply_token_expired_before_dispatch",
+          error_kind: "non_recoverable", error_code: "reply_token_expired" };
+      }
+      res = await fetchImpl(LINE_REPLY_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.opts.channel_access_token}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: requestBody,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (abortSource === "caller") {
+        return { ok: false, delivery_status: "unknown", error: "caller_cancelled_after_ambiguous_reply",
+          error_kind: "non_recoverable", error_code: "reply_outcome_unknown" };
+      }
+      if (abortSource === "timeout") {
+        return { ok: false, delivery_status: "unknown", error: `line_reply_timeout_${timeoutMs}ms`,
+          error_kind: "non_recoverable", error_code: "reply_outcome_unknown" };
+      }
+      if (isAbortError(error)) {
+        return { ok: false, delivery_status: "unknown", error: "line_reply_abort_outcome_unknown",
+          error_kind: "non_recoverable", error_code: "reply_outcome_unknown" };
+      }
+      return { ok: false, delivery_status: "unknown", error: "line_reply_network_outcome_unknown",
+        error_kind: "non_recoverable", error_code: "reply_outcome_unknown" };
+    } finally {
+      requestBody.fill(0);
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", abortForCaller);
+    }
+    const requestId = res.headers.get("x-line-request-id") ?? res.headers.get("x-request-id") ?? undefined;
+    if (res.status >= 200 && res.status < 300) {
+      return { ok: true, delivery_status: "delivered", request_id: requestId };
+    }
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = parseJsonObject(await res.text());
+    } catch {
+      // HTTP status and headers already establish the delivery classification.
+    }
+    const retryAfterHeader = res.status === 429 ? res.headers.get("retry-after") : null;
+    const retryAfter = parseRetryAfter(retryAfterHeader);
+    return {
+      ok: false,
+      delivery_status: res.status === 429 || res.status < 500 ? "not_delivered" : "unknown",
+      request_id: requestId,
+      error: lineError(res.status, parsed),
+      ...(res.status === 429 ? {
+        rate_limit_rejected: true as const,
+        ...(retryAfterHeader !== null && !retryAfter.valid ? { retry_after_invalid: true as const } : {}),
+        ...(retryAfter.valid ? { retry_after_ms: retryAfter.retry_after_ms } : {}),
+        error_code: "reply_rate_limited",
+      } : {
+        error_code: res.status >= 500 ? "reply_outcome_unknown" : `reply_http_${res.status}`,
+      }),
+    };
+  }
+
   private async handleWebhook(
     request: IncomingMessage,
     response: ServerResponse,
@@ -339,6 +491,7 @@ export class LineMessagingTransport implements LineTransport {
       return;
     }
 
+    const webhookReceivedAtMs = Date.now();
     let rawBody: Buffer;
     try {
       rawBody = await readRawBody(request, MAX_LINE_WEBHOOK_BODY_BYTES);
@@ -361,6 +514,8 @@ export class LineMessagingTransport implements LineTransport {
     } catch {
       sendWebhookResponse(response, 400, "invalid_webhook_json");
       return;
+    } finally {
+      rawBody.fill(0);
     }
     if (!isRecord(envelope) || !isSafeLineIdentifier(envelope.destination) || !Array.isArray(envelope.events)) {
       sendWebhookResponse(response, 400, "invalid_webhook_envelope");
@@ -378,8 +533,9 @@ export class LineMessagingTransport implements LineTransport {
 
     // LINE's verification request is a valid signed envelope with no events.
     for (const event of envelope.events) {
-      const message = lineTextMessageFromEvent(envelope.destination, event);
+      const message = lineTextMessageFromEvent(envelope.destination, event, webhookReceivedAtMs + 60_000);
       if (message) await handler(message);
+      else if (isRecord(event) && typeof event.replyToken === "string") event.replyToken = "";
     }
     sendWebhookResponse(response, 200, "ok");
   }
@@ -392,7 +548,7 @@ export function verifyLineSignature(rawBody: Uint8Array, signature: string, chan
   return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
-function lineTextMessageFromEvent(destination: string, input: unknown): LineInboundMessage | null {
+function lineTextMessageFromEvent(destination: string, input: unknown, replyExpiresAtMs: number): LineInboundMessage | null {
   if (!isRecord(input) || input.type !== "message" || !isRecord(input.message) || input.message.type !== "text" ||
       !isRecord(input.source) || !isRecord(input.deliveryContext)) return null;
   const message = input.message;
@@ -408,6 +564,11 @@ function lineTextMessageFromEvent(destination: string, input: unknown): LineInbo
       !Number.isSafeInteger(input.timestamp) || (input.timestamp as number) <= 0 ||
       typeof input.deliveryContext.isRedelivery !== "boolean") return null;
   if (sourceType === "user" && sourceId !== userId) return null;
+  const rawReplyToken = input.replyToken;
+  const replyToken = typeof rawReplyToken === "string" && isSafeReplyToken(rawReplyToken)
+    ? Buffer.from(rawReplyToken, "utf8")
+    : null;
+  if (typeof rawReplyToken === "string") input.replyToken = "";
   return {
     destination,
     source_type: sourceType,
@@ -418,6 +579,8 @@ function lineTextMessageFromEvent(destination: string, input: unknown): LineInbo
     webhook_event_id: input.webhookEventId as string,
     event_timestamp_ms: input.timestamp as number,
     is_redelivery: input.deliveryContext.isRedelivery,
+    reply_token: replyToken,
+    reply_expires_at_ms: replyExpiresAtMs,
   };
 }
 
@@ -443,6 +606,11 @@ function validateWebhookOptions(options: LineMessagingTransportOptions): void {
 
 function isSafeLineIdentifier(value: unknown): value is string {
   return typeof value === "string" && SAFE_LINE_IDENTIFIER_PATTERN.test(value) && value.trim() === value;
+}
+
+function isSafeReplyToken(value: string): boolean {
+  const byteLength = Buffer.byteLength(value, "utf8");
+  return byteLength > 0 && byteLength <= 4096 && !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 async function readRawBody(request: IncomingMessage, limit: number): Promise<Buffer> {

@@ -20,4 +20,5 @@ export {
   type LinePendingDelivery,
   type LineOutboundDeliveryStatus,
   type LineOutboundDeliveryStore,
+  type LineReplyAttemptInput,
 } from "./transport.js";

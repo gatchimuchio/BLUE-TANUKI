@@ -112,6 +112,7 @@ import {
 } from "./llm_config.js";
 import {
   assertLoopbackListenerHost,
+  attachInboundLineReplyContext,
   correlateOutboundReply,
   isLoopbackListenerHost,
   InboundRouter,
@@ -550,10 +551,12 @@ export function replyPayload(req: InboundRequest, content: string): ChannelSendP
       ? { reply_to_message_id: discordReply }
       : {}),
   };
-  return req.channel === "webchat" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(req.id)
-    ? correlateOutboundReply(payload, req.id)
-    : payload;
+  const validRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(req.id);
+  if (req.channel === "line") {
+    attachInboundLineReplyContext(payload, req.id);
+    return validRequestId ? correlateOutboundReply(payload, req.id) : payload;
+  }
+  return req.channel === "webchat" && validRequestId ? correlateOutboundReply(payload, req.id) : payload;
 }
 
 function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProjection | undefined): string {

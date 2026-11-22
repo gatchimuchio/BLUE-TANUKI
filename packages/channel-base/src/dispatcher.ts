@@ -1,10 +1,68 @@
 import { createHash } from "node:crypto";
 import type { ChannelSendPayload } from "@blue-tanuki/protocol";
-import type { OutboundChannel, SendContext, SendMeta, SendResult } from "./types.js";
+import type { InboundLineReplyContext, OutboundChannel, SendContext, SendMeta, SendResult } from "./types.js";
 import { classifyChannelDeliveryError } from "./delivery_error.js";
 
 const OUTBOUND_REPLY_REQUEST_ID = Symbol.for("blue-tanuki.outbound-reply-request-id.v1");
+const OUTBOUND_LINE_REPLY_CONTEXT = Symbol.for("blue-tanuki.outbound-line-reply-context.v1");
 const OUTBOUND_TARGET_LOCK_TAILS = new Map<string, Promise<void>>();
+const INBOUND_LINE_REPLY_CONTEXTS = new Map<string, { readonly context: InboundLineReplyContext; consumed: boolean }>();
+
+export type OutboundLineReplyContext = InboundLineReplyContext;
+
+/** Bind a signed LINE webhook's one-use reply capability to its in-flight request only. */
+export function registerInboundLineReplyContext(requestId: string, context: InboundLineReplyContext): void {
+  if (!isUuid(requestId) || !Number.isSafeInteger(context.expires_at_ms) || context.expires_at_ms < 0 ||
+      (context.reply_token !== null && !(context.reply_token instanceof Uint8Array))) {
+    throw new Error("inbound_line_reply_context_invalid");
+  }
+  if (INBOUND_LINE_REPLY_CONTEXTS.has(requestId)) throw new Error("inbound_line_reply_context_conflict");
+  INBOUND_LINE_REPLY_CONTEXTS.set(requestId, { context, consumed: false });
+}
+
+/** Move the one-use context onto the immediate reply without exposing it to JSON/history. */
+export function attachInboundLineReplyContext<T extends ChannelSendPayload>(payload: T, requestId: string): T {
+  if (!isUuid(requestId)) return payload;
+  const entry = INBOUND_LINE_REPLY_CONTEXTS.get(requestId);
+  if (!entry) return payload;
+  const context = entry.consumed
+    ? { reply_token: null, expires_at_ms: entry.context.expires_at_ms }
+    : entry.context;
+  entry.consumed = true;
+  Object.defineProperty(payload, OUTBOUND_LINE_REPLY_CONTEXT, {
+    value: context,
+    enumerable: false,
+    configurable: true,
+  });
+  return payload;
+}
+
+/** Release request-scoped state and erase its token even when no reply was produced. */
+export function clearInboundLineReplyContext(requestId: string): void {
+  const entry = INBOUND_LINE_REPLY_CONTEXTS.get(requestId);
+  entry?.context.reply_token?.fill(0);
+  INBOUND_LINE_REPLY_CONTEXTS.delete(requestId);
+}
+
+/** Transfer the private context through the dispatcher to the LINE adapter. */
+export function takeOutboundLineReplyContext(payload: ChannelSendPayload): OutboundLineReplyContext | undefined {
+  const object = payload as ChannelSendPayload & { [OUTBOUND_LINE_REPLY_CONTEXT]?: OutboundLineReplyContext };
+  const context = object[OUTBOUND_LINE_REPLY_CONTEXT];
+  if (context) delete object[OUTBOUND_LINE_REPLY_CONTEXT];
+  return context;
+}
+
+function attachOutboundLineReplyContext(payload: ChannelSendPayload, context: OutboundLineReplyContext): void {
+  Object.defineProperty(payload, OUTBOUND_LINE_REPLY_CONTEXT, {
+    value: context,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
+}
 
 async function acquireOutboundTargetLock(key: string): Promise<() => void> {
   const previous = OUTBOUND_TARGET_LOCK_TAILS.get(key) ?? Promise.resolve();
@@ -68,7 +126,7 @@ async function acquireOutboundTargetLockUnlessCancelled(
  * SendMeta and removes the symbol before calling an outbound adapter.
  */
 export function correlateOutboundReply<T extends ChannelSendPayload>(payload: T, requestId: string): T {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(requestId)) {
+  if (!isUuid(requestId)) {
     throw new Error("outbound_reply_request_id_invalid");
   }
   Object.defineProperty(payload, OUTBOUND_REPLY_REQUEST_ID, {
@@ -125,9 +183,11 @@ export class OutboundDispatcher {
         return { delivered: false, delivery_status: "not_delivered", error: "channel_send_cancelled_before_dispatch",
           error_kind: "non_recoverable", error_code: "cancelled_before_dispatch" };
       }
+      const lineReplyContext = takeOutboundLineReplyContext(payload);
       const correlatedPayload = payload as ChannelSendPayload & { [OUTBOUND_REPLY_REQUEST_ID]?: unknown };
       const replyRequestId = correlatedPayload[OUTBOUND_REPLY_REQUEST_ID];
       const { [OUTBOUND_REPLY_REQUEST_ID]: _replyRequestId, ...channelPayload } = correlatedPayload;
+      if (lineReplyContext) attachOutboundLineReplyContext(channelPayload, lineReplyContext);
       const sendMeta = typeof replyRequestId === "string"
         ? { ...meta, request_id: replyRequestId }
         : meta;

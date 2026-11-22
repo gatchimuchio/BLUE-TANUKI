@@ -1,5 +1,6 @@
 import type { InboundRequest } from "@blue-tanuki/protocol";
 import type { InboundChannel, InboundEphemeralContext, InboundHandler } from "./types.js";
+import { clearInboundLineReplyContext, registerInboundLineReplyContext } from "./dispatcher.js";
 
 export interface InboundRouterOptions {
   /** Channels whose scheduler must observe handler failure to persist an unknown outcome. */
@@ -56,7 +57,12 @@ export class InboundRouter {
     this.handler = handler;
     const wrapped: InboundHandler = async (req: InboundRequest, context?: InboundEphemeralContext) => {
       // Defensive: never let one inbound throw take down a channel listener.
+      let lineReplyContextRegistered = false;
       try {
+        if (req.channel === "line" && context?.ephemeral_line_reply) {
+          registerInboundLineReplyContext(req.id, context.ephemeral_line_reply);
+          lineReplyContextRegistered = true;
+        }
         await handler(req, context);
       } catch (e) {
         const propagateRedacted = this.propagateRedactedHandlerErrorsForRequest?.(req) === true;
@@ -70,9 +76,11 @@ export class InboundRouter {
           throw new Error("inbound_handler_failed");
         }
       } finally {
+        if (lineReplyContextRegistered) clearInboundLineReplyContext(req.id);
         for (const image of context?.ephemeral_images ?? []) image.data.fill(0);
         for (const audio of context?.ephemeral_audio ?? []) audio.data.fill(0);
         context?.ephemeral_canvas_artifact?.data.fill(0);
+        context?.ephemeral_line_reply?.reply_token?.fill(0);
       }
     };
     this.started = true;

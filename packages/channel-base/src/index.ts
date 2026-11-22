@@ -1,7 +1,15 @@
 export * from "./types.js";
 export { InboundRouter } from "./router.js";
 export { assertLoopbackListenerHost, isLoopbackListenerHost } from "./listener_exposure.js";
-export { correlateOutboundReply, OutboundDispatcher } from "./dispatcher.js";
+export {
+  attachInboundLineReplyContext,
+  clearInboundLineReplyContext,
+  correlateOutboundReply,
+  registerInboundLineReplyContext,
+  takeOutboundLineReplyContext,
+  OutboundDispatcher,
+  type OutboundLineReplyContext,
+} from "./dispatcher.js";
 export {
   TokenBucket,
   withRetryBackoff,

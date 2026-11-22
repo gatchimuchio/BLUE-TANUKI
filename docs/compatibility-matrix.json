@@ -26,7 +26,7 @@
     "line": {
       "status": "first-party-preview",
       "target_release": "v1.0-preview",
-      "notes": "Preview adapter using LINE Messaging API push. Conformance tests, silent fail-closed mode, retry/backoff, and live smoke skip path are implemented. Remains preview until owner-run LINE credentials, targets, validate:channels promotion evidence, and gateway-owned inbound listener closure are verified."
+      "notes": "Preview adapter separates direct one-use webhook-token replies from the existing durable push path. Reply attempts use digest-only durable receipts; failures are neither retried nor converted to push, while push retains the durable retry-key outbox. Source-level routing is connected, but conformance/runtime, owner credentials and targets, inbound listener lifecycle closure, and validate:channels promotion evidence remain unverified."
     },
     "whatsapp": {
       "status": "reserved-third-party",
