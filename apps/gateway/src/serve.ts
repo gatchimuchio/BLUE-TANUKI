@@ -219,7 +219,8 @@ import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
-import { createGatewaySettingsWritePort, createWebChatSettingsSurface, readCurrentComposioEnvironment } from "./settings_surface.js";
+import { createGatewaySettingsWritePort, createWebChatSettingsSurface, readCurrentComposioEnvironment,
+  watchComposioEnvironmentFile } from "./settings_surface.js";
 import { nativeLlmCredentialPromptAvailable, promptForGitHubWriteCredential, promptForGoogleReadCredential,
   promptForComposioApiKeyCredential, promptForLlmCredential, promptForTelegramBotCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
@@ -1486,6 +1487,11 @@ async function serveWithOwnerLease(
     nativeLlmCredentialPromptAvailable(nativePromptEnv);
   let activeLLMRegistryForSettings: LLMRegistry | undefined;
   const composioConfigurationController = new AbortController();
+  const invalidateComposioConfiguration = (): void => {
+    if (!composioConfigurationController.signal.aborted) {
+      composioConfigurationController.abort(new Error("composio_configuration_changed_restart_required"));
+    }
+  };
   const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys, {
     available: nativeCredentialPromptAvailable,
     request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
@@ -1501,11 +1507,7 @@ async function serveWithOwnerLease(
     },
   }, {
     onLlmProviderConfigurationChanged: () => activeLLMRegistryForSettings?.invalidateProviderConfiguration(),
-    onComposioConfigurationChanged: () => {
-      if (!composioConfigurationController.signal.aborted) {
-        composioConfigurationController.abort(new Error("composio_configuration_changed_restart_required"));
-      }
-    },
+    onComposioConfigurationChanged: invalidateComposioConfiguration,
   });
   tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
@@ -9968,12 +9970,15 @@ async function serveWithOwnerLease(
       }
     },
   });
+  const stopComposioConfigurationFileMonitor = await watchComposioEnvironmentFile(
+    process.env, invalidateComposioConfiguration);
   try {
     await router.start(async (req, ephemeralContext) => {
       try { await handleInbound(req, ephemeralContext); }
       finally { waitDeadlineScheduler.refresh(); }
     });
   } catch (error) {
+    stopComposioConfigurationFileMonitor();
     await runtimeKernelShadowObserver?.shutdown();
     ownerTaskSubmissionStore.close();
     throw error;
@@ -9990,6 +9995,7 @@ async function serveWithOwnerLease(
     shutdown: async () => {
       gatewayLog.info("shutting down");
       gatewayShuttingDown = true;
+      stopComposioConfigurationFileMonitor();
       telegramOutboundStop.abort();
       for (const digest of telegramInitialGrants.keys()) discardTelegramInitialGrant(digest);
       waitDeadlineScheduler.stop();

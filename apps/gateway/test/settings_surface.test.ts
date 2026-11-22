@@ -21,6 +21,7 @@ import {
   renderSettingsHtml,
   settingsSurfaceAllowed,
   updateSettingsEnvFile,
+  watchComposioEnvironmentFile,
 } from "../src/settings_surface.js";
 import { assessLlmComputeReadiness, verifyLlmProvisioning } from "../src/control_center/setup/api_settings.js";
 import type { SecretKeyringFactory } from "../src/secret_store.js";
@@ -368,6 +369,33 @@ function runtime(): PluginRuntime {
 }
 
 describe("settings surface", () => {
+  it("fences Composio calls when its environment file is atomically replaced", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-composio-env-watch-"));
+    const envFile = path.join(dir, "blue-tanuki.env");
+    const replacement = path.join(dir, "blue-tanuki.env.next");
+    await fs.writeFile(envFile, 'COMPOSIO_USER_ID="before"\n', "utf8");
+    let notifications = 0;
+    let resolveNotification: (() => void) | undefined;
+    const notified = new Promise<void>((resolve) => { resolveNotification = resolve; });
+    const stopWatching = await watchComposioEnvironmentFile({ BLUE_TANUKI_ENV_FILE: envFile }, () => {
+      notifications += 1;
+      resolveNotification?.();
+    });
+    try {
+      await fs.writeFile(replacement, 'COMPOSIO_USER_ID="after"\n', "utf8");
+      await fs.rename(replacement, envFile);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([notified, new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("Composio config change was not observed")), 2_000);
+      })]);
+      if (timeout) clearTimeout(timeout);
+      expect(notifications).toBe(1);
+    } finally {
+      stopWatching();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("writes Composio settings only through the target-bound settings port and disconnects safely", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-settings-write-composio-"));
     const envFile = path.join(dir, "blue-tanuki.env");

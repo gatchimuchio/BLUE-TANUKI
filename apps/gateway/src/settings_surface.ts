@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, watch as watchFs, type FSWatcher } from "node:fs";
 import * as path from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
 import { composioStatus, type SettingsWritePort } from "@blue-tanuki/core";
@@ -229,6 +229,68 @@ export async function readCurrentComposioEnvironment(env: Env = process.env): Pr
   }
   if (parsed.warnings.length > 0) throw new Error("composio_current_configuration_invalid");
   return { ...snapshot, ...parsed.values };
+}
+
+/**
+ * 設定ファイルの外部更新をGatewayの起動中に検知し、呼出し元へ一度だけ通知する。
+ * 親directoryを監視するため、同じ場所へのatomic rename/replacementも対象になる。
+ */
+export async function watchComposioEnvironmentFile(
+  env: Env = process.env,
+  onConfigurationChanged: () => void,
+): Promise<() => void> {
+  const filePath = envFilePath({ ...env });
+  if (!filePath) return () => undefined;
+
+  const watchers = new Set<FSWatcher>();
+  const watchedFiles = new Set<string>();
+  let closed = false;
+  let notified = false;
+  const notify = (): void => {
+    if (closed || notified) return;
+    notified = true;
+    try { onConfigurationChanged(); } catch { /* A config fence must not escape a filesystem callback. */ }
+  };
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    for (const watcher of watchers) watcher.close();
+    watchers.clear();
+  };
+  const watchFileParent = (watchedFile: string): void => {
+    const directory = path.dirname(watchedFile);
+    const basename = path.basename(watchedFile);
+    const identity = `${directory}\0${process.platform === "win32" ? basename.toLowerCase() : basename}`;
+    if (watchedFiles.has(identity)) return;
+    watchedFiles.add(identity);
+    try {
+      const watcher = watchFs(directory, { persistent: false }, (_eventType, filename) => {
+        if (filename === null) {
+          notify();
+          return;
+        }
+        const changedName = Buffer.isBuffer(filename) ? filename.toString("utf8") : filename;
+        const matches = process.platform === "win32"
+          ? changedName.toLowerCase() === basename.toLowerCase()
+          : changedName === basename;
+        if (matches) notify();
+      });
+      watcher.on("error", notify);
+      watchers.add(watcher);
+    } catch {
+      // Without a reliable watcher, do not allow the running process to keep using the old configuration.
+      notify();
+    }
+  };
+
+  watchFileParent(filePath);
+  try {
+    const targetPath = await fs.realpath(filePath);
+    watchFileParent(targetPath);
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) notify();
+  }
+  return close;
 }
 
 function envFilePath(env: Env): string | undefined {
