@@ -226,6 +226,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <div id="owner-task-saved-result-actions" class="row" hidden></div>
             <p id="owner-task-saved-result-status" class="muted" aria-live="polite" hidden></p>
             <pre id="owner-task-saved-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
+            <div id="owner-task-saved-result-composio-account-choices" class="row" role="group" aria-label="保存済みComposio accountから選択" hidden></div>
           </div>
         </section>
 

@@ -98,6 +98,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         composioDisconnectCandidateSubmissionId: null,
         composioDisconnectStatusMessage: null,
         composioDisconnectStatusTone: "warn",
+        composioDisconnectAccountToolkit: null,
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
@@ -1638,6 +1639,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const pane = byId("owner-task-saved-result");
         pane.textContent = "";
         pane.hidden = true;
+        const accountChoices = byId("owner-task-saved-result-composio-account-choices");
+        accountChoices.replaceChildren();
+        accountChoices.hidden = true;
         const status = byId("owner-task-saved-result-status");
         status.textContent = "";
         status.hidden = true;
@@ -1646,6 +1650,114 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           actions.replaceChildren();
           actions.hidden = true;
         }
+      }
+
+      function parseComposioAccountsSavedResult(content) {
+        const lines = String(content).split("\\n");
+        const header = "確認済みComposio account一覧です。所有者が明示取得した保存結果で、J/M receiptを照合済みです。";
+        const footer = [
+          "この観測は権限・同意・action許可を与えず、現在状態も保証しません。後続作用では対象を一件選び、実行直前に再読込してください。",
+          "この照会はComposioへ再接続せず、操作を再実行しません。"
+        ];
+        if (lines.length < 6 || lines[0] !== header) return null;
+        const toolkitMatch = /^toolkit: ([a-z0-9][a-z0-9_-]{0,119})$/.exec(lines[1]);
+        const countMatch = /^PRIVATE account数: (0|[1-9][0-9]?)$/.exec(lines[2]);
+        if (!toolkitMatch || !countMatch || !/^観測時刻: (?:[0-9]{1,16} ms|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z)$/.test(lines[3])) {
+          return null;
+        }
+        const count = Number(countMatch[1]);
+        if (!Number.isSafeInteger(count) || count < 0 || count > 20 || lines.length !== count + 6 ||
+            lines[count + 4] !== footer[0] || lines[count + 5] !== footer[1]) return null;
+        const accounts = [];
+        const seen = new Set();
+        const authSchemes = new Set(["API_KEY", "BASIC", "BEARER", "CUSTOM", "DCR_OAUTH", "NO_AUTH", "OAUTH1", "OAUTH2", "UNKNOWN"]);
+        for (let index = 0; index < count; index += 1) {
+          const line = lines[index + 4];
+          const prefix = "- account ID ";
+          const separator = line.indexOf(" | status=", prefix.length);
+          if (!line.startsWith(prefix) || separator <= prefix.length) return null;
+          let accountId;
+          try { accountId = JSON.parse(line.slice(prefix.length, separator)); } catch { return null; }
+          const detail = /^([A-Z_]{1,40}) \\| disabled=(true|false|unknown) \\| auth=([A-Z0-9_]{1,20}) \\| region=(us|eu|unknown|n\\/a)$/.exec(
+            line.slice(separator + " | status=".length)
+          );
+          if (typeof accountId !== "string" || accountId.length < 1 || accountId.length > 256 ||
+              accountId.trim() !== accountId || /[\\u0000-\\u001f\\u007f]/.test(accountId) || seen.has(accountId) ||
+              !detail || !authSchemes.has(detail[3])) return null;
+          seen.add(accountId);
+          accounts.push({ connected_account_id: accountId, status: detail[1], disabled: detail[2] });
+        }
+        return { toolkit: toolkitMatch[1], accounts: accounts };
+      }
+
+      function renderComposioAccountsSavedResultChoices(content) {
+        const choices = byId("owner-task-saved-result-composio-account-choices");
+        choices.replaceChildren();
+        choices.hidden = true;
+        const parsed = parseComposioAccountsSavedResult(content);
+        if (!parsed) return;
+
+        const intro = document.createElement("p");
+        intro.className = "muted";
+        intro.textContent = "Ownerが保存済み結果から一件を選ぶと、disconnect Plan候補のtoolkit/account ID欄だけを設定します。Plan作成・Provider接続・切断は行いません。";
+        choices.appendChild(intro);
+
+        const snapshot = state.connectorsSnapshot;
+        const allowedToolkits = snapshot && typeof snapshot.allowed_toolkits === "string"
+          ? snapshot.allowed_toolkits.split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+          : [];
+        const selectionReady = snapshot && snapshot.api_key_configured === true && snapshot.user_id_set === true &&
+          allowedToolkits.includes(parsed.toolkit);
+        if (!selectionReady) {
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "選択欄へ反映するには、同じtoolkitが現在のallowlistにある状態でConnectorsを読み込んでください。";
+          choices.appendChild(note);
+          choices.hidden = false;
+          return;
+        }
+        if (parsed.accounts.length === 0) {
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "保存済み一覧に選択できる接続はありません。";
+          choices.appendChild(note);
+          choices.hidden = false;
+          return;
+        }
+
+        parsed.accounts.forEach(function (account) {
+          const eligible = account.status === "ACTIVE" && account.disabled === "false";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.disabled = !eligible;
+          button.textContent = eligible
+            ? "disconnect候補に選択: " + account.connected_account_id
+            : "選択対象外（status=" + account.status + "、disabled=" + account.disabled + "）: " + account.connected_account_id;
+          if (eligible) button.addEventListener("click", function () {
+            const current = state.connectorsSnapshot;
+            const currentToolkits = current && typeof current.allowed_toolkits === "string"
+              ? current.allowed_toolkits.split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+              : [];
+            if (!current || current.api_key_configured !== true || current.user_id_set !== true ||
+                !currentToolkits.includes(parsed.toolkit)) {
+              state.composioDisconnectStatusMessage = "Connectorsの現在設定が一覧と一致しません。再読込してから選び直してください。";
+              state.composioDisconnectStatusTone = "warn";
+              renderComposioDiscoveryControls();
+              return;
+            }
+            byId("composio-discovery-toolkit").value = parsed.toolkit;
+            byId("composio-disconnect-account-id").value = account.connected_account_id;
+            state.composioDisconnectAccountToolkit = parsed.toolkit;
+            state.composioDisconnectCandidateTask = null;
+            state.composioDisconnectCandidateSubmissionId = null;
+            state.composioDisconnectStatusMessage = "Ownerが保存済み一覧の一件を選択しました。入力欄だけ設定済みで、Plan候補作成・Provider接続・切断は未実施です。";
+            state.composioDisconnectStatusTone = "warn";
+            renderComposioDiscoveryControls();
+          });
+          choices.appendChild(button);
+        });
+        choices.hidden = false;
       }
 
       function renderOwnerTaskSavedResultActions(receiptId, savedResults, recovered = false) {
@@ -1712,6 +1824,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const pane = byId("owner-task-saved-result");
           pane.textContent = result.content;
           pane.hidden = false;
+          renderComposioAccountsSavedResultChoices(result.content);
           status.textContent = "工程 " + String(step.index) + " · 保存時点の確認結果";
         } catch {
           if (isCurrent()) status.textContent = "保存済み結果を表示できませんでした。依頼状態を再確認してください。";
@@ -5511,6 +5624,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.composioDisconnectStatusMessage = null;
         state.composioDisconnectStatusTone = "warn";
         byId("composio-disconnect-account-id").value = "";
+        state.composioDisconnectAccountToolkit = null;
         setText("composio-configured-status", composio.configured ? "configured" : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
@@ -8154,6 +8268,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           appendChat("owner", task);
           appendChat("accepted", result.request_id || "Composio account revoke候補を受付済み", result.request_id);
           byId("composio-disconnect-account-id").value = "";
+          state.composioDisconnectAccountToolkit = null;
         } catch (error) {
           const message = error && typeof error.message === "string" ? error.message : "Composio disconnect plan request failed";
           state.composioDisconnectStatusMessage = message +
@@ -13156,12 +13271,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("prepare-composio-accounts").addEventListener("click", prepareComposioAccounts);
       byId("prepare-composio-disconnect").addEventListener("click", prepareComposioDisconnect);
       byId("composio-disconnect-account-id").addEventListener("input", function () {
+        state.composioDisconnectAccountToolkit = null;
         state.composioDisconnectStatusMessage = null;
         state.composioDisconnectCandidateTask = null;
         state.composioDisconnectCandidateSubmissionId = null;
         renderComposioDiscoveryControls();
       });
       byId("composio-discovery-toolkit").addEventListener("change", function () {
+        if (state.composioDisconnectAccountToolkit && state.composioDisconnectAccountToolkit !== byId("composio-discovery-toolkit").value) {
+          byId("composio-disconnect-account-id").value = "";
+          state.composioDisconnectAccountToolkit = null;
+        }
         state.composioDiscoveryStatusMessage = null;
         state.composioAccountsStatusMessage = null;
         state.composioDisconnectStatusMessage = null;
