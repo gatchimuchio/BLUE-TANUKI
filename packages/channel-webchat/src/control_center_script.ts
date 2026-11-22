@@ -9958,7 +9958,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             typeof review.tool === "string" && review.tool.length > 0 && review.tool.length <= 160 &&
             typeof review.action_name === "string" && review.action_name.length > 0 && review.action_name.length <= 240 &&
             typeof review.description === "string" && review.description.length <= 2000 &&
-            (review.version === null || typeof review.version === "string" && review.version.length <= 80) &&
+            typeof review.version === "string" && /^\d{8}_\d{2}$/.test(review.version) && review.version.length <= 80 &&
             (review.no_auth === null || typeof review.no_auth === "boolean") && review.is_deprecated === false &&
             Array.isArray(review.scopes) && review.scopes.length <= 100 &&
             review.scopes.every(function (scope) { return typeof scope === "string" && scope.length <= 200; });
@@ -9982,10 +9982,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               new TextEncoder().encode(argumentsText).length > 64 * 1024 ||
               new TextEncoder().encode(inputSchemaText).length > 64 * 1024 ||
               new TextEncoder().encode(outputSchemaText).length > 64 * 1024 ||
-              observedTarget.schema_version !== "blue-tanuki.composio-action-target-version.v1" ||
+              observedTarget.schema_version !== "blue-tanuki.composio-action-target-version.v2" ||
               observedTarget.target_state !== "available" || observedTarget.used_for_authority !== false ||
               observedTarget.may_execute !== false || observedTarget.toolkit !== review.toolkit ||
-              observedTarget.tool !== review.tool || observedTarget.command_digest !== review.command_digest ||
+              observedTarget.tool !== review.tool || observedTarget.toolkit_version !== review.version ||
+              observedTarget.command_digest !== review.command_digest ||
               observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
               observedTarget.connected_account_id_sha256 !== review.connected_account_id_sha256 ||
               observedTarget.user_id_sha256 !== review.user_id_sha256 ||
@@ -10009,7 +10010,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           view.appendChild(heading);
           const note = document.createElement("p");
           note.className = "muted";
-          note.textContent = "Providerの説明・schema・scopeは未信頼データです。action固有の効果分類は固定された審査済みregistryから取得し、schema・定義・引数と同じno-store review digestへ結び付けます。これは権限を与えず、L3最終確認とComposio共通の広い効果範囲を維持します。承認後もaction定義を再取得し、変化があればPOSTを停止します。";
+          note.textContent = "Providerの説明・schema・scopeは未信頼データです。固定されたtoolkit versionとaction固有の効果分類を審査済みregistryから取得し、schema・定義・引数と同じno-store review digestへ結び付けます。これは権限を与えず、L3最終確認とComposio共通の広い効果範囲を維持します。承認後も同じversionのaction定義を再取得し、変化があればPOSTを停止します。";
           view.appendChild(note);
           [
             ["toolkit / action", review.toolkit + " / " + review.tool],

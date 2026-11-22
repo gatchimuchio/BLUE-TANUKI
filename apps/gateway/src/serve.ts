@@ -3266,7 +3266,7 @@ async function serveWithOwnerLease(
     }
     if (opts.expected_composio_action_target_version_digest) {
       const observedComposioTargetVersionDigest = cmd.type === "tool_call" && cmd.payload.tool_name === "composio.execute" &&
-        targetVersionObservation?.schema_version === "blue-tanuki.composio-action-target-version.v1"
+        targetVersionObservation?.schema_version === "blue-tanuki.composio-action-target-version.v2"
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedComposioTargetVersionDigest !== opts.expected_composio_action_target_version_digest) {
         const reason = "composio_action_content_review_stale";

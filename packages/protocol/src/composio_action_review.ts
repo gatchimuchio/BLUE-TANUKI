@@ -24,9 +24,10 @@ export type ComposioActionEffectRegistryBinding =
 
 /** Non-authority binding for the current Composio action, account identity, schema and HDS plan. */
 export const ComposioActionTargetVersionObservationSchema = z.object({
-  schema_version: z.literal("blue-tanuki.composio-action-target-version.v1"),
+  schema_version: z.literal("blue-tanuki.composio-action-target-version.v2"),
   toolkit: z.string().min(1).max(120),
   tool: z.string().min(1).max(160),
+  toolkit_version: z.string().regex(/^\d{8}_\d{2}$/),
   connected_account_id_sha256: DigestSchema,
   user_id_sha256: DigestSchema,
   account_state_sha256: DigestSchema,
@@ -59,7 +60,7 @@ export const ComposioActionContentReviewSchema = z.object({
   tool: z.string().min(1).max(160),
   action_name: z.string().min(1).max(240),
   description: z.string().max(2_000),
-  version: z.string().max(80).nullable(),
+  version: z.string().regex(/^\d{8}_\d{2}$/).max(80),
   no_auth: z.boolean().nullable(),
   is_deprecated: z.literal(false),
   scopes: z.array(z.string().max(200)).max(100),

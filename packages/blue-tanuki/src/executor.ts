@@ -396,7 +396,7 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     }
   }
   if (tool_name === "composio.execute" &&
-      observation?.schema_version === "blue-tanuki.composio-action-target-version.v1") {
+      observation?.schema_version === "blue-tanuki.composio-action-target-version.v2") {
     const composioObservation = ComposioActionTargetVersionObservationSchema.parse(observation);
     // Composio observations expose a connected-account identity, but no canonical object identity.
     // Serialize actions for the account without placing account or action payload content in the key.

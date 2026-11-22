@@ -178,6 +178,11 @@ const MAX_SEARCH_LIMIT = 50;
 const MAX_SEARCH_QUERY_LENGTH = 500;
 const DEFAULT_ACCOUNT_LIMIT = 20;
 const MAX_ACCOUNT_LIMIT = 50;
+const COMPOSIO_TOOLKIT_VERSION_PATTERN = /^\d{8}_\d{2}$/;
+
+function isPinnedComposioToolkitVersion(value: unknown): value is string {
+  return typeof value === "string" && COMPOSIO_TOOLKIT_VERSION_PATTERN.test(value);
+}
 
 type ComposioRegisteredActionEffect = ComposioActionEffectRegistryBinding["effects"][number];
 
@@ -205,7 +210,7 @@ const COMPOSIO_ACTION_EFFECT_REGISTRY: readonly ComposioActionEffectRegistryEntr
     tool: "GITHUB_CREATE_AN_ISSUE",
     input_schema_sha256: "75a323804435b510db3f8cc7fda9a750763b0ee894a8e28a00ffafc4823ee03a",
     output_schema_sha256: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-    action_definition_sha256: "a7dea94a84dd997dc18129bc636ce71d7c2a4868d2df7bf826b515a19d4aec71",
+    action_definition_sha256: "7490a21380a1c6e1f216ac8e8c2d777e85f27e67f6186316f97db6acd1264488",
     effects: Object.freeze(["external_send", "write"] as const),
   }),
 ]);
@@ -1285,6 +1290,7 @@ interface ComposioLiveActionInspection {
   account: ComposioConnectedAccountProjection;
   toolkit: string;
   tool: string;
+  toolkitVersion: string;
   connectedAccountId: string;
   userId: string;
   argumentsBody: Record<string, unknown>;
@@ -1369,6 +1375,10 @@ async function inspectComposioLiveAction(
   if (projection.input_schema_sha256 !== inputSchemaSha256) {
     throw new Error("Composio action schema differs from the selected input schema; owner review must restart");
   }
+  const toolkitVersion = projection.version;
+  if (!isPinnedComposioToolkitVersion(toolkitVersion)) {
+    throw new Error("Composio tool version is missing or not an explicit YYYYMMDD_NN pin; live review is unavailable");
+  }
   const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
     toolkit,
     tool: String(projection.slug),
@@ -1384,9 +1394,10 @@ async function inspectComposioLiveAction(
   const requestPayloadDigest = composioRequestPayloadDigest({ toolkit, tool, connectedAccountId, userId,
     arguments: argumentsBody });
   const observation = ComposioActionTargetVersionObservationSchema.parse({
-    schema_version: "blue-tanuki.composio-action-target-version.v1",
+    schema_version: "blue-tanuki.composio-action-target-version.v2",
     toolkit,
     tool,
+    toolkit_version: toolkitVersion,
     connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
     user_id_sha256: composioIdentityDigest(userId),
     account_state_sha256: composioSchemaDigest(account),
@@ -1401,7 +1412,7 @@ async function inspectComposioLiveAction(
     used_for_authority: false,
     may_execute: false,
   });
-  return { projection, actionEffectRegistryBinding, account, toolkit, tool, connectedAccountId, userId, argumentsBody,
+  return { projection, actionEffectRegistryBinding, account, toolkit, tool, toolkitVersion, connectedAccountId, userId, argumentsBody,
     requestPayloadDigest, observation };
 }
 
@@ -1418,7 +1429,7 @@ export async function inspectComposioActionContentReview(
 ): Promise<ComposioActionContentReview> {
   const inspection = await inspectComposioLiveAction(args, opts);
   const { projection, actionEffectRegistryBinding, account, toolkit, tool, connectedAccountId, userId,
-    argumentsBody, requestPayloadDigest, observation } = inspection;
+    toolkitVersion, argumentsBody, requestPayloadDigest, observation } = inspection;
   const reviewComponents = [projection.input_parameters, projection.output_parameters, argumentsBody];
   const reviewComponentBytes = reviewComponents.map((value) => new TextEncoder().encode(canonicalJson(value)).byteLength);
   if (reviewComponentBytes.some((size) => size > 64 * 1024) ||
@@ -1438,7 +1449,7 @@ export async function inspectComposioActionContentReview(
     tool,
     action_name: String(projection.name),
     description: String(projection.description ?? ""),
-    version: typeof projection.version === "string" ? projection.version : null,
+    version: toolkitVersion,
     no_auth: typeof projection.no_auth === "boolean" ? projection.no_auth : null,
     is_deprecated: false,
     scopes: Array.isArray(projection.scopes) ? projection.scopes as string[] : [],
@@ -2250,8 +2261,10 @@ export async function invokeComposioExecute(
     signal: opts.signal,
   });
   if (opts.requireTargetVersionObservation && plannedObservation &&
-      currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256) {
-    throw new Error("Composio action definition changed after the owner review; mutation_sent=false");
+      (currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256 ||
+       !isPinnedComposioToolkitVersion(currentAction.version) ||
+       currentAction.version !== parsedObservation.data.toolkit_version)) {
+    throw new Error("Composio action definition or pinned toolkit version changed after the owner review; mutation_sent=false");
   }
   const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
     toolkit,
@@ -2275,6 +2288,7 @@ export async function invokeComposioExecute(
     body: {
       user_id: userId,
       connected_account_id: connectedAccountId,
+      version: parsedObservation.data.toolkit_version,
       arguments: argumentsBody,
     },
     api_key: apiKey,

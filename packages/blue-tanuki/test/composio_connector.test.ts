@@ -48,7 +48,7 @@ function actionSchemaResponse(toolkit: string, slug: string, inputParameters: Re
       name: slug,
       toolkit: { slug: toolkit },
       description: "Fixture action",
-      version: "fixture-1",
+      version: "20261001_00",
       no_auth: false,
       is_deprecated: false,
       scopes: ["repo"],
@@ -230,8 +230,8 @@ describe("Composio connector", () => {
     const observation = await inspectComposioActionTargetVersion(args, options);
     const review = await inspectComposioActionContentReview(args, options);
     expect(observation).toMatchObject({
-      schema_version: "blue-tanuki.composio-action-target-version.v1",
-      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", command_digest: commandDigest,
+      schema_version: "blue-tanuki.composio-action-target-version.v2",
+      toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", toolkit_version: "20261001_00", command_digest: commandDigest,
       operation_plan_binding_digest: operationPlanBindingDigest,
       target_state: "available", used_for_authority: false, may_execute: false,
     });
@@ -1105,6 +1105,7 @@ describe("Composio connector", () => {
       body: {
         user_id: "owner-local",
         connected_account_id: "conn_owner_github_1",
+        version: "20261001_00",
         arguments: { title: "hello" },
       },
     });
