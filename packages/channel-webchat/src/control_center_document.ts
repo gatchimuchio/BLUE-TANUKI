@@ -227,6 +227,7 @@ ${CONTROL_CENTER_STYLE}    </style>
             <p id="owner-task-saved-result-status" class="muted" aria-live="polite" hidden></p>
             <pre id="owner-task-saved-result" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;"></pre>
             <div id="owner-task-saved-result-composio-account-choices" class="row" role="group" aria-label="保存済みComposio accountから選択" hidden></div>
+            <div id="owner-task-saved-result-composio-action-choices" class="row" role="group" aria-label="保存済みComposio actionから選択" hidden></div>
           </div>
         </section>
 
@@ -381,6 +382,19 @@ ${CONTROL_CENTER_STYLE}    </style>
               <button id="prepare-composio-disconnect" type="button" disabled>Prepare connected account revoke plan</button>
             </div>
             <p class="muted">候補作成はComposioへ接続せず、provider操作を実行しません。検索・account一覧は設定済み範囲のbuilt-in <code>composio.search</code>／<code>composio.accounts</code> を使う未実行Plan候補を依頼します。実行時は通常の現在権限とPlan承認が必要です。接続解除候補は入力した一件のaccount IDと選択toolkitだけを含むbuilt-in <code>composio.disconnect</code> の未実行Planです。実行時は明示live opt-inとno-store L3最終確認が必須で、Provider token revokeはbest-effort、accountは削除しません。結果不明時は自動再送せず、状態再確認を要します。資格情報や秘密を入力しないでください。</p>
+            <div class="screen-card">
+              <h4>Composio execute candidate</h4>
+              <div class="status-grid">
+                <label>保存結果から選択したaction<input id="composio-execute-action" type="text" readonly placeholder="保存済みsearch結果から一件選択" /></label>
+                <label>入力schema digest<input id="composio-execute-schema-digest" type="text" readonly placeholder="action選択後に表示" /></label>
+                <label>保存結果から選択したaccount ID<input id="composio-execute-account-id" type="text" readonly placeholder="保存済みPRIVATE account一覧から一件選択" /></label>
+                <label>review registry effect（非権威情報）<input id="composio-execute-effects" type="text" readonly placeholder="action選択後に表示" /></label>
+              </div>
+              <label>Owner指定payload JSON object<textarea id="composio-execute-payload" rows="5" maxlength="65536" autocomplete="off" disabled></textarea></label>
+              <div class="action-row"><button id="prepare-composio-execute" class="primary" type="button" disabled>Prepare one unexecuted execute plan</button></div>
+              <p id="composio-execute-plan-status" class="badge warn" role="status">保存済みsearch結果のreviewed actionとaccount一覧を読み込み、各一件を選択してください。</p>
+              <p class="muted">この候補依頼ではpayloadをOwner Taskの本文に含め、現在設定されたLLMへ送信します。秘密・資格情報・個人情報・no-store内容は入力しないでください。作成するのは一件の未実行Plan候補だけで、Composio接続・action実行・権限付与はしません。実行には現在のschema/effects/account/allowlist/Permissionの再確認と別のno-store L3承認が必要です。Provider結果や保存済みmetadataは権限になりません。</p>
+            </div>
             <p id="composio-discovery-status" class="badge warn" role="status">Load Connectors to check the configured API key and allowlist.</p>
             <p id="composio-accounts-status" class="badge warn" role="status">Load Connectors to check the configured API key, owner identity, and allowlist.</p>
             <p id="composio-disconnect-plan-status" class="badge warn" role="status">Load Connectors to check the configured API key, owner identity, and allowlist.</p>
