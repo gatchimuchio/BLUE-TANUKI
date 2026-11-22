@@ -51,11 +51,21 @@ describe("ActiveTaskExecutionRegistry", () => {
     const other = new AbortController();
     registry.register("command-target", target, 100);
     registry.register("command-other", other, 200);
+    const workerInstanceId = "04ab3d71-ffad-40d3-8b93-29111fb52fe1";
 
     expect(registry.requestCancel("unknown-command", "owner", 300)).toBeNull();
     expect(target.signal.aborted).toBe(false);
     expect(other.signal.aborted).toBe(false);
 
+    registry.observeToolLifecycle("command-target", {
+      schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
+      source: "native_shell_process_provider",
+      state: "worker_started",
+      observed_at_ms: 350,
+      worker_instance_id: workerInstanceId,
+      used_for_authority: false,
+      may_execute: false,
+    });
     expect(registry.requestCancel("command-target", "webchat-resume-token-holder", 400)).toMatchObject({
       command_id: "command-target",
       status: "cancel_requested",
@@ -78,6 +88,7 @@ describe("ActiveTaskExecutionRegistry", () => {
       source: "native_shell_process_provider",
       state: "process_tree_empty_confirmed",
       observed_at_ms: 600,
+      worker_instance_id: workerInstanceId,
       used_for_authority: false,
       may_execute: false,
     });
@@ -97,6 +108,79 @@ describe("ActiveTaskExecutionRegistry", () => {
       external_processing_stop: "unknown",
     });
     expect(registry.snapshot().map((execution) => execution.command_id)).toEqual(["command-other"]);
+  });
+
+  it("does not reuse a completed process tree as evidence for a later cancellation", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    registry.register("command-stale-worker", new AbortController(), 100);
+    const workerInstanceId = "0b48417f-42d3-4b19-8a7e-4da98e251273";
+    const observe = (state: "worker_started" | "process_tree_empty_confirmed", observed_at_ms: number) =>
+      registry.observeToolLifecycle("command-stale-worker", {
+        schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
+        source: "native_shell_process_provider",
+        state,
+        observed_at_ms,
+        worker_instance_id: workerInstanceId,
+        used_for_authority: false,
+        may_execute: false,
+      });
+
+    observe("worker_started", 200);
+    observe("process_tree_empty_confirmed", 250);
+    expect(registry.requestCancel("command-stale-worker", "webchat-resume-token-holder", 300))
+      .toMatchObject({ local_worker_stop: "not_observed" });
+    expect(registry.finish("command-stale-worker")).toMatchObject({ local_worker_stop: "not_observed" });
+  });
+
+  it("confirms a cancelled task's process trees only after every observed worker is empty", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    registry.register("command-multiple-workers", new AbortController(), 100);
+    const firstWorker = "59471c50-d0a2-4212-bd8d-775b1032650a";
+    const secondWorker = "9fb421b8-52b9-45ea-b529-5ce286288d5f";
+    const observe = (workerInstanceId: string, state: "worker_started" | "worker_exit_observed" |
+      "provider_state_unknown" | "process_tree_empty_confirmed", observed_at_ms: number) => registry.observeToolLifecycle("command-multiple-workers", {
+      schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
+      source: "native_shell_process_provider",
+      state,
+      observed_at_ms,
+      worker_instance_id: workerInstanceId,
+      used_for_authority: false,
+      may_execute: false,
+    });
+
+    observe(firstWorker, "worker_started", 200);
+    observe(secondWorker, "worker_started", 201);
+    expect(registry.requestCancel("command-multiple-workers", "webchat-resume-token-holder", 300))
+      .toMatchObject({ local_worker_stop: "not_observed" });
+    observe(firstWorker, "process_tree_empty_confirmed", 400);
+    expect(registry.snapshot()[0]).toMatchObject({ local_worker_stop: "not_observed" });
+    observe(secondWorker, "worker_exit_observed", 500);
+    expect(registry.snapshot()[0]).toMatchObject({ local_worker_stop: "worker_exit_observed" });
+    observe(secondWorker, "provider_state_unknown", 550);
+    expect(registry.snapshot()[0]).toMatchObject({ local_worker_stop: "provider_state_unknown" });
+    observe(secondWorker, "worker_exit_observed", 560);
+    expect(registry.snapshot()[0]).toMatchObject({ local_worker_stop: "provider_state_unknown" });
+    observe(secondWorker, "process_tree_empty_confirmed", 600);
+    expect(registry.snapshot()[0]).toMatchObject({ local_worker_stop: "process_tree_empty_confirmed" });
+    expect(registry.finish("command-multiple-workers")).toMatchObject({
+      local_worker_stop: "process_tree_empty_confirmed",
+      external_processing_stop: "unknown",
+    });
+  });
+
+  it("keeps process stop unknown when provider observations cannot be correlated", () => {
+    const registry = new ActiveTaskExecutionRegistry();
+    registry.register("command-unbound-worker", new AbortController(), 100);
+    registry.observeToolLifecycle("command-unbound-worker", {
+      schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
+      source: "native_shell_process_provider",
+      state: "worker_started",
+      observed_at_ms: 200,
+      used_for_authority: false,
+      may_execute: false,
+    });
+    expect(registry.requestCancel("command-unbound-worker", "webchat-resume-token-holder", 300))
+      .toMatchObject({ local_worker_stop: "provider_state_unknown" });
   });
 
   it("projects correlated Agent child states without treating them as process-tree evidence", () => {

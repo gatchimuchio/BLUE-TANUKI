@@ -10,15 +10,17 @@ import { once } from "node:events";
 import { approvalContextFromCommand, CompleteHistoryStore, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry, fileSearchTool, type ExecutorApprovalClock,
   type ExecutionIntentStore } from "@blue-tanuki/core";
-import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { requireToolOperationDescriptor, type ExecuteCommand } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore, inspectExecutionIntentRecoveryLedger } from "../src/execution_intent_store.js";
 import { agentWorkerLifecycleHistoryInput, recoverPendingAgentWorkerLifecycleHistory } from "../src/agent_worker_lifecycle_history.js";
 import { recoverPendingToolLifecycleHistory } from "../src/tool_lifecycle_history.js";
 import { recoverPendingTaskCancellationHistory, taskCancellationHistoryInput } from "../src/task_cancellation_history.js";
 
+const lifecycleTestTool = requireToolOperationDescriptor("echo");
+
 function command(id = "synthetic-command"): Extract<ExecuteCommand, { type: "tool_call" }> {
-  return { id, type: "tool_call", payload: { tool_name: "synthetic.read", arguments: { target: "青" } },
-    constraints: { allowed_tools: ["synthetic.read"], allowed_capabilities: ["tool:synthetic.read"] },
+  return { id, type: "tool_call", payload: { tool_name: "echo", arguments: { text: "青" } },
+    constraints: { allowed_tools: ["echo"], allowed_capabilities: [...lifecycleTestTool.required_capabilities] },
     upstream_decision: { request_id: "synthetic-task", frame_goal: "合成対象を読む", model_abstraction: "fixture",
       commit_hash: "fixture-commit", commit_decision: "ASSERT" } };
 }
@@ -34,7 +36,8 @@ function rig(store: ExecutionIntentStore, clock?: ExecutorApprovalClock, invoke 
   execution_epoch = store instanceof GatewayExecutionIntentStore ? store.executionEpoch : randomUUID()) {
   const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch, clock, ticket_ttl_ms: clock ? 100 : 300_000 });
   const tools = new ToolRegistry();
-  tools.register({ name: "synthetic.read", description: "合成読取り", required_capabilities: ["tool:synthetic.read"], invoke });
+  tools.register({ name: "echo", adapter_version: lifecycleTestTool.adapter_version,
+    description: "合成echo fixture", required_capabilities: [...lifecycleTestTool.required_capabilities], invoke });
   const executor = new Executor({ approval_authority: authority, tools, llm: { name: "fixture", call: async () => ({ content: "青", model: "fixture", tokens_used: 0 }) } });
   return { authority, executor };
 }
@@ -84,16 +87,18 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       const lifecycleEventId = randomUUID();
       const observation = {
         schema_version: "blue-tanuki.tool-execution-lifecycle.v1" as const,
-        source: "executor_tool_adapter" as const,
-        state: "cancel_requested" as const,
+        source: "native_shell_process_provider" as const,
+        state: "worker_started" as const,
         observed_at_ms: Date.now(),
-        signal: "aborted" as const,
+        worker_instance_id: randomUUID(),
         used_for_authority: false as const,
         may_execute: false as const,
       };
       store.recordToolLifecycleEvidence(lifecycleEventId, source.id, observation);
       expect(store.pendingToolLifecycleEvidence()).toEqual([{ lifecycle_event_id: lifecycleEventId,
         command_id: source.id, observation }]);
+      expect(() => store.recordToolLifecycleEvidence(randomUUID(), source.id, { ...observation,
+        worker_instance_id: "not-a-worker-uuid" })).toThrow(/execution_lifecycle_observation_invalid/);
       expect(() => store.recordToolLifecycleEvidence(randomUUID(), "unmatched-command", observation))
         .toThrow(/execution_lifecycle_receipt_missing/);
       const failedHistoryPath = join(root, "unwritable-history.jsonl");
@@ -128,7 +133,8 @@ describe("固定承認→永続消費・開始意思→実呼出し→receipt", 
       expect(store.verifyEvents()).toBe(true);
       expect(new CompleteHistoryStore({ filepath: historyFile }).all()).toMatchObject([
         { kind: "audit_history", command_id: source.id, payload: { lifecycle_event_id: lifecycleEventId,
-          state: "cancel_requested", used_for_authority: false, may_execute: false } },
+          state: "worker_started", worker_instance_id: observation.worker_instance_id,
+          used_for_authority: false, may_execute: false } },
       ]);
       expect(inspectExecutionIntentRecoveryLedger({ private_state_root: root, database_path: filepath })).toMatchObject({
         status: "verified", used_for_authority: false, execution_eligible: false,

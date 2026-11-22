@@ -3657,7 +3657,7 @@ describe("built-in tools", () => {
       let cancelTimer: NodeJS.Timeout | undefined;
       try {
         const controller = new AbortController();
-        const lifecycle: Array<{ state: string }> = [];
+        const lifecycle: Array<{ state: string; worker_instance_id?: string }> = [];
         cancelTimer = setTimeout(() => controller.abort(), 400);
         const result = await invokeShellExec(
           {
@@ -3673,6 +3673,10 @@ describe("built-in tools", () => {
         expect(lifecycle.map((event) => event.state)).toEqual(expect.arrayContaining([
           "worker_started", "cancel_requested", "worker_exit_observed", "process_tree_empty_confirmed",
         ]));
+        const workerInstanceIds = lifecycle.map((event) => event.worker_instance_id);
+        expect(workerInstanceIds.every((id) => typeof id === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(id))).toBe(true);
+        expect(new Set(workerInstanceIds).size).toBe(1);
         expect(lifecycle.map((event) => event.state)).not.toContain("provider_state_unknown");
         await new Promise((resolve) => setTimeout(resolve, 100));
         await expect(fs.access(lateMarker)).rejects.toThrow();

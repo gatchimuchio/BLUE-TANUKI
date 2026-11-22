@@ -998,6 +998,8 @@ export interface ToolExecutionLifecycleObservation {
   state: "cancel_requested" | "worker_started" | "worker_exit_observed" |
     "process_tree_empty_confirmed" | "provider_state_unknown" | "late_result_discarded";
   observed_at_ms: number;
+  /** Random per-provider-process identity; correlates lifecycle observations without granting authority. */
+  worker_instance_id?: string;
   worker_pid?: number;
   worker_platform?: string;
   signal?: "timeout" | "aborted" | null;

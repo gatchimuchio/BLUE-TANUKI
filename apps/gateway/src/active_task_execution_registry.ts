@@ -8,6 +8,13 @@ export type LocalWorkerStopObservation =
   | "process_tree_empty_confirmed"
   | "provider_state_unknown";
 
+type LocalWorkerLifecycleState = "running" | Exclude<LocalWorkerStopObservation, "not_observed">;
+
+interface LocalWorkerLifecycleSnapshot {
+  state: LocalWorkerLifecycleState;
+  observed_at_ms: number;
+}
+
 export type TaskExecutionCancellationTokenKind = "resume" | "d4_runtime" | "owner_task";
 
 export interface ActiveAgentWorkerSnapshot {
@@ -69,8 +76,12 @@ interface ActiveTaskExecution {
   executor_status: ExecuteFeedback["status"] | "unknown";
   parent_execution_finished: boolean;
   cancellation_settlement_recorded: boolean;
+  local_workers: Map<string, LocalWorkerLifecycleSnapshot>;
+  cancellation_worker_instances: Set<string> | null;
+  cancellation_worker_seen: boolean;
+  cancellation_worker_unknown: boolean;
+  local_worker_unbound_active: boolean;
   local_worker_state: LocalWorkerStopObservation;
-  local_worker_observed_at_ms: number;
   agent_workers: Map<string, ActiveAgentWorkerSnapshot>;
 }
 
@@ -101,8 +112,12 @@ export class ActiveTaskExecutionRegistry {
       executor_status: "unknown",
       parent_execution_finished: false,
       cancellation_settlement_recorded: false,
+      local_workers: new Map(),
+      cancellation_worker_instances: null,
+      cancellation_worker_seen: false,
+      cancellation_worker_unknown: false,
+      local_worker_unbound_active: false,
       local_worker_state: "not_observed",
-      local_worker_observed_at_ms: 0,
       agent_workers: new Map(),
     });
   }
@@ -138,6 +153,14 @@ export class ActiveTaskExecutionRegistry {
       execution.cancel_requested_at_ms = requested_at_ms;
       execution.cancel_requested_by = actor;
       execution.cancel_token_kind = token_kind;
+      execution.cancellation_worker_instances = new Set(
+        [...execution.local_workers.entries()]
+          .filter(([, worker]) => worker.state !== "process_tree_empty_confirmed")
+          .map(([workerInstanceId]) => workerInstanceId),
+      );
+      execution.cancellation_worker_seen = execution.cancellation_worker_instances.size > 0;
+      execution.cancellation_worker_unknown = execution.local_worker_unbound_active;
+      this.refreshLocalWorkerStop(execution);
     }
     execution.controller.abort();
     return {
@@ -151,15 +174,71 @@ export class ActiveTaskExecutionRegistry {
   observeToolLifecycle(command_id: string, observation: ToolExecutionLifecycleObservation): void {
     const execution = this.active.get(command_id);
     if (!execution || observation.source !== "native_shell_process_provider" ||
-        observation.observed_at_ms < execution.local_worker_observed_at_ms) return;
-    execution.local_worker_observed_at_ms = observation.observed_at_ms;
-    execution.local_worker_state = observation.state === "process_tree_empty_confirmed"
-      ? "process_tree_empty_confirmed"
-      : observation.state === "worker_exit_observed"
-        ? "worker_exit_observed"
-        : observation.state === "provider_state_unknown"
-          ? "provider_state_unknown"
-          : "not_observed";
+        !Number.isSafeInteger(observation.observed_at_ms) || observation.observed_at_ms <= 0) return;
+    const workerInstanceId = observation.worker_instance_id;
+    if (!isWorkerInstanceId(workerInstanceId)) {
+      if (["worker_started", "cancel_requested", "worker_exit_observed", "provider_state_unknown"]
+        .includes(observation.state)) {
+        execution.local_worker_unbound_active = true;
+        if (execution.cancel_requested_at_ms !== null) execution.cancellation_worker_unknown = true;
+      }
+      if (observation.state === "process_tree_empty_confirmed" && execution.cancel_requested_at_ms !== null) {
+        execution.cancellation_worker_unknown = true;
+      }
+      this.refreshLocalWorkerStop(execution);
+      return;
+    }
+
+    const current = execution.local_workers.get(workerInstanceId);
+    if (current && observation.observed_at_ms < current.observed_at_ms) return;
+    switch (observation.state) {
+      case "worker_started":
+        if (!current) {
+          execution.local_workers.set(workerInstanceId, {
+            state: "running", observed_at_ms: observation.observed_at_ms,
+          });
+          this.includeCancellationWorker(execution, workerInstanceId);
+        }
+        break;
+      case "cancel_requested":
+        if (current?.state !== "process_tree_empty_confirmed") {
+          execution.local_workers.set(workerInstanceId, {
+            state: current?.state === "provider_state_unknown" ? "provider_state_unknown" : "running",
+            observed_at_ms: observation.observed_at_ms,
+          });
+          this.includeCancellationWorker(execution, workerInstanceId);
+        }
+        break;
+      case "worker_exit_observed":
+        if (current?.state !== "process_tree_empty_confirmed") {
+          execution.local_workers.set(workerInstanceId, {
+            state: current?.state === "provider_state_unknown" ? "provider_state_unknown" : "worker_exit_observed",
+            observed_at_ms: observation.observed_at_ms,
+          });
+          this.includeCancellationWorker(execution, workerInstanceId);
+        }
+        break;
+      case "provider_state_unknown":
+        if (current?.state !== "process_tree_empty_confirmed") {
+          execution.local_workers.set(workerInstanceId, {
+            state: "provider_state_unknown", observed_at_ms: observation.observed_at_ms,
+          });
+          this.includeCancellationWorker(execution, workerInstanceId);
+        }
+        break;
+      case "process_tree_empty_confirmed":
+        execution.local_workers.set(workerInstanceId, {
+          state: "process_tree_empty_confirmed", observed_at_ms: observation.observed_at_ms,
+        });
+        if (execution.cancellation_worker_instances?.has(workerInstanceId)) {
+          execution.cancellation_worker_instances.delete(workerInstanceId);
+          execution.cancellation_worker_seen = true;
+        }
+        break;
+      case "late_result_discarded":
+        break;
+    }
+    this.refreshLocalWorkerStop(execution);
   }
 
   observeAgentWorkerLifecycle(event: AgentWorkerLifecycleEvent): void {
@@ -212,13 +291,37 @@ export class ActiveTaskExecutionRegistry {
       cancel_requested_at_ms: execution.cancel_requested_at_ms,
       executor_settled: execution.executor_settled,
       executor_status: execution.executor_status,
-      local_worker_stop: execution.local_worker_state,
+      local_worker_stop: execution.cancel_requested_at_ms === null ? "not_observed" : execution.local_worker_state,
       external_processing_stop: "unknown",
     };
   }
 
   abortAll(): void {
     for (const execution of this.active.values()) execution.controller.abort();
+  }
+
+  private includeCancellationWorker(execution: ActiveTaskExecution, workerInstanceId: string): void {
+    if (execution.cancel_requested_at_ms === null) return;
+    execution.cancellation_worker_instances ??= new Set();
+    execution.cancellation_worker_instances.add(workerInstanceId);
+    execution.cancellation_worker_seen = true;
+  }
+
+  private refreshLocalWorkerStop(execution: ActiveTaskExecution): void {
+    if (execution.cancel_requested_at_ms === null || execution.cancellation_worker_instances === null) return;
+    const pending = [...execution.cancellation_worker_instances]
+      .map((workerInstanceId) => execution.local_workers.get(workerInstanceId)?.state ?? "running");
+    if (execution.cancellation_worker_unknown || pending.includes("provider_state_unknown")) {
+      execution.local_worker_state = "provider_state_unknown";
+    } else if (pending.includes("worker_exit_observed")) {
+      execution.local_worker_state = "worker_exit_observed";
+    } else if (pending.length > 0) {
+      execution.local_worker_state = "not_observed";
+    } else {
+      execution.local_worker_state = execution.cancellation_worker_seen
+        ? "process_tree_empty_confirmed"
+        : "not_observed";
+    }
   }
 
   private project(execution: ActiveTaskExecution): ActiveTaskExecutionSnapshot {
@@ -231,7 +334,7 @@ export class ActiveTaskExecutionRegistry {
       parent_execution_finished: execution.parent_execution_finished,
       executor_settled: execution.executor_settled,
       executor_status: execution.executor_status,
-      local_worker_stop: execution.local_worker_state,
+      local_worker_stop: execution.cancel_requested_at_ms === null ? "not_observed" : execution.local_worker_state,
       agent_workers: [...execution.agent_workers.values()]
         .sort((left, right) => left.role.localeCompare(right.role) || left.child_task_digest.localeCompare(right.child_task_digest))
         .map((worker) => ({ ...worker })),
@@ -239,6 +342,11 @@ export class ActiveTaskExecutionRegistry {
       used_for_authority: false,
     };
   }
+}
+
+function isWorkerInstanceId(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }
 
 function hasPendingAgentWorker(execution: ActiveTaskExecution): boolean {

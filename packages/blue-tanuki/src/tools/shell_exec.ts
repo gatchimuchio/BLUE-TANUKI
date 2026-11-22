@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -514,6 +514,7 @@ function invokeNativeProvider(
   platform: NodeJS.Platform = process.platform,
   onExecutionLifecycle?: (event: ToolExecutionLifecycleObservation) => void,
 ): Promise<NativeShellResult> {
+  const workerInstanceId = randomUUID();
   const child = spawn(
     providerPath,
     [
@@ -541,7 +542,8 @@ function invokeNativeProvider(
   const report = (event: Omit<ToolExecutionLifecycleObservation, "schema_version" | "source" | "used_for_authority" | "may_execute">): void => {
     try {
       onExecutionLifecycle?.({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1",
-        source: "native_shell_process_provider", ...event, used_for_authority: false, may_execute: false });
+        source: "native_shell_process_provider", ...event, worker_instance_id: workerInstanceId,
+        used_for_authority: false, may_execute: false });
     } catch { /* lifecycle evidence must never delay or suppress process cancellation */ }
   };
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { approvalContextFromCommand, finalReviewRequired } from "@blue-tanuki/hds-brain";
 import { Executor, createExecutorApprovalAuthority, ToolRegistry } from "@blue-tanuki/core";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import { GatewayExecutionIntentStore } from "../../src/execution_intent_store.js";
 
 const [root, id, mode, executionEpoch] = process.argv.slice(2);
@@ -13,15 +14,17 @@ const store = new GatewayExecutionIntentStore(join(root, "executor.sqlite"), exe
 try {
   const authority = createExecutorApprovalAuthority({ execution_store: store, execution_epoch: executionEpoch });
   const tools = new ToolRegistry();
-  tools.register({ name: "synthetic.read", description: "合成process作用", required_capabilities: ["tool:synthetic.read"],
+  const descriptor = requireToolOperationDescriptor("echo");
+  tools.register({ name: "echo", adapter_version: descriptor.adapter_version, description: "合成process作用",
+    required_capabilities: [...descriptor.required_capabilities],
     invoke: async () => {
       appendFileSync(join(root, "calls.txt"), `${id}\n`);
       if (mode === "hold") { process.send?.("invoked"); await new Promise(() => {}); }
       return "青";
     } });
   const executor = new Executor({ approval_authority: authority, tools, llm: { name: "fixture", call: async () => { throw new Error("not used"); } } });
-  const command = { id, type: "tool_call" as const, payload: { tool_name: "synthetic.read", arguments: { target: "青" } },
-    constraints: { allowed_tools: ["synthetic.read"], allowed_capabilities: ["tool:synthetic.read"] },
+  const command = { id, type: "tool_call" as const, payload: { tool_name: "echo", arguments: { text: "青" } },
+    constraints: { allowed_tools: ["echo"], allowed_capabilities: [...descriptor.required_capabilities] },
     upstream_decision: { request_id: "fixture-task", frame_goal: "合成対象を読む", model_abstraction: "fixture", commit_hash: "fixture-commit", commit_decision: "ASSERT" as const } };
   const context = approvalContextFromCommand(command);
   const final_review_required = finalReviewRequired(context);

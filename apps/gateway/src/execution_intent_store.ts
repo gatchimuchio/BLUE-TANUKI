@@ -919,14 +919,16 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
 
 function validateToolLifecycleObservation(value: unknown): asserts value is ToolExecutionLifecycleObservation {
   const observation = asRecord(value);
-  const allowedKeys = ["schema_version", "source", "state", "observed_at_ms", "worker_pid", "worker_platform",
-    "signal", "descendants_terminated", "used_for_authority", "may_execute"] as const;
+  const allowedKeys = ["schema_version", "source", "state", "observed_at_ms", "worker_instance_id", "worker_pid",
+    "worker_platform", "signal", "descendants_terminated", "used_for_authority", "may_execute"] as const;
   if (!observation || !hasOnlyKeys(observation, allowedKeys) ||
       observation.schema_version !== "blue-tanuki.tool-execution-lifecycle.v1" ||
       !["executor_tool_adapter", "native_shell_process_provider"].includes(String(observation.source)) ||
       !["cancel_requested", "worker_started", "worker_exit_observed", "process_tree_empty_confirmed",
         "provider_state_unknown", "late_result_discarded"].includes(String(observation.state)) ||
       !isSafeTimestamp(observation.observed_at_ms) || observation.used_for_authority !== false || observation.may_execute !== false ||
+      (observation.worker_instance_id !== undefined && (typeof observation.worker_instance_id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(observation.worker_instance_id))) ||
       (observation.worker_pid !== undefined && (!Number.isSafeInteger(observation.worker_pid) || Number(observation.worker_pid) <= 0)) ||
       (observation.worker_platform !== undefined && (typeof observation.worker_platform !== "string" ||
         !/^[a-zA-Z0-9._-]{1,32}$/.test(observation.worker_platform))) ||
