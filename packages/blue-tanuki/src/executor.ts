@@ -411,12 +411,47 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
   }
   if (tool_name === "gmail.write" && observation?.schema_version === "blue-tanuki.gmail-write-target-version.v1" &&
       ["draft.create", "message.send", "draft.send", "message.trash", "message.modify"].includes(String(args.operation))) {
+    if (args.operation === "message.trash" || args.operation === "message.modify") {
+      if (typeof args.message_id !== "string") throw new Error("Broker Gmail message target could not be resolved");
+      const resourceDigest = createHash("sha256").update(JSON.stringify([
+        "blue-tanuki.gmail-message-resource-lock.v1", args.message_id,
+      ]), "utf8").digest("hex");
+      return `gmail-message:${resourceDigest}`;
+    }
+    if (args.operation === "draft.send") {
+      if (typeof args.draft_id !== "string") throw new Error("Broker Gmail draft target could not be resolved");
+      const resourceDigest = createHash("sha256").update(JSON.stringify([
+        "blue-tanuki.gmail-draft-resource-lock.v1", args.draft_id,
+      ]), "utf8").digest("hex");
+      return `gmail-draft:${resourceDigest}`;
+    }
     return `gmail:${observation.target_identity_digest}`;
   }
-  if (tool_name === "github.write" && observation?.schema_version === "blue-tanuki.github-write-target-version.v1") {
-    return `github:${observation.target_identity_digest}`;
-  }
   return undefined;
+}
+
+function githubRepositoryResourceLockKey(repositoryId: number): string {
+  const resourceDigest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.github-repository-resource-lock.v1", repositoryId,
+  ]), "utf8").digest("hex");
+  return `github-repository:${resourceDigest}`;
+}
+
+async function targetResourceLockKeys(command: Extract<ExecuteCommand, { type: "tool_call" }>,
+  observation: BrokerTargetVersionObservation | undefined): Promise<string[]> {
+  if (command.payload.tool_name === "github.write" &&
+      observation?.schema_version === "blue-tanuki.github-write-target-version.v1") {
+    const githubObservation = GitHubWriteTargetVersionObservationSchema.parse(observation);
+    const keys = [githubRepositoryResourceLockKey(githubObservation.repository_id)];
+    // A pull request create reads its head repo as well as writing the base repo. Lock both repo identities.
+    if (githubObservation.operation === "pr.create" &&
+        githubObservation.head_repository_id !== githubObservation.repository_id) {
+      keys.push(githubRepositoryResourceLockKey(githubObservation.head_repository_id));
+    }
+    return [...new Set(keys)].sort();
+  }
+  const key = await targetResourceLockKey(command, observation);
+  return key ? [key] : [];
 }
 
 function isGitHubWriteProviderRejection(command: ExecuteCommand, value: unknown): boolean {
@@ -3203,14 +3238,15 @@ export class Executor {
       if (remaining <= 0) throw new Error(`timeout after ${constraints.timeout_ms}ms`);
       return remaining;
     };
-    const lockKey = await targetResourceLockKey(command, record.target_version_observation);
-    let releaseTargetLock: (() => void) | undefined;
+    let lockKeys: string[] = [];
+    const acquiredTargetLocks: Array<() => void> = [];
     let adapterOwnsTargetLock = false;
     try {
-      if (lockKey) {
+      lockKeys = await targetResourceLockKeys(command, record.target_version_observation);
+      for (const lockKey of lockKeys) {
         const pendingLock = acquireTargetResourceLock(lockKey);
         try {
-          releaseTargetLock = await this.withTimeout(pendingLock, remainingTimeoutMs(), controller);
+          acquiredTargetLocks.push(await this.withTimeout(pendingLock, remainingTimeoutMs(), controller));
         } catch (error) {
           // If this waiter times out, release its queue position once it reaches the head.
           void pendingLock.then((release) => release(), () => undefined);
@@ -3249,7 +3285,7 @@ export class Executor {
         const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
         if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
         const githubCredentialResolver = tool === githubWriteTool ? this.deps.resolve_github_write_credential : undefined;
-        if (lockKey?.startsWith("filesystem-root:")) filesystemAdapterDispatched = true;
+        if (lockKeys.some((lockKey) => lockKey.startsWith("filesystem-root:"))) filesystemAdapterDispatched = true;
         markInvoked("tool_adapter");
         return tool.invoke(payload.arguments, {
           command_id: id,
@@ -3275,19 +3311,20 @@ export class Executor {
           on_execution_lifecycle: observeLifecycle,
         });
       });
-      if (releaseTargetLock) {
+      if (acquiredTargetLocks.length > 0) {
         adapterOwnsTargetLock = true;
         // Keep the target serialized until the real adapter promise settles, even if
         // the caller's timeout has already returned an outcome-unknown receipt.
         const settleTarget = (): void => {
           try {
-            if (filesystemAdapterDispatched && lockKey?.startsWith("filesystem-root:")) {
-              advanceBrokerWorkspaceMutationRevisionDigest(lockKey.slice("filesystem-root:".length));
+            const filesystemRootLockKey = lockKeys.find((lockKey) => lockKey.startsWith("filesystem-root:"));
+            if (filesystemAdapterDispatched && filesystemRootLockKey) {
+              advanceBrokerWorkspaceMutationRevisionDigest(filesystemRootLockKey.slice("filesystem-root:".length));
             }
           } catch {
             // The revision module keeps this root fail-closed if invalidation cannot be recorded.
           } finally {
-            releaseTargetLock?.();
+            for (const releaseTargetLock of acquiredTargetLocks.reverse()) releaseTargetLock();
           }
         };
         void invocation.then(settleTarget, settleTarget);
@@ -3323,7 +3360,9 @@ export class Executor {
       };
     } finally {
       signal?.removeEventListener("abort", abortFromCaller);
-      if (!adapterOwnsTargetLock) releaseTargetLock?.();
+      if (!adapterOwnsTargetLock) {
+        for (const releaseTargetLock of acquiredTargetLocks.reverse()) releaseTargetLock();
+      }
     }
   }
 
