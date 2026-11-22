@@ -1640,6 +1640,21 @@ export function operationPlanResultValidationMatches(
   binding?: Binding,
 ): boolean {
   if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "composio_execute_result_matches") {
+    const identity = composioExecutePlanIdentity(step);
+    const expected = validation.expected;
+    const projection = composioExecuteResultProjection(step, output);
+    const expectedKeys = ["connected_account_id_sha256", "input_schema_sha256", "payload_digest", "schema_version", "tool", "toolkit",
+      ...(identity?.expectedProviderRegion ? ["expected_provider_region"] : [])].sort();
+    return step.operation === "composio.execute" && step.adapter === "composio" && identity !== undefined &&
+      !!binding?.operation_plan_binding_digest && !!binding.executor_command_digest &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") === expectedKeys.join(",") &&
+      expected.schema_version === "blue-tanuki.composio-execute-result-validation.v1" &&
+      expected.toolkit === identity.toolkit && expected.tool === identity.tool &&
+      expected.connected_account_id_sha256 === identity.connectedAccountIdDigest &&
+      expected.input_schema_sha256 === identity.inputSchemaSha256 && expected.payload_digest === identity.payloadDigest &&
+      expected.expected_provider_region === identity.expectedProviderRegion && projection !== undefined;
+  }
   if (validation.method === "composio_accounts_result_matches") {
     const identity = composioAccountsPlanIdentity(step);
     const expected = validation.expected;
@@ -2799,7 +2814,8 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
     return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
       operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
   }
-  return ["github.write", "mcp.call", "composio.accounts", "composio.disconnect", "file.search", "file.edit", "file.write", "file.delete"]
+  return ["github.write", "mcp.call", "composio.accounts", "composio.disconnect", "composio.execute",
+    "file.search", "file.edit", "file.write", "file.delete"]
     .includes(step.operation);
 }
 
@@ -2889,7 +2905,7 @@ function composioDisconnectPlanIdentity(step: OperationStep): {
   const { toolkit, connected_account_id: connectedAccountId } = step.parameters;
   if (Object.keys(step.parameters).sort().join(",") !== "connected_account_id,toolkit" ||
       typeof toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(toolkit) ||
-      typeof connectedAccountId !== "string" || connectedAccountId.length < 1 || connectedAccountId.length > 256 ||
+      typeof connectedAccountId !== "string" || connectedAccountId.length < 1 || connectedAccountId.length > 200 ||
       connectedAccountId.trim() !== connectedAccountId || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
       connectedAccountId.toLowerCase() === "instant_account") return undefined;
   const connectedAccountIdDigest = createHash("sha256").update(connectedAccountId, "utf8").digest("hex");
@@ -2902,6 +2918,110 @@ function composioDisconnectPlanIdentity(step: OperationStep): {
       toolkit,
       connected_account_id_sha256: connectedAccountIdDigest,
     }),
+  };
+}
+
+function composioExecutePlanIdentity(step: OperationStep): {
+  toolkit: string;
+  tool: string;
+  connectedAccountId: string;
+  connectedAccountIdDigest: string;
+  inputSchemaSha256: string;
+  payloadDigest: string;
+  expectedProviderRegion?: "us" | "eu";
+} | undefined {
+  const parameters = step.parameters;
+  if (step.operation !== "composio.execute" || !parameters) return undefined;
+  const parameterKeys = Object.keys(parameters).sort().join(",");
+  const commonKeys = "connected_account_id,input_schema_sha256,payload,tool,toolkit";
+  const regionKeys = "connected_account_id,expected_provider_region,input_schema_sha256,payload,tool,toolkit";
+  if (parameterKeys !== commonKeys && parameterKeys !== regionKeys) return undefined;
+  const toolkit = parameters.toolkit;
+  const tool = parameters.tool;
+  const connectedAccountId = parameters.connected_account_id;
+  const inputSchemaSha256 = parameters.input_schema_sha256;
+  const payload = parameters.payload;
+  if (typeof toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(toolkit) ||
+      typeof tool !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(tool) ||
+      typeof connectedAccountId !== "string" || connectedAccountId.length < 1 || connectedAccountId.length > 200 ||
+      connectedAccountId.trim() !== connectedAccountId || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
+      connectedAccountId.toLowerCase() === "instant_account" || typeof inputSchemaSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(inputSchemaSha256) || !isFileSearchResultRecord(payload) ||
+      !OperationJsonValueSchema.safeParse(payload).success || containsMcpSensitiveKey(payload)) return undefined;
+  const serializedPayload = JSON.stringify(payload);
+  if (typeof serializedPayload !== "string" || Buffer.byteLength(serializedPayload, "utf8") > 64 * 1024) return undefined;
+  const expectedProviderRegion = parameters.expected_provider_region;
+  if (toolkit === "posthog") {
+    if (expectedProviderRegion !== "us" && expectedProviderRegion !== "eu") return undefined;
+  } else if (expectedProviderRegion !== undefined) return undefined;
+  return {
+    toolkit,
+    tool,
+    connectedAccountId,
+    connectedAccountIdDigest: createHash("sha256").update(connectedAccountId, "utf8").digest("hex"),
+    inputSchemaSha256,
+    payloadDigest: createHash("sha256").update(serializedPayload, "utf8").digest("hex"),
+    ...(expectedProviderRegion === "us" || expectedProviderRegion === "eu" ? { expectedProviderRegion } : {}),
+  };
+}
+
+function composioExecuteResultProjection(step: OperationStep, value: unknown): OperationJsonValue | undefined {
+  const identity = composioExecutePlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value)) return undefined;
+  const requiredKeys = ["action_allowlist_boundary", "account_selection_boundary", "api_base_url", "api_version",
+    "approval_boundary", "approval_required", "audit_required", "capability_boundary", "composio_request_id",
+    "connected_account_id", "content_type", "dry_run", "executed", "external_call_performed", "external_mutation_sent",
+    "intent", "live_execution_enabled", "live_execution_used_for_authority", "metadata_used_for_authority", "mutation_status",
+    "operation", "payload_digest", "provider", "response_digest", "result", "result_digest", "revoke_boundary", "status",
+    "tool", "toolkit", "toolkit_allowlist_boundary", "truncated", "used_for_authority"];
+  const posthogKeys = identity.expectedProviderRegion
+    ? ["connection_context_used_for_authority", "expected_provider_region", "provider_auth_scheme", "provider_region"]
+    : [];
+  const expectedKeys = [...requiredKeys, ...posthogKeys].sort().join(",");
+  if (Object.keys(value).sort().join(",") !== expectedKeys || value.provider !== "composio" ||
+      value.operation !== "execute" || value.toolkit !== identity.toolkit || value.tool !== identity.tool ||
+      value.connected_account_id !== identity.connectedAccountId || value.intent !== "read" && value.intent !== "write" &&
+      value.intent !== "send" && value.intent !== "delete" && value.intent !== "unknown" ||
+      value.dry_run !== false || value.live_execution_enabled !== true || value.executed !== true ||
+      value.external_call_performed !== true || value.external_mutation_sent !== (value.intent !== "read") ||
+      value.mutation_status !== "confirmed" || value.approval_required !== true ||
+      value.approval_boundary !== "HDS-BRAIN Approval Gate" || value.capability_boundary !== "tool:composio.execute" ||
+      value.toolkit_allowlist_boundary !== "COMPOSIO_ALLOWED_TOOLKITS" ||
+      value.action_allowlist_boundary !== "COMPOSIO_ALLOWED_ACTIONS" || value.revoke_boundary !== "COMPOSIO_REVOKED_ACTIONS" ||
+      value.account_selection_boundary !== "explicit PRIVATE account owned by COMPOSIO_USER_ID and matching toolkit" ||
+      value.audit_required !== true || value.used_for_authority !== false || value.metadata_used_for_authority !== false ||
+      value.live_execution_used_for_authority !== false || value.payload_digest !== identity.payloadDigest ||
+      value.api_version !== "v3.1" || typeof value.api_base_url !== "string" || value.api_base_url.length < 1 ||
+      value.api_base_url.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value.api_base_url) ||
+      typeof value.status !== "number" || !Number.isSafeInteger(value.status) || value.status < 200 || value.status >= 300 ||
+      typeof value.content_type !== "string" && value.content_type !== null ||
+      typeof value.composio_request_id !== "string" && value.composio_request_id !== null ||
+      typeof value.composio_request_id === "string" && (value.composio_request_id.length > 256 ||
+        /[\u0000-\u001f\u007f]/.test(value.composio_request_id)) || value.truncated !== false ||
+      typeof value.response_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.response_digest) ||
+      typeof value.result_digest !== "string" || value.result_digest !== value.response_digest ||
+      !OperationJsonValueSchema.safeParse(value.result).success ||
+      value.result_digest !== createHash("sha256").update(JSON.stringify(value.result), "utf8").digest("hex")) return undefined;
+  if (identity.expectedProviderRegion) {
+    if (value.expected_provider_region !== identity.expectedProviderRegion ||
+        value.provider_region !== identity.expectedProviderRegion || value.provider_auth_scheme !== "API_KEY" ||
+        value.connection_context_used_for_authority !== false) return undefined;
+  }
+  return {
+    schema_version: "blue-tanuki.composio-execute-result.v1",
+    operation: "execute",
+    toolkit: identity.toolkit,
+    tool: identity.tool,
+    connected_account_id_sha256: identity.connectedAccountIdDigest,
+    input_schema_sha256: identity.inputSchemaSha256,
+    payload_digest: identity.payloadDigest,
+    intent: value.intent,
+    provider_http_status: value.status,
+    external_mutation_sent: value.external_mutation_sent,
+    provider_result_digest: value.result_digest,
+    truncated: false,
+    used_for_authority: false,
+    may_execute: false,
   };
 }
 
@@ -2954,6 +3074,35 @@ function hasConnectedPlanTarget(step: OperationStep): boolean {
         toolkit: identity.toolkit,
         connected_account_id: identity.connectedAccountId,
       });
+  }
+  if (step.operation === "composio.execute") {
+    const identity = composioExecutePlanIdentity(step);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    const expected = {
+      schema_version: "blue-tanuki.composio-execute-result-validation.v1",
+      toolkit: identity?.toolkit,
+      tool: identity?.tool,
+      connected_account_id_sha256: identity?.connectedAccountIdDigest,
+      input_schema_sha256: identity?.inputSchemaSha256,
+      payload_digest: identity?.payloadDigest,
+      ...(identity?.expectedProviderRegion ? { expected_provider_region: identity.expectedProviderRegion } : {}),
+    };
+    return identity !== undefined && step.adapter === "composio" && step.target.kind === "external_service" &&
+      step.target.id === "composio" && step.target.scope === identity.connectedAccountId &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" && step.adapter_is_authority === false &&
+      step.command_generated_by_adapter_only === false && step.effects.length === 5 &&
+      [...step.effects].sort().join(",") === "credential_access,delete,external_send,read,write" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required &&
+      step.permission.hds_brain_authority_required && preparation !== undefined &&
+      preparation.depends_on.length === 0 && preparation.bindings.length === 0 && preparation.preconditions.length === 0 &&
+      preparation.compensation.available === false &&
+      preparation.compensation.reason === "Composio provider actions may have irreversible effects; compensation requires a separate owner-approved operation" &&
+      preparation.validation.length === 1 && validation?.check_id === "composio-execute-result" &&
+      validation.method === "composio_execute_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest(expected);
   }
   if (step.operation === "schedule.create") {
     const args = RuntimeScheduleCreateArgumentsSchema.safeParse(parameters);
@@ -8475,8 +8624,16 @@ export class OperationPlanLedger {
       }
     } else if (b.status === "verified") {
       const saved = p.results.find((r) => r.step_id === b.step_id && r.result_id === result.result_id);
+      const composioProjection = b.operation === "composio.execute"
+        ? composioExecuteResultProjection(b.prepared_step, fb.result) : undefined;
+      const composioValidationMatches = b.operation !== "composio.execute" ||
+        (b.prepared_step.preparation?.validation.length === 1 &&
+          b.prepared_step.preparation.validation.every((validation) =>
+            operationPlanResultValidationMatches(validation, b.prepared_step, fb.result, b)));
       if (!saved || saved.observed_at_ms !== result.observed_at_ms ||
-          operationPlanDigest(saved.output) !== operationPlanDigest(fb.result)) throw new Error("plan_delivery_result_conflict");
+          !composioValidationMatches || (b.operation === "composio.execute"
+            ? !composioProjection || operationPlanDigest(saved.output) !== operationPlanDigest(composioProjection)
+            : operationPlanDigest(saved.output) !== operationPlanDigest(fb.result))) throw new Error("plan_delivery_result_conflict");
     } else if (b.status === "provider_rejected") {
       const summary = githubWriteReceiptSummary(delivery.feedback.result);
       if (b.operation !== "github.write" || !summary || summary.mutation_status !== "provider_rejected" ||
@@ -8500,11 +8657,14 @@ export class OperationPlanLedger {
     const validationMatched = !!result && output.success &&
       !!step.preparation?.validation.length && step.preparation.validation.every((validation) =>
         operationPlanResultValidationMatches(validation, step, output.data, b));
+    const composioExecuteProjection = b.operation === "composio.execute" && output.success
+      ? composioExecuteResultProjection(step, output.data) : undefined;
     const githubSummary = b.operation === "github.write" && validationMatched && output.success
       ? githubWriteReceiptSummary(output.data) : undefined;
     const verified = !!result && result.command_payload_digest === b.payload_digest && result.action_outcome === "reported_success" &&
       output.success && result.output_digest === createHash("sha256").update(JSON.stringify(feedback.result)).digest("hex") &&
-      validationMatched && (b.operation !== "github.write" || githubSummary?.mutation_status === "provider_accepted");
+      validationMatched && (b.operation !== "composio.execute" || composioExecuteProjection !== undefined) &&
+      (b.operation !== "github.write" || githubSummary?.mutation_status === "provider_accepted");
     const providerRejected = !!result && b.operation === "github.write" && result.action_outcome === "reported_rejection" &&
       feedback.status === "failed" && output.success && result.output_digest === createHash("sha256")
         .update(JSON.stringify(feedback.result)).digest("hex") && validationMatched &&
@@ -8522,7 +8682,9 @@ export class OperationPlanLedger {
       if ((verified || providerRejected) && githubSummary) binding.github_write_result = githubSummary;
       if (verified && output.success && result && b.operation !== "github.write") target.results.push({ plan_id: p.revisions[0]!.plan.plan_id,
         request_id: p.revisions[0]!.plan.request_id, step_id: b.step_id, result_id: result.result_id, operation: b.operation,
-        status: "succeeded", target: step.target, output: output.data, observed_at_ms: result.observed_at_ms,
+        status: "succeeded", target: step.target,
+        output: b.operation === "composio.execute" ? composioExecuteProjection! : output.data,
+        observed_at_ms: result.observed_at_ms,
         expires_at_ms: result.observed_at_ms + 600_000 });
     });
   }

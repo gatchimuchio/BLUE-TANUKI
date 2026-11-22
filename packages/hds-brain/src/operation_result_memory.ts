@@ -372,7 +372,8 @@ export function resultObservation(p: Plan, b: Binding) {
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
       !result) throw new Error("plan_memory_observation_not_eligible");
   if (b.operation === "mcp.call") return mcpCallResultObservation(p, b, result);
-  if (b.operation === "composio.accounts" || b.operation === "composio.disconnect" || b.operation === "file.write" ||
+  if (b.operation === "composio.accounts" || b.operation === "composio.disconnect" || b.operation === "composio.execute" ||
+      b.operation === "file.write" ||
       b.operation === "file.delete" || b.operation === "file.edit") {
     return {
       schema_version: "operation-action-result.v1", record_type: "action_result_observation",

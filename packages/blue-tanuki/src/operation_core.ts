@@ -90,7 +90,11 @@ export function inspectOperationCorePlannerOutput(
   if (mcpCandidate.digest_mismatch) {
     return rejectPlannerOutput("mcp.call arguments digest does not match the selected arguments");
   }
-  const plan = OperationPlanSchema.safeParse(mcpCandidate.candidate);
+  const composioCandidate = normalizeComposioExecuteDigestCandidate(mcpCandidate.candidate);
+  if (composioCandidate.digest_mismatch) {
+    return rejectPlannerOutput("composio.execute account or payload digest does not match the selected arguments");
+  }
+  const plan = OperationPlanSchema.safeParse(composioCandidate.candidate);
   if (!plan.success) {
     const issue = plan.error.issues[0];
     const location = issue?.path.length ? issue.path.join(".") : "<root>";
@@ -218,6 +222,47 @@ function normalizeMcpArgumentDigestCandidate(value: unknown): { candidate: unkno
     candidate: planChanged ? { ...plan, steps } : value,
     digest_mismatch: digestMismatch,
   };
+}
+
+/** C may select exact Composio parameters but must not compute identity or payload digests. */
+function normalizeComposioExecuteDigestCandidate(value: unknown): { candidate: unknown; digest_mismatch: boolean } {
+  const plan = asPlannerRecord(value);
+  if (!plan || !Array.isArray(plan.steps)) return { candidate: value, digest_mismatch: false };
+  let planChanged = false;
+  let digestMismatch = false;
+  const steps = plan.steps.map((rawStep) => {
+    const step = asPlannerRecord(rawStep);
+    const parameters = step ? asPlannerRecord(step.parameters) : undefined;
+    if (!step || step.operation !== "composio.execute" || step.adapter !== "composio" || !parameters ||
+        !asPlannerRecord(parameters.payload) || typeof parameters.connected_account_id !== "string") return rawStep;
+    const preparation = asPlannerRecord(step.preparation);
+    if (!preparation || !Array.isArray(preparation.validation)) return rawStep;
+    const connectedAccountIdDigest = createHash("sha256").update(parameters.connected_account_id, "utf8").digest("hex");
+    const serializedPayload = JSON.stringify(parameters.payload);
+    if (typeof serializedPayload !== "string") return rawStep;
+    const payloadDigest = createHash("sha256").update(serializedPayload, "utf8").digest("hex");
+    let stepChanged = false;
+    const validation = preparation.validation.map((rawValidation) => {
+      const item = asPlannerRecord(rawValidation);
+      if (!item || item.method !== "composio_execute_result_matches") return rawValidation;
+      const expected = asPlannerRecord(item.expected);
+      if (!expected) return rawValidation;
+      const computed = { connected_account_id_sha256: connectedAccountIdDigest, payload_digest: payloadDigest };
+      for (const [key, digest] of Object.entries(computed)) {
+        const supplied = expected[key];
+        if (supplied !== undefined && supplied !== "__computed_by_operation_core__" && supplied !== digest) {
+          digestMismatch = true;
+          return rawValidation;
+        }
+      }
+      stepChanged = true;
+      return { ...item, expected: { ...expected, ...computed } };
+    });
+    if (!stepChanged) return rawStep;
+    planChanged = true;
+    return { ...step, preparation: { ...preparation, validation } };
+  });
+  return { candidate: planChanged ? { ...plan, steps } : value, digest_mismatch: digestMismatch };
 }
 
 function asPlannerRecord(value: unknown): Record<string, unknown> | undefined {
