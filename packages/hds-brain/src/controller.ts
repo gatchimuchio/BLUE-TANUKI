@@ -6731,7 +6731,9 @@ ${planControl.question}`,
           roles: delegationRoles,
           max_child_tasks: 4,
           max_delegation_depth: 1,
-          parent_resource_limits: { timeout_ms: Math.max(1, Math.floor(planningTimeoutMs / 4)) },
+          // 4つの子役割を2件ずつの二波で実行する。子工程には計画期限の半分を配分し、
+          // 残りを親候補の統合へ残す。Executorが子工程の合計期限を強制する。
+          parent_resource_limits: { timeout_ms: Math.max(1, Math.floor(planningTimeoutMs / 2)) },
           child_resource_limits: {
             max_tokens: Math.max(1, Math.floor(planningMaxTokens / delegationRoles.length)),
             timeout_ms: Math.max(1, Math.floor(planningTimeoutMs / 4)),

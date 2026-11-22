@@ -4006,6 +4006,7 @@ async function withAgentDelegationCandidates(input: {
       contract.child_resource_limits.timeout_ms > contract.parent_resource_limits.timeout_ms) {
     throw new Error("agent_delegation_resource_contract_invalid");
   }
+  const parentDeadline = performance.now() + contract.parent_resource_limits.timeout_ms;
 
   const childResults: AgentCandidateOutcome[] = [];
   const parentCommandDigest = createHash("sha256")
@@ -4040,6 +4041,15 @@ async function withAgentDelegationCandidates(input: {
         .update("blue-tanuki.agent.child-task.v1\0")
         .update(contract.parent_task_identity_digest).update("\0").update(role)
         .digest("hex");
+      const remainingParentMs = Math.floor(parentDeadline - performance.now());
+      const childTimeoutMs = Math.min(contract.child_resource_limits.timeout_ms,
+        remainingParentMs - AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS);
+      if (childTimeoutMs <= 0) {
+        if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "cancelled_before_dispatch" })) {
+          throw new Error("agent_delegation_lifecycle_evidence_unavailable");
+        }
+        return { role, child_task_digest: childTaskDigest, outcome: "unknown", reason: "child_deadline_elapsed" };
+      }
       const roleMessage = {
         role: "system" as const,
         content: `C child role=${role}. parent_goal_digest=${contract.parent_goal_digest}; criteria_digest=${contract.criteria_digest}; termination_digest=${contract.termination_digest}. ${AGENT_ROLE_INSTRUCTIONS[role]} これは一回限りのC候補計算です。再委任、tool、外部作用、秘密要求、権限・承認・実行宣言を行わず、候補だけを返してください。`,
@@ -4064,12 +4074,12 @@ async function withAgentDelegationCandidates(input: {
         context: childContext,
         provider_request: { ...input.provider_request, messages,
           max_tokens: contract.child_resource_limits.max_tokens,
-          timeout_ms: contract.child_resource_limits.timeout_ms },
+          timeout_ms: childTimeoutMs },
         max_tokens: contract.child_resource_limits.max_tokens,
-        timeout_ms: contract.child_resource_limits.timeout_ms,
+        timeout_ms: childTimeoutMs,
         session_history_applied: false,
       });
-      const childTimeout = AbortSignal.timeout(contract.child_resource_limits.timeout_ms);
+      const childTimeout = AbortSignal.timeout(childTimeoutMs);
       const childController = new AbortController();
       const childSignal = AbortSignal.any([childController.signal, childTimeout]);
       let computeStarted = false;
@@ -4082,13 +4092,20 @@ async function withAgentDelegationCandidates(input: {
         childController.abort(input.signal?.reason ?? LLM_EXECUTION_CANCELLED_REASON);
       };
       if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
-      if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "started" })) {
-        throw new Error("agent_delegation_lifecycle_evidence_unavailable");
-      }
       input.signal?.addEventListener("abort", onParentCancel, { once: true });
       if (input.signal?.aborted) onParentCancel();
       try {
         if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
+        if (childSignal.aborted || performance.now() >= parentDeadline) {
+          computeSettled = true;
+          if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "cancelled_before_dispatch" })) {
+            throw new Error("agent_delegation_lifecycle_evidence_unavailable");
+          }
+          return { role, child_task_digest: childTaskDigest, outcome: "unknown", reason: "child_deadline_elapsed" };
+        }
+        if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "started" })) {
+          throw new Error("agent_delegation_lifecycle_evidence_unavailable");
+        }
         computeStarted = true;
         const computeOperation = input.compute.compute(request, childSignal);
         const computeObservation = await observeAgentComputeCancellation({
