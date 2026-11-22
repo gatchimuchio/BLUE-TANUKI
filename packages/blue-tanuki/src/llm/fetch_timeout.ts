@@ -1,4 +1,3 @@
-import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 import {
   LLMProviderError,
   LLM_EXECUTION_TIMEOUT_REASON,
@@ -33,8 +32,9 @@ export async function fetchWithProviderTimeout<T>(
   try {
     const response = await fetch(input, {
       ...init,
-      ...(Object.values(SETTINGS_WRITE_ACTIVATION_DESTINATIONS).some((destination) => input === destination)
-        ? { redirect: "error" as const } : {}),
+      // Provider requests can carry task content and credentials. Keep the configured URL as
+      // the egress destination; providers that need a redirect must be configured at its final URL.
+      redirect: "error",
       signal: controller.signal,
     });
     return await consumeResponse(response);
