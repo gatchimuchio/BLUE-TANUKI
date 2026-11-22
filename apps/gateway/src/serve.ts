@@ -3336,6 +3336,8 @@ async function serveWithOwnerLease(
       const d4Notice = isGatewayInternalD4RuntimeIntentRequest(origin);
       const notice = d4Notice
         ? "計画の実行を安全確認で保留しました。操作は開始していません。状態は認証済みの画面で確認してください。"
+        : rejectionReason === "plan_agent_delegation_adoption_pending"
+        ? `[blocked:operation-plan] 委任された子候補の採否評価が未完了のため、計画の実行を保留しました。処理は開始されていません。reason=${safeReason}`
         : `[blocked:operation-plan] 現在の実行条件を満たさないため、計画を実行しませんでした。reason=${safeReason}。原因を解消し、新しい計画で再確認してください。`;
       auditGatewayStatusOutput(log, origin, actor, cmd.id, "operation_plan_blocked", notice);
       if (!opts.daily_brief_read) await dispatcher.dispatch(
