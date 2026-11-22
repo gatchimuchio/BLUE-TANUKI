@@ -1864,7 +1864,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               !detail || !authSchemes.has(detail[3])) return null;
           seen.add(accountId);
           accounts.push({ connected_account_id: accountId, status: detail[1], disabled: detail[2],
-            account_type: "PRIVATE", provider_region: detail[4] === "n/a" ? null : detail[4] });
+            account_type: "PRIVATE", auth_scheme: detail[3],
+            provider_region: detail[4] === "n/a" ? null : detail[4] });
         }
         return { toolkit: toolkitMatch[1], accounts: accounts };
       }
@@ -1943,13 +1944,22 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const executeButton = document.createElement("button");
           executeButton.type = "button";
           executeButton.className = "secondary";
-          executeButton.disabled = !eligible || !selectionReady;
+          const posthogAuthUnsupported = parsed.toolkit.toLowerCase() === "posthog" && account.auth_scheme !== "API_KEY";
+          const posthogRegionUnknown = parsed.toolkit.toLowerCase() === "posthog" &&
+            account.provider_region !== "us" && account.provider_region !== "eu";
+          const executeEligible = eligible && selectionReady && !posthogAuthUnsupported && !posthogRegionUnknown;
+          executeButton.disabled = !executeEligible;
           executeButton.textContent = accountIdTooLongForPlan
             ? "execute候補対象外（Plan上限200文字超過）: " + account.connected_account_id
-            : eligible && selectionReady
-              ? "execute候補のaccountに選択: " + account.connected_account_id + " · region=" + (account.provider_region || "unknown")
+            : posthogAuthUnsupported
+              ? "execute候補対象外（PostHogはAPI_KEY認証が必要）: " + account.connected_account_id + " · auth=" + account.auth_scheme
+              : posthogRegionUnknown
+                ? "execute候補対象外（PostHogのus/eu regionが未確認）: " + account.connected_account_id
+                : eligible && selectionReady
+              ? "execute候補のaccountに選択: " + account.connected_account_id + " · auth=" + account.auth_scheme +
+                " · region=" + (account.provider_region || "unknown")
               : "execute候補対象外（PRIVATE/ACTIVE/disabled=falseと現在のidentityが必要）: " + account.connected_account_id;
-          if (eligible && selectionReady) executeButton.addEventListener("click", function () {
+          if (executeEligible) executeButton.addEventListener("click", function () {
             if (state.composioExecuteSubmitting === true) return;
             const current = state.connectorsSnapshot;
             if (!current || current.api_key_configured !== true || current.user_id_set !== true ||
@@ -1969,7 +1979,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             byId("composio-discovery-toolkit").value = parsed.toolkit;
             state.composioExecuteSelectedAccount = { toolkit: parsed.toolkit,
               connected_account_id: account.connected_account_id, status: account.status, disabled: account.disabled,
-              account_type: account.account_type, provider_region: account.provider_region };
+              account_type: account.account_type, auth_scheme: account.auth_scheme,
+              provider_region: account.provider_region };
             byId("composio-execute-account-id").value = account.connected_account_id;
             state.composioExecuteCandidateTask = null;
             state.composioExecuteCandidateSubmissionId = null;
@@ -5845,7 +5856,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           account.connected_account_id.length <= 200 && account.connected_account_id.trim() === account.connected_account_id &&
           !/[\u0000-\u001f\u007f]/.test(account.connected_account_id) &&
           account.connected_account_id.toLowerCase() !== "instant_account" &&
-          (action?.toolkit !== "posthog" || account.provider_region === "us" || account.provider_region === "eu");
+          (action?.toolkit !== "posthog" || (account.auth_scheme === "API_KEY" &&
+            (account.provider_region === "us" || account.provider_region === "eu")));
         const selectionReady = readyForSelection && actionReady && accountReady &&
           byId("composio-execute-action").value === action.toolkit + ":" + action.tool + " — " + action.name &&
           byId("composio-execute-schema-digest").value === action.input_schema_sha256 &&
@@ -8644,6 +8656,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               /[\u0000-\u001f\u007f]/.test(connectedAccountId) || connectedAccountId.toLowerCase() === "instant_account" ||
               byId("composio-execute-account-id").value !== connectedAccountId) {
             throw new Error("保存済みPRIVATE account一覧からACTIVE/disabled=falseでPlan対象長以内の一件を選んでください");
+          }
+          if (toolkit === "posthog" && account.auth_scheme !== "API_KEY") {
+            throw new Error("PostHogの未実行候補にはaccount一覧で確認したAPI_KEY認証が必要です");
           }
           if (toolkit === "posthog" && account.provider_region !== "us" && account.provider_region !== "eu") {
             throw new Error("PostHogの未実行候補にはaccount一覧で確認したus/eu provider regionが必要です");
