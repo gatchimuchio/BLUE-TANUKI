@@ -1705,7 +1705,6 @@ export async function invokeComposioExecute(
   if (!dryRun && composioLiveExecutionEnabled(env) && !isComposioActionEffectRegistered(toolkit, tool)) {
     throw new Error("Composio action is not registered with reviewed effects; live execution is blocked before provider access");
   }
-  const apiKey = assertConfigured(env);
   const intent = classifyComposioAction(tool);
   const suppliedIntent = stringArg(args, "intent", false);
   if (suppliedIntent !== undefined && suppliedIntent !== intent) {
@@ -1766,6 +1765,7 @@ export async function invokeComposioExecute(
         "Inspect the dry-run result, then disable dry-run and enable live execution only after owner approval.",
     };
   }
+  const apiKey = assertConfigured(env);
   if (!composioLiveExecutionEnabled(env)) {
     throw new Error(
       "COMPOSIO_LIVE_EXECUTION=true is required for Composio live execution; mutation_sent=false",
