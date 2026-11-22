@@ -6680,6 +6680,11 @@ ${planControl.question}`,
         role: "system",
         content: "このtaskでOwnerが明示した場合のみ、Composio接続一件の未実行候補を作れます。候補はoperation=composio.disconnect、adapter=composio、adapter_is_authority=false、command_generated_by_adapter_only=false、target={kind:'external_service',id:'composio',scope:connected_account_id}、parameters={toolkit,connected_account_id}（taskの正確な値のみ、追加keyなし）、effects=[external_send,write,delete,credential_access]です。permission={risk:'high',approval_level:'L3_final_review',final_review_required:true,approval_gate_required:true,hds_brain_authority_required:true}はplan契約の宣言であり、実権限を付与せず、承認済みを意味しません。preparationはdepends_on/bindings/preconditionsを空、validationを一件だけ（check_id='composio-disconnect-result', method='composio_disconnect_result_matches', targetはstepと同一、expected={schema_version:'blue-tanuki.composio-disconnect-result-validation.v1',operation:'disconnect',toolkit,connected_account_id}）、compensation={available:false,reason:'Composio upstream token revocation is not reversible; account deletion is not requested'}にします。raw_command_policyは通常のnot_applicableです。taskからaccount IDやtoolkitを推測せず、他のoperation/accountを加えません。候補計算中にComposioへ接続・read・revoke・delete・実行・承認を行わず、結果を成功と申告しません。実行は別のowner承認と現在の明示live opt-in、no-store L3確認を要し、結果不明は再送禁止です。",
       } : undefined;
+    const planComputeComposioAccountsMessage: LLMCallPayload["messages"][number] | undefined =
+      planCompute?.requested && req.content.includes("composio.accounts") ? {
+        role: "system",
+        content: "Ownerが明示したComposio connected account一覧取得だけを、未実行の単一Operation Plan候補にします。operation=composio.accounts、adapter=composio、adapter_is_authority=false、command_generated_by_adapter_only=false、target={kind:'external_service',id:'composio',scope:toolkit}、parameters={toolkit,limit}を使い、toolkitはOwner taskの正確な値、limitは1〜20の整数で、追加keyは含めません。effects=[external_send,read,credential_access]、permission={risk:'high',approval_level:'L3_final_review',final_review_required:true,approval_gate_required:true,hds_brain_authority_required:true}とし、これは実権限・承認を発行しません。preparation.depends_on/bindings/preconditionsは空、validationは一件（check_id='composio-accounts-result',method='composio_accounts_result_matches',targetはstepと同一、expected={schema_version:'blue-tanuki.composio-accounts-result-validation.v1',toolkit,limit}）、compensation={available:false,reason:'Composio account listing is an external read and has no compensating mutation'}です。候補計算中はComposioへ接続・readせず、account ID/toolkitを推測せず、action・disconnect・revoke・delete・別operationを同じPlanへ追加しません。Plan作成・結果・metadataから権限や同意を推定せず、成功と申告しません。実読取はOwnerの別途Plan選択、現行allowlist/identity確認およびHDS L3を要します。",
+      } : undefined;
     const planComputeParentMessage: LLMCallPayload["messages"][number] | undefined = planCompute?.parent_context ? {
       role: "system",
       content: `以下は、Jが所有・現行revision・task identityを照合した親planの原目的です。同一taskの結果に基づく候補計算文脈としてのみ使ってください。task identityと目的版bindingは相関情報であり、意味適合・権限・承認・実行を証明しません。現在のreq.contentでownerが相対pathと置換前後を明示した場合も、その内容は候補の要求としてだけ扱い、目的変更・承認・権限にしません。選択結果観測はdigest／件数等の要約で、path・query・file本文を含みません。file.editの対象pathと置換前後の値を観測要約から推測せず、明示されたtask入力と現行の個別差分確認へ結び付けます。新候補は未実行であり、step採否・Approval・Broker作用はHDSとownerの別途操作を要します。\n${JSON.stringify({
@@ -6773,6 +6778,7 @@ ${planControl.question}`,
       ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
       ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
       ...(planComputeComposioDisconnectMessage ? [planComputeComposioDisconnectMessage] : []),
+      ...(planComputeComposioAccountsMessage ? [planComputeComposioAccountsMessage] : []),
       ...(planComputeParentMessage ? [planComputeParentMessage] : []),
       ...(agentDelegationMessage ? [agentDelegationMessage] : []),
       ...(planComputeMcpCatalogOutputMessage ? [planComputeMcpCatalogOutputMessage] : [])];
@@ -6794,6 +6800,7 @@ ${planControl.question}`,
         ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
         ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
         ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
+        ...(planComputeComposioAccountsMessage ? [planComputeComposioAccountsMessage] : []),
         ...(planComputeParentMessage ? [planComputeParentMessage] : []),
         ...(agentDelegationMessage ? [agentDelegationMessage] : []),
         ...(planCompute?.requested && isGatewayInternalInboundRequest(req) &&

@@ -377,6 +377,23 @@ export type OperationPlanSavedResultReturnProjection =
     readonly tool_result_digest: string;
     readonly operation_plan_binding_digest: string;
     readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v13";
+    readonly operation: "composio.accounts";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly account_count: number;
+    readonly accounts: readonly {
+      readonly connected_account_id: string;
+      readonly toolkit: string;
+      readonly status: string;
+      readonly is_disabled: boolean | null;
+      readonly account_type: "PRIVATE";
+      readonly auth_scheme: string;
+      readonly provider_region: "us" | "eu" | "unknown" | null;
+    }[];
+    readonly source_is_untrusted: true;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -1623,6 +1640,15 @@ export function operationPlanResultValidationMatches(
   binding?: Binding,
 ): boolean {
   if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "composio_accounts_result_matches") {
+    const identity = composioAccountsPlanIdentity(step);
+    const expected = validation.expected;
+    return step.operation === "composio.accounts" && step.adapter === "composio" && identity !== undefined &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") === "limit,schema_version,toolkit" &&
+      expected.schema_version === "blue-tanuki.composio-accounts-result-validation.v1" &&
+      expected.toolkit === identity.toolkit && expected.limit === identity.limit &&
+      composioAccountsResultProjection(step, output) !== undefined;
+  }
   if (validation.method === "composio_disconnect_result_matches") {
     const identity = composioDisconnectPlanIdentity(step);
     const expected = validation.expected;
@@ -2433,6 +2459,14 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
   const taskPolicyDigests = new Map<string, { rules_digest: string; source_request_id: string }>();
   for (const p of state.plans) {
     const first = p.revisions[0]!.plan;
+    const composioAccountsSteps = p.revisions.flatMap((revision) =>
+      revision.plan.steps.filter((step) => step.operation === "composio.accounts"));
+    if (composioAccountsSteps.length > 0 &&
+        (p.revisions.length !== 1 || first.steps.length !== 1 || composioAccountsSteps.length !== 1 ||
+          p.owner !== "webchat-owner-token-holder" || p.channel !== "webchat" || !p.goal_purpose_binding ||
+          !hasConnectedPlanTarget(composioAccountsSteps[0]!))) {
+      throw new Error("plan_composio_accounts_requires_owner_input");
+    }
     const credentialRegistrations = [
       ["google_read_registration", p.owner_settings_google_read_registration],
       ["github_write_registration", p.owner_settings_github_write_registration],
@@ -2765,7 +2799,84 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
     return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
       operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
   }
-  return ["github.write", "mcp.call", "composio.disconnect", "file.search", "file.edit", "file.write", "file.delete"].includes(step.operation);
+  return ["github.write", "mcp.call", "composio.accounts", "composio.disconnect", "file.search", "file.edit", "file.write", "file.delete"]
+    .includes(step.operation);
+}
+
+function composioAccountsPlanIdentity(step: OperationStep): { toolkit: string; limit: number } | undefined {
+  const parameters = step.parameters;
+  if (step.operation !== "composio.accounts" || !parameters ||
+      Object.keys(parameters).sort().join(",") !== "limit,toolkit" ||
+      typeof parameters.toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(parameters.toolkit) ||
+      typeof parameters.limit !== "number" || !Number.isInteger(parameters.limit) || parameters.limit < 1 || parameters.limit > 20) {
+    return undefined;
+  }
+  return { toolkit: parameters.toolkit, limit: parameters.limit };
+}
+
+function composioAccountsResultProjection(step: OperationStep, value: unknown): {
+  readonly toolkit: string;
+  readonly accounts: readonly {
+    readonly connected_account_id: string;
+    readonly toolkit: string;
+    readonly status: string;
+    readonly is_disabled: boolean | null;
+    readonly account_type: "PRIVATE";
+    readonly auth_scheme: string;
+    readonly provider_region: "us" | "eu" | "unknown" | null;
+  }[];
+} | undefined {
+  const identity = composioAccountsPlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value)) return undefined;
+  const expectedKeys = ["account_count", "accounts", "api_base_url", "api_version", "external_call_performed",
+    "external_mutation_sent", "metadata_used_for_authority", "next_action", "operation", "provider", "result_digest",
+    "status", "toolkit", "truncated", "used_for_authority"];
+  const keys = Object.keys(value).sort();
+  const exactKeys = keys.join(",");
+  if (exactKeys !== expectedKeys.sort().join(",") &&
+      exactKeys !== [...expectedKeys, "composio_request_id"].sort().join(",")) return undefined;
+  if (value.provider !== "composio" || value.operation !== "accounts" || value.toolkit !== identity.toolkit ||
+      value.external_call_performed !== true || value.external_mutation_sent !== false || value.truncated !== false ||
+      value.used_for_authority !== false || value.metadata_used_for_authority !== false || value.api_version !== "v3.1" ||
+      typeof value.api_base_url !== "string" || value.api_base_url.length < 1 || value.api_base_url.length > 2_048 ||
+      /[\u0000-\u001f\u007f]/.test(value.api_base_url) || typeof value.status !== "number" ||
+      !Number.isSafeInteger(value.status) || value.status < 200 || value.status >= 300 ||
+      typeof value.next_action !== "string" || value.next_action.length > 2_000 ||
+      typeof value.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.result_digest) ||
+      (Object.hasOwn(value, "composio_request_id") && value.composio_request_id !== undefined &&
+        (typeof value.composio_request_id !== "string" || value.composio_request_id.length > 256 ||
+          /[\u0000-\u001f\u007f]/.test(value.composio_request_id))) || !Array.isArray(value.accounts) ||
+      value.accounts.length > identity.limit || value.account_count !== value.accounts.length ||
+      typeof value.account_count !== "number" || !Number.isSafeInteger(value.account_count) || value.result_digest !==
+        createHash("sha256").update(JSON.stringify(value.accounts), "utf8").digest("hex")) return undefined;
+  const authSchemes = new Set(["API_KEY", "BASIC", "BEARER", "CUSTOM", "DCR_OAUTH", "NO_AUTH", "OAUTH1", "OAUTH2", "UNKNOWN"]);
+  const accountIds = new Set<string>();
+  const accounts: Array<{
+    connected_account_id: string;
+    toolkit: string;
+    status: string;
+    is_disabled: boolean | null;
+    account_type: "PRIVATE";
+    auth_scheme: string;
+    provider_region: "us" | "eu" | "unknown" | null;
+  }> = [];
+  for (const entry of value.accounts) {
+    if (!isFileSearchResultRecord(entry) || Object.keys(entry).sort().join(",") !==
+        "account_type,auth_scheme,connected_account_id,is_disabled,provider_region,status,toolkit" ||
+        typeof entry.connected_account_id !== "string" || entry.connected_account_id.length < 1 ||
+        entry.connected_account_id.length > 256 || entry.connected_account_id.trim() !== entry.connected_account_id ||
+        /[\u0000-\u001f\u007f]/.test(entry.connected_account_id) || accountIds.has(entry.connected_account_id) ||
+        entry.toolkit !== identity.toolkit || typeof entry.status !== "string" || !/^[A-Z_]{1,40}$/.test(entry.status) ||
+        (entry.is_disabled !== null && typeof entry.is_disabled !== "boolean") || entry.account_type !== "PRIVATE" ||
+        typeof entry.auth_scheme !== "string" || !authSchemes.has(entry.auth_scheme) ||
+        (entry.provider_region !== null && entry.provider_region !== "us" && entry.provider_region !== "eu" &&
+          entry.provider_region !== "unknown")) return undefined;
+    accountIds.add(entry.connected_account_id);
+    accounts.push({ connected_account_id: entry.connected_account_id, toolkit: entry.toolkit, status: entry.status,
+      is_disabled: entry.is_disabled, account_type: "PRIVATE", auth_scheme: entry.auth_scheme,
+      provider_region: entry.provider_region });
+  }
+  return { toolkit: identity.toolkit, accounts };
 }
 
 function composioDisconnectPlanIdentity(step: OperationStep): {
@@ -2797,6 +2908,29 @@ function composioDisconnectPlanIdentity(step: OperationStep): {
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  if (step.operation === "composio.accounts") {
+    const identity = composioAccountsPlanIdentity(step);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return identity !== undefined && step.adapter === "composio" && step.target.kind === "external_service" &&
+      step.target.id === "composio" && step.target.scope === identity.toolkit &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.adapter_is_authority === false && step.command_generated_by_adapter_only === false &&
+      step.effects.length === 3 && [...step.effects].sort().join(",") === "credential_access,external_send,read" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required &&
+      step.permission.hds_brain_authority_required && preparation !== undefined &&
+      preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false &&
+      preparation.validation.length === 1 && validation?.check_id === "composio-accounts-result" &&
+      validation.method === "composio_accounts_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest({
+        schema_version: "blue-tanuki.composio-accounts-result-validation.v1",
+        toolkit: identity.toolkit,
+        limit: identity.limit,
+      });
+  }
   if (step.operation === "composio.disconnect") {
     const identity = composioDisconnectPlanIdentity(step);
     const preparation = step.preparation;
@@ -6699,6 +6833,42 @@ export class OperationPlanLedger {
       };
     }
     if (!result) throw new Error("plan_saved_result_result_unavailable");
+    if (step.operation === "composio.accounts") {
+      const identity = composioAccountsPlanIdentity(step);
+      const accountProjection = composioAccountsResultProjection(step, result.output);
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest ||
+          binding.execution_admission.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          binding.revision_digest !== current.digest || binding.result_observed_at_ms === undefined || !identity ||
+          !accountProjection || validations.length !== 1 ||
+          !operationPlanResultValidationMatches(validations[0]!, step, result.output, binding) ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.operation !== "composio.accounts" || committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" || committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_composio_accounts_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v13",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms, operation: "composio.accounts", status: "verified",
+        toolkit: accountProjection.toolkit, account_count: accountProjection.accounts.length,
+        accounts: accountProjection.accounts, source_is_untrusted: true,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
     if (gmailDraftSend) {
       const parameters = step.parameters;
       const validations = step.preparation?.validation ?? [];
