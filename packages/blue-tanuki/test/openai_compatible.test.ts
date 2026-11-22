@@ -1,6 +1,12 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LLMProviderError } from "../src/llm/base.js";
 import { OpenAICompatibleBackend } from "../src/llm/openai_compatible.js";
+
+vi.mock("../src/llm/provider_transport.js", () => ({
+  fetchProviderWithPinnedEgress: (input: string | URL | Request, init?: RequestInit) =>
+    globalThis.fetch(input, init),
+  ProviderEgressError: class ProviderEgressError extends Error {},
+}));
 
 const originalFetch = globalThis.fetch;
 

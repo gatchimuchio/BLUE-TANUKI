@@ -3,6 +3,10 @@ import {
   LLM_EXECUTION_TIMEOUT_REASON,
   createLLMAbortError,
 } from "./base.js";
+import {
+  fetchProviderWithPinnedEgress,
+  ProviderEgressError,
+} from "./provider_transport.js";
 
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS = 30_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -30,7 +34,7 @@ export async function fetchWithProviderTimeout<T>(
     controller.abort(LLM_EXECUTION_TIMEOUT_REASON);
   }, timeoutMs);
   try {
-    const response = await fetch(input, {
+    const response = await fetchProviderWithPinnedEgress(input, {
       ...init,
       // Provider requests can carry task content and credentials. Keep the configured URL as
       // the egress destination; providers that need a redirect must be configured at its final URL.
@@ -44,6 +48,13 @@ export async function fetchWithProviderTimeout<T>(
       throw createLLMAbortError(provider, callerSignal);
     }
     if (error instanceof LLMProviderError) throw error;
+    if (error instanceof ProviderEgressError) {
+      throw new LLMProviderError("Provider target rejected by egress policy.", {
+        provider,
+        kind: "bad_request",
+        retryable: false,
+      });
+    }
     if (isAbortError(error)) throw createLLMAbortError(provider, controller.signal);
     if (isDisconnectError(error)) {
       throw new LLMProviderError("Provider disconnected before the response completed.", {

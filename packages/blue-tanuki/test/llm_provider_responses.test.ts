@@ -5,6 +5,12 @@ import type { LLMRequest } from "../src/llm/base.js";
 import { AnthropicBackend } from "../src/llm/anthropic.js";
 import { OpenAICompatibleBackend } from "../src/llm/openai_compatible.js";
 
+vi.mock("../src/llm/provider_transport.js", () => ({
+  fetchProviderWithPinnedEgress: (input: string | URL | Request, init?: RequestInit) =>
+    globalThis.fetch(input, init),
+  ProviderEgressError: class ProviderEgressError extends Error {},
+}));
+
 const request: LLMRequest = {
   messages: [{ role: "user", content: "fixture request" }],
   timeout_ms: 500,
@@ -83,7 +89,7 @@ describe("LLM provider structured responses", () => {
     };
 
     expect(response.content).toBe("observed");
-    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBeUndefined();
+    expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("error");
     expect(sent.messages[0]?.content).toEqual([
       { type: "text", text: "fixture request" },
       { type: "image_url", image_url: {

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { lookup as dnsLookup } from "node:dns/promises";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import * as http from "node:http";
 import * as https from "node:https";
-import { BlockList, isIP, type LookupFunction } from "node:net";
+import { type LookupFunction } from "node:net";
 import * as path from "node:path";
+import { isPublicNetworkAddress, resolveNetworkAddresses } from "../network_egress.js";
 import {
   canonicalFileSearchTargetVersionObservation,
   canonicalFileWriteTargetVersionObservation,
@@ -251,33 +251,6 @@ const BROWSER_FORM_RESPONSE_MAX_BYTES = 512_000;
 const BROWSER_DOWNLOAD_DEFAULT_MAX_BYTES = 64_000;
 const BROWSER_AUTOMATION_VIEWPORT = { width: 1280, height: 720 } as const;
 const FILE_SEARCH_EXACT_TARGET_MAX_BYTES = 1_000_000;
-const BLOCKED_IPS = new BlockList();
-
-for (const [address, prefix, type] of [
-  ["0.0.0.0", 8, "ipv4"],
-  ["10.0.0.0", 8, "ipv4"],
-  ["100.64.0.0", 10, "ipv4"],
-  ["127.0.0.0", 8, "ipv4"],
-  ["169.254.0.0", 16, "ipv4"],
-  ["172.16.0.0", 12, "ipv4"],
-  ["192.0.0.0", 24, "ipv4"],
-  ["192.0.2.0", 24, "ipv4"],
-  ["192.168.0.0", 16, "ipv4"],
-  ["198.18.0.0", 15, "ipv4"],
-  ["198.51.100.0", 24, "ipv4"],
-  ["203.0.113.0", 24, "ipv4"],
-  ["224.0.0.0", 4, "ipv4"],
-  ["240.0.0.0", 4, "ipv4"],
-  ["::", 128, "ipv6"],
-  ["::1", 128, "ipv6"],
-  ["fc00::", 7, "ipv6"],
-  ["fe80::", 10, "ipv6"],
-  ["ff00::", 8, "ipv6"],
-  ["2001:db8::", 32, "ipv6"],
-] as const) {
-  BLOCKED_IPS.addSubnet(address, prefix, type);
-}
-
 function stringArg(
   args: Record<string, unknown>,
   name: string,
@@ -368,28 +341,8 @@ function enforceHttpAllowlist(hostname: string, env: Env): void {
   }
 }
 
-function ipv4FromMappedIPv6(address: string): string | undefined {
-  const match = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
-  return match?.[1];
-}
-
 function assertPublicAddress(hostname: string, resolved: ResolvedAddress): void {
-  const mapped = ipv4FromMappedIPv6(resolved.address);
-  if (mapped) {
-    assertPublicAddress(hostname, { address: mapped, family: 4 });
-    return;
-  }
-  if (resolved.address.toLowerCase().startsWith("::ffff:")) {
-    throw new Error(
-      `http.fetch denied non-public address for ${hostname}: ${resolved.address}`,
-    );
-  }
-  const detected = isIP(resolved.address);
-  if (detected !== resolved.family) {
-    throw new Error(`http.fetch could not validate resolved address for ${hostname}`);
-  }
-  const type = resolved.family === 6 ? "ipv6" : "ipv4";
-  if (BLOCKED_IPS.check(resolved.address, type)) {
+  if (!isPublicNetworkAddress(resolved)) {
     throw new Error(
       `http.fetch denied non-public address for ${hostname}: ${resolved.address}`,
     );
@@ -397,13 +350,7 @@ function assertPublicAddress(hostname: string, resolved: ResolvedAddress): void 
 }
 
 async function defaultResolveHost(hostname: string): Promise<ResolvedAddress[]> {
-  const records = await dnsLookup(hostname, { all: true, verbatim: true });
-  return records.map((record) => {
-    if (record.family !== 4 && record.family !== 6) {
-      throw new Error(`http.fetch unsupported address family for ${hostname}`);
-    }
-    return { address: record.address, family: record.family };
-  });
+  return await resolveNetworkAddresses(hostname);
 }
 
 async function resolvePublicTarget(
