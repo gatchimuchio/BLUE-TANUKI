@@ -3911,6 +3911,62 @@ type AgentCandidateOutcome =
   | { role: AgentWorkerRole; child_task_digest: string; resource_use_digest?: string; resource_use: ComputeResourceUse; outcome: "rejected";
       reason: "invalid_child_output" };
 
+type AgentComputeSettlement<T> =
+  | { kind: "resolved"; value: T }
+  | { kind: "rejected"; error: unknown };
+
+type AgentComputeObservation<T> = AgentComputeSettlement<T> | { kind: "residual" };
+
+function observeAgentComputeCancellation<T>(input: {
+  operation: Promise<T>;
+  signal: AbortSignal;
+  grace_ms: number;
+  on_residual: () => void;
+  on_late_settlement: (settlement: AgentComputeSettlement<T>) => void;
+}): Promise<AgentComputeObservation<T>> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let residualObserved = false;
+    let residualTimer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (residualTimer) clearTimeout(residualTimer);
+      input.signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (observation: AgentComputeObservation<T>): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(observation);
+    };
+    const onAbort = (): void => {
+      if (settled || residualTimer) return;
+      residualTimer = setTimeout(() => {
+        if (settled) return;
+        residualObserved = true;
+        try { input.on_residual(); } catch { /* Keep the worker pending if observation cannot be recorded. */ }
+        finish({ kind: "residual" });
+      }, input.grace_ms);
+    };
+    input.signal.addEventListener("abort", onAbort, { once: true });
+    if (input.signal.aborted) onAbort();
+    void input.operation.then((value) => {
+      const settlement: AgentComputeSettlement<T> = { kind: "resolved", value };
+      if (residualObserved) {
+        try { input.on_late_settlement(settlement); } catch { /* The durable pending state remains conservative. */ }
+        return;
+      }
+      finish(settlement);
+    }, (error: unknown) => {
+      const settlement: AgentComputeSettlement<T> = { kind: "rejected", error };
+      if (residualObserved) {
+        try { input.on_late_settlement(settlement); } catch { /* The durable pending state remains conservative. */ }
+        return;
+      }
+      finish(settlement);
+    });
+  });
+}
+
 async function withAgentDelegationCandidates(input: {
   compute: ComputeBackend<LLMRequest, LLMResponse>;
   command_id: string;
@@ -4018,20 +4074,12 @@ async function withAgentDelegationCandidates(input: {
       const childSignal = AbortSignal.any([childController.signal, childTimeout]);
       let computeStarted = false;
       let computeSettled = false;
-      let residualTimer: ReturnType<typeof setTimeout> | undefined;
       const resourceUseDigest = (resourceUse: ComputeResourceUse | undefined): string | undefined => resourceUse
         ? agentDelegationResourceUseDigest(resourceUse) : undefined;
       const onParentCancel = (): void => {
         if (computeSettled || childController.signal.aborted) return;
         reportLifecycle({ child_task_digest: childTaskDigest, role, state: "cancel_requested" });
         childController.abort(input.signal?.reason ?? LLM_EXECUTION_CANCELLED_REASON);
-        if (computeStarted) {
-          residualTimer = setTimeout(() => {
-            if (!computeSettled) {
-              reportLifecycle({ child_task_digest: childTaskDigest, role, state: "residual_worker_observed" });
-            }
-          }, AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS);
-        }
       };
       if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
       if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "started" })) {
@@ -4042,7 +4090,30 @@ async function withAgentDelegationCandidates(input: {
       try {
         if (input.signal?.aborted) throw createLLMAbortError(provider, input.signal);
         computeStarted = true;
-        const result = await input.compute.compute(request, childSignal);
+        const computeOperation = input.compute.compute(request, childSignal);
+        const computeObservation = await observeAgentComputeCancellation({
+          operation: computeOperation,
+          signal: childSignal,
+          grace_ms: AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS,
+          on_residual: () => { reportLifecycle({ child_task_digest: childTaskDigest, role,
+            state: "residual_worker_observed" }); },
+          on_late_settlement: (settlement) => {
+            computeSettled = true;
+            const lateResourceUse = settlement.kind === "resolved" ? settlement.value.compute_resource_use
+              : settlement.error instanceof LLMComputeResourceFailure ? settlement.error.compute_resource_use : undefined;
+            const lateContent = settlement.kind === "resolved" ? settlement.value.content : undefined;
+            reportLifecycle({ child_task_digest: childTaskDigest, role,
+              state: settlement.kind === "resolved" ? "late_result_discarded" : "settled_after_abort",
+              ...(typeof lateContent === "string" ? { output_observed: true as const,
+                output_characters: lateContent.length } : {}),
+              ...(resourceUseDigest(lateResourceUse) ? { resource_use_digest: resourceUseDigest(lateResourceUse)! } : {}) });
+          },
+        });
+        if (computeObservation.kind === "residual") {
+          return { role, child_task_digest: childTaskDigest, outcome: "unknown", reason: "child_deadline_elapsed" };
+        }
+        if (computeObservation.kind === "rejected") throw computeObservation.error;
+        const result = computeObservation.value;
         computeSettled = true;
         const content = typeof result.content === "string" ? result.content.trim() : "";
         const usageDigest = resourceUseDigest(result.compute_resource_use);
@@ -4104,7 +4175,6 @@ async function withAgentDelegationCandidates(input: {
         }
         throw error;
       } finally {
-        if (residualTimer) clearTimeout(residualTimer);
         input.signal?.removeEventListener("abort", onParentCancel);
       }
     }));
