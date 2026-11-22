@@ -379,6 +379,7 @@ interface PendingApproval {
   content_review_settings_write_target_version_digest?: string;
   content_review_mcp_target_version_digest?: string;
   content_review_composio_target_version_digest?: string;
+  content_review_composio_disconnect_target_version_digest?: string;
   content_review_drive_target_version_digest?: string;
   content_review_github_target_version_digest?: string;
   cron_event?: { event_id: string; payload_digest: string };
@@ -2374,6 +2375,7 @@ async function serveWithOwnerLease(
     expected_github_write_target_version_digest?: string;
     expected_mcp_call_target_version_digest?: string;
     expected_composio_action_target_version_digest?: string;
+    expected_composio_disconnect_target_version_digest?: string;
     browser_form_input_review_digest?: string;
     browser_form_input_operation_plan_binding_digest?: string;
     browser_form_submit_receipt_pending?: PendingApproval;
@@ -2878,12 +2880,14 @@ async function serveWithOwnerLease(
       hds.onCommandLifecycle(cmd.id, "approval_approved", { actor, reason: evaluation.reason });
       recordApprovalHistory("approval_approved", cmd, log, origin, actor, evaluation);
     }
-    if (isComposioExecuteCommand(cmd)) {
+    if (isComposioExecuteCommand(cmd) ||
+        cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect") {
       hds.onAuthorityEvent("composio_execution_requested", {
         request_id: log.request_id,
         command_id: cmd.id,
         actor,
-        reason: "composio_execute_pre_executor",
+        reason: cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect"
+          ? "composio_disconnect_pre_executor" : "composio_execute_pre_executor",
         evaluation: executionEvaluation ?? undefined,
       });
       recordCompleteHistory({
@@ -3169,6 +3173,19 @@ async function serveWithOwnerLease(
         ? operationPlanDigest(targetVersionObservation) : undefined;
       if (observedComposioTargetVersionDigest !== opts.expected_composio_action_target_version_digest) {
         const reason = "composio_action_content_review_stale";
+        hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
+        recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
+          used_for_authority: false, may_execute: false,
+        });
+        return { status: reason };
+      }
+    }
+    if (opts.expected_composio_disconnect_target_version_digest) {
+      const observedDisconnectTargetVersionDigest = cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect" &&
+        targetVersionObservation?.schema_version === "blue-tanuki.composio-disconnect-target-version.v1"
+        ? operationPlanDigest(targetVersionObservation) : undefined;
+      if (observedDisconnectTargetVersionDigest !== opts.expected_composio_disconnect_target_version_digest) {
+        const reason = "composio_disconnect_content_review_stale";
         hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason, request_id: log.request_id });
         recordApprovalHistory(reason, cmd, log, origin, actor, executionEvaluation, {
           used_for_authority: false, may_execute: false,
@@ -3552,14 +3569,17 @@ async function serveWithOwnerLease(
     }
     if (planBound) gatewayLog.info("saved execution result reconciliation",
       reconcileExecutionResults(hds, executionStore, ownerLease.executionEpoch));
-    if (isComposioExecuteCommand(cmd) && !failureMemoryGateChangedBeforeExecution) {
+    if ((isComposioExecuteCommand(cmd) ||
+        cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect") &&
+        !failureMemoryGateChangedBeforeExecution) {
       hds.onAuthorityEvent(
         fb.status === "success" ? "composio_execution_completed" : "composio_execution_failed",
         {
           request_id: log.request_id,
           command_id: cmd.id,
           actor,
-          reason: `composio_execute_post_executor:${fb.status}`,
+          reason: `${cmd.type === "tool_call" && cmd.payload.tool_name === "composio.disconnect"
+            ? "composio_disconnect" : "composio_execute"}_post_executor:${fb.status}`,
           evaluation: executionEvaluation ?? undefined,
         },
       );
@@ -4209,6 +4229,7 @@ async function serveWithOwnerLease(
       command.payload.tool_name === "file.edit" || command.payload.tool_name === "file.delete" ||
       command.payload.tool_name === "memory.personalization.stop" || command.payload.tool_name === "settings.write" ||
       command.payload.tool_name === "mcp.call" ||
+      command.payload.tool_name === "composio.disconnect" ||
       (command.payload.tool_name === "composio.execute" && !composioDryRun(process.env) &&
         composioLiveExecutionEnabled(process.env)) ||
       (command.payload.tool_name === "google.calendar.write" &&
@@ -4948,6 +4969,8 @@ async function serveWithOwnerLease(
           ? { expected_mcp_call_target_version_digest: pending.content_review_mcp_target_version_digest } : {}),
         ...(pending.content_review_composio_target_version_digest
           ? { expected_composio_action_target_version_digest: pending.content_review_composio_target_version_digest } : {}),
+        ...(pending.content_review_composio_disconnect_target_version_digest
+          ? { expected_composio_disconnect_target_version_digest: pending.content_review_composio_disconnect_target_version_digest } : {}),
       });
       if (r.status === "failure_memory_gate_changed" || r.status === "canonical_state_restore_archive_changed" ||
           r.status === "canonical_state_restore_archive_binding_required") {
@@ -7248,6 +7271,22 @@ async function serveWithOwnerLease(
         return null;
       }
     }
+    if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "composio.disconnect" &&
+        executorCommandDigest(pending.command) === pending.command_digest &&
+        hds.operationPlanCommandIsCurrent(pending.command)) {
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        const snapshot = await executor.inspectCommandContentReview(pending.command, undefined, operationPlanBindingDigest);
+        if (!snapshot || !("kind" in snapshot) || snapshot.kind !== "composio_disconnect" ||
+            snapshot.command_digest !== operationPlanDigest(pending.command) ||
+            snapshot.operation_plan_binding_digest !== operationPlanBindingDigest) return null;
+        pendingApprovals.set(command_id, { ...pending, content_review_digest: snapshot.review_digest,
+          content_review_composio_disconnect_target_version_digest: snapshot.target_version_digest });
+        return { ...snapshot, command_id };
+      } catch {
+        return null;
+      }
+    }
     if (pending?.command.type === "tool_call" && pending.command.payload.tool_name === "memory.personalization.stop" &&
         executorCommandDigest(pending.command) === pending.command_digest &&
         hds.operationPlanCommandIsCurrent(pending.command)) {
@@ -7681,6 +7720,28 @@ async function serveWithOwnerLease(
           current.operation_plan_binding_digest === operationPlanBindingDigest &&
           current.review_digest === pending.content_review_digest &&
           current.target_version_digest === pending.content_review_composio_target_version_digest
+          ? "valid" : "stale";
+      } catch {
+        return signal?.aborted ? "cancelled" : "unavailable";
+      }
+    }
+    if (pending.command.type === "tool_call" && pending.command.payload.tool_name === "composio.disconnect") {
+      if (executorCommandDigest(pending.command) !== pending.command_digest ||
+          !hds.operationPlanCommandIsCurrent(pending.command)) return "stale";
+      if (!content_review_digest || !pending.content_review_digest ||
+          !pending.content_review_composio_disconnect_target_version_digest) return "required";
+      if (content_review_digest !== pending.content_review_digest) return "stale";
+      try {
+        const operationPlanBindingDigest = hds.getExecutionOperationPlanBindingDigest(pending.command);
+        if (!operationPlanBindingDigest) return "unavailable";
+        const current = await executor.inspectCommandContentReview(pending.command, undefined,
+          operationPlanBindingDigest, signal);
+        if (signal?.aborted) return "cancelled";
+        return current && "kind" in current && current.kind === "composio_disconnect" &&
+          current.command_digest === operationPlanDigest(pending.command) &&
+          current.operation_plan_binding_digest === operationPlanBindingDigest &&
+          current.review_digest === pending.content_review_digest &&
+          current.target_version_digest === pending.content_review_composio_disconnect_target_version_digest
           ? "valid" : "stale";
       } catch {
         return signal?.aborted ? "cancelled" : "unavailable";

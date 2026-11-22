@@ -41,7 +41,9 @@ export type ActionRoute = ToolActionRoute | NoopActionRoute | null;
  *   - tool:google.calendar.write operation=event.create calendar_id=primary summary="Standup" start=2026-05-12T09:00:00Z end=2026-05-12T09:15:00Z
  *   - tool:google.drive.write operation=file.create name=notes.txt content="hello"
  *   - tool:composio.search toolkit=github query=issues
+ *   - tool:composio.accounts toolkit=github limit=20
  *   - tool:composio.execute toolkit=github tool=issues.search payload="{...}"
+ *   - tool:composio.disconnect toolkit=github connected_account_id=<exact-id>
  *   - tool:browser.read url=https://example.com max_chars=4000
  *   - tool:browser.snapshot url=https://example.com max_chars=4000
  *   - tool:browser.automation action=smoke

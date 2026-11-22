@@ -110,6 +110,7 @@ import {
   composioAccountsTool,
   composioScopesTool,
   composioExecuteTool,
+  composioDisconnectTool,
   composioSearchTool,
 } from "./composio.js";
 import {
@@ -8430,6 +8431,7 @@ export function registerBuiltinTools(registry: {
   registry.register(composioAccountsTool);
   registry.register(composioScopesTool);
   registry.register(composioExecuteTool);
+  registry.register(composioDisconnectTool);
   registry.register(browserReadTool);
   registry.register(browserSnapshotTool);
   registry.register(browserAutomationTool);

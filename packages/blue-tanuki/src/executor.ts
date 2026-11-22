@@ -42,6 +42,8 @@ import {
   McpCallTargetVersionObservationSchema,
   ComposioActionTargetVersionObservationSchema,
   ComposioActionContentReviewSchema,
+  ComposioDisconnectTargetVersionObservationSchema,
+  ComposioDisconnectContentReviewSchema,
   MCP_CALL_POTENTIAL_EFFECTS,
   canonicalGitHubWriteTargetVersionObservation,
   canonicalExecutorCommandBytes,
@@ -130,6 +132,7 @@ import {
 } from "./tools/workspace_resource_version.js";
 import { composioDryRun, composioLiveExecutionEnabled, composioIdentityDigest,
   composioRequestPayloadDigest, composioSchemaDigest, parseComposioArguments, classifyComposioAction,
+  composioDisconnectRequestPayloadDigest, composioDisconnectTool,
   resolveComposioActionEffectRegistryBinding, composioToolEnvironment, composioAccountsTool, composioExecuteTool,
   composioScopesTool, composioSearchTool } from "./tools/composio.js";
 import type { SessionStore } from "./sessions/types.js";
@@ -392,6 +395,16 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
     const composioObservation = ComposioActionTargetVersionObservationSchema.parse(observation);
     // Composio observations expose a connected-account identity, but no canonical object identity.
     // Serialize actions for the account without placing account or action payload content in the key.
+    const accountDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.composio-account-resource-lock.v1",
+      composioObservation.user_id_sha256,
+      composioObservation.connected_account_id_sha256,
+    ]), "utf8").digest("hex");
+    return `composio-account:${accountDigest}`;
+  }
+  if (tool_name === "composio.disconnect" &&
+      observation?.schema_version === "blue-tanuki.composio-disconnect-target-version.v1") {
+    const composioObservation = ComposioDisconnectTargetVersionObservationSchema.parse(observation);
     const accountDigest = createHash("sha256").update(JSON.stringify([
       "blue-tanuki.composio-account-resource-lock.v1",
       composioObservation.user_id_sha256,
@@ -1007,6 +1020,14 @@ function approveCommandForExecution(
         throw new Error("Executor approval rejected: composio.execute target version does not match the selected command, plan, or live configuration");
       }
       target_version_observation = Object.freeze(observation);
+    } else if (snapshot.payload.tool_name === "composio.disconnect") {
+      const bindingDigest = hds_binding?.operation_plan_binding_digest;
+      if (!bindingDigest) {
+        throw new Error("Executor approval rejected: composio.disconnect requires a selected Operation Plan binding");
+      }
+      const observation = ComposioDisconnectTargetVersionObservationSchema.parse(rawTargetVersionObservation);
+      target_version_observation = Object.freeze(assertComposioDisconnectTargetVersionBinding(
+        snapshot.payload.arguments, observation, operationPlanDigest(snapshot), bindingDigest, process.env));
     } else if (snapshot.payload.tool_name === "memory.personalization.stop") {
       const observation = MemoryPersonalizationTargetVersionObservationSchema.parse(rawTargetVersionObservation);
       const args = snapshot.payload.arguments;
@@ -1310,6 +1331,32 @@ function assertComposioTargetVersionBinding(
   return observation;
 }
 
+function assertComposioDisconnectTargetVersionBinding(
+  args: Record<string, unknown>,
+  rawObservation: unknown,
+  commandDigest: string,
+  operationPlanBindingDigest: string,
+  env: Readonly<Record<string, string | undefined>>,
+): ReturnType<typeof ComposioDisconnectTargetVersionObservationSchema.parse> {
+  const observation = ComposioDisconnectTargetVersionObservationSchema.parse(rawObservation);
+  const toolkit = typeof args.toolkit === "string" ? args.toolkit.trim().toLowerCase() : "";
+  const connectedAccountId = typeof args.connected_account_id === "string" ? args.connected_account_id.trim() : "";
+  const userId = env.COMPOSIO_USER_ID?.trim() ?? "";
+  if (Object.keys(args).sort().join(",") !== "connected_account_id,toolkit" || !toolkit || !connectedAccountId || !userId) {
+    throw new Error("composio.disconnect binding requires exactly one toolkit, connected account, and configured owner");
+  }
+  const requestPayloadDigest = composioDisconnectRequestPayloadDigest({ toolkit, connectedAccountId });
+  if (observation.toolkit !== toolkit ||
+      observation.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+      observation.user_id_sha256 !== composioIdentityDigest(userId) ||
+      observation.request_payload_digest !== requestPayloadDigest ||
+      observation.command_digest !== commandDigest ||
+      observation.operation_plan_binding_digest !== operationPlanBindingDigest) {
+    throw new Error("composio.disconnect target version does not match the selected account, owner, or Operation Plan");
+  }
+  return observation;
+}
+
 /**
  * Executor: the top-level dispatcher for BLUE-TANUKI.
  *
@@ -1423,6 +1470,22 @@ export class Executor {
         command_digest: operationPlanDigest(command),
       });
       return Object.freeze(assertComposioTargetVersionBinding(command.payload.arguments, observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
+    }
+    if (command.payload.tool_name === "composio.disconnect") {
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) return undefined;
+      if (!operationPlanBindingDigest) throw new Error("composio.disconnect requires a selected Operation Plan binding");
+      const tool = this.deps.tools.get("composio.disconnect");
+      if (tool !== composioDisconnectTool || !tool.inspect_target_version) {
+        throw new Error("composio.disconnect target inspection requires the registered built-in adapter");
+      }
+      const observation = await inspectTargetVersion(tool, command.payload.arguments, {
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      });
+      return Object.freeze(assertComposioDisconnectTargetVersionBinding(command.payload.arguments, observation,
         operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
     }
     if (command.payload.tool_name === "github.write") {
@@ -1918,6 +1981,50 @@ export class Executor {
           review.provider_metadata_used_for_authority !== false || !/^[a-f0-9]{64}$/.test(review_digest) ||
           operationPlanDigest(reviewBase) !== review_digest) {
         throw new Error("composio.execute content review returned evidence for another action, account, payload, or plan source");
+      }
+      return Object.freeze(review);
+    }
+    if (command.payload.tool_name === "composio.disconnect") {
+      if (!operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(operationPlanBindingDigest)) {
+        throw new Error("composio.disconnect content review requires a selected Operation Plan binding");
+      }
+      const effectiveEnv = env ?? process.env;
+      if (composioDryRun(effectiveEnv) || !composioLiveExecutionEnabled(effectiveEnv)) {
+        throw new Error("composio.disconnect content review requires explicit live execution opt-in");
+      }
+      const tool = this.deps.tools.get("composio.disconnect");
+      if (tool !== composioDisconnectTool || !tool.inspect_content_review) {
+        throw new Error("composio.disconnect content review requires the registered built-in adapter");
+      }
+      const review = ComposioDisconnectContentReviewSchema.parse(await tool.inspect_content_review(command.payload.arguments, {
+        env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
+        ...(signal ? { signal } : {}),
+        operation_plan_binding_digest: operationPlanBindingDigest,
+        command_digest: operationPlanDigest(command),
+      }));
+      assertNotCancelled();
+      const args = command.payload.arguments;
+      const toolkit = typeof args.toolkit === "string" ? args.toolkit.trim().toLowerCase() : "";
+      const connectedAccountId = typeof args.connected_account_id === "string" ? args.connected_account_id.trim() : "";
+      const userId = effectiveEnv.COMPOSIO_USER_ID?.trim() ?? "";
+      const observation = assertComposioDisconnectTargetVersionBinding(args, review.target_version_observation,
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv);
+      const { review_digest, ...reviewBase } = review;
+      if (!toolkit || !connectedAccountId || !userId || review.kind !== "composio_disconnect" ||
+          review.operation !== "composio.disconnect" || review.toolkit !== toolkit ||
+          review.connected_account_id !== connectedAccountId ||
+          review.connected_account_id_sha256 !== composioIdentityDigest(connectedAccountId) ||
+          review.user_id_sha256 !== composioIdentityDigest(userId) ||
+          review.command_digest !== operationPlanDigest(command) ||
+          review.operation_plan_binding_digest !== operationPlanBindingDigest ||
+          review.target_version_digest !== operationPlanDigest(observation) ||
+          review.request_payload_digest !== observation.request_payload_digest ||
+          review.account_type !== "PRIVATE" || review.account_status !== "ACTIVE" || review.account_disabled !== false ||
+          review.effect !== "revoke_upstream_tokens_and_mark_account_REVOKED" || review.upstream_revocation !== "best_effort" ||
+          review.account_deletion !== false || review.no_store !== true || review.used_for_authority !== false ||
+          review.may_execute !== false || review.provider_metadata_used_for_authority !== false ||
+          !/^[a-f0-9]{64}$/.test(review_digest) || operationPlanDigest(reviewBase) !== review_digest) {
+        throw new Error("composio.disconnect content review returned evidence for another account or Operation Plan");
       }
       return Object.freeze(review);
     }
@@ -3314,7 +3421,8 @@ export class Executor {
         if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
         before_action_dispatch?.();
         const composioApiKey = tool === composioSearchTool || tool === composioAccountsTool ||
-          tool === composioScopesTool || tool === composioExecuteTool ? this.resolveComposioApiKey(process.env) : undefined;
+          tool === composioScopesTool || tool === composioExecuteTool || tool === composioDisconnectTool
+          ? this.resolveComposioApiKey(process.env) : undefined;
         const googleReadAccessToken = this.resolveGoogleReadAccessToken(tool, process.env);
         if (composioApiKey !== undefined || googleReadAccessToken !== undefined) remainingTimeoutMs();
         const githubCredentialResolver = tool === githubWriteTool ? this.deps.resolve_github_write_credential : undefined;

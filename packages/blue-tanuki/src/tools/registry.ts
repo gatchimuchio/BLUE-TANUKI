@@ -13,7 +13,8 @@ import type { ShellExecTargetVersionObservation } from "@blue-tanuki/protocol";
 import type { SettingsWriteActivation, SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
   SettingsWriteGoogleReadCredentialReview, SettingsWriteLlmProvider, SettingsWriteTargetVersionObservation,
   SettingsWriteTelegramBotCredentialReview } from "@blue-tanuki/protocol";
-import type { ComposioActionTargetVersionObservation, ComposioActionContentReview } from "@blue-tanuki/protocol";
+import type { ComposioActionTargetVersionObservation, ComposioActionContentReview,
+  ComposioDisconnectTargetVersionObservation, ComposioDisconnectContentReview } from "@blue-tanuki/protocol";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
@@ -22,7 +23,8 @@ export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation 
   GoogleDrivePermissionCreateTargetVersionObservation | GoogleDrivePublicLinkCreateTargetVersionObservation |
   GoogleDriveTrashTargetVersionObservation |
   GitHubWriteTargetVersionObservation | MemoryPersonalizationTargetVersionObservation |
-  McpCallTargetVersionObservation | ComposioActionTargetVersionObservation | SettingsWriteTargetVersionObservation;
+  McpCallTargetVersionObservation | ComposioActionTargetVersionObservation |
+  ComposioDisconnectTargetVersionObservation | SettingsWriteTargetVersionObservation;
 
 /** No-store projection of one exact, plan-bound GitHub issue.create payload. */
 export interface GitHubIssueCreateContentReview {
@@ -967,6 +969,7 @@ export interface GoogleDriveFileTrashContentReview {
 export type ToolContentReview = GmailDraftContentReview | GmailWriteContentReview | GmailMessageTrashContentReview |
   GmailMessageModifyContentReview |
   FileEditDiffContentReview | FileDeleteTargetContentReview | ComposioActionContentReview |
+  ComposioDisconnectContentReview |
   MemoryPersonalizationStopContentReview | SettingsWriteContentReview | McpCallContentReview |
   GoogleCalendarEventCreateContentReview | GoogleCalendarEventUpdateContentReview | GoogleCalendarEventDeleteContentReview |
   GoogleCalendarEventInviteContentReview | GoogleDriveFileCreateContentReview | GoogleDriveFileUpdateContentReview |

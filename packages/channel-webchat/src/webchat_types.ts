@@ -1,6 +1,6 @@
 import type { Clock } from "@blue-tanuki/channel-base";
 import type {
-  ComposioActionContentReview, D4RuntimeIntentReplyObservation, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
+  ComposioActionContentReview, ComposioDisconnectContentReview, D4RuntimeIntentReplyObservation, OperationCoreApprovalTrace, OperationPlan, SettingsWriteActivation,
   RuntimeScheduleCreateProposal, RuntimeScheduleCreateReview, RuntimeScheduleUpdateProposal, RuntimeScheduleUpdateReview,
   RuntimeScheduleDeleteProposal, RuntimeScheduleDeleteReview,
   SettingsWriteCredentialRotationReview, SettingsWriteGitHubWriteCredentialReview,
@@ -1550,6 +1550,7 @@ export interface WebChatMcpCallContentReview {
 }
 
 export type WebChatComposioExecuteContentReview = ComposioActionContentReview & { command_id: string };
+export type WebChatComposioDisconnectContentReview = ComposioDisconnectContentReview & { command_id: string };
 
 export type WebChatApprovalContentReview = WebChatDailyBriefReadContentReview | WebChatGmailApprovalContentReview | WebChatGmailMessageTrashContentReview |
   RuntimeScheduleCreateReview |
@@ -1560,6 +1561,7 @@ export type WebChatApprovalContentReview = WebChatDailyBriefReadContentReview | 
   WebChatGoalPurposeRelationContentReview | WebChatMeaningUpdateContentReview | WebChatMemoryJudgmentReassessmentContentReview |
   WebChatMemoryPersonalizationStopContentReview | WebChatSettingsWriteContentReview | WebChatMcpCallContentReview |
   WebChatComposioExecuteContentReview |
+  WebChatComposioDisconnectContentReview |
   WebChatFileEditDiffContentReview | WebChatFileDeleteTargetContentReview | WebChatBrowserFormGetContentReview |
   WebChatBrowserFormInputContentReview |
   WebChatBrowserLinkNavigationContentReview |

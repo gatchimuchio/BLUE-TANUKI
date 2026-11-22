@@ -1623,6 +1623,36 @@ export function operationPlanResultValidationMatches(
   binding?: Binding,
 ): boolean {
   if (operationPlanDigest(validation.target) !== operationPlanDigest(step.target)) return false;
+  if (validation.method === "composio_disconnect_result_matches") {
+    const identity = composioDisconnectPlanIdentity(step);
+    const expected = validation.expected;
+    if (step.operation !== "composio.disconnect" || step.adapter !== "composio" || !identity ||
+        !binding?.operation_plan_binding_digest || !binding.executor_command_digest ||
+        !isFileSearchResultRecord(expected) || !isFileSearchResultRecord(output) ||
+        Object.keys(expected).sort().join(",") !== "connected_account_id,operation,schema_version,toolkit" ||
+        expected.schema_version !== "blue-tanuki.composio-disconnect-result-validation.v1" ||
+        expected.operation !== "disconnect" || expected.toolkit !== identity.toolkit ||
+        expected.connected_account_id !== identity.connectedAccountId ||
+        Object.keys(output).sort().join(",") !==
+          "account_deleted,account_status,automatic_retry,connected_account_id_sha256,disconnect_status,external_call_performed,external_mutation_sent,may_execute,operation,provider,provider_request_id_digest,request_payload_digest,result_digest,revoked_token_count_reported,schema_version,toolkit,upstream_revocation,used_for_authority,user_id_sha256") return false;
+    const { result_digest: resultDigest, ...result } = output;
+    return output.schema_version === "blue-tanuki.composio-disconnect-result.v1" &&
+      output.provider === "composio" && output.operation === "disconnect" && output.toolkit === identity.toolkit &&
+      output.connected_account_id_sha256 === identity.connectedAccountIdDigest &&
+      output.request_payload_digest === identity.requestPayloadDigest &&
+      typeof output.user_id_sha256 === "string" && /^[a-f0-9]{64}$/.test(output.user_id_sha256) &&
+      output.account_status === "REVOKED" && output.disconnect_status === "confirmed" &&
+      output.upstream_revocation === "best_effort" &&
+      (output.revoked_token_count_reported === null || (typeof output.revoked_token_count_reported === "number" &&
+        Number.isSafeInteger(output.revoked_token_count_reported) && output.revoked_token_count_reported >= 0 &&
+        output.revoked_token_count_reported <= 100_000)) && output.account_deleted === false &&
+      output.external_call_performed === true && output.external_mutation_sent === true && output.automatic_retry === false &&
+      (output.provider_request_id_digest === null || typeof output.provider_request_id_digest === "string" &&
+        /^[a-f0-9]{64}$/.test(output.provider_request_id_digest)) &&
+      output.used_for_authority === false && output.may_execute === false &&
+      typeof resultDigest === "string" && /^[a-f0-9]{64}$/.test(resultDigest) &&
+      operationPlanDigest(result) === resultDigest;
+  }
   if (validation.method === "runtime_schedule_create_result_matches") {
     const args = RuntimeScheduleCreateArgumentsSchema.safeParse(step.parameters);
     const expected = validation.expected;
@@ -2735,12 +2765,62 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
     return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
       operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
   }
-  return ["github.write", "mcp.call", "file.search", "file.edit", "file.write", "file.delete"].includes(step.operation);
+  return ["github.write", "mcp.call", "composio.disconnect", "file.search", "file.edit", "file.write", "file.delete"].includes(step.operation);
+}
+
+function composioDisconnectPlanIdentity(step: OperationStep): {
+  toolkit: string;
+  connectedAccountId: string;
+  connectedAccountIdDigest: string;
+  requestPayloadDigest: string;
+} | undefined {
+  if (step.operation !== "composio.disconnect" || !step.parameters) return undefined;
+  const { toolkit, connected_account_id: connectedAccountId } = step.parameters;
+  if (Object.keys(step.parameters).sort().join(",") !== "connected_account_id,toolkit" ||
+      typeof toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(toolkit) ||
+      typeof connectedAccountId !== "string" || connectedAccountId.length < 1 || connectedAccountId.length > 256 ||
+      connectedAccountId.trim() !== connectedAccountId || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
+      connectedAccountId.toLowerCase() === "instant_account") return undefined;
+  const connectedAccountIdDigest = createHash("sha256").update(connectedAccountId, "utf8").digest("hex");
+  return {
+    toolkit,
+    connectedAccountId,
+    connectedAccountIdDigest,
+    requestPayloadDigest: operationPlanDigest({
+      schema_version: "blue-tanuki.composio-disconnect-request.v1",
+      toolkit,
+      connected_account_id_sha256: connectedAccountIdDigest,
+    }),
+  };
 }
 
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  if (step.operation === "composio.disconnect") {
+    const identity = composioDisconnectPlanIdentity(step);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return identity !== undefined && step.adapter === "composio" && step.target.kind === "external_service" &&
+      step.target.id === "composio" && step.target.scope === identity.connectedAccountId &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.effects.length === 4 && [...step.effects].sort().join(",") === "credential_access,delete,external_send,write" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required &&
+      step.permission.hds_brain_authority_required && preparation !== undefined &&
+      preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false &&
+      preparation.compensation.reason === "Composio upstream token revocation is not reversible; account deletion is not requested" &&
+      preparation.validation.length === 1 && validation?.check_id === "composio-disconnect-result" &&
+      validation.method === "composio_disconnect_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest({
+        schema_version: "blue-tanuki.composio-disconnect-result-validation.v1",
+        operation: "disconnect",
+        toolkit: identity.toolkit,
+        connected_account_id: identity.connectedAccountId,
+      });
+  }
   if (step.operation === "schedule.create") {
     const args = RuntimeScheduleCreateArgumentsSchema.safeParse(parameters);
     const preparation = step.preparation;
@@ -5222,6 +5302,18 @@ export class OperationPlanLedger {
     const goalRelationAdoptionAssessment = this.goalRelationAdoptionAssessment(plan, step);
     if (command.type !== "tool_call" || command.payload.tool_name !== descriptor.tool_name ||
         operationPlanDigest(command.payload.arguments) !== operationPlanDigest(step.parameters)) throw new Error("plan_command_content_changed");
+    if (descriptor.operation_id === "composio.disconnect") {
+      const identity = composioDisconnectPlanIdentity(step);
+      if (!identity) throw new Error("composio_disconnect_plan_identity_invalid");
+      const priorEffect = this.state.plans.some((candidate) => candidate.bindings.some((binding) => {
+        if (binding.operation !== "composio.disconnect" ||
+            !(isUnresolvedOperationAttempt(binding.status) || binding.status === "verified")) return false;
+        const priorIdentity = composioDisconnectPlanIdentity(binding.prepared_step);
+        return priorIdentity !== undefined && priorIdentity.toolkit === identity.toolkit &&
+          priorIdentity.connectedAccountIdDigest === identity.connectedAccountIdDigest;
+      }));
+      if (priorEffect) throw new Error("composio_disconnect_account_already_selected_or_attempted");
+    }
     if (descriptor.operation_id === "google.calendar.write" &&
         ["event.create", "event.update", "event.delete", "event.invite"].includes(String(step.parameters?.operation))) {
       const effectIdentity = googleCalendarWriteEffectIdentityDigest(step.parameters ?? {});

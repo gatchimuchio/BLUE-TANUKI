@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import * as https from "node:https";
 import { requireToolOperationDescriptor, ComposioActionEffectRegistryBindingSchema,
   ComposioActionTargetVersionObservationSchema, type ComposioActionEffectRegistryBinding,
-  type ComposioActionTargetVersionObservation, type ComposioActionContentReview } from "@blue-tanuki/protocol";
+  type ComposioActionTargetVersionObservation, type ComposioActionContentReview,
+  ComposioDisconnectTargetVersionObservationSchema, ComposioDisconnectContentReviewSchema,
+  type ComposioDisconnectTargetVersionObservation, type ComposioDisconnectContentReview } from "@blue-tanuki/protocol";
 import { operationPlanDigest } from "@blue-tanuki/hds-brain";
 import { assertToolExecutionNotCancelled, type Tool, type ToolContext } from "./registry.js";
 
@@ -102,6 +104,17 @@ export interface ComposioScopesTarget {
   maxBytes: number;
 }
 
+export interface ComposioDisconnectTarget {
+  api_base_url: string;
+  path: string;
+  method: "POST";
+  connected_account_id: string;
+  toolkit: string;
+  user_id: string;
+  api_key: string;
+  maxBytes: number;
+}
+
 export interface ComposioExecuteResponse {
   status: number;
   ok: boolean;
@@ -117,11 +130,13 @@ export interface ComposioOptions {
   commandDigest?: string;
   operationPlanBindingDigest?: string;
   targetVersionObservation?: ComposioActionTargetVersionObservation;
+  disconnectTargetVersionObservation?: ComposioDisconnectTargetVersionObservation;
   requireTargetVersionObservation?: boolean;
   request?: (target: ComposioExecuteTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   searchRequest?: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   accountsRequest?: (target: ComposioAccountsTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   scopesRequest?: (target: ComposioScopesTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  disconnectRequest?: (target: ComposioDisconnectTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -319,6 +334,17 @@ export function composioRequestPayloadDigest(params: {
   });
 }
 
+export function composioDisconnectRequestPayloadDigest(params: {
+  toolkit: string;
+  connectedAccountId: string;
+}): string {
+  return operationPlanDigest({
+    schema_version: "blue-tanuki.composio-disconnect-request.v1",
+    toolkit: params.toolkit.toLowerCase(),
+    connected_account_id_sha256: composioIdentityDigest(params.connectedAccountId),
+  });
+}
+
 function assertConfigured(env: Env): string {
   const key = envValue(env, "COMPOSIO_API_KEY");
   if (!key) {
@@ -492,7 +518,7 @@ interface ComposioHttpRequestTarget {
   body?: Record<string, unknown>;
   api_key: string;
   maxBytes: number;
-  operation: "search" | "execute" | "accounts" | "scopes";
+  operation: "search" | "execute" | "accounts" | "scopes" | "disconnect";
 }
 
 async function defaultComposioApiRequest(
@@ -594,6 +620,8 @@ async function defaultComposioApiRequest(
           ? "account_status"
           : target.operation === "scopes"
             ? "scope_status"
+          : target.operation === "disconnect"
+            ? "disconnect_status"
             : "catalog_status";
       req.destroy(
         new Error(
@@ -646,6 +674,16 @@ async function defaultComposioScopesRequest(
   return await defaultComposioApiRequest({
     ...target,
     operation: "scopes",
+  }, signal);
+}
+
+async function defaultComposioDisconnectRequest(
+  target: ComposioDisconnectTarget,
+  signal?: AbortSignal,
+): Promise<ComposioExecuteResponse> {
+  return await defaultComposioApiRequest({
+    ...target,
+    operation: "disconnect",
   }, signal);
 }
 
@@ -1371,6 +1409,217 @@ export async function inspectComposioActionContentReview(
   return Object.freeze({ ...base, review_digest: operationPlanDigest({ ...base, arguments: argumentsBody }) });
 }
 
+interface ComposioDisconnectInspection {
+  toolkit: string;
+  connectedAccountId: string;
+  userId: string;
+  account: ComposioConnectedAccountProjection;
+  requestPayloadDigest: string;
+  observation: ComposioDisconnectTargetVersionObservation;
+}
+
+function assertComposioDisconnectArguments(args: Record<string, unknown>): {
+  toolkit: string;
+  connectedAccountId: string;
+} {
+  if (Object.keys(args).sort().join(",") !== "connected_account_id,toolkit") {
+    throw new Error("composio.disconnect accepts only toolkit and connected_account_id");
+  }
+  const toolkit = stringArg(args, "toolkit")!.toLowerCase();
+  const connectedAccountId = stringArg(args, "connected_account_id")!;
+  if (connectedAccountId.length > 256 || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
+      connectedAccountId.toLowerCase() === "instant_account") {
+    throw new Error("connected_account_id is outside the supported bounded format");
+  }
+  return { toolkit, connectedAccountId };
+}
+
+async function inspectComposioDisconnect(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioDisconnectInspection> {
+  const env = opts.env ?? process.env;
+  if (composioDryRun(env) || !composioLiveExecutionEnabled(env)) {
+    throw new Error("composio.disconnect requires dry-run disabled and explicit live execution opt-in");
+  }
+  if (!opts.commandDigest || !/^[a-f0-9]{64}$/.test(opts.commandDigest) ||
+      !opts.operationPlanBindingDigest || !/^[a-f0-9]{64}$/.test(opts.operationPlanBindingDigest)) {
+    throw new Error("composio.disconnect requires the exact HDS command and Operation Plan binding");
+  }
+  const { toolkit, connectedAccountId } = assertComposioDisconnectArguments(args);
+  assertToolkitAllowed(toolkit, composioAllowedToolkits(env));
+  const apiKey = assertConfigured(env);
+  const userId = envValue(env, "COMPOSIO_USER_ID");
+  if (!userId) throw new Error("COMPOSIO_USER_ID is required for composio.disconnect");
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const maxBytes = DEFAULT_MAX_BYTES;
+  const accounts = await readComposioAccounts({
+    apiBaseUrl,
+    apiKey,
+    toolkit,
+    userId,
+    connectedAccountId,
+    limit: 2,
+    maxBytes,
+    request: opts.accountsRequest ?? defaultComposioAccountsRequest,
+    signal: opts.signal,
+  });
+  const account = accounts.accounts[0];
+  if (accounts.accounts.length !== 1 || !account || account.connected_account_id !== connectedAccountId ||
+      account.status !== "ACTIVE" || account.is_disabled !== false || account.account_type !== "PRIVATE") {
+    throw new Error("composio.disconnect review requires exactly one ACTIVE, enabled PRIVATE account for the configured owner and toolkit");
+  }
+  const requestPayloadDigest = operationPlanDigest({
+    schema_version: "blue-tanuki.composio-disconnect-request.v1",
+    toolkit,
+    connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
+  });
+  const observation = ComposioDisconnectTargetVersionObservationSchema.parse({
+    schema_version: "blue-tanuki.composio-disconnect-target-version.v1",
+    toolkit,
+    connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
+    user_id_sha256: composioIdentityDigest(userId),
+    account_state_sha256: composioSchemaDigest(account),
+    request_payload_digest: requestPayloadDigest,
+    command_digest: opts.commandDigest,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest,
+    target_state: "available",
+    used_for_authority: false,
+    may_execute: false,
+  });
+  return { toolkit, connectedAccountId, userId, account, requestPayloadDigest, observation };
+}
+
+export async function inspectComposioDisconnectTargetVersion(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioDisconnectTargetVersionObservation> {
+  return (await inspectComposioDisconnect(args, opts)).observation;
+}
+
+export async function inspectComposioDisconnectContentReview(
+  args: Record<string, unknown>,
+  opts: ComposioOptions,
+): Promise<ComposioDisconnectContentReview> {
+  const inspection = await inspectComposioDisconnect(args, opts);
+  const { toolkit, connectedAccountId, account, requestPayloadDigest, observation } = inspection;
+  const base = {
+    kind: "composio_disconnect" as const,
+    operation: "composio.disconnect" as const,
+    command_digest: opts.commandDigest!,
+    request_payload_digest: requestPayloadDigest,
+    target_version_digest: operationPlanDigest(observation),
+    target_version_observation: observation,
+    operation_plan_binding_digest: opts.operationPlanBindingDigest!,
+    toolkit,
+    connected_account_id: connectedAccountId,
+    connected_account_id_sha256: composioIdentityDigest(connectedAccountId),
+    user_id_sha256: observation.user_id_sha256,
+    account_type: "PRIVATE" as const,
+    account_status: "ACTIVE" as const,
+    account_disabled: false as const,
+    auth_scheme: account.auth_scheme,
+    provider_region: account.provider_region,
+    effect: "revoke_upstream_tokens_and_mark_account_REVOKED" as const,
+    upstream_revocation: "best_effort" as const,
+    account_deletion: false as const,
+    no_store: true as const,
+    used_for_authority: false as const,
+    may_execute: false as const,
+    provider_metadata_used_for_authority: false as const,
+  };
+  return ComposioDisconnectContentReviewSchema.parse({
+    ...base,
+    review_digest: operationPlanDigest(base),
+  });
+}
+
+export async function invokeComposioDisconnect(
+  args: Record<string, unknown>,
+  opts: ComposioOptions = {},
+): Promise<unknown> {
+  const env = opts.env ?? process.env;
+  const apiKey = assertConfigured(env);
+  const expectedObservation = opts.disconnectTargetVersionObservation;
+  if (!opts.requireTargetVersionObservation || !expectedObservation || !opts.commandDigest ||
+      expectedObservation.command_digest !== opts.commandDigest || !opts.operationPlanBindingDigest ||
+      expectedObservation.operation_plan_binding_digest !== opts.operationPlanBindingDigest) {
+    throw new Error("composio.disconnect execution requires the exact HDS-reviewed target observation");
+  }
+  const current = await inspectComposioDisconnect(args, opts);
+  if (operationPlanDigest(current.observation) !== operationPlanDigest(expectedObservation)) {
+    throw new Error("composio.disconnect target changed after owner review; external_mutation_sent=false");
+  }
+  assertToolExecutionNotCancelled(opts.signal, "composio.disconnect");
+  const apiBaseUrl = composioApiBaseUrl(env);
+  const request = opts.disconnectRequest ?? defaultComposioDisconnectRequest;
+  let response: ComposioExecuteResponse;
+  try {
+    response = await request({
+      api_base_url: apiBaseUrl,
+      path: `/api/${COMPOSIO_API_VERSION}/connected_accounts/${encodeURIComponent(current.connectedAccountId)}/revoke`,
+      method: "POST",
+      connected_account_id: current.connectedAccountId,
+      toolkit: current.toolkit,
+      user_id: current.userId,
+      api_key: apiKey,
+      maxBytes: DEFAULT_MAX_BYTES,
+    }, opts.signal);
+  } catch {
+    throw new Error("composio.disconnect outcome_unknown; automatic_retry=false; inspect the current account state before any new request");
+  }
+  if (!response.ok) {
+    const rejected = [400, 401, 403, 404, 409].includes(response.status);
+    throw new Error(rejected
+      ? `composio.disconnect provider_rejected HTTP ${response.status}; automatic_retry=false; no account deletion was requested`
+      : `composio.disconnect outcome_unknown HTTP ${response.status}; automatic_retry=false; inspect the current account state before any new request`);
+  }
+  let after: ComposioConnectedAccountProjection | undefined;
+  try {
+    const observed = await readComposioAccounts({
+      apiBaseUrl,
+      apiKey,
+      toolkit: current.toolkit,
+      userId: current.userId,
+      connectedAccountId: current.connectedAccountId,
+      limit: 2,
+      maxBytes: DEFAULT_MAX_BYTES,
+      request: opts.accountsRequest ?? defaultComposioAccountsRequest,
+      signal: opts.signal,
+    });
+    if (observed.accounts.length === 1) after = observed.accounts[0];
+  } catch {
+    // A successful POST followed by unavailable state confirmation is an unresolved external result.
+  }
+  if (!after || after.status !== "REVOKED" || after.account_type !== "PRIVATE") {
+    throw new Error("composio.disconnect outcome_unknown; automatic_retry=false; provider state is not confirmed REVOKED; inspect before any new request");
+  }
+  const responseData = parseJsonOrText(response.body);
+  const revokedTokens = isRecord(responseData) && Array.isArray(responseData.revoked_tokens)
+    ? responseData.revoked_tokens.length : null;
+  const result = {
+    schema_version: "blue-tanuki.composio-disconnect-result.v1",
+    provider: "composio",
+    operation: "disconnect",
+    toolkit: current.toolkit,
+    connected_account_id_sha256: expectedObservation.connected_account_id_sha256,
+    user_id_sha256: expectedObservation.user_id_sha256,
+    request_payload_digest: expectedObservation.request_payload_digest,
+    account_status: "REVOKED",
+    disconnect_status: "confirmed",
+    upstream_revocation: "best_effort",
+    revoked_token_count_reported: revokedTokens,
+    account_deleted: false,
+    external_call_performed: true,
+    external_mutation_sent: true,
+    automatic_retry: false,
+    provider_request_id_digest: response.request_id ? composioIdentityDigest(response.request_id) : null,
+    used_for_authority: false,
+    may_execute: false,
+  };
+  return { ...result, result_digest: operationPlanDigest(result) };
+}
+
 export async function invokeComposioSearch(
   args: Record<string, unknown>,
   opts: ComposioOptions = {},
@@ -1736,6 +1985,48 @@ export const composioExecuteTool: Tool = {
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { targetVersionObservation: observation } : {}),
+      requireTargetVersionObservation: true,
+    });
+  },
+};
+
+export const composioDisconnectTool: Tool = {
+  name: "composio.disconnect",
+  adapter_version: "1.0.0-rc.1",
+  description:
+    "Revokes upstream credentials for exactly one explicitly selected active PRIVATE Composio connected account. Requires the configured owner identity, allowlisted toolkit, explicit live opt-in, a bound current target observation, and authenticated no-store HDS L3 review. It never deletes the connected account, never retries automatically, and reports success only after a fresh account read confirms REVOKED.",
+  required_capabilities: requireToolOperationDescriptor("composio.disconnect").required_capabilities,
+  async inspect_target_version(args, inspectOptions) {
+    if (!inspectOptions?.command_digest || !inspectOptions.operation_plan_binding_digest) {
+      throw new Error("composio.disconnect inspection requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioDisconnectTargetVersion(args, {
+      env: composioToolEnvironment(inspectOptions.env ?? process.env),
+      ...(inspectOptions.signal ? { signal: inspectOptions.signal } : {}),
+      commandDigest: inspectOptions.command_digest,
+      operationPlanBindingDigest: inspectOptions.operation_plan_binding_digest,
+    });
+  },
+  async inspect_content_review(args, reviewOptions) {
+    if (!reviewOptions?.command_digest || !reviewOptions.operation_plan_binding_digest) {
+      throw new Error("composio.disconnect owner review requires an HDS command and Operation Plan binding");
+    }
+    return await inspectComposioDisconnectContentReview(args, {
+      env: composioToolEnvironment(reviewOptions.env ?? process.env),
+      ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
+      commandDigest: reviewOptions.command_digest,
+      operationPlanBindingDigest: reviewOptions.operation_plan_binding_digest,
+    });
+  },
+  async invoke(args: Record<string, unknown>, context): Promise<unknown> {
+    const observation = context.target_version_observation === undefined
+      ? undefined : ComposioDisconnectTargetVersionObservationSchema.parse(context.target_version_observation);
+    return await invokeComposioDisconnect(args, {
+      env: composioToolEnvironment(process.env, context.composio_api_key),
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
+      ...(observation ? { disconnectTargetVersionObservation: observation } : {}),
+      operationPlanBindingDigest: observation?.operation_plan_binding_digest,
       requireTargetVersionObservation: true,
     });
   },

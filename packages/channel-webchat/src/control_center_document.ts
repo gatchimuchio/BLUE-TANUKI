@@ -372,14 +372,17 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="">Load Connectors first</option>
               </select>
               <input id="composio-discovery-query" type="search" maxlength="500" autocomplete="off" placeholder="Search query (max 500 characters)" disabled />
+              <input id="composio-disconnect-account-id" type="text" maxlength="256" autocomplete="off" placeholder="Exact connected account ID for revoke" disabled />
             </div>
             <div class="action-row">
               <button id="prepare-composio-discovery" class="primary" type="button" disabled>Prepare Composio search plan</button>
               <button id="prepare-composio-accounts" type="button" disabled>Prepare connected account list plan</button>
+              <button id="prepare-composio-disconnect" type="button" disabled>Prepare connected account revoke plan</button>
             </div>
-            <p class="muted">どちらの候補作成もComposioへ接続せず、provider操作を実行しません。選択したallowlist内toolkitと検索文をOwner Task Computeへ送信し、built-in <code>composio.search</code> を1回だけ使う未実行Plan候補を依頼できます。account一覧候補は、設定済みowner identityとtoolkitからbuilt-in <code>composio.accounts</code> を1回だけ使う未実行Plan候補を依頼します。実行時はComposioへ読取要求を行うため、別途Plan確認・通常の承認が必要です。検索文へ秘密・認証情報・個人情報を入れないでください。</p>
+            <p class="muted">候補作成はComposioへ接続せず、provider操作を実行しません。検索・account一覧は設定済み範囲のbuilt-in <code>composio.search</code>／<code>composio.accounts</code> を使う未実行Plan候補を依頼します。実行時は通常の現在権限とPlan承認が必要です。接続解除候補は入力した一件のaccount IDと選択toolkitだけを含むbuilt-in <code>composio.disconnect</code> の未実行Planです。実行時は明示live opt-inとno-store L3最終確認が必須で、Provider token revokeはbest-effort、accountは削除しません。結果不明時は自動再送せず、状態再確認を要します。資格情報や秘密を入力しないでください。</p>
             <p id="composio-discovery-status" class="badge warn" role="status">Load Connectors to check the configured API key and allowlist.</p>
             <p id="composio-accounts-status" class="badge warn" role="status">Load Connectors to check the configured API key, owner identity, and allowlist.</p>
+            <p id="composio-disconnect-plan-status" class="badge warn" role="status">Load Connectors to check the configured API key, owner identity, and allowlist.</p>
           </div>
           <pre id="connectors-json">not loaded</pre>
           <div class="screen-grid">

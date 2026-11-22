@@ -87,3 +87,51 @@ export const ComposioActionContentReviewSchema = z.object({
 }).strict();
 
 export type ComposioActionContentReview = z.infer<typeof ComposioActionContentReviewSchema>;
+
+/** Non-authority binding for one connected account revoke request and current owner account state. */
+export const ComposioDisconnectTargetVersionObservationSchema = z.object({
+  schema_version: z.literal("blue-tanuki.composio-disconnect-target-version.v1"),
+  toolkit: z.string().min(1).max(120),
+  connected_account_id_sha256: DigestSchema,
+  user_id_sha256: DigestSchema,
+  account_state_sha256: DigestSchema,
+  request_payload_digest: DigestSchema,
+  command_digest: DigestSchema,
+  operation_plan_binding_digest: DigestSchema,
+  target_state: z.literal("available"),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+}).strict();
+
+export type ComposioDisconnectTargetVersionObservation =
+  z.infer<typeof ComposioDisconnectTargetVersionObservationSchema>;
+
+/** Exact no-store owner review for revoking one active PRIVATE connected account. */
+export const ComposioDisconnectContentReviewSchema = z.object({
+  kind: z.literal("composio_disconnect"),
+  operation: z.literal("composio.disconnect"),
+  command_digest: DigestSchema,
+  review_digest: DigestSchema,
+  request_payload_digest: DigestSchema,
+  target_version_digest: DigestSchema,
+  target_version_observation: ComposioDisconnectTargetVersionObservationSchema,
+  operation_plan_binding_digest: DigestSchema,
+  toolkit: z.string().min(1).max(120),
+  connected_account_id: z.string().min(1).max(256),
+  connected_account_id_sha256: DigestSchema,
+  user_id_sha256: DigestSchema,
+  account_type: z.literal("PRIVATE"),
+  account_status: z.literal("ACTIVE"),
+  account_disabled: z.literal(false),
+  auth_scheme: z.string().max(80),
+  provider_region: z.enum(["us", "eu", "unknown"]).nullable(),
+  effect: z.literal("revoke_upstream_tokens_and_mark_account_REVOKED"),
+  upstream_revocation: z.literal("best_effort"),
+  account_deletion: z.literal(false),
+  no_store: z.literal(true),
+  used_for_authority: z.literal(false),
+  may_execute: z.literal(false),
+  provider_metadata_used_for_authority: z.literal(false),
+}).strict();
+
+export type ComposioDisconnectContentReview = z.infer<typeof ComposioDisconnectContentReviewSchema>;

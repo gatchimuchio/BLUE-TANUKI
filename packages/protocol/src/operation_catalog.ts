@@ -321,6 +321,19 @@ export const OPERATION_DESCRIPTOR_REGISTRY: readonly OperationDescriptor[] = Obj
     15_000,
   ),
   toolDescriptor(
+    "composio.disconnect",
+    "packages/blue-tanuki/src/tools/composio.ts#composioDisconnectTool",
+    "composio",
+    ["external_send", "write", "delete", "credential_access"],
+    [
+      "tool:composio.disconnect",
+      "network:composio.dev",
+      "secrets:COMPOSIO_API_KEY",
+      "external:send",
+    ],
+    15_000,
+  ),
+  toolDescriptor(
     "browser.read",
     "packages/blue-tanuki/src/tools/builtin.ts#browserReadTool",
     "external_api",

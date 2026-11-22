@@ -308,7 +308,10 @@ export function resultMemoryEligible(b: Binding): boolean {
     b.prepared_step.preparation.validation[0]?.method === "gmail_reply_draft_result_matches" &&
     isRecord(b.prepared_step.preparation.validation[0]?.expected) &&
     b.prepared_step.preparation.validation[0]?.expected.schema_version === "blue-tanuki.gmail-reply-draft-result-validation.v2";
-  if (b.status === "verified") return b.operation === "file.search" || b.operation === "file.write" ||
+  if (b.status === "verified") return (b.operation === "composio.disconnect" &&
+    !!b.execution_admission?.task_identity_digest && !!b.operation_plan_binding_digest && !!b.delivery_digest &&
+    !!b.result_digest && b.result_observed_at_ms !== undefined) ||
+    b.operation === "file.search" || b.operation === "file.write" ||
     b.operation === "file.delete" || b.operation === "file.edit" || b.operation === "browser.read" ||
     b.operation === "gmail.write" && b.prepared_step.operation === "gmail.write" &&
       (replyDraftReadback || b.prepared_step.parameters?.operation === "draft.send" ||
@@ -367,7 +370,8 @@ export function resultObservation(p: Plan, b: Binding) {
   if (b.status !== "verified" || !b.execution_admission || !b.delivery_digest || !b.result_digest ||
       !result) throw new Error("plan_memory_observation_not_eligible");
   if (b.operation === "mcp.call") return mcpCallResultObservation(p, b, result);
-  if (b.operation === "file.write" || b.operation === "file.delete" || b.operation === "file.edit") {
+  if (b.operation === "composio.disconnect" || b.operation === "file.write" ||
+      b.operation === "file.delete" || b.operation === "file.edit") {
     return {
       schema_version: "operation-action-result.v1", record_type: "action_result_observation",
       plan_revision_digest: b.revision_digest, step_review_request_id: b.request_id,

@@ -94,6 +94,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         composioAccountsCandidateSubmissionId: null,
         composioAccountsStatusMessage: null,
         composioAccountsStatusTone: "warn",
+        composioDisconnectCandidateTask: null,
+        composioDisconnectCandidateSubmissionId: null,
+        composioDisconnectStatusMessage: null,
+        composioDisconnectStatusTone: "warn",
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
@@ -5368,8 +5372,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const status = byId("composio-discovery-status");
         const prepareAccountsButton = byId("prepare-composio-accounts");
         const accountsStatus = byId("composio-accounts-status");
+        const disconnectIdInput = byId("composio-disconnect-account-id");
+        const prepareDisconnectButton = byId("prepare-composio-disconnect");
+        const disconnectStatus = byId("composio-disconnect-plan-status");
         status.className = "badge warn";
         accountsStatus.className = "badge warn";
+        disconnectStatus.className = "badge warn";
         const snapshot = state.connectorsSnapshot;
         const previousSelection = toolkitSelect.value;
         const toolkits = snapshot && typeof snapshot.allowed_toolkits === "string"
@@ -5397,6 +5405,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         prepareButton.disabled = !ready || !toolkitSelect.value || !queryInput.value.trim() || queryInput.value.length > 500;
         const accountsReady = ready && snapshot.user_id_set === true;
         prepareAccountsButton.disabled = !accountsReady || !toolkitSelect.value;
+        disconnectIdInput.disabled = !accountsReady || !toolkitSelect.value;
+        const connectedAccountId = disconnectIdInput.value.trim();
+        prepareDisconnectButton.disabled = !accountsReady || !toolkitSelect.value || !connectedAccountId ||
+          connectedAccountId.length > 256 || /[\u0000-\u001f\u007f]/.test(connectedAccountId);
         if (state.composioAccountsStatusMessage) {
           accountsStatus.textContent = state.composioAccountsStatusMessage;
           accountsStatus.className = "badge " + state.composioAccountsStatusTone;
@@ -5405,6 +5417,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         else if (snapshot.user_id_set !== true) accountsStatus.textContent = "Composio owner identity is not configured. No account-list plan can be prepared.";
         else if (!toolkits.length) accountsStatus.textContent = "No allowlisted toolkit is configured. Add and load a toolkit before preparing an account-list plan.";
         else accountsStatus.textContent = "Ready to request one unexecuted composio.accounts plan. No Composio request will be made here.";
+        if (state.composioDisconnectStatusMessage) {
+          disconnectStatus.textContent = state.composioDisconnectStatusMessage;
+          disconnectStatus.className = "badge " + state.composioDisconnectStatusTone;
+        } else if (!snapshot) disconnectStatus.textContent = "Load Connectors to check the configured API key, owner identity, and allowlist.";
+        else if (!configured) disconnectStatus.textContent = "Composio API key is not configured. No disconnect plan can be prepared.";
+        else if (snapshot.user_id_set !== true) disconnectStatus.textContent = "Composio owner identity is not configured. No disconnect plan can be prepared.";
+        else if (!toolkits.length) disconnectStatus.textContent = "No allowlisted toolkit is configured. Add and load a toolkit before preparing a disconnect plan.";
+        else if (!connectedAccountId) disconnectStatus.textContent = "Enter the exact connected account ID. Candidate creation does not contact Composio.";
+        else disconnectStatus.textContent = "Ready to request one unexecuted composio.disconnect plan. Runtime use requires live opt-in and a current no-store L3 review.";
         if (state.composioDiscoveryStatusMessage) {
           status.textContent = state.composioDiscoveryStatusMessage;
           status.className = "badge " + state.composioDiscoveryStatusTone;
@@ -5485,6 +5506,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         renderComposioDiscoveryControls();
         state.connectorsCandidateTask = null;
         state.connectorsCandidateSubmissionId = null;
+        state.composioDisconnectCandidateTask = null;
+        state.composioDisconnectCandidateSubmissionId = null;
+        state.composioDisconnectStatusMessage = null;
+        state.composioDisconnectStatusTone = "warn";
+        byId("composio-disconnect-account-id").value = "";
         setText("composio-configured-status", composio.configured ? "configured" : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
@@ -8063,6 +8089,83 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
       }
 
+      async function prepareComposioDisconnect() {
+        const button = byId("prepare-composio-disconnect");
+        button.disabled = true;
+        let requestSubmissionId = null;
+        let requestAttempted = false;
+        try {
+          const snapshot = state.connectorsSnapshot;
+          if (!snapshot || snapshot.api_key_configured !== true || snapshot.user_id_set !== true) {
+            throw new Error("Load Connectors with a configured Composio API key and owner identity before preparing a disconnect plan");
+          }
+          const toolkit = byId("composio-discovery-toolkit").value;
+          const allowedToolkits = typeof snapshot.allowed_toolkits === "string"
+            ? snapshot.allowed_toolkits.split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+            : [];
+          if (!toolkit || !allowedToolkits.includes(toolkit)) {
+            throw new Error("Select a toolkit from the currently loaded Composio allowlist");
+          }
+          const connectedAccountId = byId("composio-disconnect-account-id").value.trim();
+          if (!connectedAccountId || connectedAccountId.length > 256 || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
+              connectedAccountId.toLowerCase() === "instant_account") {
+            throw new Error("Enter one exact connected account ID, up to 256 characters");
+          }
+          const args = { toolkit: toolkit, connected_account_id: connectedAccountId };
+          const task = [
+            "Create one unexecuted Operation Plan candidate with exactly one built-in composio.disconnect call and the exact arguments JSON below.",
+            "Do not call Composio, make a network request, revoke tokens, delete an account, execute the plan, or perform another external action. Do not add a second account, action, credential, or permission.",
+            "This request only prepares a candidate. Runtime execution requires the current configured owner identity, allowlisted toolkit, explicit live opt-in, current owner account state, and a separate authenticated no-store L3 final review. Provider token revocation is best-effort; never automatically resend an unknown result, and confirm REVOKED state before any new request. The provider account is not deleted.",
+            "Exact composio.disconnect arguments JSON: " + JSON.stringify(args)
+          ].join("\\n");
+          const ownerTokenInput = byId("owner-task-token");
+          const ownerToken = ownerTokenInput.value.trim();
+          const goalSelect = byId("owner-task-goal-ref");
+          const goalRef = goalSelect.value;
+          const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
+          state.chatUser = byId("chat-user").value.trim() || "owner";
+          if (!ownerToken) throw new Error("Operation Plan候補の作成にはOwner Taskのowner tokenが必要です");
+          if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+            throw new Error("候補の受付状態を確認するため、WebChatへ接続してください");
+          }
+          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 1) {
+            throw new Error("Owner Taskから現在の委任目的を読み込み、選択してください");
+          }
+          const candidateFingerprint = JSON.stringify([task, goalRef, purposeVersion, state.chatUser]);
+          if (!state.composioDisconnectCandidateTask || state.composioDisconnectCandidateTask !== candidateFingerprint) {
+            state.composioDisconnectCandidateTask = candidateFingerprint;
+            state.composioDisconnectCandidateSubmissionId = crypto.randomUUID();
+          }
+          const submissionId = state.composioDisconnectCandidateSubmissionId;
+          requestSubmissionId = submissionId;
+          requestAttempted = true;
+          const result = await postOwnerTaskCompute(ownerToken, {
+            user: state.chatUser, task: task, goal_ref: goalRef, purpose_version: purposeVersion,
+            submission_id: submissionId
+          });
+          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          state.composioDisconnectStatusMessage = "Plan candidate request accepted: " +
+            (result.request_id || submissionId) + ". No Composio request or revocation was made.";
+          state.composioDisconnectStatusTone = "good";
+          byId("owner-task-status").textContent = result.status === "already_in_progress" || result.status === "already_accepted"
+            ? "このComposio account revoke候補は既に受付済みです。重複起動していません"
+            : "Composio account revokeの未実行Plan候補を受付済み。Provider作用は未実行です";
+          byId("owner-task-status").className = "badge good";
+          appendChat("owner", task);
+          appendChat("accepted", result.request_id || "Composio account revoke候補を受付済み", result.request_id);
+          byId("composio-disconnect-account-id").value = "";
+        } catch (error) {
+          const message = error && typeof error.message === "string" ? error.message : "Composio disconnect plan request failed";
+          state.composioDisconnectStatusMessage = message +
+            (requestAttempted && requestSubmissionId ? " Request ID retained: " + requestSubmissionId + ". If the outcome is unknown, check Tasks/Runtime before changing the request." : "");
+          state.composioDisconnectStatusTone = "bad";
+          byId("owner-task-status").textContent = message;
+          byId("owner-task-status").className = "badge bad";
+        } finally {
+          renderComposioDiscoveryControls();
+        }
+      }
+
       async function verifyLlmSettings() {
         const token = byId("settings-token").value.trim();
         state.settingsToken = token;
@@ -9235,6 +9338,79 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.approvalContentDigests[commandId] = review.review_digest;
           approve.disabled = false;
           button.textContent = "Composio actionを再確認";
+          return;
+        }
+        if (review.kind === "composio_disconnect") {
+          const isDigest = function (value) { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); };
+          const observedTarget = isObject(review.target_version_observation) ? review.target_version_observation : {};
+          const cacheControl = response.headers.get("cache-control") || "";
+          if (review.command_id !== commandId || review.operation !== "composio.disconnect" || review.no_store !== true ||
+              !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(cacheControl) || review.used_for_authority !== false ||
+              review.may_execute !== false || review.provider_metadata_used_for_authority !== false ||
+              !isDigest(review.command_digest) || !isDigest(review.review_digest) ||
+              !isDigest(review.request_payload_digest) || !isDigest(review.target_version_digest) ||
+              !isDigest(review.operation_plan_binding_digest) ||
+              observedTarget.schema_version !== "blue-tanuki.composio-disconnect-target-version.v1" ||
+              observedTarget.target_state !== "available" || observedTarget.used_for_authority !== false ||
+              observedTarget.may_execute !== false || observedTarget.toolkit !== review.toolkit ||
+              observedTarget.connected_account_id_sha256 !== review.connected_account_id_sha256 ||
+              observedTarget.user_id_sha256 !== review.user_id_sha256 ||
+              observedTarget.request_payload_digest !== review.request_payload_digest ||
+              observedTarget.command_digest !== review.command_digest ||
+              observedTarget.operation_plan_binding_digest !== review.operation_plan_binding_digest ||
+              !isDigest(observedTarget.account_state_sha256) ||
+              typeof review.toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(review.toolkit) ||
+              typeof review.connected_account_id !== "string" || review.connected_account_id.length < 1 ||
+              review.connected_account_id.length > 256 || !isDigest(review.connected_account_id_sha256) ||
+              !isDigest(review.user_id_sha256) || review.account_type !== "PRIVATE" ||
+              review.account_status !== "ACTIVE" || review.account_disabled !== false ||
+              typeof review.auth_scheme !== "string" || review.auth_scheme.length > 80 ||
+              !(review.provider_region === null || ["us", "eu", "unknown"].includes(review.provider_region)) ||
+              review.effect !== "revoke_upstream_tokens_and_mark_account_REVOKED" ||
+              review.upstream_revocation !== "best_effort" || review.account_deletion !== false) {
+            throw new Error("Composio disconnect review is not bound to one current active owner account");
+          }
+          const reviewBody = Object.assign({}, review);
+          delete reviewBody.command_id;
+          delete reviewBody.review_digest;
+          if (await digestObject(observedTarget) !== review.target_version_digest ||
+              await digestObject(reviewBody) !== review.review_digest) {
+            throw new Error("Composio disconnect review digest verification failed; approval remains unavailable");
+          }
+          view.replaceChildren();
+          const heading = document.createElement("strong");
+          heading.textContent = "Composio connected account revocationの高リスク・L3最終確認";
+          view.appendChild(heading);
+          const note = document.createElement("p");
+          note.className = "muted";
+          note.textContent = "この操作は選択した一件の接続についてProvider token revokeを試み、Composio上の状態をREVOKEDへ変更します。upstream失効はbest-effortです。接続accountを削除せず、成功表示は実行後のaccount再読込でREVOKEDを確認した場合だけです。結果不明時は自動再送しません。";
+          view.appendChild(note);
+          [
+            ["toolkit", review.toolkit],
+            ["connected account ID", review.connected_account_id],
+            ["account status / type / disabled", review.account_status + " / " + review.account_type + " / " + String(review.account_disabled)],
+            ["auth scheme / provider region", review.auth_scheme + " / " + String(review.provider_region || "unknown")],
+            ["account identity digest", review.connected_account_id_sha256],
+            ["owner identity digest", review.user_id_sha256],
+            ["effect", review.effect],
+            ["upstream revocation / account deletion", review.upstream_revocation + " / " + String(review.account_deletion)],
+            ["Operation Plan binding", review.operation_plan_binding_digest],
+            ["target version digest", review.target_version_digest]
+          ].forEach(function (field) {
+            const row = document.createElement("p");
+            const label = document.createElement("strong");
+            label.textContent = field[0] + ": ";
+            const value = document.createElement("span");
+            value.textContent = field[1];
+            row.append(label, value);
+            view.appendChild(row);
+          });
+          const digests = document.createElement("small");
+          digests.textContent = "command digest: " + review.command_digest + " | review digest: " + review.review_digest;
+          view.appendChild(digests);
+          state.approvalContentDigests[commandId] = review.review_digest;
+          approve.disabled = false;
+          button.textContent = "Composio account revokeを再確認";
           return;
         }
         if (review.kind === "memory_personalization_stop") {
@@ -12978,9 +13154,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("prepare-composio-discovery").addEventListener("click", prepareComposioDiscovery);
       byId("prepare-composio-accounts").addEventListener("click", prepareComposioAccounts);
+      byId("prepare-composio-disconnect").addEventListener("click", prepareComposioDisconnect);
+      byId("composio-disconnect-account-id").addEventListener("input", function () {
+        state.composioDisconnectStatusMessage = null;
+        state.composioDisconnectCandidateTask = null;
+        state.composioDisconnectCandidateSubmissionId = null;
+        renderComposioDiscoveryControls();
+      });
       byId("composio-discovery-toolkit").addEventListener("change", function () {
         state.composioDiscoveryStatusMessage = null;
         state.composioAccountsStatusMessage = null;
+        state.composioDisconnectStatusMessage = null;
+        state.composioDisconnectCandidateTask = null;
+        state.composioDisconnectCandidateSubmissionId = null;
         renderComposioDiscoveryControls();
       });
       byId("composio-discovery-query").addEventListener("input", function () {
