@@ -1785,6 +1785,7 @@ async function serveWithOwnerLease(
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
+    currentExecutionEpoch: () => { ownerLease.assertActive(); return ownerLease.executionEpoch; },
     hasUnsettledWork: () => runtimeSchedules.hasPendingPersistence() || activeCommandFinalizations.size > 0 || executionTasks.size > 0 ||
       activeTaskExecutions.snapshot().length > 0,
     abortRunningExecutions: ({ actor, requested_at_ms }) => {

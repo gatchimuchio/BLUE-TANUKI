@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditLog, HDSUpperController } from "@blue-tanuki/hds-brain";
 import { EmergencyStopControl } from "../src/emergency_stop_control.js";
 import { EmergencyStopStateStore } from "../src/emergency_stop_state_store.js";
+
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 interface TestAuditEvent {
   kind: "authority_event";
@@ -14,12 +17,15 @@ interface TestAuditEvent {
   actor: string;
   reason: string;
   occurred_at_ms: number;
+  execution_epoch?: string | null;
   audit_gap_recovered?: boolean;
   timestamp: number;
 }
 
 const directories: string[] = [];
 const stores = new Set<EmergencyStopStateStore>();
+const firstExecutionEpoch = "00000000-0000-4000-8000-000000000001";
+const nextExecutionEpoch = "00000000-0000-4000-8000-000000000002";
 
 afterEach(() => {
   for (const store of stores) store.close();
@@ -65,6 +71,54 @@ function hash(value: unknown): string {
 }
 
 describe("EmergencyStopControl", () => {
+  it("migrates a legacy active stop to a restart-bound execution epoch", () => {
+    const { store: initialStore, path } = makeStore();
+    initialStore.close();
+    stores.delete(initialStore);
+    const legacyState = {
+      schema_version: "blue-tanuki.emergency-stop-state.v1",
+      active: true,
+      activation: {
+        control_event_id: "legacy-activation", actor: "owner", occurred_at_ms: 100, audit_recorded: true,
+      },
+      last_clear: null,
+    };
+    const db = new DatabaseSync(path);
+    db.prepare("INSERT INTO emergency_stop_state(id, state_json, digest) VALUES(1, ?, ?)")
+      .run(JSON.stringify(legacyState), hash(legacyState));
+    db.close();
+
+    const store = openStore(path);
+    const audit = makeAuthority([{
+      kind: "authority_event", event: "emergency_stop_activated", control_event_id: "legacy-activation",
+      actor: "owner", reason: "legacy stop", occurred_at_ms: 100, timestamp: 100,
+    }]);
+    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => firstExecutionEpoch });
+
+    expect(store.load()).toMatchObject({ schema_version: "blue-tanuki.emergency-stop-state.v2",
+      active: true, activation: { execution_epoch: firstExecutionEpoch } });
+    expect(control.snapshot()).toMatchObject({ active: true, clear_requires_new_execution_epoch: true });
+    expect(() => control.clear({ actor: "owner" })).toThrow("emergency_stop_clear_requires_new_execution_epoch");
+  });
+
+  it("refuses clear when the HDS activation epoch conflicts with the durable stop", () => {
+    const { store } = makeStore();
+    store.activate({ control_event_id: "epoch-conflict", actor: "owner", occurred_at_ms: 100,
+      execution_epoch: firstExecutionEpoch });
+    store.markActivationAudited("epoch-conflict");
+    const audit = makeAuthority([{
+      kind: "authority_event", event: "emergency_stop_activated", control_event_id: "epoch-conflict",
+      actor: "owner", reason: "fixture", occurred_at_ms: 100, execution_epoch: nextExecutionEpoch, timestamp: 100,
+    }]);
+    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => nextExecutionEpoch });
+
+    expect(control.snapshot()).toMatchObject({ active: true, clear_state_conflict: true });
+    expect(() => control.clear({ actor: "owner" })).toThrow("emergency_stop_clear_state_conflict");
+    expect(store.load()).toMatchObject({ active: true, activation: { execution_epoch: firstExecutionEpoch } });
+  });
+
   it("keeps the stop observed in the audit active if restoring durable state fails", () => {
     const { store } = makeStore();
     const { authority, entries } = makeAuthority([{
@@ -109,13 +163,15 @@ describe("EmergencyStopControl", () => {
   it("does not clear the stop while the activation gap or persistent audit is unavailable", () => {
     const { store } = makeStore();
     const audit = makeAuthority([], true);
-    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(), now: () => 100 });
+    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => firstExecutionEpoch, now: () => 100 });
     control.activate({ actor: "owner" });
     expect(() => control.clear({ actor: "owner" })).toThrow("emergency_stop_audit_recovery_pending");
     expect(control.snapshot()).toMatchObject({ active: true, execution_blocked: true });
 
     audit.setFailed(false);
-    const recovered = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(), now: () => 200 });
+    const recovered = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => nextExecutionEpoch, now: () => 200 });
     audit.setPersistent(false);
     expect(() => recovered.clear({ actor: "owner" })).toThrow("emergency_stop_clear_requires_persistent_audit");
     expect(recovered.snapshot()).toMatchObject({ active: true, execution_blocked: true });
@@ -124,7 +180,8 @@ describe("EmergencyStopControl", () => {
   it("revalidates a repaired activation and refuses clear when its durable audit marker cannot be saved", () => {
     const { store } = makeStore();
     const audit = makeAuthority([], true);
-    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(), now: () => 100 });
+    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => firstExecutionEpoch, now: () => 100 });
     expect(control.activate({ actor: "owner" })).toMatchObject({
       active: true, audit_recovery_status: "pending", clear_state_conflict: false,
     });
@@ -133,23 +190,30 @@ describe("EmergencyStopControl", () => {
       throw new Error("fixture unavailable");
     });
 
-    expect(() => control.clear({ actor: "owner" })).toThrow("emergency_stop_state_store_unavailable");
-    expect(control.snapshot()).toMatchObject({ active: true, execution_blocked: true, audit_recovery_status: "state_unavailable" });
+    const recovered = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => nextExecutionEpoch, now: () => 200 });
+    expect(() => recovered.clear({ actor: "owner" })).toThrow("emergency_stop_state_store_unavailable");
+    expect(recovered.snapshot()).toMatchObject({ active: true, execution_blocked: true, audit_recovery_status: "state_unavailable" });
     expect(store.load()).toMatchObject({ active: true, activation: { audit_recorded: false } });
     expect(audit.entries.map((entry) => entry.log.event)).toEqual(["emergency_stop_activated"]);
   });
 
-  it("can clear after repairing a missing activation in the same process", () => {
+  it("requires a new execution epoch before clearing after a missing activation is repaired", () => {
     const { store } = makeStore();
     const audit = makeAuthority([{
       kind: "authority_event", event: "emergency_stop_cleared", control_event_id: "prior-clear",
       actor: "owner", reason: "prior stop cleared", occurred_at_ms: 90, timestamp: 90,
     }], true);
-    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(), now: () => 100 });
+    const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => firstExecutionEpoch, now: () => 100 });
     expect(control.activate({ actor: "owner" })).toMatchObject({ clear_state_conflict: false, audit_recovery_status: "pending" });
     audit.setFailed(false);
 
-    expect(control.clear({ actor: "owner" })).toMatchObject({ active: false, clear_state_conflict: false });
+    expect(() => control.clear({ actor: "owner" })).toThrow("emergency_stop_clear_requires_new_execution_epoch");
+    const restarted = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => nextExecutionEpoch, now: () => 200 });
+    expect(restarted.clear({ actor: "owner", reason: "cause repaired and pending actions reconciled" }))
+      .toMatchObject({ active: false, clear_state_conflict: false });
     expect(store.load().active).toBe(false);
     expect(audit.entries.map((entry) => entry.log.event)).toEqual([
       "emergency_stop_cleared", "emergency_stop_activated", "emergency_stop_cleared",
@@ -158,7 +222,7 @@ describe("EmergencyStopControl", () => {
 
   it.each([true, false])("preserves a conflicting latched activation after restart (recorded=%s)", (recorded) => {
     const { store } = makeStore();
-    store.activate({ control_event_id: "latched-activation", actor: "owner", occurred_at_ms: 100 });
+    store.activate({ control_event_id: "latched-activation", actor: "owner", occurred_at_ms: 100, execution_epoch: null });
     if (recorded) store.markActivationAudited("latched-activation");
     const original = store.load();
     const audit = makeAuthority([{
@@ -178,7 +242,7 @@ describe("EmergencyStopControl", () => {
 
   it("does not reconstruct a missing audit record for an activation already marked audited", () => {
     const { store } = makeStore();
-    store.activate({ control_event_id: "missing-activation", actor: "owner", occurred_at_ms: 100 });
+    store.activate({ control_event_id: "missing-activation", actor: "owner", occurred_at_ms: 100, execution_epoch: null });
     const original = store.markActivationAudited("missing-activation");
     const audit = makeAuthority();
 
@@ -216,7 +280,7 @@ describe("EmergencyStopControl", () => {
     const control = new EmergencyStopControl({ store, authority: audit.authority, abortRunningExecutions: vi.fn(), now: () => 100 });
     control.activate({ actor: "owner" });
     store.clear({ control_event_id: "fixture-clear", actor: "owner", occurred_at_ms: 101 });
-    store.activate({ control_event_id: "fixture-other-activation", actor: "owner", occurred_at_ms: 102 });
+    store.activate({ control_event_id: "fixture-other-activation", actor: "owner", occurred_at_ms: 102, execution_epoch: null });
     const actual = store.markActivationAudited("fixture-other-activation");
 
     expect(control.snapshot()).toMatchObject({ active: true, execution_blocked: true, clear_state_conflict: true });
@@ -241,7 +305,8 @@ describe("EmergencyStopControl", () => {
     const auditDirectory = `${path}.audit`;
     const auditPath = join(auditDirectory, "events.jsonl");
     const firstAuthority = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }) });
-    const first = new EmergencyStopControl({ store, authority: firstAuthority, abortRunningExecutions: vi.fn(), now: () => 300 });
+    const first = new EmergencyStopControl({ store, authority: firstAuthority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => firstExecutionEpoch, now: () => 300 });
 
     writeFileSync(auditPath, "fixture appears after audit target identity was observed");
     expect(first.activate({ actor: "owner" })).toMatchObject({ active: true, audit_recovery_status: "pending" });
@@ -250,7 +315,8 @@ describe("EmergencyStopControl", () => {
 
     rmSync(auditPath);
     const recoveredAuthority = new HDSUpperController({ audit: new AuditLog({ filepath: auditPath }) });
-    const recovered = new EmergencyStopControl({ store, authority: recoveredAuthority, abortRunningExecutions: vi.fn(), now: () => 400 });
+    const recovered = new EmergencyStopControl({ store, authority: recoveredAuthority, abortRunningExecutions: vi.fn(),
+      currentExecutionEpoch: () => nextExecutionEpoch, now: () => 400 });
 
     expect(recovered.snapshot()).toMatchObject({ active: true, audit_recovery_status: "recorded" });
     expect(recoveredAuthority.getAudit().list().at(-1)?.log).toMatchObject({

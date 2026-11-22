@@ -287,6 +287,7 @@ async function runCliWithExecutionStore(
   const emergencyStop = new EmergencyStopControl({
     store: emergencyStopStateStore,
     authority: hds,
+    currentExecutionEpoch: () => { ownerLease.assertActive(); return ownerLease.executionEpoch; },
     // The one-shot runtime holds the same exclusive owner lease as serve and
     // checks the durable stop latch before it creates a command or Executor.
     // There cannot be another Gateway process to cancel while this lease is held.

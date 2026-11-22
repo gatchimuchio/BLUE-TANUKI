@@ -11,6 +11,7 @@ export interface EmergencyStopActivation {
   actor: string;
   occurred_at_ms: number;
   audit_recorded: boolean;
+  execution_epoch: string | null;
 }
 
 export interface EmergencyStopClear {
@@ -20,14 +21,14 @@ export interface EmergencyStopClear {
 }
 
 export interface EmergencyStopDurableState {
-  schema_version: "blue-tanuki.emergency-stop-state.v1";
+  schema_version: "blue-tanuki.emergency-stop-state.v2";
   active: boolean;
   activation: EmergencyStopActivation | null;
   last_clear: EmergencyStopClear | null;
 }
 
 const INITIAL_STATE: EmergencyStopDurableState = {
-  schema_version: "blue-tanuki.emergency-stop-state.v1",
+  schema_version: "blue-tanuki.emergency-stop-state.v2",
   active: false,
   activation: null,
   last_clear: null,
@@ -92,11 +93,21 @@ export class EmergencyStopStateStore {
     }
   }
 
-  activate(input: { control_event_id: string; actor: string; occurred_at_ms: number }): EmergencyStopDurableState {
+  activate(input: { control_event_id: string; actor: string; occurred_at_ms: number; execution_epoch: string | null }): EmergencyStopDurableState {
     const current = this.load();
     if (current.active) return current;
-    return this.write({ schema_version: "blue-tanuki.emergency-stop-state.v1", active: true,
+    return this.write({ schema_version: "blue-tanuki.emergency-stop-state.v2", active: true,
       activation: parseActivation({ ...input, audit_recorded: false }), last_clear: null });
+  }
+
+  bindActivationExecutionEpoch(controlEventId: string, executionEpoch: string): EmergencyStopDurableState {
+    if (!isExecutionEpoch(executionEpoch)) throw new Error("emergency_stop_execution_epoch_invalid");
+    const current = this.load();
+    if (!current.active || current.activation?.control_event_id !== controlEventId) {
+      throw new Error("emergency_stop_activation_state_changed");
+    }
+    if (current.activation.execution_epoch !== null) return current;
+    return this.write({ ...current, activation: { ...current.activation, execution_epoch: executionEpoch } });
   }
 
   markActivationAudited(controlEventId: string): EmergencyStopDurableState {
@@ -120,7 +131,7 @@ export class EmergencyStopStateStore {
   clear(input: { control_event_id: string; actor: string; occurred_at_ms: number }): EmergencyStopDurableState {
     const current = this.load();
     if (!current.active || !current.activation?.audit_recorded) throw new Error("emergency_stop_clear_requires_audited_activation");
-    return this.write({ schema_version: "blue-tanuki.emergency-stop-state.v1", active: false, activation: null,
+    return this.write({ schema_version: "blue-tanuki.emergency-stop-state.v2", active: false, activation: null,
       last_clear: parseClear(input) });
   }
 
@@ -163,24 +174,33 @@ function digest(value: unknown): string {
 
 function parseDurableState(value: unknown): EmergencyStopDurableState {
   if (!isRecord(value) || !hasExactKeys(value, ["schema_version", "active", "activation", "last_clear"]) ||
-    value.schema_version !== "blue-tanuki.emergency-stop-state.v1" || typeof value.active !== "boolean") {
+    (value.schema_version !== "blue-tanuki.emergency-stop-state.v1" &&
+      value.schema_version !== "blue-tanuki.emergency-stop-state.v2") || typeof value.active !== "boolean") {
     throw new Error("emergency_stop_state_invalid");
   }
   const activation = value.activation === null ? null : parseActivation(value.activation);
   const lastClear = value.last_clear === null ? null : parseClear(value.last_clear);
   if (value.active !== (activation !== null)) throw new Error("emergency_stop_state_active_record_mismatch");
-  return { schema_version: "blue-tanuki.emergency-stop-state.v1", active: value.active,
+  return { schema_version: "blue-tanuki.emergency-stop-state.v2", active: value.active,
     activation, last_clear: lastClear };
 }
 
 function parseActivation(value: unknown): EmergencyStopActivation {
-  if (!isRecord(value) || !hasExactKeys(value, ["control_event_id", "actor", "occurred_at_ms", "audit_recorded"]) ||
+  if (!isRecord(value) ||
+    !(hasExactKeys(value, ["control_event_id", "actor", "occurred_at_ms", "audit_recorded"]) ||
+      hasExactKeys(value, ["control_event_id", "actor", "occurred_at_ms", "audit_recorded", "execution_epoch"])) ||
     !validText(value.control_event_id, 128) || !validText(value.actor, 120) ||
-    !validTimestamp(value.occurred_at_ms) || typeof value.audit_recorded !== "boolean") {
+    !validTimestamp(value.occurred_at_ms) || typeof value.audit_recorded !== "boolean" ||
+    (Object.hasOwn(value, "execution_epoch") && value.execution_epoch !== null && !isExecutionEpoch(value.execution_epoch))) {
     throw new Error("emergency_stop_activation_invalid");
   }
   return { control_event_id: value.control_event_id, actor: value.actor,
-    occurred_at_ms: value.occurred_at_ms, audit_recorded: value.audit_recorded };
+    occurred_at_ms: value.occurred_at_ms, audit_recorded: value.audit_recorded,
+    execution_epoch: Object.hasOwn(value, "execution_epoch") ? value.execution_epoch as string | null : null };
+}
+
+function isExecutionEpoch(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
 }
 
 function parseClear(value: unknown): EmergencyStopClear {

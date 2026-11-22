@@ -9477,6 +9477,8 @@ describe("WebChatChannel — approval API", () => {
       byId,
       setText(id: string, value: unknown) { byId(id).textContent = String(value); },
       setHtml() {},
+      isLocalCredentialControlCenter() { return false; },
+      clearDailyBriefReviewOwnerToken() {},
       renderApprovalGrants() {},
       renderApprovalHistory() {},
       renderActiveExecutions() {},
@@ -9487,9 +9489,14 @@ describe("WebChatChannel — approval API", () => {
     expect(byId("clear-emergency-stop").disabled).toBe(true);
     render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "state_unavailable" } });
     expect(byId("clear-emergency-stop").disabled).toBe(true);
-    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "pending", clear_state_conflict: false } });
+    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "pending", clear_state_conflict: false,
+      clear_requires_new_execution_epoch: false } });
     expect(byId("approval-emergency-status").textContent).toBe("active · audit pending");
     expect(byId("clear-emergency-stop").disabled).toBe(false);
+    render.runInNewContext({ ...context, snapshot: { active: true, audit_recovery_status: "recorded", clear_state_conflict: false,
+      clear_requires_new_execution_epoch: true } });
+    expect(byId("approval-emergency-status").textContent).toContain("restart required before clear");
+    expect(byId("clear-emergency-stop").disabled).toBe(true);
   });
 
   it("exposes grants, approval history, and emergency stop through the resume-token gate", async () => {

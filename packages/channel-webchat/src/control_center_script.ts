@@ -5086,13 +5086,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (emergencyStopActive && emergencyStop.clear_blocked_by_active_work === true) {
           emergencyStopStatus += " · local command still settling";
         }
+        if (emergencyStopActive && emergencyStop.clear_requires_new_execution_epoch === true) {
+          emergencyStopStatus += " · restart required before clear";
+        }
         if (emergencyStopActive && emergencyStop.clear_state_conflict === true) {
           emergencyStopStatus += " · audit/state conflict";
         }
         setText("approval-emergency-status", emergencyStopStatus);
         byId("approval-emergency-status").className = "badge " + (emergencyStopActive ? "bad" : "good");
         byId("clear-emergency-stop").disabled = !emergencyStopActive ||
-          emergencyStop.clear_blocked_by_active_work === true || emergencyStop.clear_state_conflict === true ||
+          emergencyStop.clear_blocked_by_active_work === true || emergencyStop.clear_requires_new_execution_epoch === true ||
+          emergencyStop.clear_state_conflict === true ||
           emergencyStop.audit_recovery_status === "state_unavailable";
         setText("approval-grant-count", grants.length);
         setText("approval-history-count", approvalHistory.length);

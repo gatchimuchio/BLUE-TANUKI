@@ -14,6 +14,7 @@ export interface EmergencyStopSnapshot {
   audit_recovery_status: EmergencyStopAuditRecoveryStatus;
   execution_blocked: boolean;
   clear_blocked_by_active_work: boolean;
+  clear_requires_new_execution_epoch: boolean;
   clear_state_conflict: boolean;
   hds_brain_remains_authority: true;
   used_for_authority: false;
@@ -27,6 +28,7 @@ interface AuthorityEventLike {
   readonly actor?: unknown;
   readonly timestamp?: unknown;
   readonly occurred_at_ms?: unknown;
+  readonly execution_epoch?: unknown;
 }
 
 interface EmergencyStopAuditEntry {
@@ -45,6 +47,7 @@ interface EmergencyStopAuthority {
     reason: string;
     control_event_id: string;
     occurred_at_ms: number;
+    execution_epoch?: string | null;
     audit_gap_recovered?: boolean;
   }): void;
 }
@@ -65,10 +68,12 @@ export class EmergencyStopControl {
     readonly authority: EmergencyStopAuthority;
     readonly abortRunningExecutions: (context: EmergencyStopCancellationContext) => void;
     readonly hasUnsettledWork?: () => boolean;
+    readonly currentExecutionEpoch?: () => string;
     readonly now?: () => number;
   }) {
     this.durable = options.store.load();
     this.restoreFromAudit();
+    this.bindMissingActivationExecutionEpoch();
     if (this.durable.active && !this.durable.activation?.audit_recorded) {
       this.recordActivationIfPossible(true);
     }
@@ -77,6 +82,9 @@ export class EmergencyStopControl {
   snapshot(): EmergencyStopSnapshot {
     const active = this.durable.active;
     const clearBlockedByActiveWork = active && (this.options.hasUnsettledWork?.() ?? false);
+    const currentEpoch = this.readCurrentExecutionEpoch();
+    const clearRequiresNewExecutionEpoch = active && (!this.durable.activation?.execution_epoch ||
+      !currentEpoch || this.durable.activation.execution_epoch === currentEpoch);
     const clearStateConflict = active &&
       this.hasClearStateConflict(() => this.options.authority.getAudit().list());
     return {
@@ -96,6 +104,7 @@ export class EmergencyStopControl {
           : this.durable.activation?.audit_recorded ? "recorded" : "pending",
       execution_blocked: active,
       clear_blocked_by_active_work: clearBlockedByActiveWork,
+      clear_requires_new_execution_epoch: clearRequiresNewExecutionEpoch,
       clear_state_conflict: clearStateConflict,
       hds_brain_remains_authority: true,
       used_for_authority: false,
@@ -110,8 +119,8 @@ export class EmergencyStopControl {
     this.reasonText = context.reason ?? "owner emergency stop";
     if (!this.durable.active) {
       const activation = { control_event_id: randomUUID(), actor: context.actor,
-        occurred_at_ms: this.now(), audit_recorded: false };
-      this.durable = { schema_version: "blue-tanuki.emergency-stop-state.v1", active: true,
+        occurred_at_ms: this.now(), audit_recorded: false, execution_epoch: this.readCurrentExecutionEpoch() };
+      this.durable = { schema_version: "blue-tanuki.emergency-stop-state.v2", active: true,
         activation, last_clear: this.durable.last_clear };
       try { this.durable = this.options.store.activate(activation); }
       catch { this.stateStoreAvailable = false; }
@@ -131,7 +140,7 @@ export class EmergencyStopControl {
   clear(context: { actor: string; reason?: string }): EmergencyStopSnapshot {
     if (!this.durable.active) return this.snapshot();
     if (!this.stateStoreAvailable) throw new Error("emergency_stop_state_store_unavailable");
-    if (this.options.hasUnsettledWork?.()) throw new Error("emergency_stop_clear_blocked_active_work");
+    if (this.snapshot().clear_state_conflict) throw new Error("emergency_stop_clear_state_conflict");
     if (!this.durable.activation?.audit_recorded) {
       if (this.hasClearStateConflict(() => this.options.authority.getAudit().list())) {
         throw new Error("emergency_stop_clear_state_conflict");
@@ -139,6 +148,12 @@ export class EmergencyStopControl {
       if (!this.recordActivationIfPossible(true)) throw new Error("emergency_stop_audit_recovery_pending");
     }
     if (!this.stateStoreAvailable) throw new Error("emergency_stop_state_store_unavailable");
+    const currentSnapshot = this.snapshot();
+    if (currentSnapshot.clear_state_conflict) throw new Error("emergency_stop_clear_state_conflict");
+    if (currentSnapshot.clear_requires_new_execution_epoch) {
+      throw new Error("emergency_stop_clear_requires_new_execution_epoch");
+    }
+    if (this.options.hasUnsettledWork?.()) throw new Error("emergency_stop_clear_blocked_active_work");
     const audit = this.options.authority.getAudit();
     if (!audit.isPersistent() || !audit.verify()) throw new Error("emergency_stop_clear_requires_persistent_audit");
     if (this.hasClearStateConflict(() => audit.list())) {
@@ -164,8 +179,13 @@ export class EmergencyStopControl {
           persisted.activation.audit_recorded !== activation.audit_recorded ||
           persisted.activation.control_event_id !== activation.control_event_id ||
           persisted.activation.actor !== activation.actor ||
-          persisted.activation.occurred_at_ms !== activation.occurred_at_ms) return true;
+          persisted.activation.occurred_at_ms !== activation.occurred_at_ms ||
+          persisted.activation.execution_epoch !== activation.execution_epoch) return true;
       const entries = list();
+      const activationAudit = entries.find(({ log, entry_hash }) => isAuthorityEvent(log) && log.event === "emergency_stop_activated" &&
+        auditControlEventId(log, entry_hash) === activation.control_event_id);
+      if (activationAudit && isAuthorityEvent(activationAudit.log) && Object.hasOwn(activationAudit.log, "execution_epoch") &&
+          activationAudit.log.execution_epoch !== activation.execution_epoch) return true;
       if (!activation.audit_recorded && !hasActivationAudit(entries, activation.control_event_id)) {
         return !mayRecoverMissingActivation(entries, activation.occurred_at_ms);
       }
@@ -197,6 +217,7 @@ export class EmergencyStopControl {
       occurred_at_ms: Number.isSafeInteger(latest.log.occurred_at_ms) && Number(latest.log.occurred_at_ms) > 0
         ? Number(latest.log.occurred_at_ms)
         : Number.isSafeInteger(latest.log.timestamp) && Number(latest.log.timestamp) > 0 ? Number(latest.log.timestamp) : this.now(),
+      execution_epoch: isExecutionEpoch(latest.log.execution_epoch) ? latest.log.execution_epoch : null,
     };
     this.durable = { ...this.durable, active: true, activation: { ...activation, audit_recorded: true } };
     try {
@@ -225,6 +246,7 @@ export class EmergencyStopControl {
         reason: recovered ? "emergency stop activation recovered after audit persistence failure" : "owner emergency stop",
         control_event_id: activation.control_event_id,
         occurred_at_ms: activation.occurred_at_ms,
+        execution_epoch: activation.execution_epoch,
         audit_gap_recovered: recovered,
       });
       const appended = hasActivationAudit(this.options.authority.getAudit().list(), activation.control_event_id);
@@ -233,6 +255,27 @@ export class EmergencyStopControl {
       catch { this.durable = { ...this.durable, activation: { ...activation, audit_recorded: true } }; this.stateStoreAvailable = false; }
       return true;
     } catch { return false; }
+  }
+
+  private bindMissingActivationExecutionEpoch(): void {
+    const activation = this.durable.activation;
+    if (!this.durable.active || !activation || activation.execution_epoch) return;
+    const epoch = this.readCurrentExecutionEpoch();
+    if (!epoch) return;
+    try {
+      this.durable = this.options.store.bindActivationExecutionEpoch(activation.control_event_id, epoch);
+    } catch {
+      this.stateStoreAvailable = false;
+    }
+  }
+
+  private readCurrentExecutionEpoch(): string | null {
+    try {
+      const epoch = this.options.currentExecutionEpoch?.();
+      return isExecutionEpoch(epoch) ? epoch : null;
+    } catch {
+      return null;
+    }
   }
 
   private now(): number { return this.options.now?.() ?? Date.now(); }
@@ -245,6 +288,10 @@ function isAuthorityEvent(value: unknown): value is AuthorityEventLike {
 function auditControlEventId(log: AuthorityEventLike, entryHash: string): string {
   return typeof log.control_event_id === "string" && log.control_event_id.length > 0
     ? log.control_event_id : entryHash;
+}
+
+function isExecutionEpoch(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
 }
 
 function hasActivationAudit(entries: readonly EmergencyStopAuditEntry[], activationId: string): boolean {
