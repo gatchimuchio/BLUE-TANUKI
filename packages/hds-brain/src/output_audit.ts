@@ -115,7 +115,8 @@ export type GatewayStatusOutputSource =
   | "schedule_approval"
   | "approval_required"
   | "human_approval"
-  | "schedule_expiry";
+  | "schedule_expiry"
+  | "operation_plan_blocked";
 
 /** Digest-only audit for a command-bound control status emitted by the Gateway. */
 export interface GatewayStatusOutputAuditLog {
@@ -248,7 +249,7 @@ export function buildGatewayStatusOutputAuditLog(input: GatewayStatusOutputAudit
       !/^[A-Za-z0-9._:-]{1,128}$/u.test(input.command_id) ||
       !/^[a-f0-9]{64}$/u.test(input.upstream_commit_hash) ||
       !["ASSERT", "SUSPEND", "OUT_OF_SCOPE", "FAIL"].includes(input.upstream_decision) ||
-      !["emergency_stop", "failure_memory", "approval_capacity", "schedule_approval", "approval_required", "human_approval", "schedule_expiry"].includes(input.status_source) ||
+      !["emergency_stop", "failure_memory", "approval_capacity", "schedule_approval", "approval_required", "human_approval", "schedule_expiry", "operation_plan_blocked"].includes(input.status_source) ||
       typeof input.rendered_output !== "string" || input.rendered_output.length === 0) {
     throw new Error("invalid_gateway_status_output_audit_input");
   }

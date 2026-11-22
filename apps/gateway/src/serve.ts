@@ -3201,6 +3201,18 @@ async function serveWithOwnerLease(
         used_for_authority: false,
       });
       hds.onCommandLifecycle(cmd.id, "approval_cancelled", { actor, reason: rejectionReason });
+      const safeReason = /^[A-Za-z0-9._:-]{1,128}$/u.test(rejectionReason)
+        ? rejectionReason : "plan_attempt_not_admitted";
+      const d4Notice = isGatewayInternalD4RuntimeIntentRequest(origin);
+      const notice = d4Notice
+        ? "計画の実行を安全確認で保留しました。操作は開始していません。状態は認証済みの画面で確認してください。"
+        : `[blocked:operation-plan] 現在の実行条件を満たさないため、計画を実行しませんでした。reason=${safeReason}。原因を解消し、新しい計画で再確認してください。`;
+      auditGatewayStatusOutput(log, origin, actor, cmd.id, "operation_plan_blocked", notice);
+      if (!opts.daily_brief_read) await dispatcher.dispatch(
+        replyPayload(origin, notice),
+        { command_id: d4Notice ? randomUUID() : `operation-plan-blocked-${cmd.id}`,
+          upstream_commit_hash: log.commit.hash },
+      );
       return { status: rejectionReason };
     }
     if (operationPlanRestore && !hds.beginOperationPlanRecoveryRefresh(cmd)) {
