@@ -117,13 +117,13 @@ export class EmergencyStopControl {
 
   activate(context: { actor: string; reason?: string }): EmergencyStopSnapshot {
     this.reasonText = context.reason ?? "owner emergency stop";
+    let activationToPersist: EmergencyStopDurableState["activation"] = null;
     if (!this.durable.active) {
       const activation = { control_event_id: randomUUID(), actor: context.actor,
         occurred_at_ms: this.now(), audit_recorded: false, execution_epoch: this.readCurrentExecutionEpoch() };
       this.durable = { schema_version: "blue-tanuki.emergency-stop-state.v2", active: true,
         activation, last_clear: this.durable.last_clear };
-      try { this.durable = this.options.store.activate(activation); }
-      catch { this.stateStoreAvailable = false; }
+      activationToPersist = activation;
     }
     // Latch the deny state before asking workers to cancel. A cancellation callback
     // failure must never leave new execution admissible or undo the emergency stop.
@@ -132,6 +132,12 @@ export class EmergencyStopControl {
     } catch {
       // Active execution observations remain authoritative for local worker state;
       // this cancellation request does not claim that local or external work stopped.
+    }
+    // Deliver the stop signal before synchronous persistence. A blocked or failed
+    // state-store write must not delay cancellation of already running workers.
+    if (activationToPersist) {
+      try { this.durable = this.options.store.activate(activationToPersist); }
+      catch { this.stateStoreAvailable = false; }
     }
     if (this.durable.activation && !this.durable.activation.audit_recorded) this.recordActivationIfPossible(false);
     return this.snapshot();

@@ -160,6 +160,28 @@ describe("EmergencyStopControl", () => {
     expect(store.load()).toMatchObject({ active: true, activation: { audit_recorded: true } });
   });
 
+  it("dispatches the stop callback before synchronous latch persistence", () => {
+    const { store } = makeStore();
+    const audit = makeAuthority([], true);
+    const order: string[] = [];
+    vi.spyOn(store, "activate").mockImplementation((input) => {
+      order.push("state_latch_persist_failed");
+      throw new Error("fixture disk full");
+    });
+    const control = new EmergencyStopControl({
+      store,
+      authority: audit.authority,
+      abortRunningExecutions: () => { order.push("stop_dispatched"); },
+      now: () => 100,
+    });
+
+    expect(control.activate({ actor: "owner", reason: "fixture stop" })).toMatchObject({
+      active: true, execution_blocked: true, audit_recovery_status: "state_unavailable",
+    });
+    expect(order).toEqual(["stop_dispatched", "state_latch_persist_failed"]);
+    expect(audit.authority.onAuthorityEvent).not.toHaveBeenCalled();
+  });
+
   it("does not clear the stop while the activation gap or persistent audit is unavailable", () => {
     const { store } = makeStore();
     const audit = makeAuthority([], true);
