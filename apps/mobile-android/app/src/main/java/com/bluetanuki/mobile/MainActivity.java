@@ -102,6 +102,8 @@ public final class MainActivity extends Activity {
     private MobileTaskContract.McpSnapshot mcpSnapshot;
     private String deviceId;
     private boolean identityReady;
+    private volatile boolean packageVersionBlocked;
+    private PackageVersionFence.Result packageVersionResult = PackageVersionFence.Result.INVALID_INSTALLED_VERSION;
     private boolean permissionRequestPending;
     private volatile boolean credentialStateUncertain;
     private boolean recoveryAuditUnavailable;
@@ -120,22 +122,30 @@ public final class MainActivity extends Activity {
         ensureTaskNotificationChannel();
         credentialStore = AndroidCredentialStore.forApplication(this);
         taskClient = new MobileTaskClient(credentialStore, transport);
-        try {
-            deviceId = credentialStore.loadOrCreateDeviceId();
-            identityReady = true;
-        } catch (AndroidCredentialStore.CredentialStoreException exception) {
+        packageVersionResult = credentialStore.verifyPackageVersion(installedPackageVersionCode());
+        packageVersionBlocked = packageVersionResult != PackageVersionFence.Result.READY;
+        if (packageVersionBlocked) {
             deviceId = null;
             identityReady = false;
+        } else {
+            try {
+                deviceId = credentialStore.loadOrCreateDeviceId();
+                identityReady = true;
+            } catch (AndroidCredentialStore.CredentialStoreException exception) {
+                deviceId = null;
+                identityReady = false;
+            }
         }
         setContentView(buildScreen());
-        loadTaskCheckpoint();
+        if (!packageVersionBlocked) loadTaskCheckpoint();
         refreshCredentialControls(credentialStore.contains());
-        refreshRecoveryAuditSummary();
-        setStatus(credentialStore.hasPendingDesktopRevocation() ? REVOCATION_PENDING_MESSAGE : identityReady
-                ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
-                : credentialStore.hasPendingTaskCheckpoint()
-                        ? "未照合のTask記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
-                        : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
+        if (!packageVersionBlocked) refreshRecoveryAuditSummary();
+        setStatus(packageVersionBlocked ? packageVersionHoldMessage()
+                : credentialStore.hasPendingDesktopRevocation() ? REVOCATION_PENDING_MESSAGE : identityReady
+                    ? "未接続です。保存済み端末IDをDesktop ownerへ安全な対面手段で渡し、対象端末向けの招待を発行してもらってください。"
+                    : credentialStore.hasPendingTaskCheckpoint()
+                            ? "未照合のTask記録がありますが端末IDを復元できません。新ID作成と招待登録を停止しています。Desktop Agent Centerで旧端末とTask状態を確認してください。"
+                            : "端末IDを安全に保存・再読込できません。招待登録を停止しています。");
     }
 
     @Override
@@ -144,6 +154,12 @@ public final class MainActivity extends Activity {
         foreground = true;
         notificationForeground = true;
         refreshOwnedTaskRequestsAfterForeground = true;
+        if (packageVersionBlocked) {
+            setStatus(packageVersionHoldMessage());
+            refreshCredentialControls(credentialStore.contains());
+            refreshTaskControls();
+            return;
+        }
         loadTaskCheckpoint();
         verifyStoredCredential();
         refreshTaskControls();
@@ -489,6 +505,10 @@ public final class MainActivity extends Activity {
     }
 
     private void beginPairing() {
+        if (packageVersionBlocked || !credentialStore.isPackageVersionReady()) {
+            setStatus(packageVersionHoldMessage());
+            return;
+        }
         if (busy || !foreground || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation()) {
             return;
         }
@@ -563,6 +583,12 @@ public final class MainActivity extends Activity {
 
     private void verifyStoredCredential() {
         if (!foreground || busy) {
+            return;
+        }
+        if (packageVersionBlocked || !credentialStore.isPackageVersionReady()) {
+            refreshOwnedTaskRequestsAfterForeground = false;
+            refreshCredentialControls(credentialStore.contains());
+            setStatus(packageVersionHoldMessage());
             return;
         }
         clearDesktopNotifications();
@@ -650,7 +676,8 @@ public final class MainActivity extends Activity {
     }
 
     private void beginDesktopRevocation() {
-        if (!foreground || busy || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation()) return;
+        if (packageVersionBlocked || !credentialStore.isPackageVersionReady() || !foreground || busy ||
+                credentialStateUncertain || credentialStore.hasPendingDesktopRevocation()) return;
         final DeviceCredential credential;
         try {
             credential = credentialStore.read();
@@ -682,7 +709,8 @@ public final class MainActivity extends Activity {
     }
 
     private void performDesktopRevocation(DeviceCredential selected) {
-        if (!foreground || busy || credentialStateUncertain || credentialStore.hasPendingDesktopRevocation() ||
+        if (packageVersionBlocked || !credentialStore.isPackageVersionReady() || !foreground || busy ||
+                credentialStateUncertain || credentialStore.hasPendingDesktopRevocation() ||
                 !hasLocalNetworkPermission()) return;
         busy = true;
         disconnectInFlight = true;
@@ -792,7 +820,8 @@ public final class MainActivity extends Activity {
     }
 
     private boolean canSend(long operationGeneration) {
-        return foreground && generation.get() == operationGeneration && !isFinishing() && !isDestroyed();
+        return !packageVersionBlocked && credentialStore.isPackageVersionReady() && foreground &&
+                generation.get() == operationGeneration && !isFinishing() && !isDestroyed();
     }
 
     private boolean canUseDeviceLink(long operationGeneration) {
@@ -812,7 +841,8 @@ public final class MainActivity extends Activity {
                 usableCredential = false;
             }
         }
-        boolean ready = foreground && !busy && !credentialStateUncertain;
+        boolean ready = foreground && !busy && !credentialStateUncertain && !packageVersionBlocked &&
+                credentialStore.isPackageVersionReady();
         boolean revocationPending = credentialStore.hasPendingDesktopRevocation();
         pairButton.setEnabled(identityReady && ready && !credentialPresent && !revocationPending);
         if (leaveButton != null) {
@@ -861,6 +891,27 @@ public final class MainActivity extends Activity {
         return !requiresLocalNetworkRuntimePermission(Build.VERSION.SDK_INT) ||
                 checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) ==
                         PackageManager.PERMISSION_GRANTED;
+    }
+
+    private long installedPackageVersionCode() {
+        try {
+            android.content.pm.PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? packageInfo.getLongVersionCode() : packageInfo.versionCode;
+        } catch (PackageManager.NameNotFoundException exception) {
+            return 0;
+        }
+    }
+
+    private String packageVersionHoldMessage() {
+        switch (packageVersionResult) {
+            case ROLLBACK_DETECTED:
+                return "保存済み最高versionをinstalled packageが下回るため、通信・資格・Task操作を停止しました。同じ署名元の最新packageを手動で再インストールし、Desktop側の未決Taskを照合してください。";
+            case PERSISTENCE_UNCERTAIN:
+                return "アプリ版の照合記録を安全に保存・読戻しできないため、通信・資格・Task操作を停止しました。データを消去せず、現在版のインストール状態を確認してください。";
+            default:
+                return "インストール済みアプリ版を確認できないため、通信・資格・Task操作を停止しました。対応するpackageを再取得して確認してください。";
+        }
     }
 
     static boolean requiresLocalNetworkRuntimePermission(int sdkInt) {
@@ -951,7 +1002,8 @@ public final class MainActivity extends Activity {
     }
 
     private DeviceCredential availableMobileTaskCredential() {
-        if (!foreground || busy || credentialStateUncertain || taskStateUncertain ||
+        if (packageVersionBlocked || !credentialStore.isPackageVersionReady() || !foreground || busy ||
+                credentialStateUncertain || taskStateUncertain ||
                 credentialStore.hasPendingDesktopRevocation() || !hasLocalNetworkPermission()) {
             return null;
         }

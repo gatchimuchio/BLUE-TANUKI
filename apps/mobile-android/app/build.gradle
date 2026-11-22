@@ -10,6 +10,7 @@ android {
         applicationId "com.bluetanuki.mobile"
         minSdk 23
         targetSdk 37
+        // Keep versionCode monotonic; the native client fences rollback below its stored high-water mark.
         versionCode 1
         versionName "0.1.0"
     }

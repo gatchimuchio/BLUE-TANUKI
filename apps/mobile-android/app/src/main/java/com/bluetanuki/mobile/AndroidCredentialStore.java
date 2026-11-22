@@ -23,6 +23,7 @@ import javax.crypto.spec.GCMParameterSpec;
 final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     private static final String KEY_ALIAS = "blue-tanuki-device-link-aes-v1";
     private static final String PREFS_NAME = "device_link_encrypted_v1";
+    private static final String PACKAGE_VERSION_HIGH_WATER_KEY = "package_version_high_water";
     private static final String DEVICE_ID_KEY = "device_id";
     private static final String VALUE_KEY = "credential";
     private static final String ACTIVE_DIGEST_KEY = "active_credential_sha256";
@@ -43,6 +44,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     private static AndroidCredentialStore instance;
     private final SharedPreferences preferences;
+    private boolean packageVersionReady;
 
     static synchronized AndroidCredentialStore forApplication(Context context) {
         if (instance == null) instance = new AndroidCredentialStore(context.getApplicationContext());
@@ -53,7 +55,37 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
         preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
     }
 
+    synchronized PackageVersionFence.Result verifyPackageVersion(long installedVersionCode) {
+        packageVersionReady = false;
+        PackageVersionFence.Result result = PackageVersionFence.verify(installedVersionCode,
+                new PackageVersionFence.HighWaterStore() {
+                    @Override
+                    public long read() {
+                        return preferences.contains(PACKAGE_VERSION_HIGH_WATER_KEY)
+                                ? preferences.getLong(PACKAGE_VERSION_HIGH_WATER_KEY, 0) : 0;
+                    }
+
+                    @Override
+                    public boolean write(long versionCode) {
+                        return preferences.edit()
+                                .putLong(PACKAGE_VERSION_HIGH_WATER_KEY, versionCode)
+                                .commit();
+                    }
+                });
+        packageVersionReady = result == PackageVersionFence.Result.READY;
+        return result;
+    }
+
+    synchronized boolean isPackageVersionReady() {
+        return packageVersionReady;
+    }
+
+    private void requirePackageVersionReady() throws CredentialStoreException {
+        if (!packageVersionReady) throw new CredentialStoreException();
+    }
+
     synchronized String loadOrCreateDeviceId() throws CredentialStoreException {
+        requirePackageVersionReady();
         String stored = preferences.getString(DEVICE_ID_KEY, null);
         if (stored != null) {
             validateDeviceId(stored);
@@ -81,7 +113,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized boolean canRotateDeviceId() {
-        return !contains() && !hasPendingTaskCheckpoint() && !hasPendingDesktopRevocation();
+        return packageVersionReady && !contains() && !hasPendingTaskCheckpoint() && !hasPendingDesktopRevocation();
     }
 
     synchronized boolean hasPendingTaskCheckpoint() {
@@ -98,6 +130,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized DeviceCredential readForDeviceLink() throws CredentialStoreException {
+        requirePackageVersionReady();
         return hasPendingDesktopRevocation() ? null : read();
     }
 
@@ -110,11 +143,12 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized boolean canPair(String expectedDeviceId) {
-        return expectedDeviceId.equals(preferences.getString(DEVICE_ID_KEY, null)) &&
+        return packageVersionReady && expectedDeviceId.equals(preferences.getString(DEVICE_ID_KEY, null)) &&
                 !contains() && !hasPendingDesktopRevocation();
     }
 
     private String persistDeviceId(String deviceId) throws CredentialStoreException {
+        requirePackageVersionReady();
         validateDeviceId(deviceId);
         if (!preferences.edit().putString(DEVICE_ID_KEY, deviceId).commit()) {
             throw new CredentialStoreException();
@@ -136,6 +170,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized DeviceCredential read() throws CredentialStoreException {
+        requirePackageVersionReady();
         String encoded = preferences.getString(VALUE_KEY, null);
         String activeDigest = preferences.getString(ACTIVE_DIGEST_KEY, null);
         if (encoded == null && activeDigest == null) {
@@ -180,6 +215,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized void saveAndVerify(DeviceCredential credential) throws CredentialStoreException {
+        requirePackageVersionReady();
         if (credential == null || credential.deviceId == null ||
                 !credential.deviceId.equals(loadOrCreateDeviceId()) || contains() || hasPendingDesktopRevocation()) {
             throw new CredentialStoreException();
@@ -244,6 +280,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     @Override
     public synchronized String begin(DeviceCredential expected) throws CredentialStoreException {
+        requirePackageVersionReady();
         if (hasPendingDesktopRevocation() || !expected.sameValue(read())) throw new CredentialStoreException();
         String activeDigest = preferences.getString(ACTIVE_DIGEST_KEY, null);
         String checkpoint = encryptTaskCheckpoint(activeDigest, REVOCATION_AAD);
@@ -257,6 +294,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     @Override
     public synchronized boolean isCurrent(DeviceCredential expected, String checkpoint) throws CredentialStoreException {
+        requirePackageVersionReady();
         if (!checkpoint.equals(preferences.getString(REVOCATION_KEY, null)) ||
                 !digest(checkpoint).equals(preferences.getString(REVOCATION_DIGEST_KEY, null)) ||
                 !expected.sameValue(read())) return false;
@@ -266,6 +304,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     @Override
     public synchronized void finish(DeviceCredential expected, String checkpoint, boolean revoked) throws CredentialStoreException {
+        requirePackageVersionReady();
         if (!isCurrent(expected, checkpoint)) throw new CredentialStoreException();
         SharedPreferences.Editor editor = preferences.edit().remove(REVOCATION_KEY).remove(REVOCATION_DIGEST_KEY);
         if (revoked) editor.remove(VALUE_KEY).remove(ACTIVE_DIGEST_KEY);
@@ -310,6 +349,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     synchronized List<DeviceLinkLocalRecoveryAudit.Event> readLocalRecoveryAudit()
             throws CredentialStoreException {
+        requirePackageVersionReady();
         String encoded = preferences.getString(RECOVERY_AUDIT_KEY, null);
         String activeDigest = preferences.getString(RECOVERY_AUDIT_DIGEST_KEY, null);
         if (encoded == null && activeDigest == null) return java.util.Collections.emptyList();
@@ -321,6 +361,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
 
     /** 一度の送信前に依頼の照合記録を暗号化して保存する。 */
     synchronized void markTaskSubmissionPending(PendingTaskSubmission pending) throws CredentialStoreException {
+        requirePackageVersionReady();
         if (pendingTaskSubmission() != null) throw new CredentialStoreException();
         String value = pending.encode();
         String encrypted = encryptTaskCheckpoint(value, TASK_PENDING_AAD);
@@ -338,6 +379,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized PendingTaskSubmission pendingTaskSubmission() throws CredentialStoreException {
+        requirePackageVersionReady();
         String encoded = preferences.getString(TASK_PENDING_KEY, null);
         String activeDigest = preferences.getString(TASK_PENDING_DIGEST_KEY, null);
         if (encoded == null && activeDigest == null) return null;
@@ -352,6 +394,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized void clearTaskSubmissionPending(PendingTaskSubmission expected) throws CredentialStoreException {
+        requirePackageVersionReady();
         PendingTaskSubmission current = pendingTaskSubmission();
         if (current == null || !expected.encode().equals(current.encode())) throw new CredentialStoreException();
         if (!preferences.edit().remove(TASK_PENDING_KEY).remove(TASK_PENDING_DIGEST_KEY).commit() ||
@@ -359,6 +402,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized void markTaskMutationPending(PendingTaskMutation mutation) throws CredentialStoreException {
+        requirePackageVersionReady();
         List<PendingTaskMutation> pending = new ArrayList<>(pendingTaskMutations());
         if (pending.size() >= PendingTaskMutation.MAX_PENDING) throw new CredentialStoreException();
         for (PendingTaskMutation current : pending) {
@@ -369,6 +413,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized List<PendingTaskMutation> pendingTaskMutations() throws CredentialStoreException {
+        requirePackageVersionReady();
         try {
             String encoded = preferences.getString(TASK_MUTATION_KEY, null);
             String activeDigest = preferences.getString(TASK_MUTATION_DIGEST_KEY, null);
@@ -384,6 +429,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     synchronized void clearTaskMutationPending(PendingTaskMutation expected) throws CredentialStoreException {
+        requirePackageVersionReady();
         List<PendingTaskMutation> pending = new ArrayList<>(pendingTaskMutations());
         for (int index = 0; index < pending.size(); index++) {
             if (expected.encode().equals(pending.get(index).encode())) {
@@ -396,6 +442,7 @@ final class AndroidCredentialStore implements DeviceLinkRevocation.Checkpoints {
     }
 
     private void writeTaskMutations(List<PendingTaskMutation> pending) throws CredentialStoreException {
+        requirePackageVersionReady();
         SharedPreferences.Editor editor = preferences.edit();
         String value = PendingTaskMutation.encodeList(pending);
         if (pending.isEmpty()) {

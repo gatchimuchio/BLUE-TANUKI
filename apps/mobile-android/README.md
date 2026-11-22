@@ -13,6 +13,7 @@ BLUE-TANUKIのAndroidネイティブ製品入口である。Desktop Device Link 
 
 ## 現在の実装
 
+- 起動時にinstalled `versionCode`をアプリ内の非backup状態と照合し、最新利用版より古いrollback、版情報の破損、保存/readback失敗では資格・Task・Device Link通信を止める。`versionCode`は単調増加させる。この防止は`PackageVersionFence`を含むpackageが対象で、guardを含まない旧binary自体を止めるものではない。記録はアプリデータ内にあるため、uninstallまたはアプリデータ消去後には残らず、Desktop側の未決Task照合やinstalled update/rollback試験の代用ではない。
 - ownerがDesktopで一回限りの招待を発行するときに使う128-bit device IDを生成・保存する。起動時に保存値を再読込し、旧形式の資格情報を移行するときはそのdevice IDを引き継ぐ。資格情報が保存されている間はdevice IDを変更できない。
 - native Android画面で招待情報を入力し、招待のdevice IDがこの端末のIDと一致することを確認する。pairingの前にDesktop hostと証明書fingerprintをownerが目視確認する。
 - privateまたはloopbackのIPv4へTLSで接続する。固定する証明書は招待に含まれるfingerprintと一致し、有効期間内でなければならない。
