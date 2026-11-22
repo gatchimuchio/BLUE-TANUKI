@@ -212,6 +212,11 @@ export async function fetchProviderWithPinnedEgress(
     throw new ProviderEgressError();
   }
 
+  // A reachable Provider endpoint is not permission to transfer Owner data.
+  // The runtime does not yet carry a J-issued ComputeGrant to this transport,
+  // so only explicitly local loopback Providers may receive request content.
+  if (!isLoopbackHostname(hostnameFor(url))) throw new ProviderEgressError();
+
   const target = await resolveProviderTarget(url, request.signal, resolveHost);
   const { hostname, addresses } = target;
 

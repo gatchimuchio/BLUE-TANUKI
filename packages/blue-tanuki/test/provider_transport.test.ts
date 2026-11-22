@@ -124,6 +124,22 @@ describe("provider pinned egress transport", () => {
     expect(socketConnections).toBe(0);
   });
 
+  it("blocks remote Provider egress before DNS when no J-issued ComputeGrant reaches the transport", async () => {
+    let dnsLookups = 0;
+    const resolveHost = async () => {
+      dnsLookups += 1;
+      return [{ address: "93.184.216.34", family: 4 as const }];
+    };
+
+    await expect(fetchProviderWithPinnedEgress(
+      "https://provider.example/v1",
+      { method: "POST", headers: { authorization: "Bearer synthetic-secret" }, body: "synthetic protected marker" },
+      resolveHost,
+    )).rejects.toBeInstanceOf(ProviderEgressError);
+
+    expect(dnsLookups).toBe(0);
+  });
+
   it("rejects mixed public and private DNS answers", async () => {
     const url = new URL("https://provider.invalid/v1");
     const resolveHost = async () => [
