@@ -241,6 +241,33 @@ interface OperationPlanSavedResultReturnProjectionBase {
   readonly may_execute: false;
 };
 
+type ComposioSearchSavedRegistrySummary =
+  | {
+    readonly status: "reviewed";
+    readonly registry_version: string;
+    readonly registry_entry_id: string;
+    readonly registry_entry_sha256: string;
+    readonly effects: readonly string[];
+    readonly binding_sha256: string;
+  }
+  | {
+    readonly status: "unreviewed";
+    readonly registry_version: string;
+    readonly effects: readonly [];
+    readonly reason_code: "action_or_schema_not_in_reviewed_registry";
+  };
+
+type ComposioSearchSavedToolSummary = {
+  readonly slug: string;
+  readonly name: string;
+  readonly toolkit: string;
+  readonly input_schema_sha256: string;
+  readonly output_schema_sha256: string;
+  readonly action_definition_sha256: string;
+  readonly is_deprecated: boolean | null;
+  readonly action_effect_registry: ComposioSearchSavedRegistrySummary;
+};
+
 export type OperationPlanSavedResultReturnProjection =
   | (OperationPlanSavedResultReturnProjectionBase & {
     readonly schema_version: "operation-plan-saved-result-return.v1";
@@ -393,6 +420,33 @@ export type OperationPlanSavedResultReturnProjection =
       readonly auth_scheme: string;
       readonly provider_region: "us" | "eu" | "unknown" | null;
     }[];
+    readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v14";
+    readonly operation: "composio.search";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly query_digest: string;
+    readonly tool_count: number;
+    readonly catalog_result_digest: string;
+    readonly tools: readonly ComposioSearchSavedToolSummary[];
+    readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v15";
+    readonly operation: "composio.execute";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly tool: string;
+    readonly intent: "read" | "write" | "send" | "delete" | "unknown";
+    readonly provider_http_status: number;
+    readonly external_mutation_sent: boolean;
+    readonly connected_account_id_sha256: string;
+    readonly input_schema_sha256: string;
+    readonly payload_digest: string;
+    readonly provider_result_digest: string;
+    readonly operation_plan_binding_digest: string;
     readonly source_is_untrusted: true;
   });
 
@@ -1655,6 +1709,17 @@ export function operationPlanResultValidationMatches(
       expected.input_schema_sha256 === identity.inputSchemaSha256 && expected.payload_digest === identity.payloadDigest &&
       expected.expected_provider_region === identity.expectedProviderRegion && projection !== undefined;
   }
+  if (validation.method === "composio_search_result_matches") {
+    const identity = composioSearchPlanIdentity(step);
+    const expected = validation.expected;
+    return step.operation === "composio.search" && step.adapter === "composio" && identity !== undefined &&
+      !!binding?.operation_plan_binding_digest && !!binding.executor_command_digest &&
+      isFileSearchResultRecord(expected) && Object.keys(expected).sort().join(",") ===
+        "limit,query_digest,schema_version,toolkit" &&
+      expected.schema_version === "blue-tanuki.composio-search-result-validation.v1" &&
+      expected.toolkit === identity.toolkit && expected.query_digest === identity.queryDigest &&
+      expected.limit === identity.limit && composioSearchResultProjection(step, output) !== undefined;
+  }
   if (validation.method === "composio_accounts_result_matches") {
     const identity = composioAccountsPlanIdentity(step);
     const expected = validation.expected;
@@ -2814,9 +2879,32 @@ function supportsSavedResultReturn(step: OperationStep): boolean {
     return operation === "message.send" || operation === "draft.send" || operation === "message.trash" ||
       operation === "message.modify" || (operation === "draft.create" && typeof step.parameters?.reply_to_message_id === "string");
   }
-  return ["github.write", "mcp.call", "composio.accounts", "composio.disconnect", "composio.execute",
+  return ["github.write", "mcp.call", "composio.search", "composio.accounts", "composio.disconnect", "composio.execute",
     "file.search", "file.edit", "file.write", "file.delete"]
     .includes(step.operation);
+}
+
+function composioSearchPlanIdentity(step: OperationStep): {
+  toolkit: string;
+  query: string;
+  queryDigest: string;
+  limit: number;
+} | undefined {
+  const parameters = step.parameters;
+  if (step.operation !== "composio.search" || step.adapter !== "composio" || !parameters ||
+      Object.keys(parameters).sort().join(",") !== "limit,query,toolkit" ||
+      typeof parameters.toolkit !== "string" || !/^[a-z0-9][a-z0-9_-]{0,119}$/.test(parameters.toolkit) ||
+      typeof parameters.query !== "string" || parameters.query.length < 1 || parameters.query.length > 500 ||
+      parameters.query.trim() !== parameters.query || /[\u0000-\u001f\u007f]/.test(parameters.query) ||
+      typeof parameters.limit !== "number" || !Number.isSafeInteger(parameters.limit) || parameters.limit < 1 ||
+      parameters.limit > 20) return undefined;
+  const serializedQuery = JSON.stringify(parameters.query);
+  return typeof serializedQuery === "string" ? {
+    toolkit: parameters.toolkit,
+    query: parameters.query,
+    queryDigest: createHash("sha256").update(serializedQuery, "utf8").digest("hex"),
+    limit: parameters.limit,
+  } : undefined;
 }
 
 function composioAccountsPlanIdentity(step: OperationStep): { toolkit: string; limit: number } | undefined {
@@ -2893,6 +2981,241 @@ function composioAccountsResultProjection(step: OperationStep, value: unknown): 
       provider_region: entry.provider_region });
   }
   return { toolkit: identity.toolkit, accounts };
+}
+
+function composioSearchRegistrySummary(value: unknown, action: {
+  toolkit: string;
+  tool: string;
+  inputSchemaSha256: string;
+  outputSchemaSha256: string;
+  actionDefinitionSha256: string;
+}): ComposioSearchSavedRegistrySummary | undefined {
+  if (!isFileSearchResultRecord(value)) return undefined;
+  if (value.status === "unreviewed") {
+    return Object.keys(value).sort().join(",") === "effects,reason_code,registry_version,status" &&
+      typeof value.registry_version === "string" && value.registry_version.length > 0 && value.registry_version.length <= 80 &&
+      Array.isArray(value.effects) && value.effects.length === 0 &&
+      value.reason_code === "action_or_schema_not_in_reviewed_registry"
+      ? { status: "unreviewed", registry_version: value.registry_version, effects: [],
+        reason_code: "action_or_schema_not_in_reviewed_registry" }
+      : undefined;
+  }
+  const registryKeys = "action_definition_sha256,binding_sha256,effects,input_schema_sha256,output_schema_sha256,registry_entry_id,registry_entry_sha256,registry_version,schema_version,status,tool,toolkit";
+  if (value.status !== "reviewed" || Object.keys(value).sort().join(",") !== registryKeys ||
+      value.schema_version !== "blue-tanuki.composio-action-effect-registry-binding.v1" ||
+      typeof value.registry_version !== "string" || value.registry_version.length < 1 || value.registry_version.length > 80 ||
+      typeof value.registry_entry_id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(value.registry_entry_id) ||
+      typeof value.registry_entry_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.registry_entry_sha256) ||
+      typeof value.binding_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.binding_sha256) ||
+      value.toolkit !== action.toolkit || value.tool !== action.tool ||
+      value.input_schema_sha256 !== action.inputSchemaSha256 || value.output_schema_sha256 !== action.outputSchemaSha256 ||
+      value.action_definition_sha256 !== action.actionDefinitionSha256 || !Array.isArray(value.effects) ||
+      value.effects.length < 1 || value.effects.length > 20 ||
+      value.effects.some((effect) => typeof effect !== "string" || ![
+        "observe", "read", "write", "delete", "external_send", "process_spawn", "browser_action",
+        "settings_change", "credential_access", "schedule_change", "rollback",
+      ].includes(effect))) return undefined;
+  const entryBase = {
+    schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1",
+    registry_version: value.registry_version,
+    registry_entry_id: value.registry_entry_id,
+    toolkit: value.toolkit,
+    tool: value.tool,
+    input_schema_sha256: value.input_schema_sha256,
+    output_schema_sha256: value.output_schema_sha256,
+    action_definition_sha256: value.action_definition_sha256,
+    effects: value.effects,
+  };
+  const { binding_sha256: _bindingSha256, ...bindingBase } = value;
+  if (operationPlanDigest(entryBase) !== value.registry_entry_sha256 ||
+      operationPlanDigest(bindingBase) !== value.binding_sha256) return undefined;
+  return {
+    status: "reviewed",
+    registry_version: value.registry_version,
+    registry_entry_id: value.registry_entry_id,
+    registry_entry_sha256: value.registry_entry_sha256,
+    effects: value.effects as string[],
+    binding_sha256: value.binding_sha256,
+  };
+}
+
+function composioSearchToolSummary(value: unknown, expectedToolkit: string): ComposioSearchSavedToolSummary | undefined {
+  if (!isFileSearchResultRecord(value) || Object.keys(value).sort().join(",") !==
+      "action_definition_sha256,action_effect_registry,description,input_parameters,input_schema_sha256,is_deprecated,name,no_auth,output_parameters,output_schema_sha256,scopes,slug,toolkit,version") return undefined;
+  const { slug, name, toolkit, description, version, no_auth: noAuth, is_deprecated: isDeprecated,
+    scopes, input_parameters: inputParameters, output_parameters: outputParameters } = value;
+  if (typeof slug !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(slug) ||
+      typeof name !== "string" || name.length < 1 || name.length > 240 ||
+      typeof toolkit !== "string" || toolkit !== expectedToolkit ||
+      typeof description !== "string" || description.length > 2_000 ||
+      version !== null && (typeof version !== "string" || version.length > 80) ||
+      noAuth !== null && typeof noAuth !== "boolean" ||
+      isDeprecated !== null && typeof isDeprecated !== "boolean" ||
+      !Array.isArray(scopes) || scopes.length > 100 ||
+      scopes.some((scope) => typeof scope !== "string" || scope.length > 2_000) ||
+      !isFileSearchResultRecord(inputParameters) || !isFileSearchResultRecord(outputParameters) ||
+      !OperationJsonValueSchema.safeParse(inputParameters).success ||
+      !OperationJsonValueSchema.safeParse(outputParameters).success) return undefined;
+  const inputSchemaSha256 = operationPlanDigest(inputParameters);
+  const outputSchemaSha256 = operationPlanDigest(outputParameters);
+  const actionDefinition = { slug, name, toolkit, description, version, no_auth: noAuth,
+    is_deprecated: isDeprecated, scopes, input_parameters: inputParameters, output_parameters: outputParameters };
+  const actionDefinitionSha256 = operationPlanDigest(actionDefinition);
+  if (value.input_schema_sha256 !== inputSchemaSha256 || value.output_schema_sha256 !== outputSchemaSha256 ||
+      value.action_definition_sha256 !== actionDefinitionSha256 ||
+      Buffer.byteLength(JSON.stringify(actionDefinition), "utf8") > 512_000) return undefined;
+  const registry = composioSearchRegistrySummary(value.action_effect_registry, {
+    toolkit, tool: slug, inputSchemaSha256, outputSchemaSha256, actionDefinitionSha256,
+  });
+  if (!registry) return undefined;
+  return { slug, name, toolkit, input_schema_sha256: inputSchemaSha256, output_schema_sha256: outputSchemaSha256,
+    action_definition_sha256: actionDefinitionSha256, is_deprecated: isDeprecated, action_effect_registry: registry };
+}
+
+function composioSearchResultProjection(step: OperationStep, value: unknown): OperationJsonValue | undefined {
+  const identity = composioSearchPlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value)) return undefined;
+  const requiredKeys = ["api_base_url", "api_version", "external_call_performed", "external_mutation_sent",
+    "metadata_used_for_authority", "next_action", "operation", "permission_granted", "provider", "query_digest",
+    "result_digest", "status", "tool_count", "tools", "truncated", "toolkit", "used_for_authority"];
+  const expectedKeys = [...requiredKeys, ...(Object.hasOwn(value, "composio_request_id") ? ["composio_request_id"] : [])].sort();
+  if (Object.keys(value).sort().join(",") !== expectedKeys.join(",") || value.provider !== "composio" ||
+      value.operation !== "search" || value.toolkit !== identity.toolkit || value.query_digest !== identity.queryDigest ||
+      value.external_call_performed !== true || value.external_mutation_sent !== false || value.permission_granted !== false ||
+      value.used_for_authority !== false || value.metadata_used_for_authority !== false || value.truncated !== false ||
+      value.api_version !== "v3.1" || typeof value.api_base_url !== "string" || value.api_base_url.length < 1 ||
+      value.api_base_url.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value.api_base_url) ||
+      typeof value.status !== "number" || !Number.isSafeInteger(value.status) || value.status < 200 || value.status >= 300 ||
+      typeof value.next_action !== "string" || value.next_action.length > 2_000 ||
+      typeof value.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.result_digest) ||
+      Object.hasOwn(value, "composio_request_id") && value.composio_request_id !== undefined &&
+        (typeof value.composio_request_id !== "string" || value.composio_request_id.length > 256 ||
+          /[\u0000-\u001f\u007f]/.test(value.composio_request_id)) ||
+      !Array.isArray(value.tools) || value.tools.length > identity.limit || value.tool_count !== value.tools.length ||
+      !Number.isSafeInteger(value.tool_count) || value.result_digest !== createHash("sha256")
+        .update(JSON.stringify(value.tools), "utf8").digest("hex")) return undefined;
+  const tools: ComposioSearchSavedToolSummary[] = [];
+  for (const entry of value.tools) {
+    const summary = composioSearchToolSummary(entry, identity.toolkit);
+    if (!summary) return undefined;
+    tools.push(summary);
+  }
+  return OperationJsonValueSchema.parse({
+    schema_version: "blue-tanuki.composio-search-result.v1",
+    provider: "composio",
+    operation: "search",
+    toolkit: identity.toolkit,
+    query_digest: identity.queryDigest,
+    tool_count: tools.length,
+    result_digest: value.result_digest,
+    tools,
+    external_call_performed: true,
+    external_mutation_sent: false,
+    api_version: "v3.1",
+    status: value.status,
+    truncated: false,
+    permission_granted: false,
+    metadata_used_for_authority: false,
+    used_for_authority: false,
+    may_execute: false,
+  });
+}
+
+function composioSearchStoredResultProjection(step: OperationStep, value: unknown): {
+  readonly tool_count: number;
+  readonly result_digest: string;
+  readonly tools: readonly ComposioSearchSavedToolSummary[];
+} | undefined {
+  const identity = composioSearchPlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value) || Object.keys(value).sort().join(",") !==
+      "api_version,external_call_performed,external_mutation_sent,may_execute,metadata_used_for_authority,operation,permission_granted,provider,query_digest,result_digest,schema_version,status,tool_count,toolkit,tools,truncated,used_for_authority" ||
+      value.schema_version !== "blue-tanuki.composio-search-result.v1" || value.provider !== "composio" ||
+      value.operation !== "search" || value.toolkit !== identity.toolkit || value.query_digest !== identity.queryDigest ||
+      value.external_call_performed !== true || value.external_mutation_sent !== false || value.may_execute !== false ||
+      value.permission_granted !== false || value.metadata_used_for_authority !== false || value.used_for_authority !== false ||
+      value.api_version !== "v3.1" || value.truncated !== false || typeof value.status !== "number" ||
+      !Number.isSafeInteger(value.status) || value.status < 200 || value.status >= 300 ||
+      typeof value.result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.result_digest) ||
+      !Array.isArray(value.tools) || value.tools.length > identity.limit || value.tool_count !== value.tools.length ||
+      !Number.isSafeInteger(value.tool_count)) return undefined;
+  const tools: ComposioSearchSavedToolSummary[] = [];
+  for (const raw of value.tools) {
+    if (!isFileSearchResultRecord(raw) || Object.keys(raw).sort().join(",") !==
+        "action_definition_sha256,action_effect_registry,input_schema_sha256,is_deprecated,name,output_schema_sha256,slug,toolkit" ||
+        typeof raw.slug !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(raw.slug) ||
+        typeof raw.name !== "string" || raw.name.length < 1 || raw.name.length > 240 || raw.toolkit !== identity.toolkit ||
+        typeof raw.input_schema_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.input_schema_sha256) ||
+        typeof raw.output_schema_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.output_schema_sha256) ||
+        typeof raw.action_definition_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.action_definition_sha256) ||
+        raw.is_deprecated !== null && typeof raw.is_deprecated !== "boolean") return undefined;
+    const registry = composioSearchStoredRegistrySummary(raw.action_effect_registry, {
+      toolkit: identity.toolkit, tool: raw.slug, inputSchemaSha256: raw.input_schema_sha256,
+      outputSchemaSha256: raw.output_schema_sha256, actionDefinitionSha256: raw.action_definition_sha256,
+    });
+    if (!registry) return undefined;
+    tools.push({ slug: raw.slug, name: raw.name, toolkit: identity.toolkit,
+      input_schema_sha256: raw.input_schema_sha256, output_schema_sha256: raw.output_schema_sha256,
+      action_definition_sha256: raw.action_definition_sha256, is_deprecated: raw.is_deprecated,
+      action_effect_registry: registry });
+  }
+  return { tool_count: value.tool_count as number, result_digest: value.result_digest, tools };
+}
+
+function composioSearchStoredRegistrySummary(value: unknown, action: {
+  toolkit: string; tool: string; inputSchemaSha256: string; outputSchemaSha256: string; actionDefinitionSha256: string;
+}): ComposioSearchSavedRegistrySummary | undefined {
+  if (!isFileSearchResultRecord(value)) return undefined;
+  if (value.status === "unreviewed") {
+    return Object.keys(value).sort().join(",") === "effects,reason_code,registry_version,status" &&
+      typeof value.registry_version === "string" && value.registry_version.length > 0 && value.registry_version.length <= 80 &&
+      Array.isArray(value.effects) && value.effects.length === 0 &&
+      value.reason_code === "action_or_schema_not_in_reviewed_registry"
+      ? { status: "unreviewed", registry_version: value.registry_version, effects: [],
+        reason_code: "action_or_schema_not_in_reviewed_registry" }
+      : undefined;
+  }
+  if (Object.keys(value).sort().join(",") !== "binding_sha256,effects,registry_entry_id,registry_entry_sha256,registry_version,status" ||
+      value.status !== "reviewed" || typeof value.registry_version !== "string" || value.registry_version.length < 1 ||
+      value.registry_version.length > 80 || typeof value.registry_entry_id !== "string" ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(value.registry_entry_id) ||
+      typeof value.registry_entry_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.registry_entry_sha256) ||
+      typeof value.binding_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.binding_sha256) ||
+      !Array.isArray(value.effects) || value.effects.length < 1 || value.effects.length > 20 ||
+      value.effects.some((effect) => typeof effect !== "string" || ![
+        "observe", "read", "write", "delete", "external_send", "process_spawn", "browser_action",
+        "settings_change", "credential_access", "schedule_change", "rollback",
+      ].includes(effect))) return undefined;
+  const entryBase = {
+    schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1",
+    registry_version: value.registry_version,
+    registry_entry_id: value.registry_entry_id,
+    toolkit: action.toolkit,
+    tool: action.tool,
+    input_schema_sha256: action.inputSchemaSha256,
+    output_schema_sha256: action.outputSchemaSha256,
+    action_definition_sha256: action.actionDefinitionSha256,
+    effects: value.effects,
+  };
+  const bindingBase = {
+    schema_version: "blue-tanuki.composio-action-effect-registry-binding.v1",
+    status: "reviewed",
+    registry_version: value.registry_version,
+    registry_entry_id: value.registry_entry_id,
+    registry_entry_sha256: value.registry_entry_sha256,
+    toolkit: action.toolkit,
+    tool: action.tool,
+    input_schema_sha256: action.inputSchemaSha256,
+    output_schema_sha256: action.outputSchemaSha256,
+    action_definition_sha256: action.actionDefinitionSha256,
+    effects: value.effects,
+  };
+  if (operationPlanDigest(entryBase) !== value.registry_entry_sha256 ||
+      operationPlanDigest(bindingBase) !== value.binding_sha256) return undefined;
+  return {
+    status: "reviewed", registry_version: value.registry_version,
+    registry_entry_id: value.registry_entry_id, registry_entry_sha256: value.registry_entry_sha256,
+    effects: value.effects as string[], binding_sha256: value.binding_sha256,
+  };
 }
 
 function composioDisconnectPlanIdentity(step: OperationStep): {
@@ -3025,9 +3348,61 @@ function composioExecuteResultProjection(step: OperationStep, value: unknown): O
   };
 }
 
+function composioExecuteStoredResultProjection(step: OperationStep, value: unknown): {
+  readonly intent: "read" | "write" | "send" | "delete" | "unknown";
+  readonly provider_http_status: number;
+  readonly external_mutation_sent: boolean;
+  readonly provider_result_digest: string;
+} | undefined {
+  const identity = composioExecutePlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value) || Object.keys(value).sort().join(",") !==
+      "connected_account_id_sha256,external_mutation_sent,input_schema_sha256,intent,may_execute,operation,payload_digest,provider_http_status,provider_result_digest,schema_version,tool,toolkit,truncated,used_for_authority" ||
+      value.schema_version !== "blue-tanuki.composio-execute-result.v1" || value.operation !== "execute" ||
+      value.toolkit !== identity.toolkit || value.tool !== identity.tool ||
+      value.connected_account_id_sha256 !== identity.connectedAccountIdDigest ||
+      value.input_schema_sha256 !== identity.inputSchemaSha256 || value.payload_digest !== identity.payloadDigest ||
+      value.intent !== "read" && value.intent !== "write" && value.intent !== "send" && value.intent !== "delete" &&
+        value.intent !== "unknown" || value.external_mutation_sent !== (value.intent !== "read") ||
+      typeof value.provider_http_status !== "number" || !Number.isSafeInteger(value.provider_http_status) ||
+      value.provider_http_status < 200 || value.provider_http_status >= 300 ||
+      typeof value.provider_result_digest !== "string" || !/^[a-f0-9]{64}$/.test(value.provider_result_digest) ||
+      value.truncated !== false || value.used_for_authority !== false || value.may_execute !== false) return undefined;
+  return {
+    intent: value.intent as "read" | "write" | "send" | "delete" | "unknown",
+    provider_http_status: value.provider_http_status as number,
+    external_mutation_sent: value.external_mutation_sent as boolean,
+    provider_result_digest: value.provider_result_digest,
+  };
+}
+
 /** A plan step may bind only when its declared target and bounded arguments match a wired adapter. */
 function hasConnectedPlanTarget(step: OperationStep): boolean {
   const parameters = step.parameters;
+  if (step.operation === "composio.search") {
+    const identity = composioSearchPlanIdentity(step);
+    const preparation = step.preparation;
+    const validation = preparation?.validation[0];
+    return identity !== undefined && step.adapter === "composio" && step.target.kind === "external_service" &&
+      step.target.id === "composio" && step.target.scope === identity.toolkit &&
+      Object.keys(step.target).sort().join(",") === "id,kind,scope" &&
+      step.adapter_is_authority === false && step.command_generated_by_adapter_only === false &&
+      step.effects.length === 3 && [...step.effects].sort().join(",") === "credential_access,external_send,read" &&
+      step.permission.risk === "high" && step.permission.approval_level === "L3_final_review" &&
+      step.permission.final_review_required && step.permission.approval_gate_required &&
+      step.permission.hds_brain_authority_required && preparation !== undefined &&
+      preparation.depends_on.length === 0 && preparation.bindings.length === 0 &&
+      preparation.preconditions.length === 0 && preparation.compensation.available === false &&
+      preparation.compensation.reason === "Composio catalog discovery is an external read and has no compensating mutation" &&
+      preparation.validation.length === 1 && validation?.check_id === "composio-search-result" &&
+      validation.method === "composio_search_result_matches" &&
+      operationPlanDigest(validation.target) === operationPlanDigest(step.target) &&
+      operationPlanDigest(validation.expected) === operationPlanDigest({
+        schema_version: "blue-tanuki.composio-search-result-validation.v1",
+        toolkit: identity.toolkit,
+        query_digest: identity.queryDigest,
+        limit: identity.limit,
+      });
+  }
   if (step.operation === "composio.accounts") {
     const identity = composioAccountsPlanIdentity(step);
     const preparation = step.preparation;
@@ -7018,6 +7393,84 @@ export class OperationPlanLedger {
         used_as_world_truth: false, used_for_authority: false, may_execute: false,
       };
     }
+    if (step.operation === "composio.search") {
+      const identity = composioSearchPlanIdentity(step);
+      const searchProjection = composioSearchStoredResultProjection(step, result.output);
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest ||
+          binding.execution_admission.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          binding.revision_digest !== current.digest || binding.result_observed_at_ms === undefined || !identity ||
+          !searchProjection || !hasConnectedPlanTarget(step) || validations.length !== 1 ||
+          validations[0]?.method !== "composio_search_result_matches" ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.operation !== "composio.search" || committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" || committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_composio_search_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v14",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms, operation: "composio.search", status: "verified",
+        toolkit: identity.toolkit, query_digest: identity.queryDigest, tool_count: searchProjection.tool_count,
+        catalog_result_digest: searchProjection.result_digest,
+        tools: searchProjection.tools, source_is_untrusted: true,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
+    if (step.operation === "composio.execute") {
+      const identity = composioExecutePlanIdentity(step);
+      const executeProjection = composioExecuteStoredResultProjection(step, result.output);
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest ||
+          !binding.execution_admission?.task_identity_digest ||
+          binding.execution_admission.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          binding.revision_digest !== current.digest || binding.result_observed_at_ms === undefined || !identity ||
+          !executeProjection || !hasConnectedPlanTarget(step) || validations.length !== 1 ||
+          validations[0]?.method !== "composio_execute_result_matches" ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.operation !== "composio.execute" || committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" || committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_composio_execute_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v15",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms, operation: "composio.execute", status: "verified",
+        toolkit: identity.toolkit, tool: identity.tool, intent: executeProjection.intent,
+        provider_http_status: executeProjection.provider_http_status,
+        external_mutation_sent: executeProjection.external_mutation_sent,
+        connected_account_id_sha256: identity.connectedAccountIdDigest,
+        input_schema_sha256: identity.inputSchemaSha256, payload_digest: identity.payloadDigest,
+        provider_result_digest: executeProjection.provider_result_digest,
+        operation_plan_binding_digest: binding.operation_plan_binding_digest, source_is_untrusted: true,
+        used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
     if (gmailDraftSend) {
       const parameters = step.parameters;
       const validations = step.preparation?.validation ?? [];
@@ -8624,14 +9077,16 @@ export class OperationPlanLedger {
       }
     } else if (b.status === "verified") {
       const saved = p.results.find((r) => r.step_id === b.step_id && r.result_id === result.result_id);
+      const composioProjectedOperation = b.operation === "composio.execute" || b.operation === "composio.search";
       const composioProjection = b.operation === "composio.execute"
-        ? composioExecuteResultProjection(b.prepared_step, fb.result) : undefined;
-      const composioValidationMatches = b.operation !== "composio.execute" ||
+        ? composioExecuteResultProjection(b.prepared_step, fb.result)
+        : b.operation === "composio.search" ? composioSearchResultProjection(b.prepared_step, fb.result) : undefined;
+      const composioValidationMatches = !composioProjectedOperation ||
         (b.prepared_step.preparation?.validation.length === 1 &&
           b.prepared_step.preparation.validation.every((validation) =>
             operationPlanResultValidationMatches(validation, b.prepared_step, fb.result, b)));
       if (!saved || saved.observed_at_ms !== result.observed_at_ms ||
-          !composioValidationMatches || (b.operation === "composio.execute"
+          !composioValidationMatches || (composioProjectedOperation
             ? !composioProjection || operationPlanDigest(saved.output) !== operationPlanDigest(composioProjection)
             : operationPlanDigest(saved.output) !== operationPlanDigest(fb.result))) throw new Error("plan_delivery_result_conflict");
     } else if (b.status === "provider_rejected") {
@@ -8659,11 +9114,15 @@ export class OperationPlanLedger {
         operationPlanResultValidationMatches(validation, step, output.data, b));
     const composioExecuteProjection = b.operation === "composio.execute" && output.success
       ? composioExecuteResultProjection(step, output.data) : undefined;
+    const composioSearchProjection = b.operation === "composio.search" && output.success
+      ? composioSearchResultProjection(step, output.data) : undefined;
+    const composioProjectedOperation = b.operation === "composio.execute" || b.operation === "composio.search";
+    const composioProjection = composioExecuteProjection ?? composioSearchProjection;
     const githubSummary = b.operation === "github.write" && validationMatched && output.success
       ? githubWriteReceiptSummary(output.data) : undefined;
     const verified = !!result && result.command_payload_digest === b.payload_digest && result.action_outcome === "reported_success" &&
       output.success && result.output_digest === createHash("sha256").update(JSON.stringify(feedback.result)).digest("hex") &&
-      validationMatched && (b.operation !== "composio.execute" || composioExecuteProjection !== undefined) &&
+      validationMatched && (!composioProjectedOperation || composioProjection !== undefined) &&
       (b.operation !== "github.write" || githubSummary?.mutation_status === "provider_accepted");
     const providerRejected = !!result && b.operation === "github.write" && result.action_outcome === "reported_rejection" &&
       feedback.status === "failed" && output.success && result.output_digest === createHash("sha256")
@@ -8683,7 +9142,7 @@ export class OperationPlanLedger {
       if (verified && output.success && result && b.operation !== "github.write") target.results.push({ plan_id: p.revisions[0]!.plan.plan_id,
         request_id: p.revisions[0]!.plan.request_id, step_id: b.step_id, result_id: result.result_id, operation: b.operation,
         status: "succeeded", target: step.target,
-        output: b.operation === "composio.execute" ? composioExecuteProjection! : output.data,
+        output: composioProjectedOperation ? composioProjection! : output.data,
         observed_at_ms: result.observed_at_ms,
         expires_at_ms: result.observed_at_ms + 600_000 });
     });

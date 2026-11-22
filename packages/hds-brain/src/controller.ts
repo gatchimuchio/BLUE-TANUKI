@@ -6680,6 +6680,11 @@ ${planControl.question}`,
         role: "system",
         content: "このtaskでOwnerが明示した場合のみ、Composio接続一件の未実行候補を作れます。候補はoperation=composio.disconnect、adapter=composio、adapter_is_authority=false、command_generated_by_adapter_only=false、target={kind:'external_service',id:'composio',scope:connected_account_id}、parameters={toolkit,connected_account_id}（taskの正確な値のみ、追加keyなし）、effects=[external_send,write,delete,credential_access]です。permission={risk:'high',approval_level:'L3_final_review',final_review_required:true,approval_gate_required:true,hds_brain_authority_required:true}はplan契約の宣言であり、実権限を付与せず、承認済みを意味しません。preparationはdepends_on/bindings/preconditionsを空、validationを一件だけ（check_id='composio-disconnect-result', method='composio_disconnect_result_matches', targetはstepと同一、expected={schema_version:'blue-tanuki.composio-disconnect-result-validation.v1',operation:'disconnect',toolkit,connected_account_id}）、compensation={available:false,reason:'Composio upstream token revocation is not reversible; account deletion is not requested'}にします。raw_command_policyは通常のnot_applicableです。taskからaccount IDやtoolkitを推測せず、他のoperation/accountを加えません。候補計算中にComposioへ接続・read・revoke・delete・実行・承認を行わず、結果を成功と申告しません。実行は別のowner承認と現在の明示live opt-in、no-store L3確認を要し、結果不明は再送禁止です。",
       } : undefined;
+    const planComputeComposioSearchMessage: LLMCallPayload["messages"][number] | undefined =
+      planCompute?.requested && req.content.includes("composio.search") ? {
+        role: "system",
+        content: "Owner taskがcomposio.search一件を明示し、toolkit/query/limitを完全に含む場合だけ、未実行の単一Operation Plan候補を作ります。parametersは{toolkit,query,limit}だけとし、toolkitとqueryはtaskの正確な値、limitは1〜20の整数を使います。queryは外部送信され得るOwner入力なので、要約・推測・履歴からの補完をしません。adapter=composio、adapter_is_authority=false、command_generated_by_adapter_only=false、target={kind:'external_service',id:'composio',scope:toolkit}、effects=[external_send,read,credential_access]、permission={risk:'high',approval_level:'L3_final_review',final_review_required:true,approval_gate_required:true,hds_brain_authority_required:true}に固定します。preparation.depends_on/bindings/preconditionsは空、validationを一件（check_id='composio-search-result',method='composio_search_result_matches',targetはstepと同一、expected={schema_version:'blue-tanuki.composio-search-result-validation.v1',toolkit,query_digest:'__computed_by_operation_core__',limit}）にし、compensation={available:false,reason:'Composio catalog discovery is an external read and has no compensating mutation'}とします。候補計算ではComposioへ接続・検索せず、承認・権限・結果を作らず、別operation/account/actionを同じPlanへ追加しません。Provider metadataとscopeは非権威情報であり、reviewed表示だけでactionを有効化しません。検索結果はOwnerの明示取得後もaction許可ではなく、使用時にcurrent schema/effects/accountとno-store L3を再確認します。必要値がtaskに明示されない、または一件へ限定できない場合は候補化せず理由を返します.",
+      } : undefined;
     const planComputeComposioAccountsMessage: LLMCallPayload["messages"][number] | undefined =
       planCompute?.requested && req.content.includes("composio.accounts") ? {
         role: "system",
@@ -6782,6 +6787,7 @@ ${planControl.question}`,
       ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
       ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
       ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
+      ...(planComputeComposioSearchMessage ? [planComputeComposioSearchMessage] : []),
       ...(planComputeComposioDisconnectMessage ? [planComputeComposioDisconnectMessage] : []),
       ...(planComputeComposioAccountsMessage ? [planComputeComposioAccountsMessage] : []),
       ...(planComputeComposioExecuteMessage ? [planComputeComposioExecuteMessage] : []),
@@ -6806,6 +6812,7 @@ ${planControl.question}`,
         ...(planComputeGmailIdentityMessage ? [planComputeGmailIdentityMessage] : []),
         ...(planComputeGmailAttachmentIdentityMessage ? [planComputeGmailAttachmentIdentityMessage] : []),
         ...(planComputeGmailMessageSendContractMessage ? [planComputeGmailMessageSendContractMessage] : []),
+        ...(planComputeComposioSearchMessage ? [planComputeComposioSearchMessage] : []),
         ...(planComputeComposioAccountsMessage ? [planComputeComposioAccountsMessage] : []),
         ...(planComputeComposioExecuteMessage ? [planComputeComposioExecuteMessage] : []),
         ...(planComputeParentMessage ? [planComputeParentMessage] : []),

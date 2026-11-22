@@ -90,7 +90,11 @@ export function inspectOperationCorePlannerOutput(
   if (mcpCandidate.digest_mismatch) {
     return rejectPlannerOutput("mcp.call arguments digest does not match the selected arguments");
   }
-  const composioCandidate = normalizeComposioExecuteDigestCandidate(mcpCandidate.candidate);
+  const composioSearchCandidate = normalizeComposioSearchDigestCandidate(mcpCandidate.candidate);
+  if (composioSearchCandidate.digest_mismatch) {
+    return rejectPlannerOutput("composio.search query digest does not match the selected query");
+  }
+  const composioCandidate = normalizeComposioExecuteDigestCandidate(composioSearchCandidate.candidate);
   if (composioCandidate.digest_mismatch) {
     return rejectPlannerOutput("composio.execute account or payload digest does not match the selected arguments");
   }
@@ -222,6 +226,43 @@ function normalizeMcpArgumentDigestCandidate(value: unknown): { candidate: unkno
     candidate: planChanged ? { ...plan, steps } : value,
     digest_mismatch: digestMismatch,
   };
+}
+
+/** C may select an exact Composio query but must not compute its result-binding digest. */
+function normalizeComposioSearchDigestCandidate(value: unknown): { candidate: unknown; digest_mismatch: boolean } {
+  const plan = asPlannerRecord(value);
+  if (!plan || !Array.isArray(plan.steps)) return { candidate: value, digest_mismatch: false };
+  let planChanged = false;
+  let digestMismatch = false;
+  const steps = plan.steps.map((rawStep) => {
+    const step = asPlannerRecord(rawStep);
+    const parameters = step ? asPlannerRecord(step.parameters) : undefined;
+    if (!step || step.operation !== "composio.search" || step.adapter !== "composio" || !parameters ||
+        typeof parameters.query !== "string") return rawStep;
+    const preparation = asPlannerRecord(step.preparation);
+    if (!preparation || !Array.isArray(preparation.validation)) return rawStep;
+    const serializedQuery = JSON.stringify(parameters.query);
+    if (typeof serializedQuery !== "string") return rawStep;
+    const queryDigest = createHash("sha256").update(serializedQuery, "utf8").digest("hex");
+    let stepChanged = false;
+    const validation = preparation.validation.map((rawValidation) => {
+      const item = asPlannerRecord(rawValidation);
+      if (!item || item.method !== "composio_search_result_matches") return rawValidation;
+      const expected = asPlannerRecord(item.expected);
+      if (!expected) return rawValidation;
+      const supplied = expected.query_digest;
+      if (supplied !== undefined && supplied !== "__computed_by_operation_core__" && supplied !== queryDigest) {
+        digestMismatch = true;
+        return rawValidation;
+      }
+      stepChanged = true;
+      return { ...item, expected: { ...expected, query_digest: queryDigest } };
+    });
+    if (!stepChanged) return rawStep;
+    planChanged = true;
+    return { ...step, preparation: { ...preparation, validation } };
+  });
+  return { candidate: planChanged ? { ...plan, steps } : value, digest_mismatch: digestMismatch };
 }
 
 /** C may select exact Composio parameters but must not compute identity or payload digests. */

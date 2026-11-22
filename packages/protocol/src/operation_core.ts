@@ -319,7 +319,7 @@ export const OperationStepPreparationSchema = z.object({
       "gmail_message_trash_result_matches", "gmail_message_modify_result_matches", "mcp_call_result_matches",
       "shell_exec_result_matches", "github_write_result_matches", "runtime_schedule_create_result_matches",
       "runtime_schedule_update_result_matches", "composio_disconnect_result_matches", "composio_accounts_result_matches",
-      "composio_execute_result_matches"]),
+      "composio_execute_result_matches", "composio_search_result_matches"]),
     target: OperationTargetSchema,
     expected: OperationJsonValueSchema,
   }).strict()).min(1).max(100),

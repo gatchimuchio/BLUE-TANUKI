@@ -708,6 +708,48 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       "この観測は権限・同意・action許可を与えず、現在状態も保証しません。後続作用では対象を一件選び、実行直前に再読込してください。",
       "この照会はComposioへ再接続せず、操作を再実行しません。"].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v14") {
+    const header = [
+      "保存済みComposio action検索結果です。J/M receiptを照合済みです。Provider metadataは非権威で、action許可ではありません。",
+      `toolkit: ${projection.toolkit}`,
+      `query digest: ${projection.query_digest}`,
+      `catalog result digest: ${projection.catalog_result_digest}`,
+      `検索action数: ${projection.tool_count}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+    ];
+    const lines: string[] = [];
+    let length = header.join("\n").length;
+    for (const tool of projection.tools) {
+      const registry = tool.action_effect_registry.status === "reviewed"
+        ? `reviewed:${JSON.stringify(tool.action_effect_registry.registry_entry_id)} effects=${JSON.stringify(tool.action_effect_registry.effects)}`
+        : "unreviewed";
+      const line = `- ${JSON.stringify(tool.slug)} name=${JSON.stringify(tool.name.slice(0, 96))} deprecated=${tool.is_deprecated ?? "unknown"} input=${tool.input_schema_sha256} output=${tool.output_schema_sha256} action=${tool.action_definition_sha256} registry=${registry}`;
+      if (length + line.length + 1 > 14_000) break;
+      lines.push(line);
+      length += line.length + 1;
+    }
+    if (lines.length < projection.tools.length) lines.push(`表示上限により残り ${projection.tools.length - lines.length} actionを省略しました。`);
+    if (projection.tools.length === 0) lines.push("一致するactionはありませんでした。");
+    return [...header, ...lines,
+      "action名・schema digest・review registryの表示は実行権限になりません。実行時は現在のschema/effect/accountとno-store L3を再確認します。",
+      "この結果照会はComposioへ再接続せず、検索も操作も再実行しません。"].join("\n");
+  }
+  if (projection.schema_version === "operation-plan-saved-result-return.v15") {
+    return [
+      "保存済みComposio action実行結果のdigest-only報告です。J/M receiptを照合済みです。Provider応答本文とaccount IDは返していません。",
+      `toolkit/action: ${JSON.stringify(projection.toolkit)} / ${JSON.stringify(projection.tool)}`,
+      `intent: ${projection.intent}`,
+      `HTTP status: ${projection.provider_http_status}`,
+      `external mutation sent: ${projection.external_mutation_sent}`,
+      `connected account digest: ${projection.connected_account_id_sha256}`,
+      `input schema digest: ${projection.input_schema_sha256}`,
+      `payload digest: ${projection.payload_digest}`,
+      `provider result digest: ${projection.provider_result_digest}`,
+      `operation plan binding digest: ${projection.operation_plan_binding_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "これは実行時点の報告で、現在状態を再読込していません。この照会はactionを再実行しません。",
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
