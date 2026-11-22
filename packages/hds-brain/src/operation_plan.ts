@@ -71,6 +71,7 @@ import {
   type OperationPlanMemoryInterpretationDependency,
   type OperationPlanReceiptReconciliationControl,
   type ComputeResourceUse,
+  computeResourceUseRequiresReview,
   canonicalExecutorCommandBytes,
   createGatewayInternalInboundRequest,
   isGatewayInternalInboundRequest,
@@ -556,9 +557,8 @@ export function operationPlanTaskIdentityDigest(plan: PlanState): string {
   return operationPlanTaskIdentityDigestFor(plan.owner, plan.channel, plan.goal, first);
 }
 
-function hasChargedComputeResourceUse(resourceUse: ComputeResourceUse | undefined): resourceUse is ComputeResourceUse {
-  return resourceUse !== undefined && (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 ||
-    resourceUse.charged_cost_amount > 0);
+function hasReviewableComputeResourceUse(resourceUse: ComputeResourceUse | undefined): resourceUse is ComputeResourceUse {
+  return resourceUse !== undefined && computeResourceUseRequiresReview(resourceUse);
 }
 
 function operationPlanResourceReviewStepDigest(step: OperationPlan["steps"][number]): string {
@@ -4531,7 +4531,7 @@ export class OperationPlanLedger {
     return structuredClone(updated);
   }
 
-  /** Validate one bounded J re-open after a charged failed wait computation. */
+  /** 既知の請求または未確定資源があるwait計算失敗について、Jの一回限りの再開放を検証する。 */
   inspectWaitResourceReview(control: OperationPlanWaitResourceReviewControl, caller: InboundRequest): {
     readonly wait_id: string;
     readonly task_identity_digest: string;
@@ -4552,11 +4552,11 @@ export class OperationPlanLedger {
     const wait = matches.length === 1 ? matches[0] : undefined;
     if (!wait || wait.state !== "resumed" ||
         (wait.compute_outcome !== "candidate_rejected" && wait.compute_outcome !== "failed") ||
-        !hasChargedComputeResourceUse(wait.compute_resource_use)) {
+        !hasReviewableComputeResourceUse(wait.compute_resource_use)) {
       throw new Error("plan_wait_resource_review_stale");
     }
     if (wait.resource_review) throw new Error("plan_wait_resource_review_already_started");
-    if (this.latestChargedFailedWaitForTask(wait.task_identity_digest)?.wait_id !== wait.wait_id) {
+    if (this.latestReviewableFailedWaitForTask(wait.task_identity_digest)?.wait_id !== wait.wait_id) {
       throw new Error("plan_wait_resource_review_stale");
     }
     const parentPlans = this.state.plans.filter((plan) =>
@@ -4913,7 +4913,7 @@ export class OperationPlanLedger {
       (candidate.state === "waiting" || (candidate.state === "resumed" && candidate.compute_outcome === "interrupted") ||
        (candidate.state === "resumed" && !candidate.resource_review &&
         (candidate.compute_outcome === "candidate_rejected" || candidate.compute_outcome === "failed") &&
-        hasChargedComputeResourceUse(candidate.compute_resource_use))));
+        hasReviewableComputeResourceUse(candidate.compute_resource_use))));
     if (!wait || !this.port || operationPlanDigest(this.port.load()) !== this.savedDigest) return null;
     const plan = this.state.plans.find((candidate) => operationPlanDigest(candidate.revisions[0]!.plan.plan_id) === wait.plan_id_digest);
     const binding = plan?.goal_purpose_binding;
@@ -5687,7 +5687,7 @@ export class OperationPlanLedger {
           operationPlanDigest(parentPlan.owner) !== parentWait.owner_digest ||
           operationPlanDigest(parentPlan.channel) !== parentWait.channel_digest ||
           origin.user !== parentPlan.owner || origin.channel !== parentPlan.channel ||
-          this.latestChargedFailedWaitForTask(parentWait.task_identity_digest)?.wait_id !== parentWait.wait_id) {
+          this.latestReviewableFailedWaitForTask(parentWait.task_identity_digest)?.wait_id !== parentWait.wait_id) {
         throw new Error("plan_wait_resource_review_binding_invalid");
       }
       if (this.taskGoalIsAchieved(parentWait.task_identity_digest)) throw new Error("plan_task_goal_already_achieved");
@@ -6032,16 +6032,16 @@ export class OperationPlanLedger {
     return true;
   }
 
-  private latestChargedFailedWaitForTask(taskIdentityDigest: string): OperationPlanWaitState | undefined {
+  private latestReviewableFailedWaitForTask(taskIdentityDigest: string): OperationPlanWaitState | undefined {
     return (this.state.waits ?? []).filter((wait) => wait.task_identity_digest === taskIdentityDigest &&
       (wait.compute_outcome === "candidate_rejected" || wait.compute_outcome === "failed") &&
-      hasChargedComputeResourceUse(wait.compute_resource_use))
+      hasReviewableComputeResourceUse(wait.compute_resource_use))
       .sort((left, right) => (right.compute_completed_at_ms ?? 0) - (left.compute_completed_at_ms ?? 0) ||
         right.wait_id.localeCompare(left.wait_id))[0];
   }
 
   private assertWaitResourceReviewAllowsPlan(plan: PlanState): void {
-    const latest = this.latestChargedFailedWaitForTask(operationPlanTaskIdentityDigest(plan));
+    const latest = this.latestReviewableFailedWaitForTask(operationPlanTaskIdentityDigest(plan));
     if (!latest) return;
     const linkedPlanId = latest.resource_review?.candidate_plan_id_digest;
     if (latest.resource_review?.status === "candidate_retained" &&

@@ -224,6 +224,12 @@ export const ComputeResourceUseSchema = z.object({
 });
 export type ComputeResourceUse = z.infer<typeof ComputeResourceUseSchema>;
 
+/** 未確定の資源量は数値予約額が0でもJの再検討対象とする。 */
+export function computeResourceUseRequiresReview(resourceUse: ComputeResourceUse): boolean {
+  return resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0 ||
+    resourceUse.tokens_usage_status === "unknown" || resourceUse.cost_status === "unknown";
+}
+
 const AgentDelegationResultEvidenceDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const AgentDelegationChildResultEvidenceV1Schema = z.discriminatedUnion("outcome", [
   z.object({

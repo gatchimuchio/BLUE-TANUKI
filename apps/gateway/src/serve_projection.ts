@@ -19,6 +19,7 @@ import {
   OperationPlanWaitResourceReviewSchema,
   OperationPlanComputeSourceObservationSchema,
   ComputeResourceUseSchema,
+  computeResourceUseRequiresReview,
   prepareOperationPlan,
   inspectOperationCommandExecutionResult,
   type ExecuteCommand,
@@ -488,7 +489,7 @@ export function projectOperationPlanStatus(value: unknown): OperationPlanStatusP
     }
     const resourceReviewEligible = Boolean(resourceUse &&
       (outcome === "candidate_rejected" || outcome === "failed") &&
-      (resourceUse.charged_compute_ms > 0 || resourceUse.charged_tokens > 0 || resourceUse.charged_cost_amount > 0));
+      computeResourceUseRequiresReview(resourceUse));
     const resourceReviewRequired = resourceReviewEligible && !resourceReview;
     if (wait.resource_review !== undefined && (!resourceReview || !resourceReviewEligible ||
         resourceReview.requested_at_ms < (completedAt as number))) {

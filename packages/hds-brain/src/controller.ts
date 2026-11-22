@@ -38,6 +38,7 @@ import {
   parseInboundRequestAtBoundary,
   LLMCallFailureSchema,
   LLMToolCallCandidateSchema,
+  computeResourceUseRequiresReview,
   SkepticalReviewRequestSchema,
   LLMFallbackAuthorizationSchema,
   inspectOperationCommandExecutionResult,
@@ -4441,8 +4442,7 @@ ${planControl.question}`,
         target_digest: recorded.candidate_plan_id_digest ?? recorded.plan_id_digest,
         reason: waitComputeOutcome, used_for_authority: false, timestamp: this.nowMs() });
       if (computeResourceUse && waitComputeOutcome !== "candidate_retained" &&
-          (computeResourceUse.charged_compute_ms > 0 || computeResourceUse.charged_tokens > 0 ||
-            computeResourceUse.charged_cost_amount > 0)) {
+          computeResourceUseRequiresReview(computeResourceUse)) {
         this.audit.append({ kind: "operation_plan", event: "wait_resource_consumed_without_progress",
           request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
           projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
@@ -4464,8 +4464,7 @@ ${planControl.question}`,
         candidate_digest: recorded.task_identity_digest, target_digest: recorded.wait_id,
         reason: resourceReviewOutcome, used_for_authority: false, timestamp: this.nowMs() });
       if (computeResourceUse && resourceReviewOutcome !== "candidate_retained" &&
-          (computeResourceUse.charged_compute_ms > 0 || computeResourceUse.charged_tokens > 0 ||
-            computeResourceUse.charged_cost_amount > 0)) {
+          computeResourceUseRequiresReview(computeResourceUse)) {
         this.audit.append({ kind: "operation_plan", event: "wait_resource_review_consumed_without_progress",
           request_id: sourceLog?.request_id ?? null, command_id: fb.command_id,
           projection_digest: operationPlanDigest(recorded), proposal_digest: sha256(computeResourceUse),
