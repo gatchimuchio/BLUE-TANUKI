@@ -1696,26 +1696,30 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (count === 0) {
           if (lines[6] !== "一致するactionはありませんでした。") return null;
         } else {
-          const actionLinePattern = /^- ("(?:[^"\\\\]|\\.)*") name=("(?:[^"\\\\]|\\.)*") deprecated=(true|false|unknown) input=([a-f0-9]{64}) output=([a-f0-9]{64}) action=([a-f0-9]{64}) registry=(.*)$/;
+          const actionLinePattern = /^- ("(?:[^"\\\\]|\\.)*") name=("(?:[^"\\\\]|\\.)*")(?: provider-version=(null|"(?:[^"\\\\]|\\.)*"))? deprecated=(true|false|unknown) input=([a-f0-9]{64}) output=([a-f0-9]{64}) action=([a-f0-9]{64}) registry=(.*)$/;
           const reviewedPattern = /^reviewed:("(?:[^"\\\\]|\\.)*") effects=(\\[.*\\])$/;
           for (let index = 0; index < count; index += 1) {
             const match = actionLinePattern.exec(lines[6 + index]);
             if (!match) return null;
             let slug;
             let name;
+            let providerVersion = null;
             try {
               slug = JSON.parse(match[1]);
               name = JSON.parse(match[2]);
+              if (match[3] && match[3] !== "null") providerVersion = JSON.parse(match[3]);
             } catch { return null; }
             if (typeof slug !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(slug) ||
                 JSON.stringify(slug) !== match[1] || typeof name !== "string" || name.length < 1 || name.length > 96 ||
-                JSON.stringify(name) !== match[2] || seen.has(slug.toLowerCase())) return null;
+                JSON.stringify(name) !== match[2] ||
+                providerVersion !== null && (typeof providerVersion !== "string" || providerVersion.length > 80 ||
+                  JSON.stringify(providerVersion) !== match[3]) || seen.has(slug.toLowerCase())) return null;
             seen.add(slug.toLowerCase());
             let registry;
-            if (match[7] === "unreviewed") {
+            if (match[8] === "unreviewed") {
               registry = { status: "unreviewed", effects: [] };
             } else {
-              const reviewed = reviewedPattern.exec(match[7]);
+              const reviewed = reviewedPattern.exec(match[8]);
               if (!reviewed) return null;
               let entryId;
               let effects;
@@ -1730,8 +1734,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
                   new Set(effects).size !== effects.length || JSON.stringify(effects) !== reviewed[2]) return null;
               registry = { status: "reviewed", entry_id: entryId, effects: effects };
             }
-            tools.push({ slug: slug, name: name, deprecated: match[3] === "unknown" ? null : match[3] === "true",
-              input_schema_sha256: match[4], output_schema_sha256: match[5], action_definition_sha256: match[6],
+            tools.push({ slug: slug, name: name, provider_version: providerVersion,
+              deprecated: match[4] === "unknown" ? null : match[4] === "true",
+              input_schema_sha256: match[5], output_schema_sha256: match[6], action_definition_sha256: match[7],
               action_effect_registry: registry });
           }
         }
@@ -1795,6 +1800,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const reason = !selectionReady ? "Connectors再読込が必要" : !reviewed ? "review registry未登録" :
             !nonDeprecated ? "deprecated状態未確定または非推奨" : !allowlisted ? "現在のaction allowlist外またはrevoked" : "実行候補に選択";
           button.textContent = reason + ": " + parsed.toolkit + "/" + tool.slug + " · " + tool.name +
+            " · catalog version=" + (tool.provider_version === null ? "unknown" : JSON.stringify(tool.provider_version)) +
             " · effects=" + tool.action_effect_registry.effects.join(",");
           if (eligible) button.addEventListener("click", function () {
             if (state.composioExecuteSubmitting === true) return;

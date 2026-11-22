@@ -709,7 +709,8 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       "この観測は権限・同意・action許可を与えず、現在状態も保証しません。後続作用では対象を一件選び、実行直前に再読込してください。",
       "この照会はComposioへ再接続せず、操作を再実行しません。"].join("\n");
   }
-  if (projection.schema_version === "operation-plan-saved-result-return.v14") {
+  if (projection.schema_version === "operation-plan-saved-result-return.v14" ||
+      projection.schema_version === "operation-plan-saved-result-return.v18") {
     const header = [
       "保存済みComposio action検索結果です。J/M receiptを照合済みです。Provider metadataは非権威で、action許可ではありません。",
       `toolkit: ${projection.toolkit}`,
@@ -724,7 +725,9 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       const registry = tool.action_effect_registry.status === "reviewed"
         ? `reviewed:${JSON.stringify(tool.action_effect_registry.registry_entry_id)} effects=${JSON.stringify(tool.action_effect_registry.effects)}`
         : "unreviewed";
-      const line = `- ${JSON.stringify(tool.slug)} name=${JSON.stringify(tool.name.slice(0, 96))} deprecated=${tool.is_deprecated ?? "unknown"} input=${tool.input_schema_sha256} output=${tool.output_schema_sha256} action=${tool.action_definition_sha256} registry=${registry}`;
+      const providerVersion = "provider_version" in tool
+        ? ` provider-version=${JSON.stringify(tool.provider_version)}` : "";
+      const line = `- ${JSON.stringify(tool.slug)} name=${JSON.stringify(tool.name.slice(0, 96))}${providerVersion} deprecated=${tool.is_deprecated ?? "unknown"} input=${tool.input_schema_sha256} output=${tool.output_schema_sha256} action=${tool.action_definition_sha256} registry=${registry}`;
       if (length + line.length + 1 > 14_000) break;
       lines.push(line);
       length += line.length + 1;

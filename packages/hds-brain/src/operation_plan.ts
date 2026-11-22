@@ -257,7 +257,7 @@ type ComposioSearchSavedRegistrySummary =
     readonly reason_code: "action_or_schema_not_in_reviewed_registry";
   };
 
-type ComposioSearchSavedToolSummary = {
+type ComposioSearchSavedToolSummaryBase = {
   readonly slug: string;
   readonly name: string;
   readonly toolkit: string;
@@ -266,6 +266,10 @@ type ComposioSearchSavedToolSummary = {
   readonly action_definition_sha256: string;
   readonly is_deprecated: boolean | null;
   readonly action_effect_registry: ComposioSearchSavedRegistrySummary;
+};
+
+type ComposioSearchSavedToolSummary = ComposioSearchSavedToolSummaryBase & {
+  readonly provider_version: string | null;
 };
 
 export type OperationPlanSavedResultReturnProjection =
@@ -430,7 +434,7 @@ export type OperationPlanSavedResultReturnProjection =
     readonly query_digest: string;
     readonly tool_count: number;
     readonly catalog_result_digest: string;
-    readonly tools: readonly ComposioSearchSavedToolSummary[];
+    readonly tools: readonly ComposioSearchSavedToolSummaryBase[];
     readonly source_is_untrusted: true;
   })
   | (OperationPlanSavedResultReturnProjectionBase & {
@@ -492,6 +496,17 @@ export type OperationPlanSavedResultReturnProjection =
     readonly provider_request_id_digest: string | null;
     readonly provider_result_digest: string;
     readonly operation_plan_binding_digest: string;
+    readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v18";
+    readonly operation: "composio.search";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly query_digest: string;
+    readonly tool_count: number;
+    readonly catalog_result_digest: string;
+    readonly tools: readonly ComposioSearchSavedToolSummary[];
     readonly source_is_untrusted: true;
   });
 
@@ -3130,7 +3145,8 @@ function composioSearchToolSummary(value: unknown, expectedToolkit: string): Com
   });
   if (!registry) return undefined;
   return { slug, name, toolkit, input_schema_sha256: inputSchemaSha256, output_schema_sha256: outputSchemaSha256,
-    action_definition_sha256: actionDefinitionSha256, is_deprecated: isDeprecated, action_effect_registry: registry };
+    action_definition_sha256: actionDefinitionSha256, is_deprecated: isDeprecated, provider_version: version,
+    action_effect_registry: registry };
 }
 
 function composioSearchResultProjection(step: OperationStep, value: unknown): OperationJsonValue | undefined {
@@ -3201,14 +3217,20 @@ function composioSearchStoredResultProjection(step: OperationStep, value: unknow
       !Number.isSafeInteger(value.tool_count)) return undefined;
   const tools: ComposioSearchSavedToolSummary[] = [];
   for (const raw of value.tools) {
-    if (!isFileSearchResultRecord(raw) || Object.keys(raw).sort().join(",") !==
-        "action_definition_sha256,action_effect_registry,input_schema_sha256,is_deprecated,name,output_schema_sha256,slug,toolkit" ||
+    if (!isFileSearchResultRecord(raw)) return undefined;
+    const storedToolKeys = Object.keys(raw).sort().join(",");
+    const hasProviderVersion = Object.hasOwn(raw, "provider_version");
+    if (storedToolKeys !== (hasProviderVersion
+          ? "action_definition_sha256,action_effect_registry,input_schema_sha256,is_deprecated,name,output_schema_sha256,provider_version,slug,toolkit"
+          : "action_definition_sha256,action_effect_registry,input_schema_sha256,is_deprecated,name,output_schema_sha256,slug,toolkit") ||
         typeof raw.slug !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(raw.slug) ||
         typeof raw.name !== "string" || raw.name.length < 1 || raw.name.length > 240 || raw.toolkit !== identity.toolkit ||
         typeof raw.input_schema_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.input_schema_sha256) ||
         typeof raw.output_schema_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.output_schema_sha256) ||
         typeof raw.action_definition_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.action_definition_sha256) ||
-        raw.is_deprecated !== null && typeof raw.is_deprecated !== "boolean") return undefined;
+        raw.is_deprecated !== null && typeof raw.is_deprecated !== "boolean" ||
+        hasProviderVersion && raw.provider_version !== null &&
+          (typeof raw.provider_version !== "string" || raw.provider_version.length > 80)) return undefined;
     const registry = composioSearchStoredRegistrySummary(raw.action_effect_registry, {
       toolkit: identity.toolkit, tool: raw.slug, inputSchemaSha256: raw.input_schema_sha256,
       outputSchemaSha256: raw.output_schema_sha256, actionDefinitionSha256: raw.action_definition_sha256,
@@ -3217,6 +3239,7 @@ function composioSearchStoredResultProjection(step: OperationStep, value: unknow
     tools.push({ slug: raw.slug, name: raw.name, toolkit: identity.toolkit,
       input_schema_sha256: raw.input_schema_sha256, output_schema_sha256: raw.output_schema_sha256,
       action_definition_sha256: raw.action_definition_sha256, is_deprecated: raw.is_deprecated,
+      provider_version: hasProviderVersion ? raw.provider_version as string | null : null,
       action_effect_registry: registry });
   }
   return { tool_count: value.tool_count as number, result_digest: value.result_digest, tools };
@@ -7721,7 +7744,7 @@ export class OperationPlanLedger {
         throw new Error("plan_saved_result_state_changed");
       }
       return {
-        schema_version: "operation-plan-saved-result-return.v14",
+        schema_version: "operation-plan-saved-result-return.v18",
         plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
         step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
         result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
