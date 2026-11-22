@@ -227,7 +227,7 @@ export interface ExecutorDeps {
 }
 
 export interface AgentWorkerLifecycleEvent {
-  schema_version: "blue-tanuki.agent-worker-lifecycle.v1";
+  schema_version: "blue-tanuki.agent-worker-lifecycle.v1" | "blue-tanuki.agent-worker-lifecycle.v2";
   parent_command_id: string;
   parent_command_digest: string;
   child_task_digest: string;
@@ -237,6 +237,7 @@ export interface AgentWorkerLifecycleEvent {
   observed_at_ms: number;
   output_observed?: true;
   output_characters?: number;
+  late_output_digest?: string;
   resource_use_digest?: string;
   used_for_authority: false;
   may_execute: false;
@@ -4182,6 +4183,13 @@ function digestLLMRequest(request: LLMRequest): string {
   return digest.digest("hex");
 }
 
+function digestAgentChildLateOutput(content: string): string {
+  return createHash("sha256")
+    .update("blue-tanuki.agent-child-late-output.v1\0")
+    .update(content, "utf8")
+    .digest("hex");
+}
+
 const AGENT_WORKER_CANCEL_OBSERVATION_GRACE_MS = 1_000;
 
 // Delegation wraps an existing plan-compute context. Keep the inner context's
@@ -4313,10 +4321,11 @@ async function withAgentDelegationCandidates(input: {
     .update("blue-tanuki.agent.parent-command.v1\0").update(input.command_id).digest("hex");
   const provider = safeProviderLabel(input.provider_request.backend_hint ?? "configured-provider");
   const reportLifecycle = (event: Pick<AgentWorkerLifecycleEvent, "child_task_digest" | "role" | "state"> &
-    Partial<Pick<AgentWorkerLifecycleEvent, "output_observed" | "output_characters" | "resource_use_digest">>): boolean => {
+    Partial<Pick<AgentWorkerLifecycleEvent,
+      "output_observed" | "output_characters" | "late_output_digest" | "resource_use_digest">>): boolean => {
     try {
       return input.lifecycle_observer!({
-        schema_version: "blue-tanuki.agent-worker-lifecycle.v1",
+        schema_version: "blue-tanuki.agent-worker-lifecycle.v2",
         parent_command_id: input.command_id,
         parent_command_digest: parentCommandDigest,
         child_task_digest: event.child_task_digest,
@@ -4325,6 +4334,7 @@ async function withAgentDelegationCandidates(input: {
         observed_at_ms: Date.now(),
         ...(event.output_observed ? { output_observed: true as const } : {}),
         ...(event.output_characters !== undefined ? { output_characters: event.output_characters } : {}),
+        ...(event.late_output_digest ? { late_output_digest: event.late_output_digest } : {}),
         ...(event.resource_use_digest ? { resource_use_digest: event.resource_use_digest } : {}),
         used_for_authority: false,
         may_execute: false,
@@ -4422,7 +4432,8 @@ async function withAgentDelegationCandidates(input: {
             reportLifecycle({ child_task_digest: childTaskDigest, role,
               state: settlement.kind === "resolved" ? "late_result_discarded" : "settled_after_abort",
               ...(typeof lateContent === "string" ? { output_observed: true as const,
-                output_characters: lateContent.length } : {}),
+                output_characters: lateContent.length,
+                late_output_digest: digestAgentChildLateOutput(lateContent) } : {}),
               ...(resourceUseDigest(lateResourceUse) ? { resource_use_digest: resourceUseDigest(lateResourceUse)! } : {}) });
           },
         });
@@ -4437,7 +4448,8 @@ async function withAgentDelegationCandidates(input: {
         if (childSignal.aborted || input.signal?.aborted) {
           if (!reportLifecycle({ child_task_digest: childTaskDigest, role, state: "late_result_discarded",
             ...(typeof result.content === "string" ? { output_observed: true as const,
-              output_characters: result.content.length } : {}),
+              output_characters: result.content.length,
+              late_output_digest: digestAgentChildLateOutput(result.content) } : {}),
             ...(usageDigest ? { resource_use_digest: usageDigest } : {}) })) {
             throw new Error("agent_delegation_lifecycle_evidence_unavailable");
           }

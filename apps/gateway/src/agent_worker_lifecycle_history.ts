@@ -31,6 +31,7 @@ export function agentWorkerLifecycleHistoryInput(event: AgentWorkerLifecycleEvid
       observed_at_ms: observation.observed_at_ms,
       ...(observation.output_observed ? { output_observed: true } : {}),
       ...(observation.output_characters !== undefined ? { output_characters: observation.output_characters } : {}),
+      ...(observation.late_output_digest ? { late_output_digest: observation.late_output_digest } : {}),
       ...(observation.resource_use_digest ? { resource_use_digest: observation.resource_use_digest } : {}),
       used_for_authority: false,
       may_execute: false,

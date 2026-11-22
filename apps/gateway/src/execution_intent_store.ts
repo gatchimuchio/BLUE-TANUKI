@@ -964,8 +964,11 @@ function validateAgentWorkerLifecycleEvidenceEvent(value: unknown): asserts valu
   }
   const event = asRecord(record.event);
   const allowedKeys = ["schema_version", "parent_command_id", "parent_command_digest", "child_task_digest", "role", "state",
-    "observed_at_ms", "output_observed", "output_characters", "resource_use_digest", "used_for_authority", "may_execute"];
-  if (!event || !hasOnlyKeys(event, allowedKeys) || event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" ||
+    "observed_at_ms", "output_observed", "output_characters", "resource_use_digest", "used_for_authority", "may_execute",
+    ...(event?.schema_version === "blue-tanuki.agent-worker-lifecycle.v2" ? ["late_output_digest"] : [])];
+  const isLifecycleV1 = event?.schema_version === "blue-tanuki.agent-worker-lifecycle.v1";
+  const isLifecycleV2 = event?.schema_version === "blue-tanuki.agent-worker-lifecycle.v2";
+  if (!event || !hasOnlyKeys(event, allowedKeys) || (!isLifecycleV1 && !isLifecycleV2) ||
       typeof event.parent_command_id !== "string" || !/^[^\u0000-\u001f\u007f]{1,256}$/.test(event.parent_command_id) ||
       event.parent_command_digest !== createHash("sha256").update("blue-tanuki.agent.parent-command.v1\0")
         .update(event.parent_command_id).digest("hex") || !/^[a-f0-9]{64}$/.test(String(event.child_task_digest)) ||
@@ -976,6 +979,11 @@ function validateAgentWorkerLifecycleEvidenceEvent(value: unknown): asserts valu
       (event.output_observed !== undefined && event.output_observed !== true) ||
       (event.output_characters !== undefined && (!Number.isSafeInteger(event.output_characters) ||
         Number(event.output_characters) < 0 || event.output_observed !== true)) ||
+      (event.late_output_digest !== undefined && (!isLifecycleV2 || event.state !== "late_result_discarded" ||
+        event.output_observed !== true || typeof event.late_output_digest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(event.late_output_digest))) ||
+      (isLifecycleV2 && event.state === "late_result_discarded" && event.output_observed === true &&
+        typeof event.late_output_digest !== "string") ||
       (event.resource_use_digest !== undefined && !/^[a-f0-9]{64}$/.test(String(event.resource_use_digest))) ||
       event.used_for_authority !== false || event.may_execute !== false) {
     throw new Error("execution_agent_worker_event_invalid");

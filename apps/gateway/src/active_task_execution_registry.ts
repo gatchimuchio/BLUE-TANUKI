@@ -164,7 +164,8 @@ export class ActiveTaskExecutionRegistry {
 
   observeAgentWorkerLifecycle(event: AgentWorkerLifecycleEvent): void {
     const execution = this.active.get(event.parent_command_id);
-    if (!execution || event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" ||
+    if (!execution || (event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v1" &&
+        event.schema_version !== "blue-tanuki.agent-worker-lifecycle.v2") ||
         event.used_for_authority !== false || event.may_execute !== false ||
         event.parent_command_digest !== createHash("sha256")
           .update("blue-tanuki.agent.parent-command.v1\0").update(event.parent_command_id).digest("hex") ||
