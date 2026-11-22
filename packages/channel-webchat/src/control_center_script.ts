@@ -10,6 +10,7 @@ import {
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW,
   SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE,
+  SETTINGS_WRITE_COMPOSIO_API_KEY_CHANGE,
   SettingsWriteLlmProviderSchema,
 } from "@blue-tanuki/protocol";
 
@@ -28,6 +29,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       const SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_CHANGE)};
       const SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW)};
       const SETTINGS_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE = ${JSON.stringify(SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE)};
+      const SETTINGS_COMPOSIO_API_KEY_CHANGE = ${JSON.stringify(SETTINGS_WRITE_COMPOSIO_API_KEY_CHANGE)};
       const SETTINGS_GOOGLE_READ_API_HOSTS = ${JSON.stringify(Object.fromEntries(Object.entries(SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS)
         .map(([scope, target]) => [scope, target.api_hosts])))};
       const GOOGLE_READ_CREDENTIAL_LABELS = { gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", shared: "共通" };
@@ -81,6 +83,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         telegramBotCredentialAvailable: false,
         telegramBotInitialGrantAvailable: false,
         telegramBotCredentialNextScreen: null,
+        composioApiKeyCredentialAvailable: false,
+        composioApiKeyCredentialNextScreen: null,
         settingsCredentialSubmitting: false,
         connectorsToken: sessionStorage.getItem("bt.connectorsToken") || "",
         connectorsSnapshot: null,
@@ -5646,6 +5650,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("prepare-telegram-bot-credential").disabled = state.settingsCredentialSubmitting ||
           (state.telegramBotCredentialAvailable !== true && state.telegramBotInitialGrantAvailable !== true);
         byId("telegram-initial-inbound-grant").disabled = state.settingsCredentialSubmitting || state.telegramBotInitialGrantAvailable !== true;
+        byId("prepare-composio-api-key-credential").disabled = state.settingsCredentialSubmitting ||
+          state.composioApiKeyCredentialAvailable !== true;
       }
 
       function renderGoogleReadCredentialAvailability(scopes) {
@@ -5710,6 +5716,19 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           : state.telegramBotCredentialAvailable ? "設定済みの受信許可リストでBotの登録を申請できます。"
           : state.telegramBotInitialGrantAvailable ? "初回の受信許可を入力してBotの登録を申請できます。"
           : "新規登録できません。設置先の設定と既存の資格情報を確認してください。");
+      }
+
+      function renderComposioApiKeyCredentialAvailability(available, configured, nativePromptAvailable) {
+        const local = isLocalCredentialControlCenter();
+        state.composioApiKeyCredentialAvailable = local && available === true;
+        updateSettingsCredentialButtons();
+        setText("composio-api-key-credential-status", !local ? "設置先のControl Centerを開いて登録してください。"
+          : available === undefined && configured === undefined && nativePromptAvailable === undefined
+            ? "設定を読み込んで登録可否を確認してください。"
+          : available !== true && configured ? "APIキー設定済みです。初回登録とローテーションの申請はできません。"
+          : available !== true && nativePromptAvailable !== true ? "この端末では専用の安全な資格情報入力が利用できません。"
+          : available !== true ? "現在、初回登録できません。設定ファイルと資格情報の登録状態を確認してください。"
+          : "未登録です。申請後、L3審査と専用入力を経て端末の保護ストアに保存します。");
       }
 
       function renderComposioDiscoveryControls() {
@@ -5915,6 +5934,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         } : null;
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
+        renderComposioApiKeyCredentialAvailability(snapshot.composio_api_key_credential_registration_available,
+          composio.configured === true, llm.native_credential_prompt_available === true);
         const toolkits = Array.isArray(composio.allowed_toolkits) ? composio.allowed_toolkits : [];
         const actions = Array.isArray(composio.allowed_actions) ? composio.allowed_actions : [];
         const revoked = Array.isArray(composio.revoked_actions) ? composio.revoked_actions : [];
@@ -7771,8 +7792,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (state.settingsCredentialSubmitting) return;
         const googleRead = kind === "google-read";
         const telegramBot = kind === "telegram-bot";
+        const composioApiKey = kind === "composio-api-key";
         const nextScreen = googleRead ? "googleReadCredentialNextScreen"
-          : telegramBot ? "telegramBotCredentialNextScreen" : "githubWriteCredentialNextScreen";
+          : telegramBot ? "telegramBotCredentialNextScreen"
+          : composioApiKey ? "composioApiKeyCredentialNextScreen" : "githubWriteCredentialNextScreen";
         const status = kind + "-credential-status";
         const next = byId("open-" + kind + "-credential-review");
         next.hidden = true;
@@ -7782,7 +7805,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const scope = googleRead ? byId("google-read-credential-scope").value : undefined;
         const needsInitialGrant = telegramBot && state.telegramBotInitialGrantAvailable === true;
         const available = googleRead ? state.googleReadCredentialScopes.includes(scope)
-          : telegramBot ? state.telegramBotCredentialAvailable || needsInitialGrant : state.githubWriteCredentialAvailable;
+          : telegramBot ? state.telegramBotCredentialAvailable || needsInitialGrant
+          : composioApiKey ? state.composioApiKeyCredentialAvailable : state.githubWriteCredentialAvailable;
         let goal;
         let initialGrant;
         try {
@@ -9119,7 +9143,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const dailyBriefService = dailyBriefCard ? card.getAttribute("data-daily-brief-service") : null;
         const approve = card?.querySelector?.('[data-verdict="approve"]');
         const nativeCredentialMode = approve?.getAttribute?.("data-native-credential-entry");
-        const nativeCredential = verdict === "approve" && ["register", "rotate", "google-read", "github-write", "telegram-bot"].includes(nativeCredentialMode);
+        const nativeCredential = verdict === "approve" && ["register", "rotate", "google-read", "github-write", "telegram-bot", "composio-api-key"].includes(nativeCredentialMode);
         if (nativeCredential) {
           if (!state.approvalContentDigests[commandId] || !isLocalCredentialControlCenter()) {
             throw new Error("この端末のControl Centerで対象を確認してから承認してください。");
@@ -9195,6 +9219,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               ? "資格情報をこの端末の保護ストアに登録しました。製品を再起動してください。GitHubとの接続とトークンの権限は未確認です。"
             : nativeCredentialMode === "telegram-bot"
               ? "Telegramの登録設定を保存しました。Gatewayを再起動してください。Telegramとの接続は未確認です。"
+            : nativeCredentialMode === "composio-api-key"
+              ? "Composio APIキーを端末の保護ストアへ保存しました。Gatewayを再起動してください。Composioへの接続は未確認です。"
             : nativeCredentialMode === "rotate" ? "更新した資格情報を保護ストアに保存しました。製品を通常再起動してください。"
             : "資格情報を保護ストアに登録し、切り替え設定を保存しました。製品を通常再起動してください。";
           setText("native-credential-approval-status", confirmed ? saved
@@ -9204,6 +9230,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (confirmed && nativeCredentialMode === "telegram-bot") {
             renderTelegramBotCredentialAvailability(false);
             setText("telegram-bot-credential-status", saved);
+          }
+          if (confirmed && nativeCredentialMode === "composio-api-key") {
+            renderComposioApiKeyCredentialAvailability(false);
+            setText("composio-api-key-credential-status", saved);
           }
           await loadApprovals();
           return;
@@ -10025,20 +10055,33 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           const googleRead = Object.hasOwn(review, "google_read_registration");
           const githubWrite = Object.hasOwn(review, "github_write_registration");
           const telegramBot = Object.hasOwn(review, "telegram_bot_registration");
-          if (googleRead || githubWrite || telegramBot) {
+          const composioApiKey = Object.hasOwn(review, "composio_api_key_registration");
+          if (googleRead || githubWrite || telegramBot || composioApiKey) {
             const registration = googleRead ? review.google_read_registration
-              : githubWrite ? review.github_write_registration : review.telegram_bot_registration;
+              : githubWrite ? review.github_write_registration
+              : telegramBot ? review.telegram_bot_registration : review.composio_api_key_registration;
             const initialGrantReview = telegramBot && registration &&
               (Object.hasOwn(registration, "initial_inbound_grant") || Object.hasOwn(registration, "initial_inbound_grant_digest"));
             const initialGrant = initialGrantReview ? registration.initial_inbound_grant : null;
             const scope = googleRead ? registration?.scope : undefined;
             const expectedRegistration = telegramBot ? SETTINGS_TELEGRAM_BOT_CREDENTIAL_REVIEW : SETTINGS_GITHUB_WRITE_CREDENTIAL_REVIEW;
+            let composioEndpoint;
+            if (composioApiKey && typeof registration?.api_base_url === "string") {
+              try { composioEndpoint = new URL(registration.api_base_url); } catch { composioEndpoint = null; }
+            }
             const hosts = googleRead
               ? (typeof scope === "string" && Object.hasOwn(SETTINGS_GOOGLE_READ_API_HOSTS, scope) ? SETTINGS_GOOGLE_READ_API_HOSTS[scope] : null)
-              : [expectedRegistration.api_host];
+              : composioApiKey ? (composioEndpoint ? [composioEndpoint.host] : null) : [expectedRegistration.api_host];
             const expectedChange = googleRead ? SETTINGS_GOOGLE_READ_CREDENTIAL_CHANGE
-              : githubWrite ? SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE : SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE;
-            const registrationValid = registration && hosts && (googleRead
+              : githubWrite ? SETTINGS_GITHUB_WRITE_CREDENTIAL_CHANGE
+              : telegramBot ? SETTINGS_TELEGRAM_BOT_CREDENTIAL_CHANGE : SETTINGS_COMPOSIO_API_KEY_CHANGE;
+            const composioEndpointValid = composioApiKey && composioEndpoint && registration?.api_base_url.length <= 2048 &&
+              composioEndpoint.protocol === "https:" && !composioEndpoint.username && !composioEndpoint.password &&
+              !composioEndpoint.search && !composioEndpoint.hash;
+            const registrationValid = registration && hosts && (composioApiKey
+              ? Object.keys(registration).length === 2 && registration.protected_reference_configured === false &&
+                composioEndpointValid
+              : googleRead
               ? Object.keys(registration).length === 3 && registration.protected_reference_configured === false &&
                 Array.isArray(registration.api_hosts) && registration.api_hosts.length === hosts.length &&
                 hosts.every(function (host, index) { return registration.api_hosts[index] === host; })
@@ -10052,7 +10095,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             const changesValid = Array.isArray(review.changes) && review.changes.length === (initialGrantReview ? 2 : 1) &&
               exactChange(review.changes[0], expectedChange) &&
               (!initialGrantReview || exactChange(review.changes[1], SETTINGS_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE));
-            if ([googleRead, githubWrite, telegramBot].filter(Boolean).length !== 1 ||
+            if ([googleRead, githubWrite, telegramBot, composioApiKey].filter(Boolean).length !== 1 ||
                 !isLocalCredentialControlCenter() || !hasNoStore(response) || !card.isConnected ||
                 token !== byId("approval-token").value.trim() || Object.keys(review).length !== 13 ||
                 review.command_id !== commandId || review.operation !== "settings.write" || review.no_store !== true ||
@@ -10066,9 +10109,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             const heading = document.createElement("strong");
             heading.textContent = googleRead ? GOOGLE_READ_CREDENTIAL_LABELS[scope] + "の資格情報を登録"
               : githubWrite ? "GitHub書き込み用の資格情報を登録"
+              : composioApiKey ? "Composio APIキーを初回登録"
               : initialGrantReview ? "Telegram Botと初回の受信許可を登録" : "Telegram Botの資格情報を登録";
             const destination = document.createElement("p");
-            destination.textContent = "対象APIホスト " + hosts.join("、");
+            destination.textContent = composioApiKey ? "接続先API " + registration.api_base_url : "対象APIホスト " + hosts.join("、");
             view.append(heading, destination);
             if (initialGrantReview) {
               const access = document.createElement("p");
@@ -10082,13 +10126,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
               ? "承認後に、この端末の専用入力画面で読み取り専用スコープのOAuthアクセストークンを登録します。反映後はGatewayを再起動してください。Googleとの接続とトークンのスコープはこの操作では確認しません。"
               : githubWrite
                 ? "承認後に、この端末の専用入力画面で書き込み用アクセストークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。GitHubとの接続とトークンの権限はこの操作では確認しません。"
+                : composioApiKey
+                  ? "承認後に専用入力画面でAPIキーを入力し、端末の保護ストアへ保存します。値は計画・審査本文・履歴に入りません。Gateway再起動後に利用可能になります。この操作ではComposioへ接続しません。"
                 : (initialGrantReview ? "表示した1組だけを受信許可に設定します。" : "設定済みの受信許可リストを使います。") +
                   "承認後、この端末の専用入力画面でBotトークンを入力し、端末の保護ストアへ保存します。反映後はGatewayを再起動してください。";
             const digests = document.createElement("small");
             digests.textContent = "command digest: " + review.command_digest + " | settings review digest: " + review.review_digest;
             view.append(note, digests);
             state.approvalContentDigests[commandId] = review.review_digest;
-            approve.setAttribute("data-native-credential-entry", googleRead ? "google-read" : githubWrite ? "github-write" : "telegram-bot");
+            approve.setAttribute("data-native-credential-entry", googleRead ? "google-read" : githubWrite ? "github-write"
+              : telegramBot ? "telegram-bot" : "composio-api-key");
             approve.textContent = "承認して入力画面を開く";
             approve.disabled = false;
             button.textContent = "登録先を再確認";
@@ -13852,6 +13899,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         renderGoogleReadCredentialAvailability();
         renderGitHubWriteCredentialAvailability();
         renderTelegramBotCredentialAvailability();
+        renderComposioApiKeyCredentialAvailability();
         byId("prepare-llm-credential-rotation").hidden = true;
       });
       byId("settings-provider-choice").addEventListener("change", function () {
@@ -13888,6 +13936,12 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("prepare-telegram-bot-credential").addEventListener("click", function () { return prepareSettingsCredentialPlan("telegram-bot"); });
       byId("open-telegram-bot-credential-review").addEventListener("click", function () {
         openSettingsProposalScreen(state.telegramBotCredentialNextScreen);
+      });
+      byId("prepare-composio-api-key-credential").addEventListener("click", function () {
+        return prepareSettingsCredentialPlan("composio-api-key");
+      });
+      byId("open-composio-api-key-credential-review").addEventListener("click", function () {
+        openSettingsProposalScreen(state.composioApiKeyCredentialNextScreen);
       });
       byId("connect-chat").addEventListener("click", function () {
         connectChat().catch(function (error) {

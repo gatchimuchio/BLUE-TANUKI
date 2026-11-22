@@ -2539,9 +2539,13 @@ function candidatePlan(value: unknown): OperationPlan {
 }
 
 function stepOwnerSettingsInput(step: OperationStep):
-  "activation" | "credential_rotation" | "google_read_registration" | "github_write_registration" | "telegram_bot_registration" | undefined {
+  "activation" | "credential_rotation" | "google_read_registration" | "github_write_registration" |
+  "telegram_bot_registration" | "composio_api_key_registration" | undefined {
   if (step.operation !== "settings.write") return undefined;
-  const patch = step.parameters?.patch as { llm?: unknown; google_read?: unknown; github_write?: unknown; telegram?: unknown } | null | undefined;
+  const patch = step.parameters?.patch as {
+    llm?: unknown; google_read?: unknown; github_write?: unknown; telegram?: unknown; composio?: { register_api_key?: unknown };
+  } | null | undefined;
+  if (patch?.composio?.register_api_key === true) return "composio_api_key_registration";
   if (patch?.google_read !== undefined) return "google_read_registration";
   if (patch?.github_write !== undefined) return "github_write_registration";
   if (patch?.telegram !== undefined) return "telegram_bot_registration";
@@ -2572,6 +2576,7 @@ function validateOperationPlanCheckpoint(value: unknown, memoryAvailable: boolea
       ["google_read_registration", p.owner_settings_google_read_registration],
       ["github_write_registration", p.owner_settings_github_write_registration],
       ["telegram_bot_registration", p.owner_settings_telegram_bot_registration],
+      ["composio_api_key_registration", p.owner_settings_composio_api_key_registration],
     ] as const;
     const ownerSettingsInputs = first.steps.map(stepOwnerSettingsInput);
     for (const [registration, recorded] of credentialRegistrations) {
@@ -5696,6 +5701,7 @@ export class OperationPlanLedger {
         ...(ownerSettingsInput === "google_read_registration" ? { owner_settings_google_read_registration: true } : {}),
         ...(ownerSettingsInput === "github_write_registration" ? { owner_settings_github_write_registration: true } : {}),
         ...(ownerSettingsInput === "telegram_bot_registration" ? { owner_settings_telegram_bot_registration: true } : {}),
+        ...(ownerSettingsInput === "composio_api_key_registration" ? { owner_settings_composio_api_key_registration: true } : {}),
         ...(scheduleCreation ? { owner_runtime_schedule_create: true } : {}),
         ...(scheduleDeletion ? { owner_runtime_schedule_delete: true } : {}),
         ...(scheduleUpdate ? { owner_runtime_schedule_update: true } : {}),
@@ -5897,7 +5903,8 @@ export class OperationPlanLedger {
         (ownerSettingsInput === "credential_rotation" && !p.owner_settings_credential_rotation) ||
         (ownerSettingsInput === "google_read_registration" && !p.owner_settings_google_read_registration) ||
         (ownerSettingsInput === "github_write_registration" && !p.owner_settings_github_write_registration) ||
-        (ownerSettingsInput === "telegram_bot_registration" && !p.owner_settings_telegram_bot_registration)) {
+        (ownerSettingsInput === "telegram_bot_registration" && !p.owner_settings_telegram_bot_registration) ||
+        (ownerSettingsInput === "composio_api_key_registration" && !p.owner_settings_composio_api_key_registration)) {
       throw new Error(`plan_settings_${ownerSettingsInput}_requires_owner_input`);
     }
     if (step.operation === "schedule.delete" && !p.owner_runtime_schedule_delete) {
@@ -10096,6 +10103,7 @@ export class OperationPlanLedger {
       throw new Error("plan_runtime_schedule_update_requires_owner_input");
     }
     const ownerSettingsInput = p.owner_settings_telegram_bot_registration ? "telegram_bot_registration"
+      : p.owner_settings_composio_api_key_registration ? "composio_api_key_registration"
       : p.owner_settings_github_write_registration ? "github_write_registration"
       : p.owner_settings_activation ? "activation" : p.owner_settings_credential_rotation
         ? "credential_rotation" : p.owner_settings_google_read_registration

@@ -219,7 +219,7 @@ import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime }
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
 import { nativeLlmCredentialPromptAvailable, promptForGitHubWriteCredential, promptForGoogleReadCredential,
-  promptForLlmCredential, promptForTelegramBotCredential } from "./llm_credential_prompt.js";
+  promptForComposioApiKeyCredential, promptForLlmCredential, promptForTelegramBotCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
 import {
   buildRecoveryPostActionObservation,
@@ -1463,6 +1463,7 @@ async function serveWithOwnerLease(
     requestGoogleRead: (scope, signal) => promptForGoogleReadCredential(scope, signal, nativePromptEnv),
     requestGitHubWrite: signal => promptForGitHubWriteCredential(signal, nativePromptEnv),
     requestTelegramBot: signal => promptForTelegramBotCredential(signal, nativePromptEnv),
+    requestComposioApiKey: signal => promptForComposioApiKeyCredential(signal, nativePromptEnv),
     readTelegramInitialInboundGrant: readTelegramInitialGrant,
     assertCurrent: (commandDigest) => {
       const approval = nativeCredentialApproval.getStore();
@@ -5603,6 +5604,7 @@ async function serveWithOwnerLease(
       onOwnerGoogleReadCredentialProposal: submitOwnerGoogleReadCredentialProposal,
       onOwnerGitHubWriteCredentialProposal: submitOwnerGitHubWriteCredentialProposal,
       onOwnerTelegramBotCredentialProposal: submitOwnerTelegramBotCredentialProposal,
+      onOwnerComposioApiKeyCredentialProposal: submitOwnerComposioApiKeyCredentialProposal,
       onOwnerDailyBriefRead: submitOwnerDailyBriefRead,
       onGoalPurposeAdoption: async (input: { purpose_text: string; actor: string }) => submitGoalPurposeAdoption(input),
       onGoalPurposeChangeProposal: async (input: { goal_ref: string; purpose_text: string; actor: string;
@@ -5657,6 +5659,11 @@ async function serveWithOwnerLease(
         },
         inspectTelegramBotCredentialRegistration: async () => {
           try { return (await settingsWritePort.inspect(undefined, undefined, undefined, undefined, true)).telegram_bot_registration_ready === true; }
+          catch { return false; }
+        },
+        inspectComposioApiKeyCredentialRegistration: async () => {
+          try { return (await settingsWritePort.inspect(undefined, undefined, undefined, undefined, undefined, undefined, true))
+            .composio_api_key_registration_ready === true; }
           catch { return false; }
         },
         inspectTelegramBotInitialGrantRegistration: async () => {
@@ -6391,6 +6398,10 @@ async function serveWithOwnerLease(
     }
   }
 
+  function submitOwnerComposioApiKeyCredentialProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }) {
+    return submitOwnerSettingsProposal(input, { patch: { composio: { register_api_key: true } } });
+  }
+
   async function submitOwnerSettingsProposal(input: { actor: string; goal_ref?: string; purpose_version?: number }, rawArguments: unknown) {
     const unavailable = { accepted: false as const, status: "settings_proposal_unavailable" as const,
       used_for_authority: false as const, may_execute: false as const };
@@ -6440,6 +6451,7 @@ async function serveWithOwnerLease(
           ? "指定したTelegram受信許可を設定し、Botトークンを保護して保存する。"
           : "設定済みの受信許可範囲で使用するTelegram Botトークンを保護して保存する。"
           : githubWriteRegistration ? "GitHub 書き込み用の資格情報を保護して保存する。"
+          : patch.composio?.register_api_key ? "Composio APIキーを専用入力から保護して保存する。"
           : googleScope !== undefined ? "選択された Google 読み取り用の資格情報を保護して保存する。"
           : llm?.rotate_credential ? "現行計算プロバイダーの保護済み資格情報を更新する。"
           : llm?.activation ? "選択された計算プロバイダーと資源上限を運転設定に保存する。"

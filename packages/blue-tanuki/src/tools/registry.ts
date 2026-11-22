@@ -713,6 +713,7 @@ export interface SettingsWriteContentReview {
   google_read_registration?: SettingsWriteGoogleReadCredentialReview;
   github_write_registration?: SettingsWriteGitHubWriteCredentialReview;
   telegram_bot_registration?: SettingsWriteTelegramBotCredentialReview;
+  composio_api_key_registration?: { api_base_url: string; protected_reference_configured: false };
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
       "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" |

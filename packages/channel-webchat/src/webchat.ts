@@ -958,6 +958,7 @@ function findAotanuAssetRoot(): string {
  *   POST /owner/google-read-credential-proposal body:{scope,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/github-write-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/telegram-bot-credential-proposal body:{initial_inbound_grant?,goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
+ *   POST /owner/composio-api-key-credential-proposal body:{goal_ref?,purpose_version?} auth:local Control Center owner bearer, no-store
  *   POST /owner/daily-brief-read body:{occurrence_id_digest,service} auth:dedicated local owner bearer, no-store
  *   POST /owner/goal-purpose-change body:{goal_ref, purpose_text} auth:dedicated owner bearer
  *   POST /owner/task-submission-status body:{submission_id} auth:dedicated owner bearer
@@ -1553,9 +1554,10 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     if (url.pathname === "/owner/google-read-credential-proposal" || url.pathname === "/owner/github-write-credential-proposal" ||
-        url.pathname === "/owner/telegram-bot-credential-proposal") {
+        url.pathname === "/owner/telegram-bot-credential-proposal" || url.pathname === "/owner/composio-api-key-credential-proposal") {
       const kind = url.pathname === "/owner/google-read-credential-proposal" ? "google-read"
-        : url.pathname === "/owner/github-write-credential-proposal" ? "github-write" : "telegram-bot";
+        : url.pathname === "/owner/github-write-credential-proposal" ? "github-write"
+        : url.pathname === "/owner/composio-api-key-credential-proposal" ? "composio-api-key" : "telegram-bot";
       await this.handleOwnerCredentialProposal(req, res, url, kind);
       return;
     }
@@ -5173,7 +5175,7 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
   }
 
   private async handleOwnerCredentialProposal(req: IncomingMessage, res: ServerResponse, url: URL,
-    kind: "google-read" | "github-write" | "telegram-bot"): Promise<void> {
+    kind: "google-read" | "github-write" | "telegram-bot" | "composio-api-key"): Promise<void> {
     res.setHeader("content-type", "application/json");
     res.setHeader("cache-control", "no-store");
     res.setHeader("x-content-type-options", "nosniff");
@@ -5188,11 +5190,12 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       return;
     }
     const googleRead = kind === "google-read";
-    const proposalKey = kind.replace("-", "_");
+    const proposalKey = kind.replaceAll("-", "_");
     const proposeGoogle = googleRead ? this.opts.onOwnerGoogleReadCredentialProposal : undefined;
     const proposeGitHub = kind === "github-write" ? this.opts.onOwnerGitHubWriteCredentialProposal : undefined;
     const proposeTelegram = kind === "telegram-bot" ? this.opts.onOwnerTelegramBotCredentialProposal : undefined;
-    if (!this.opts.owner_token || !(proposeGoogle || proposeGitHub || proposeTelegram)) {
+    const proposeComposio = kind === "composio-api-key" ? this.opts.onOwnerComposioApiKeyCredentialProposal : undefined;
+    if (!this.opts.owner_token || !(proposeGoogle || proposeGitHub || proposeTelegram || proposeComposio)) {
       res.writeHead(404);
       res.end(JSON.stringify({ error: `owner_${proposalKey}_credential_proposal_not_configured` }));
       return;
@@ -5243,6 +5246,8 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
     } else if (proposeTelegram) {
       await this.respondToOwnerPlanProposal(res, Boolean(goal), () => proposeTelegram({ ...input,
         ...(initialGrant?.success ? { initial_inbound_grant: initialGrant.data } : {}) }));
+    } else if (proposeComposio) {
+      await this.respondToOwnerPlanProposal(res, Boolean(goal), () => proposeComposio(input));
     }
   }
 

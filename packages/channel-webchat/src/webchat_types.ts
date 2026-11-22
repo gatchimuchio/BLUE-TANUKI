@@ -1051,6 +1051,7 @@ export interface WebChatSettingsWriteContentReview {
   google_read_registration?: SettingsWriteGoogleReadCredentialReview;
   github_write_registration?: SettingsWriteGitHubWriteCredentialReview;
   telegram_bot_registration?: SettingsWriteTelegramBotCredentialReview & { initial_inbound_grant?: TelegramInboundGrant };
+  composio_api_key_registration?: { api_base_url: string; protected_reference_configured: false };
   changes: readonly {
     key: "llm.provider" | "llm.model" | "llm.temperature" | "llm.max_tokens" | "llm.timeout_ms" | "llm.credential_reference" |
       "google_read.credential_reference" | "github_write.credential_reference" | "telegram.credential_reference" | "telegram.inbound_grants" |
@@ -2173,6 +2174,8 @@ export interface WebChatOptions {
   onOwnerGitHubWriteCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerTelegramBotCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string; initial_inbound_grant?: TelegramInboundGrant }) =>
+    Promise<Record<string, unknown>>;
+  onOwnerComposioApiKeyCredentialProposal?: (input: WebChatOwnerCredentialProposal & { actor: string }) =>
     Promise<Record<string, unknown>>;
   onOwnerDailyBriefRead?: (input: WebChatDailyBriefReadRequest & { actor: string }) =>
     Promise<Record<string, unknown>>;

@@ -36,6 +36,10 @@ export const SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW = Object.freeze({
 export const SETTINGS_WRITE_TELEGRAM_INITIAL_INBOUND_GRANT_CHANGE = Object.freeze({
   key: "telegram.inbound_grants", before: "unconfigured", after: "one_exact_grant_on_restart",
 } as const);
+export const SETTINGS_WRITE_COMPOSIO_API_KEY_CHANGE = Object.freeze({
+  key: "composio.api_key", before: "未設定", after: "専用入力後に保護ストアへ登録",
+} as const);
+export const SETTINGS_WRITE_COMPOSIO_DEFAULT_API_BASE_URL = "https://backend.composio.dev";
 
 const TelegramIdSchema = z.string().regex(/^-?[1-9][0-9]{0,15}$/u)
   .refine(value => value === value.trim() && Number.isSafeInteger(Number(value)));
@@ -81,6 +85,7 @@ export const SettingsWritePatchSchema = z.object({
     .refine((llm) => llm.rotate_credential !== true || Object.keys(llm).length === 1,
       "credential rotation must be the only change in the patch").optional(),
   composio: z.object({
+    register_api_key: z.literal(true).optional(),
     user_id: z.string().trim().min(1).max(512).nullable().optional(),
     allowed_toolkits: z.string().trim().max(4_096).nullable().optional(),
     allowed_actions: z.string().trim().max(8_192).nullable().optional(),
@@ -97,6 +102,8 @@ export const SettingsWritePatchSchema = z.object({
     live_execution: z.boolean().optional(),
     clear_api_key: z.literal(true).optional(),
   }).strict().refine((composio) => Object.keys(composio).length > 0, "at least one supported Composio setting is required")
+    .refine((composio) => composio.register_api_key !== true || Object.keys(composio).length === 1,
+      "initial API key registration cannot be combined with other Composio settings")
     .refine((composio) => composio.clear_api_key !== true ||
       (composio.dry_run === undefined && composio.live_execution === undefined),
     "disconnect resets dry_run and live_execution and cannot be combined with explicit values").optional(),
@@ -147,12 +154,19 @@ export type SettingsWriteGitHubWriteCredentialReview = typeof SETTINGS_WRITE_GIT
 export type SettingsWriteTelegramBotCredentialReview = typeof SETTINGS_WRITE_TELEGRAM_BOT_CREDENTIAL_REVIEW & {
   initial_inbound_grant_digest?: string;
 };
+export type SettingsWriteComposioApiKeyCredentialReview = ReturnType<typeof settingsWriteComposioApiKeyCredentialReview>;
 export type SettingsWriteTargetVersionObservation =
   z.infer<typeof SettingsWriteTargetVersionObservationSchema>;
 
 export function settingsWriteRequiresNativeCredentialEntry(patch: SettingsWritePatch): boolean {
   return patch.llm?.activation?.register_credential === true || patch.llm?.rotate_credential === true ||
-    patch.google_read !== undefined || patch.github_write !== undefined || patch.telegram !== undefined;
+    patch.google_read !== undefined || patch.github_write !== undefined || patch.telegram !== undefined ||
+    patch.composio?.register_api_key === true;
+}
+
+export function settingsWriteComposioApiKeyCredentialReview(apiBaseUrl?: string | null) {
+  return { api_base_url: apiBaseUrl || SETTINGS_WRITE_COMPOSIO_DEFAULT_API_BASE_URL,
+    protected_reference_configured: false as const };
 }
 
 export function settingsWriteCredentialRotationReview(provider: SettingsWriteNativeLlmProvider) {

@@ -44,6 +44,7 @@ export interface SettingsSurfaceOptions {
   inspectGoogleReadCredentialRegistration?: (scope: SettingsWriteGoogleReadCredentialScope) => Promise<boolean>;
   inspectGitHubWriteCredentialRegistration?: () => Promise<boolean>;
   inspectTelegramBotCredentialRegistration?: () => Promise<boolean>;
+  inspectComposioApiKeyCredentialRegistration?: () => Promise<boolean>;
   inspectTelegramBotInitialGrantRegistration?: () => Promise<boolean>;
 }
 
@@ -78,6 +79,7 @@ export interface SettingsSnapshot {
   google_read_credential_registration_available?: SettingsWriteGoogleReadCredentialScope[];
   github_write_credential_registration_available?: true;
   telegram_bot_credential_registration_available?: true;
+  composio_api_key_credential_registration_available?: true;
   telegram_bot_initial_grant_registration_available?: true;
   approval: {
     mode: ReturnType<typeof setupConfigFromEnv>["approval"]["mode"];
@@ -219,6 +221,7 @@ type NativeCredentialRegistration = {
   requestGoogleRead?(scope: SettingsWriteGoogleReadCredentialScope, signal: AbortSignal): Promise<Buffer | null>;
   requestGitHubWrite?(signal: AbortSignal): Promise<Buffer | null>;
   requestTelegramBot?(signal: AbortSignal): Promise<Buffer | null>;
+  requestComposioApiKey?(signal: AbortSignal): Promise<Buffer | null>;
   readTelegramInitialInboundGrant?(digest: string): Readonly<TelegramInboundGrant> | undefined;
   assertCurrent(commandDigest: string): void;
 };
@@ -274,7 +277,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     "BLUE_TANUKI_LLM_FALLBACK_BACKEND", "BLUE_TANUKI_LLM_FALLBACK_AUTHORIZATION_JSON"));
   const inspectCurrent = async (expectedLlmProvider?: SettingsWriteLlmProvider,
     llmPatch?: NonNullable<SettingsWritePatch["llm"]>, googleScope?: SettingsWriteGoogleReadCredentialScope,
-    githubWriteRegistration?: true, telegramBotRegistration?: true | string, telegramInitialReadiness?: true) => {
+    githubWriteRegistration?: true, telegramBotRegistration?: true | string, telegramInitialReadiness?: true,
+    composioApiKeyRegistration?: true) => {
     const target = envFilePath(env);
     if (!target) throw new Error("settings_write_env_file_unavailable");
     const before = await fs.lstat(target).catch(() => undefined);
@@ -321,13 +325,16 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
     } : googleScope !== undefined ? {
       key: SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS[SettingsWriteGoogleReadCredentialScopeSchema.parse(googleScope)].key,
       prefix: "google_read_credential_registration",
+    } : composioApiKeyRegistration ? {
+      key: "COMPOSIO_API_KEY" as const, prefix: "composio_api_key_credential_registration",
     } : undefined;
     let initialTelegramInboundGrant: Readonly<TelegramInboundGrant> | undefined;
     if (firstRegistration) {
       const { key, prefix } = firstRegistration;
       const prompt = telegramRegistrationRequested ? nativeRegistration?.requestTelegramBot :
         githubWriteRegistration ? nativeRegistration?.requestGitHubWrite : nativeRegistration?.requestGoogleRead;
-      if (env.BLUE_TANUKI_SAFE_MODE === "1" || !prompt || !nativeRegistration?.available()) {
+      const selectedPrompt = composioApiKeyRegistration ? nativeRegistration?.requestComposioApiKey : prompt;
+      if (env.BLUE_TANUKI_SAFE_MODE === "1" || !selectedPrompt || !nativeRegistration?.available()) {
         throw new Error(`${prefix}_unavailable`);
       }
       const settingsKeys = Object.keys(parsed.values).map((name) => process.platform === "win32" ? name.toUpperCase() : name);
@@ -396,15 +403,16 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
   };
   return {
     inspect: async (expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration,
-      telegramInitialReadiness) => {
+      telegramInitialReadiness, composioApiKeyRegistration) => {
       const { target_state_digest, llm_provider, managed_llm_settings, values, activationUpdates, credentialRotation,
         firstRegistration } = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration,
-        telegramBotRegistration, telegramInitialReadiness);
+        telegramBotRegistration, telegramInitialReadiness, composioApiKeyRegistration);
       return { target_state_digest, llm_provider, managed_llm_settings, values,
         ...(activationUpdates ? { provider_activation_ready: true as const } : {}),
         ...(credentialRotation ? { credential_rotation_ready: true as const } : {}),
         ...(firstRegistration?.key === "TELEGRAM_BOT_TOKEN" ? { telegram_bot_registration_ready: true as const } :
           firstRegistration?.key === "GITHUB_TOKEN" ? { github_write_registration_ready: true as const } :
+          firstRegistration?.key === "COMPOSIO_API_KEY" ? { composio_api_key_registration_ready: true as const } :
           firstRegistration ? { google_read_registration_ready: true as const } : {}) };
     },
     apply: async (patch: SettingsWritePatch, expectedTargetStateDigest: string, expectedLlmProvider, context) => serializeWrite(async () => {
@@ -413,7 +421,9 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       const googleScope = patch.google_read?.register_credential;
       const githubWriteRegistration = patch.github_write?.register_credential;
       const telegramBotRegistration = patch.telegram?.initial_inbound_grant_digest ?? patch.telegram?.register_credential;
-      const state = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration);
+      const composioApiKeyRegistration = patch.composio?.register_api_key;
+      const state = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration,
+        undefined, composioApiKeyRegistration);
       if (!/^[a-f0-9]{64}$/.test(expectedTargetStateDigest) ||
           state.target_state_digest !== expectedTargetStateDigest) {
         throw new Error("settings_write_target_changed_before_invoke");
@@ -448,7 +458,8 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
       }
       if (!credentialKey && Object.keys(updates).length === 0) throw new Error("settings_write_patch_has_no_effect");
       const recheckTarget = async () => {
-        const latest = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration, telegramBotRegistration);
+        const latest = await inspectCurrent(expectedLlmProvider, llmPatch, googleScope, githubWriteRegistration,
+          telegramBotRegistration, undefined, composioApiKeyRegistration);
         if (latest.target_state_digest !== expectedTargetStateDigest || latest.target !== state.target) {
           throw new Error("settings_write_target_changed_before_persist");
         }
@@ -477,6 +488,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
             : githubWriteRegistration ? await nativeRegistration.requestGitHubWrite?.(context.signal)
             : googleScope !== undefined
             ? await nativeRegistration.requestGoogleRead?.(googleScope, context.signal)
+            : composioApiKeyRegistration ? await nativeRegistration.requestComposioApiKey?.(context.signal)
             : credentialProvider && await nativeRegistration.request(credentialProvider, context.signal);
           if (!credential) throw new Error(`${registrationPrefix}_cancelled`);
           try {
@@ -535,7 +547,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         }
         if (credentialKey) {
           const message = error instanceof Error ? error.message : "";
-          throw new Error(/^(?:(?:llm_credential_(?:prompt|registration|rotation)|(?:google_read|github_write|telegram_bot)_credential_(?:prompt|registration))_[a-z_]+|settings_write_target_changed_before_persist)$/u.test(message)
+          throw new Error(/^(?:(?:llm_credential_(?:prompt|registration|rotation)|(?:google_read|github_write|telegram_bot|composio_api_key)_credential_(?:prompt|registration))_[a-z_]+|settings_write_target_changed_before_persist)$/u.test(message)
             ? message : `${registrationPrefix}_failed`);
         }
         throw error;
@@ -564,6 +576,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         timeout_ms: patch.llm?.timeout_ms ?? state.values.timeout_ms,
         composio: {
           ...state.values.composio,
+          ...(composio?.register_api_key === true ? { api_key_configured: true } : {}),
           ...(composio?.clear_api_key === true ? { api_key_configured: false, dry_run: true, live_execution: false } : {}),
           ...(composio?.user_id !== undefined ? { user_id: composio.user_id } : {}),
           ...(composio?.allowed_toolkits !== undefined ? { allowed_toolkits: composio.allowed_toolkits } : {}),
@@ -858,6 +871,9 @@ export function createWebChatSettingsSurface(
         snapshot.telegram_bot_credential_registration_available = true;
       } else if (snapshot.llm.native_credential_prompt_available && await opts.inspectTelegramBotInitialGrantRegistration?.()) {
         snapshot.telegram_bot_initial_grant_registration_available = true;
+      }
+      if (snapshot.llm.native_credential_prompt_available && await opts.inspectComposioApiKeyCredentialRegistration?.()) {
+        snapshot.composio_api_key_credential_registration_available = true;
       }
       return snapshot;
     },

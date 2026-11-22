@@ -929,6 +929,8 @@ export const OperationPlanCheckpointPlanSchema = z.object({
     owner_settings_github_write_registration: z.literal(true).optional(),
     /** Records the authenticated owner input for a Telegram Bot credential registration. */
     owner_settings_telegram_bot_registration: z.literal(true).optional(),
+    /** Records the authenticated owner input for an initial Composio API key registration. */
+    owner_settings_composio_api_key_registration: z.literal(true).optional(),
     /** Records that J received an exact schedule-create proposal from authenticated local owner input. */
     owner_runtime_schedule_create: z.literal(true).optional(),
     revisions: z.array(z.object({ digest: Digest, plan: OperationPlanSchema }).strict()).min(1).max(100),

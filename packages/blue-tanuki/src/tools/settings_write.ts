@@ -4,11 +4,13 @@ import {
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE,
   SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW,
+  SETTINGS_WRITE_COMPOSIO_API_KEY_CHANGE,
   SettingsWriteArgumentsSchema,
   SettingsWriteNativeLlmProviderSchema,
   SettingsWriteTargetVersionObservationSchema,
   requireToolOperationDescriptor,
   settingsWriteCredentialRotationReview,
+  settingsWriteComposioApiKeyCredentialReview,
   settingsWriteGoogleReadCredentialReview,
   settingsWriteTelegramBotCredentialChanges,
   settingsWriteTelegramBotCredentialReview,
@@ -31,7 +33,8 @@ export interface SettingsWritePort {
     googleScope?: SettingsWriteGoogleReadCredentialScope,
     githubWriteRegistration?: true,
     telegramBotRegistration?: true | string,
-    telegramInitialReadiness?: true): Promise<{
+    telegramInitialReadiness?: true,
+    composioApiKeyRegistration?: true): Promise<{
     target_state_digest: string;
     llm_provider?: SettingsWriteLlmProvider;
     managed_llm_settings?: boolean;
@@ -40,6 +43,7 @@ export interface SettingsWritePort {
     google_read_registration_ready?: true;
     github_write_registration_ready?: true;
     telegram_bot_registration_ready?: true;
+    composio_api_key_registration_ready?: true;
     values: {
       model: string | null;
       temperature: number | null;
@@ -119,12 +123,15 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       const googleScope = patch.google_read?.register_credential;
       const githubRegistration = patch.github_write?.register_credential === true;
       const telegramRegistration = patch.telegram;
+      const composioRegistration = patch.composio?.register_api_key === true;
       const registrationChanges = telegramRegistration
         ? settingsWriteTelegramBotCredentialChanges(telegramRegistration.initial_inbound_grant_digest)
+        : composioRegistration ? [SETTINGS_WRITE_COMPOSIO_API_KEY_CHANGE]
         : [githubRegistration ? SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_CHANGE : SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_CHANGE];
       const changes = patch.llm
         ? buildLlmChanges(patch.llm, target)
-        : patch.composio ? buildComposioChanges(patch.composio, target.values.composio)
+        : composioRegistration ? registrationChanges
+          : patch.composio ? buildComposioChanges(patch.composio, target.values.composio)
           : registrationChanges;
       if (changes.length === 0) throw new Error("settings_write_patch_has_no_effect");
       const reviewBase = {
@@ -138,6 +145,8 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
         ...(githubRegistration ? { github_write_registration: SETTINGS_WRITE_GITHUB_WRITE_CREDENTIAL_REVIEW } : {}),
         ...(telegramRegistration ? { telegram_bot_registration: settingsWriteTelegramBotCredentialReview(
           telegramRegistration.initial_inbound_grant_digest) } : {}),
+        ...(composioRegistration ? { composio_api_key_registration: settingsWriteComposioApiKeyCredentialReview(
+          target.values.composio.api_base_url) } : {}),
         changes,
         request_payload_digest: observation.request_payload_digest,
         target_version_digest: operationPlanDigest(observation),
@@ -161,6 +170,7 @@ export function createSettingsWriteTool(port: SettingsWritePort): Tool {
       assertToolExecutionNotCancelled(context.signal, "settings.write");
       if (settingsWriteRequiresNativeCredentialEntry(args.patch)) {
         if (!context.assert_current_settings_write) {
+          if (args.patch.composio?.register_api_key) throw new Error("composio_api_key_credential_registration_not_authorized");
           if (args.patch.github_write) throw new Error("github_write_credential_registration_not_authorized");
           if (args.patch.telegram) throw new Error("telegram_bot_credential_registration_not_authorized");
           throw new Error(args.patch.llm?.rotate_credential
@@ -207,8 +217,10 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   const googleScope = args.patch.google_read?.register_credential;
   const githubRegistration = args.patch.github_write?.register_credential;
   const telegramRegistration = args.patch.telegram;
-  const target = telegramRegistration ? await port.inspect(undefined, undefined, undefined, undefined,
-    telegramRegistration.initial_inbound_grant_digest ?? true)
+  const composioRegistration = args.patch.composio?.register_api_key === true;
+  const target = composioRegistration ? await port.inspect(undefined, undefined, undefined, undefined, undefined, undefined, true)
+    : telegramRegistration ? await port.inspect(undefined, undefined, undefined, undefined,
+      telegramRegistration.initial_inbound_grant_digest ?? true)
     : githubRegistration ? await port.inspect(undefined, undefined, undefined, true)
     : googleScope ? await port.inspect(undefined, undefined, googleScope)
     : await port.inspect(expectedProvider, llm?.activation || llm?.rotate_credential ? llm : undefined);
@@ -230,6 +242,9 @@ async function inspectBoundTarget(port: SettingsWritePort, args: SettingsWriteAr
   }
   if (telegramRegistration && target.telegram_bot_registration_ready !== true) {
     throw new Error("settings_write_telegram_bot_registration_unavailable");
+  }
+  if (composioRegistration && target.composio_api_key_registration_ready !== true) {
+    throw new Error("settings_write_composio_api_key_registration_unavailable");
   }
   return target;
 }

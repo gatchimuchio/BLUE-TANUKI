@@ -5378,7 +5378,14 @@ ${planControl.question}`,
     }
     const { patch, expected_llm_provider } = args.data;
     const googleScope = patch.google_read?.register_credential;
-    const credentialRegistration = googleScope !== undefined ? {
+    const composioApiKeyRegistration = patch.composio?.register_api_key === true;
+    const credentialRegistration = composioApiKeyRegistration ? {
+      scope: "composio.connector",
+      stepId: "composio-api-key-credentials",
+      checkId: "composio-api-key-credential-saved",
+      content: "Composio APIキーを専用入力から保護ストアへ初回登録する",
+      changedKeys: ["COMPOSIO_API_KEY_REF"],
+    } : googleScope !== undefined ? {
       scope: "google.read",
       stepId: "google-read-credentials",
       checkId: "google-read-credential-saved",

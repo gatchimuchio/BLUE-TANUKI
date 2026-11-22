@@ -350,10 +350,15 @@ ${CONTROL_CENTER_STYLE}    </style>
             <label class="check"><input id="composio-clear-api-key" type="checkbox" /> clear Composio API key</label>
           </div>
           <div class="action-row">
+            <button id="prepare-composio-api-key-credential" type="button" disabled>Composio APIキーを初回登録</button>
+            <button id="open-composio-api-key-credential-review" type="button" hidden>審査を開く</button>
+            <span id="composio-api-key-credential-status" class="badge warn">登録可否を確認してください。</span>
+          </div>
+          <div class="action-row">
             <button id="load-connectors" class="primary" type="button">Load Connectors</button>
             <button id="save-connectors" class="primary" type="button">Prepare Composio settings plan</button>
           </div>
-          <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; key replacement remains in OS-protected setup. An approved change that clears a key removes only the local credential/reference and disables live execution; it does not disconnect the connected account at Composio.</p>
+          <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; first registration uses a dedicated OS-protected input after approval. An approved change that clears a key removes only the local credential/reference and disables live execution; it does not disconnect the connected account at Composio.</p>
           <div class="status-grid">
             <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
