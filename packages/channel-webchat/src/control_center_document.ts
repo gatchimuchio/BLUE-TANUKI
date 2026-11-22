@@ -399,9 +399,11 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <label>review registry effect（非権威情報）<input id="composio-execute-effects" type="text" readonly placeholder="action選択後に表示" /></label>
               </div>
               <label>Owner指定payload JSON object<textarea id="composio-execute-payload" rows="5" maxlength="65536" autocomplete="off" disabled></textarea></label>
+              <h5>ローカル候補preview（Provider/LLMへの送信なし）</h5>
+              <pre id="composio-execute-preview" aria-live="polite" hidden></pre>
               <div class="action-row"><button id="prepare-composio-execute" class="primary" type="button" disabled>Prepare one unexecuted execute plan</button></div>
               <p id="composio-execute-plan-status" class="badge warn" role="status">保存済みsearch結果のreviewed actionとaccount一覧を読み込み、各一件を選択してください。</p>
-              <p class="muted">この候補依頼ではpayloadをOwner Taskの本文に含め、現在設定されたLLMへ送信します。秘密・資格情報・個人情報・no-store内容は入力しないでください。作成するのは一件の未実行Plan候補だけで、Composio接続・action実行・権限付与はしません。実行には現在のschema/effects/account/allowlist/Permissionの再確認と別のno-store L3承認が必要です。Provider結果や保存済みmetadataは権限になりません。</p>
+              <p class="muted">上のpreviewは画面内だけで作る候補表示で、action dry-runのProvider結果・実行・許可ではありません。Prepareを押すとpayloadをOwner Taskの本文に含め、現在設定されたLLMへ送信します。秘密・資格情報・個人情報・no-store内容は入力しないでください。作成するのは一件の未実行Plan候補だけで、Composio接続・action実行・権限付与はしません。実行には現在のschema/effects/account/allowlist/Permissionの再確認と別のno-store L3承認が必要です。Provider結果や保存済みmetadataは権限になりません。</p>
             </div>
             <p id="composio-discovery-status" class="badge warn" role="status">Load Connectors to check the configured API key and allowlist.</p>
             <p id="composio-accounts-status" class="badge warn" role="status">Load Connectors to check the configured API key, owner identity, and allowlist.</p>

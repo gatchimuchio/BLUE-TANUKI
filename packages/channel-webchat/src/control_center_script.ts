@@ -5920,6 +5920,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       function renderComposioExecuteControls() {
         const button = byId("prepare-composio-execute");
         const payload = byId("composio-execute-payload");
+        const preview = byId("composio-execute-preview");
         const status = byId("composio-execute-plan-status");
         const snapshot = state.connectorsSnapshot;
         const action = state.composioExecuteSelectedAction;
@@ -5948,8 +5949,35 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const payloadBytes = new TextEncoder().encode(payloadText).byteLength;
         const payloadEmpty = !payloadText.trim();
         const payloadTooLarge = payloadBytes > 64 * 1024;
+        const parsedPayload = payloadEmpty || payloadTooLarge ? { error: payloadEmpty ? "empty" : "too_large" }
+          : parseComposioPayloadForCandidate(payloadText);
+        const payloadReady = !!parsedPayload.payload;
         payload.disabled = !selectionReady || state.composioExecuteSubmitting === true;
-        button.disabled = !selectionReady || state.composioExecuteSubmitting === true || payloadEmpty || payloadTooLarge;
+        button.disabled = !selectionReady || state.composioExecuteSubmitting === true || !payloadReady;
+        preview.hidden = !selectionReady || !payloadReady;
+        if (preview.hidden) {
+          preview.textContent = "";
+        } else {
+          const args = {
+            toolkit: toolkit,
+            tool: action.tool,
+            connected_account_id: account.connected_account_id,
+            input_schema_sha256: action.input_schema_sha256,
+            payload: parsedPayload.payload,
+            ...(toolkit === "posthog" ? { expected_provider_region: account.provider_region } : {})
+          };
+          preview.textContent = JSON.stringify({
+            kind: "local_candidate_preview",
+            operation: "composio.execute",
+            target: { provider: "composio", toolkit: toolkit, connected_account_id: account.connected_account_id },
+            action_effect_registry: action.action_effect_registry,
+            arguments: args,
+            external_call_performed: false,
+            external_mutation_sent: false,
+            permission_granted: false,
+            used_for_authority: false
+          }, null, 2);
+        }
         if (state.composioExecuteStatusMessage) {
           status.textContent = state.composioExecuteStatusMessage;
           status.className = "badge " + state.composioExecuteStatusTone;
@@ -5964,14 +5992,15 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
             ? "保存済みPRIVATE/ACTIVE accountを選択してください。PostHogではprovider regionがus/euと確認できる必要があります。"
             : "保存済みPRIVATE account一覧からACTIVE/disabled=falseの一件を選択してください。";
           status.className = "badge warn";
-        } else if (payloadEmpty) {
-          status.textContent = "Ownerが明示するJSON objectを入力すると、未実行Plan候補を依頼できます。";
-          status.className = "badge warn";
-        } else if (payloadTooLarge) {
-          status.textContent = "payloadはUTF-8で64 KiB以内にしてください。";
+        } else if (!payloadReady) {
+          const payloadError = parsedPayload.error;
+          status.textContent = payloadError === "empty" ? "Ownerが明示するJSON objectを入力してください。" :
+            payloadError === "too_large" ? "payloadはUTF-8で64 KiB以内にしてください。" :
+              payloadError === "sensitive_key" ? "secret-like keyを含むpayloadは候補化できません。秘密・個人情報・no-store内容も入力しないでください。" :
+                "payloadを安全なkeyを持つJSON objectにしてください。";
           status.className = "badge warn";
         } else {
-          status.textContent = "payload JSON objectの候補条件は依頼時に検査します。一件の未実行候補だけを作り、Provider操作・権限付与は行いません。";
+          status.textContent = "同じaction/account/effects/argumentsのローカルpreviewを表示中です。Prepare後も一件の未実行候補のみで、Provider操作・権限付与は行いません。";
           status.className = "badge warn";
         }
       }
@@ -13993,6 +14022,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("prepare-composio-connect").addEventListener("click", prepareComposioConnect);
       byId("prepare-composio-disconnect").addEventListener("click", prepareComposioDisconnect);
       byId("prepare-composio-execute").addEventListener("click", prepareComposioExecute);
+      byId("composio-execute-payload").addEventListener("input", () => {
+        state.composioExecuteStatusMessage = null;
+        renderComposioExecuteControls();
+      });
       byId("composio-execute-payload").addEventListener("input", function () {
         state.composioExecuteCandidateTask = null;
         state.composioExecuteCandidateSubmissionId = null;
