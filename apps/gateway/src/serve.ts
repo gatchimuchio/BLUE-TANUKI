@@ -220,7 +220,7 @@ import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_c
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
 import { createGatewaySettingsWritePort, createWebChatSettingsSurface, readCurrentComposioEnvironment,
-  watchComposioEnvironmentFile } from "./settings_surface.js";
+  watchGatewayEnvironmentFile } from "./settings_surface.js";
 import { nativeLlmCredentialPromptAvailable, promptForGitHubWriteCredential, promptForGoogleReadCredential,
   promptForComposioApiKeyCredential, promptForLlmCredential, promptForTelegramBotCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
@@ -9971,15 +9971,22 @@ async function serveWithOwnerLease(
       }
     },
   });
-  const stopComposioConfigurationFileMonitor = await watchComposioEnvironmentFile(
-    process.env, invalidateComposioConfiguration);
+  const stopGatewayEnvironmentFileMonitor = await watchGatewayEnvironmentFile(process.env, () => {
+    invalidateComposioConfiguration();
+    activeLLMRegistryForSettings?.invalidateProviderConfiguration();
+    gatewayLog.warn("Gateway environment configuration changed or its watcher failed; provider runtimes are fenced until restart", {
+      boundary: "gateway_environment_file_monitor",
+      composio_configuration_invalidated: true,
+      llm_provider_configuration_invalidated: true,
+    });
+  });
   try {
     await router.start(async (req, ephemeralContext) => {
       try { await handleInbound(req, ephemeralContext); }
       finally { waitDeadlineScheduler.refresh(); }
     });
   } catch (error) {
-    stopComposioConfigurationFileMonitor();
+    stopGatewayEnvironmentFileMonitor();
     await runtimeKernelShadowObserver?.shutdown();
     ownerTaskSubmissionStore.close();
     throw error;
@@ -9996,7 +10003,7 @@ async function serveWithOwnerLease(
     shutdown: async () => {
       gatewayLog.info("shutting down");
       gatewayShuttingDown = true;
-      stopComposioConfigurationFileMonitor();
+      stopGatewayEnvironmentFileMonitor();
       telegramOutboundStop.abort();
       for (const digest of telegramInitialGrants.keys()) discardTelegramInitialGrant(digest);
       waitDeadlineScheduler.stop();

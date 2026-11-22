@@ -232,10 +232,10 @@ export async function readCurrentComposioEnvironment(env: Env = process.env): Pr
 }
 
 /**
- * 設定ファイルの外部更新をGatewayの起動中に検知し、呼出し元へ一度だけ通知する。
+ * Gateway設定ファイルの外部更新を起動中に検知し、呼出し元へ一度だけ通知する。
  * 親directoryを監視するため、同じ場所へのatomic rename/replacementも対象になる。
  */
-export async function watchComposioEnvironmentFile(
+export async function watchGatewayEnvironmentFile(
   env: Env = process.env,
   onConfigurationChanged: () => void,
 ): Promise<() => void> {

@@ -21,7 +21,7 @@ import {
   renderSettingsHtml,
   settingsSurfaceAllowed,
   updateSettingsEnvFile,
-  watchComposioEnvironmentFile,
+  watchGatewayEnvironmentFile,
 } from "../src/settings_surface.js";
 import { assessLlmComputeReadiness, verifyLlmProvisioning } from "../src/control_center/setup/api_settings.js";
 import type { SecretKeyringFactory } from "../src/secret_store.js";
@@ -369,15 +369,15 @@ function runtime(): PluginRuntime {
 }
 
 describe("settings surface", () => {
-  it("fences Composio calls when its environment file is atomically replaced", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-composio-env-watch-"));
+  it("notifies runtime fences when the Gateway environment file is atomically replaced", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "btnk-gateway-env-watch-"));
     const envFile = path.join(dir, "blue-tanuki.env");
     const replacement = path.join(dir, "blue-tanuki.env.next");
     await fs.writeFile(envFile, 'COMPOSIO_USER_ID="before"\n', "utf8");
     let notifications = 0;
     let resolveNotification: (() => void) | undefined;
     const notified = new Promise<void>((resolve) => { resolveNotification = resolve; });
-    const stopWatching = await watchComposioEnvironmentFile({ BLUE_TANUKI_ENV_FILE: envFile }, () => {
+    const stopWatching = await watchGatewayEnvironmentFile({ BLUE_TANUKI_ENV_FILE: envFile }, () => {
       notifications += 1;
       resolveNotification?.();
     });
@@ -386,7 +386,7 @@ describe("settings surface", () => {
       await fs.rename(replacement, envFile);
       let timeout: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([notified, new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("Composio config change was not observed")), 2_000);
+        timeout = setTimeout(() => reject(new Error("Gateway config change was not observed")), 2_000);
       })]);
       if (timeout) clearTimeout(timeout);
       expect(notifications).toBe(1);
