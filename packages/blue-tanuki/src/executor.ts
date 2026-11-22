@@ -504,6 +504,15 @@ function githubRepositoryResourceLockKey(repositoryId: number): string {
   return `github-repository:${resourceDigest}`;
 }
 
+function channelSendResourceLockKey(payload: ChannelSendPayload): string {
+  // Channel sends append a new provider message rather than replacing a versioned
+  // object. Keep same-destination sends ordered without exposing destination data.
+  const resourceDigest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.channel-send-resource-lock.v1", payload.channel, payload.target,
+  ]), "utf8").digest("hex");
+  return `channel-send:${resourceDigest}`;
+}
+
 async function targetResourceLockKeys(command: Extract<ExecuteCommand, { type: "tool_call" }>,
   observation: BrokerTargetVersionObservation | undefined): Promise<string[]> {
   if (command.payload.tool_name === "browser.automation") {
@@ -3683,49 +3692,71 @@ export class Executor {
         metrics: { duration_ms: elapsedMilliseconds(start) } };
     }
     if (this.deps.dispatcher) {
-      before_action_dispatch?.();
-      markInvoked("channel_adapter");
-      before_action_dispatch?.();
-      const r = await this.deps.dispatcher.dispatch(payload, {
-        command_id: id,
-        upstream_commit_hash: commit_hash,
-        ...(payload.channel === "webchat" && request_id ? { request_id } : {}),
-      }, { ...(signal ? { signal } : {}) });
-      if (r.delivery_status === "unknown") {
-        return { command_id: id, status: "failed", error: "channel_send_delivery_outcome_unknown",
-          result: { delivery_status: "unknown", external_processing: "unknown",
-            next_action: "Check the destination's delivery status before deciding whether to send again.",
-            used_for_authority: false, may_execute: false },
-          metrics: { duration_ms: elapsedMilliseconds(start) } };
-      }
-      if (r.delivered) {
+      const pendingTargetLock = acquireTargetResourceLock(channelSendResourceLockKey(payload));
+      let releaseTargetLock: (() => void) | undefined;
+      let abortWait: (() => void) | undefined;
+      try {
+        if (signal) {
+          const cancelled = new Promise<never>((_, reject) => {
+            abortWait = () => reject(new Error("channel_send_cancelled_before_dispatch"));
+            signal.addEventListener("abort", abortWait, { once: true });
+            if (signal.aborted) abortWait();
+          });
+          releaseTargetLock = await Promise.race([pendingTargetLock, cancelled]);
+        } else {
+          releaseTargetLock = await pendingTargetLock;
+        }
+        if (signal?.aborted) throw new Error("channel_send_cancelled_before_dispatch");
+        before_action_dispatch?.();
+        markInvoked("channel_adapter");
+        before_action_dispatch?.();
+        const r = await this.deps.dispatcher.dispatch(payload, {
+          command_id: id,
+          upstream_commit_hash: commit_hash,
+          ...(payload.channel === "webchat" && request_id ? { request_id } : {}),
+        }, { ...(signal ? { signal } : {}) });
+        if (r.delivery_status === "unknown") {
+          return { command_id: id, status: "failed", error: "channel_send_delivery_outcome_unknown",
+            result: { delivery_status: "unknown", external_processing: "unknown",
+              next_action: "Check the destination's delivery status before deciding whether to send again.",
+              used_for_authority: false, may_execute: false },
+            metrics: { duration_ms: elapsedMilliseconds(start) } };
+        }
+        if (r.delivered) {
+          return {
+            command_id: id,
+            status: "success",
+            result: {
+              sent: true,
+              channel: payload.channel,
+              target: payload.target,
+              external_id: r.external_id,
+            },
+            metrics: { duration_ms: elapsedMilliseconds(start) },
+          };
+        }
         return {
           command_id: id,
-          status: "success",
+          status: "failed",
+          error: r.error ?? "channel_dispatch_failed",
           result: {
-            sent: true,
+            sent: false,
             channel: payload.channel,
             target: payload.target,
-            external_id: r.external_id,
+            error_kind: r.error_kind,
+            error_code: r.error_code,
+            retry_after_ms: r.retry_after_ms,
+            next_action: r.next_action,
           },
           metrics: { duration_ms: elapsedMilliseconds(start) },
         };
+      } catch (error) {
+        if (!releaseTargetLock) void pendingTargetLock.then((release) => release(), () => undefined);
+        throw error;
+      } finally {
+        if (abortWait) signal?.removeEventListener("abort", abortWait);
+        releaseTargetLock?.();
       }
-      return {
-        command_id: id,
-        status: "failed",
-        error: r.error ?? "channel_dispatch_failed",
-        result: {
-          sent: false,
-          channel: payload.channel,
-          target: payload.target,
-          error_kind: r.error_kind,
-          error_code: r.error_code,
-          retry_after_ms: r.retry_after_ms,
-          next_action: r.next_action,
-        },
-        metrics: { duration_ms: elapsedMilliseconds(start) },
-      };
     }
 
     return {
