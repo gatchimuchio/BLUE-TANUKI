@@ -11,6 +11,7 @@ import {
   shellExecIsolationProviderAvailable,
   shellExecIsolationUnavailableReason,
 } from "@blue-tanuki/core";
+import { isLoopbackListenerHost } from "@blue-tanuki/channel-base";
 import {
   buildLLMCommandRouteFromEnv,
   listConfiguredLLMProviders,
@@ -1416,8 +1417,17 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<DoctorReport>
 
   if (opts.probe_port !== false) {
     const port = parseInt(env.WEBCHAT_PORT ?? "8787", 10);
-    const host = env.WEBCHAT_HOST ?? "127.0.0.1";
-    draftChecks.push(await probePort(port, host));
+    const host = env.WEBCHAT_HOST?.trim() || "127.0.0.1";
+    if (!isLoopbackListenerHost(host)) {
+      draftChecks.push({
+        id: "port",
+        level: "error",
+        label: "WEBCHAT listener",
+        detail: "non-loopback WEBCHAT_HOST rejected before port probe; no listener opened",
+      });
+    } else {
+      draftChecks.push(await probePort(port, host));
+    }
   }
 
   const checks = draftChecks.map(enrichCheck);
