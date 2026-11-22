@@ -1028,6 +1028,9 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** 組込みComposio toolだけが受け取る一時的な接続資格。 */
   composio_api_key?: string;
+  /** Gatewayが消費済みcommand・現在owner/goal・dispatch条件を再照合し、Provider作用直前のComposio設定を返す。 */
+  current_composio_dispatch_environment?: () => Readonly<Record<string, string | undefined>> |
+    Promise<Readonly<Record<string, string | undefined>>>;
   /** Executorが組込みComposio discovery/executeだけへ渡す、コードレビュー済みaction登録。 */
   composio_action_effect_registry?: ComposioActionEffectRegistry;
   /** no-store URLを一度だけ渡すため、Executorがcomposio.connectだけへ注入する。 */

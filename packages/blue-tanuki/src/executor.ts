@@ -177,6 +177,8 @@ export interface ExecutorDeps {
   tools: ToolRegistry;
   /** Gatewayが保護参照を解決する。資格値を受け取るのはComposio組込みの経路だけ。 */
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
+  /** Composioの最終作用境界で保存済みGateway設定を再読する。 */
+  read_current_composio_environment?: () => Promise<Readonly<Record<string, string | undefined>>>;
   /** Source-owned reviewed registry passed through Composio's governed path; provider metadata cannot populate it. */
   composio_action_effect_registry?: ComposioActionEffectRegistry;
   /** Owner-only WebChat reserves bounded volatile capacity before one Composio link mutation. */
@@ -3532,6 +3534,25 @@ export class Executor {
         assertCurrentHdsGoalVersion(command);
         before_action_dispatch?.();
       } : undefined;
+      const currentComposioDispatchEnvironment = payload.tool_name === "composio.execute" ||
+        payload.tool_name === "composio.connect" || payload.tool_name === "composio.disconnect"
+        ? async (): Promise<Readonly<Record<string, string | undefined>>> => {
+          if (controller.signal.aborted) throw new Error("composio_dispatch_cancelled_before_provider_action");
+          remainingTimeoutMs();
+          assertTicketCurrent(record);
+          record.runtime.assert_execution_owner?.();
+          assertCurrentHdsGoalVersion(command);
+          before_action_dispatch?.();
+          const currentEnv = this.deps.read_current_composio_environment
+            ? await this.deps.read_current_composio_environment() : process.env;
+          if (controller.signal.aborted) throw new Error("composio_dispatch_cancelled_before_provider_action");
+          remainingTimeoutMs();
+          assertTicketCurrent(record);
+          record.runtime.assert_execution_owner?.();
+          assertCurrentHdsGoalVersion(command);
+          before_action_dispatch?.();
+          return composioToolEnvironment(currentEnv, this.resolveComposioApiKey(currentEnv));
+        } : undefined;
       let filesystemAdapterDispatched = false;
       const connectHandoff = payload.tool_name === "composio.connect"
         ? this.deps.reserve_composio_connect_handoff?.() : undefined;
@@ -3560,6 +3581,8 @@ export class Executor {
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
           ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
+          ...(currentComposioDispatchEnvironment
+            ? { current_composio_dispatch_environment: currentComposioDispatchEnvironment } : {}),
           ...(tool === composioSearchTool || tool === composioExecuteTool
             ? { composio_action_effect_registry: this.deps.composio_action_effect_registry } : {}),
           ...(connectHandoff ? { composio_connect_handoff: connectHandoff } : {}),

@@ -210,6 +210,27 @@ async function readEnvFileEnv(filePath: string | undefined): Promise<Env> {
   return raw ? parseEnvFile(raw).values : {};
 }
 
+/** 外部作用直前の再照合用に保存済み現行設定を読む。読取不能・不正形式はfail-closedにする。 */
+export async function readCurrentComposioEnvironment(env: Env = process.env): Promise<Env> {
+  const snapshot = { ...env };
+  const filePath = envFilePath(snapshot);
+  if (!filePath) return snapshot;
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch {
+    throw new Error("composio_current_configuration_unavailable");
+  }
+  let parsed: ReturnType<typeof parseEnvFile>;
+  try {
+    parsed = parseEnvFile(raw);
+  } catch {
+    throw new Error("composio_current_configuration_invalid");
+  }
+  if (parsed.warnings.length > 0) throw new Error("composio_current_configuration_invalid");
+  return { ...snapshot, ...parsed.values };
+}
+
 function envFilePath(env: Env): string | undefined {
   const raw = env.BLUE_TANUKI_ENV_FILE;
   return raw && raw.trim().length > 0 ? path.resolve(raw) : undefined;

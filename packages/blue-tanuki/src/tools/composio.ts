@@ -151,6 +151,8 @@ export interface ComposioExecuteResponse {
 export interface ComposioOptions {
   env?: Env;
   signal?: AbortSignal;
+  /** Provider作用直前にGateway実行権限を再照合し、現在の保護設定を受け取る。 */
+  currentDispatchEnvironment?: () => Readonly<Env> | Promise<Readonly<Env>>;
   actionEffectRegistry?: ComposioActionEffectRegistry;
   commandDigest?: string;
   operationPlanBindingDigest?: string;
@@ -166,6 +168,34 @@ export interface ComposioOptions {
   disconnectRequest?: (target: ComposioDisconnectTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   authConfigRequest?: (target: ComposioAuthConfigTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
   connectRequest?: (target: ComposioConnectTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+}
+
+async function assertComposioDispatchCurrent(opts: ComposioOptions, input: {
+  operation: "composio.execute" | "composio.connect" | "composio.disconnect";
+  toolkit: string;
+  tool?: string;
+  userId: string;
+  apiKey: string;
+  apiBaseUrl: string;
+}): Promise<void> {
+  assertToolExecutionNotCancelled(opts.signal, input.operation);
+  const currentEnv = await opts.currentDispatchEnvironment?.();
+  if (currentEnv) {
+    if (composioDryRun(currentEnv) || !composioLiveExecutionEnabled(currentEnv)) {
+      throw new Error(`${input.operation} live configuration changed before provider dispatch; external_mutation_sent=false`);
+    }
+    const currentApiKey = assertConfigured(currentEnv);
+    if (currentApiKey !== input.apiKey || envValue(currentEnv, "COMPOSIO_USER_ID") !== input.userId ||
+        composioApiBaseUrl(currentEnv) !== input.apiBaseUrl) {
+      throw new Error(`${input.operation} credential, owner identity, or endpoint changed before provider dispatch; external_mutation_sent=false`);
+    }
+    assertToolkitAllowed(input.toolkit, composioAllowedToolkits(currentEnv));
+    if (input.tool) {
+      assertActionAllowed(input.toolkit, input.tool, composioAllowedActions(currentEnv),
+        composioRevokedActions(currentEnv));
+    }
+  }
+  assertToolExecutionNotCancelled(opts.signal, input.operation);
 }
 
 const DEFAULT_DRY_RUN = true;
@@ -1683,10 +1713,13 @@ export async function invokeComposioDisconnect(
   if (operationPlanDigest(current.observation) !== operationPlanDigest(expectedObservation)) {
     throw new Error("composio.disconnect target changed after owner review; external_mutation_sent=false");
   }
-  assertToolExecutionNotCancelled(opts.signal, "composio.disconnect");
   const apiBaseUrl = composioApiBaseUrl(env);
   const request = opts.disconnectRequest ?? defaultComposioDisconnectRequest;
   let response: ComposioExecuteResponse;
+  await assertComposioDispatchCurrent(opts, {
+    operation: "composio.disconnect", toolkit: current.toolkit, userId: current.userId,
+    apiKey, apiBaseUrl,
+  });
   try {
     response = await request({
       api_base_url: apiBaseUrl,
@@ -2004,8 +2037,10 @@ export async function invokeComposioConnect(args: Record<string, unknown>, opts:
   if (operationPlanDigest(freshObservation) !== operationPlanDigest(expected)) {
     throw new Error("Composio auth config changed after owner review; external mutation sent=false; refresh the review");
   }
-  assertToolExecutionNotCancelled(opts.signal, "composio.connect");
   let response: ComposioExecuteResponse;
+  await assertComposioDispatchCurrent(opts, {
+    operation: "composio.connect", toolkit, userId, apiKey, apiBaseUrl,
+  });
   try {
     response = await (opts.connectRequest ?? defaultComposioConnectRequest)({
       api_base_url: apiBaseUrl,
@@ -2281,6 +2316,36 @@ export async function invokeComposioExecute(
   if (!plannedEffectRegistryBindingSha256) {
     throw new Error("Composio live execution requires reviewed action effect registry evidence; mutation_sent=false");
   }
+  const currentAction = await assertComposioInputSchemaUnchanged({
+    toolkit,
+    tool,
+    expectedInputSchemaSha256: inputSchemaSha256,
+    ...(opts.requireTargetVersionObservation && plannedObservation
+      ? { expectedActionDefinitionSha256: plannedObservation.action_definition_sha256 } : {}),
+    apiBaseUrl,
+    apiKey,
+    maxBytes,
+    request: opts.searchRequest ?? defaultComposioSearchRequest,
+    actionEffectRegistry: opts.actionEffectRegistry,
+    signal: opts.signal,
+  });
+  if (opts.requireTargetVersionObservation && plannedObservation &&
+      (currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256 ||
+       !isPinnedComposioToolkitVersion(currentAction.version) ||
+       currentAction.version !== parsedObservation.data.toolkit_version)) {
+    throw new Error("Composio action definition or pinned toolkit version changed after the owner review; mutation_sent=false");
+  }
+  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
+    toolkit,
+    tool: String(currentAction.slug),
+    inputSchemaSha256: String(currentAction.input_schema_sha256),
+    outputSchemaSha256: String(currentAction.output_schema_sha256),
+    actionDefinitionSha256: String(currentAction.action_definition_sha256),
+  }, opts.actionEffectRegistry);
+  if (!actionEffectRegistryBinding || actionEffectRegistryBinding.binding_sha256 !== plannedEffectRegistryBindingSha256 ||
+      operationPlanDigest(actionEffectRegistryBinding) !== operationPlanDigest(plannedObservation.action_effect_registry)) {
+    throw new Error("Composio action schema/effects registry binding changed after owner review; mutation_sent=false");
+  }
   const accounts = await readComposioAccounts({
     apiBaseUrl,
     apiKey,
@@ -2312,37 +2377,9 @@ export async function invokeComposioExecute(
   if (composioSchemaDigest(selectedAccount) !== parsedObservation.data.account_state_sha256) {
     throw new Error("Composio connected account changed after owner review; mutation_sent=false");
   }
-  const currentAction = await assertComposioInputSchemaUnchanged({
-    toolkit,
-    tool,
-    expectedInputSchemaSha256: inputSchemaSha256,
-    ...(opts.requireTargetVersionObservation && plannedObservation
-      ? { expectedActionDefinitionSha256: plannedObservation.action_definition_sha256 } : {}),
-    apiBaseUrl,
-    apiKey,
-    maxBytes,
-    request: opts.searchRequest ?? defaultComposioSearchRequest,
-    actionEffectRegistry: opts.actionEffectRegistry,
-    signal: opts.signal,
+  await assertComposioDispatchCurrent(opts, {
+    operation: "composio.execute", toolkit, tool, userId, apiKey, apiBaseUrl,
   });
-  if (opts.requireTargetVersionObservation && plannedObservation &&
-      (currentAction.action_definition_sha256 !== plannedObservation.action_definition_sha256 ||
-       !isPinnedComposioToolkitVersion(currentAction.version) ||
-       currentAction.version !== parsedObservation.data.toolkit_version)) {
-    throw new Error("Composio action definition or pinned toolkit version changed after the owner review; mutation_sent=false");
-  }
-  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
-    toolkit,
-    tool: String(currentAction.slug),
-    inputSchemaSha256: String(currentAction.input_schema_sha256),
-    outputSchemaSha256: String(currentAction.output_schema_sha256),
-    actionDefinitionSha256: String(currentAction.action_definition_sha256),
-  }, opts.actionEffectRegistry);
-  if (!actionEffectRegistryBinding || actionEffectRegistryBinding.binding_sha256 !== plannedEffectRegistryBindingSha256 ||
-      operationPlanDigest(actionEffectRegistryBinding) !== operationPlanDigest(plannedObservation.action_effect_registry)) {
-    throw new Error("Composio action schema/effects registry binding changed after owner review; mutation_sent=false");
-  }
-  assertToolExecutionNotCancelled(opts.signal, "composio.execute");
   const response = await request({
     api_base_url: apiBaseUrl,
     path: `/api/${COMPOSIO_API_VERSION}/tools/execute/${encodeURIComponent(tool)}`,
@@ -2460,6 +2497,8 @@ export const composioExecuteTool: Tool = {
     return await invokeComposioExecute(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key),
       ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { targetVersionObservation: observation } : {}),
       actionEffectRegistry: context.composio_action_effect_registry,
@@ -2502,6 +2541,8 @@ export const composioDisconnectTool: Tool = {
     return await invokeComposioDisconnect(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key),
       ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { disconnectTargetVersionObservation: observation } : {}),
       operationPlanBindingDigest: observation?.operation_plan_binding_digest,
@@ -2544,6 +2585,8 @@ export const composioConnectTool: Tool = {
     return await invokeComposioConnect(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key),
       ...(context.signal ? { signal: context.signal } : {}),
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { connectTargetVersionObservation: observation } : {}),
       ...(context.composio_connect_handoff ? { connectHandoff: context.composio_connect_handoff } : {}),

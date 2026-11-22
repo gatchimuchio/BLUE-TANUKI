@@ -217,7 +217,7 @@ import { renderCommandOutput } from "./result_render.js";
 import { finalizeCommandOutput, finalizeCommandStatusOutput } from "./finalize_command_output.js";
 import { approvalDeniedFeedback, approvalRequiredMessage, buildApprovalRuntime } from "./approval_runtime.js";
 import { loadPluginRuntime } from "./plugin_loader.js";
-import { createGatewaySettingsWritePort, createWebChatSettingsSurface } from "./settings_surface.js";
+import { createGatewaySettingsWritePort, createWebChatSettingsSurface, readCurrentComposioEnvironment } from "./settings_surface.js";
 import { nativeLlmCredentialPromptAvailable, promptForGitHubWriteCredential, promptForGoogleReadCredential,
   promptForComposioApiKeyCredential, promptForLlmCredential, promptForTelegramBotCredential } from "./llm_credential_prompt.js";
 import { buildAboutSnapshot } from "./about_surface.js";
@@ -9177,6 +9177,7 @@ async function serveWithOwnerLease(
     compute: new LLMComputeAdapter(llm, computeBudget, resourceBackpressure),
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
+    read_current_composio_environment: () => readCurrentComposioEnvironment(process.env),
     reserve_composio_connect_handoff: () => webchat.reserveComposioConnectHandoff(),
     resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),
