@@ -90,6 +90,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         composioDiscoveryCandidateSubmissionId: null,
         composioDiscoveryStatusMessage: null,
         composioDiscoveryStatusTone: "warn",
+        composioAccountsCandidateTask: null,
+        composioAccountsCandidateSubmissionId: null,
+        composioAccountsStatusMessage: null,
+        composioAccountsStatusTone: "warn",
         aboutToken: sessionStorage.getItem("bt.aboutToken") || "",
         updateToken: sessionStorage.getItem("bt.updateToken") || "",
         recoveryToken: sessionStorage.getItem("bt.recoveryToken") || "",
@@ -5362,7 +5366,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const queryInput = byId("composio-discovery-query");
         const prepareButton = byId("prepare-composio-discovery");
         const status = byId("composio-discovery-status");
+        const prepareAccountsButton = byId("prepare-composio-accounts");
+        const accountsStatus = byId("composio-accounts-status");
         status.className = "badge warn";
+        accountsStatus.className = "badge warn";
         const snapshot = state.connectorsSnapshot;
         const previousSelection = toolkitSelect.value;
         const toolkits = snapshot && typeof snapshot.allowed_toolkits === "string"
@@ -5388,6 +5395,16 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         toolkitSelect.disabled = !ready;
         queryInput.disabled = !ready;
         prepareButton.disabled = !ready || !toolkitSelect.value || !queryInput.value.trim() || queryInput.value.length > 500;
+        const accountsReady = ready && snapshot.user_id_set === true;
+        prepareAccountsButton.disabled = !accountsReady || !toolkitSelect.value;
+        if (state.composioAccountsStatusMessage) {
+          accountsStatus.textContent = state.composioAccountsStatusMessage;
+          accountsStatus.className = "badge " + state.composioAccountsStatusTone;
+        } else if (!snapshot) accountsStatus.textContent = "Load Connectors to check the configured API key, owner identity, and allowlist.";
+        else if (!configured) accountsStatus.textContent = "Composio API key is not configured. No account-list plan can be prepared.";
+        else if (snapshot.user_id_set !== true) accountsStatus.textContent = "Composio owner identity is not configured. No account-list plan can be prepared.";
+        else if (!toolkits.length) accountsStatus.textContent = "No allowlisted toolkit is configured. Add and load a toolkit before preparing an account-list plan.";
+        else accountsStatus.textContent = "Ready to request one unexecuted composio.accounts plan. No Composio request will be made here.";
         if (state.composioDiscoveryStatusMessage) {
           status.textContent = state.composioDiscoveryStatusMessage;
           status.className = "badge " + state.composioDiscoveryStatusTone;
@@ -7389,6 +7406,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.connectorsSnapshot = null;
         state.composioDiscoveryStatusMessage = null;
         state.composioDiscoveryStatusTone = "warn";
+        state.composioAccountsStatusMessage = null;
+        state.composioAccountsStatusTone = "warn";
         renderComposioDiscoveryControls();
         renderGoogleReadCredentialAvailability();
         renderGitHubWriteCredentialAvailability();
@@ -7419,6 +7438,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.connectorsSnapshot = null;
         state.composioDiscoveryStatusMessage = null;
         state.composioDiscoveryStatusTone = "warn";
+        state.composioAccountsStatusMessage = null;
+        state.composioAccountsStatusTone = "warn";
         renderComposioDiscoveryControls();
         sessionStorage.setItem("bt.connectorsToken", token);
         try {
@@ -7960,6 +7981,81 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           state.composioDiscoveryStatusMessage = message +
             (requestAttempted && requestSubmissionId ? " Request ID retained: " + requestSubmissionId + ". If the outcome is unknown, check Tasks/Runtime before changing the request." : "");
           state.composioDiscoveryStatusTone = "bad";
+          byId("owner-task-status").textContent = message;
+          byId("owner-task-status").className = "badge bad";
+        } finally {
+          renderComposioDiscoveryControls();
+        }
+      }
+
+      async function prepareComposioAccounts() {
+        const button = byId("prepare-composio-accounts");
+        button.disabled = true;
+        let requestSubmissionId = null;
+        let requestAttempted = false;
+        try {
+          const snapshot = state.connectorsSnapshot;
+          if (!snapshot || snapshot.api_key_configured !== true) {
+            throw new Error("Load Connectors and configure the Composio API key before preparing an account-list plan");
+          }
+          if (snapshot.user_id_set !== true) {
+            throw new Error("Configure the Composio owner identity before preparing an account-list plan");
+          }
+          const toolkit = byId("composio-discovery-toolkit").value;
+          const allowedToolkits = typeof snapshot.allowed_toolkits === "string"
+            ? snapshot.allowed_toolkits.split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+            : [];
+          if (!toolkit || !allowedToolkits.includes(toolkit)) {
+            throw new Error("Select a toolkit from the currently loaded Composio allowlist");
+          }
+
+          const args = { toolkit: toolkit, limit: 20 };
+          const task = [
+            "Create one unexecuted Operation Plan candidate with exactly one built-in composio.accounts call and the exact arguments JSON below.",
+            "Do not invoke composio.accounts or any other tool, make a network request, contact Composio, execute the plan, or perform an external action. Do not add an account identifier, credential, action, or permission.",
+            "This request only prepares a candidate. If later executed after separate Plan review and normal current authorization, composio.accounts performs a provider read request and returns account metadata; it does not grant authority or select an account automatically.",
+            "Exact composio.accounts arguments JSON: " + JSON.stringify(args)
+          ].join("\\n");
+          const ownerTokenInput = byId("owner-task-token");
+          const ownerToken = ownerTokenInput.value.trim();
+          const goalSelect = byId("owner-task-goal-ref");
+          const goalRef = goalSelect.value;
+          const purposeVersion = Number(goalSelect.selectedOptions[0]?.dataset.purposeVersion);
+          state.chatUser = byId("chat-user").value.trim() || "owner";
+          if (!ownerToken) throw new Error("Operation Plan候補の作成にはOwner Taskのowner tokenが必要です");
+          if (!state.chatSocket || state.chatSocket.readyState !== WebSocket.OPEN) {
+            throw new Error("候補の受付状態を確認するため、WebChatへ接続してください");
+          }
+          if (!goalRef || !Number.isSafeInteger(purposeVersion) || purposeVersion < 1) {
+            throw new Error("Owner Taskから現在の委任目的を読み込み、選択してください");
+          }
+          const candidateFingerprint = JSON.stringify([task, goalRef, purposeVersion, state.chatUser]);
+          if (!state.composioAccountsCandidateTask || state.composioAccountsCandidateTask !== candidateFingerprint) {
+            state.composioAccountsCandidateTask = candidateFingerprint;
+            state.composioAccountsCandidateSubmissionId = crypto.randomUUID();
+          }
+          const submissionId = state.composioAccountsCandidateSubmissionId;
+          requestSubmissionId = submissionId;
+          requestAttempted = true;
+          const result = await postOwnerTaskCompute(ownerToken, {
+            user: state.chatUser, task: task, goal_ref: goalRef, purpose_version: purposeVersion,
+            submission_id: submissionId
+          });
+          if (ownerTokenInput.value.trim() === ownerToken) ownerTokenInput.value = "";
+          state.composioAccountsStatusMessage = "Plan candidate request accepted: " +
+            (result.request_id || submissionId) + ". No Composio request was made.";
+          state.composioAccountsStatusTone = "good";
+          byId("owner-task-status").textContent = result.status === "already_in_progress" || result.status === "already_accepted"
+            ? "このComposio account-list候補は既に受付済みです。重複起動していません"
+            : "Composio account-list Plan候補の作成依頼を受付済み。account読取・外部作用は未実行です";
+          byId("owner-task-status").className = "badge good";
+          appendChat("owner", task);
+          appendChat("accepted", result.request_id || "Composio account-list候補を受付済み", result.request_id);
+        } catch (error) {
+          const message = error && typeof error.message === "string" ? error.message : "Composio account-list plan request failed";
+          state.composioAccountsStatusMessage = message +
+            (requestAttempted && requestSubmissionId ? " Request ID retained: " + requestSubmissionId + ". If the outcome is unknown, check Tasks/Runtime before changing the request." : "");
+          state.composioAccountsStatusTone = "bad";
           byId("owner-task-status").textContent = message;
           byId("owner-task-status").className = "badge bad";
         } finally {
@@ -12881,8 +12977,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("load-connectors").addEventListener("click", loadConnectors);
       byId("save-connectors").addEventListener("click", saveConnectors);
       byId("prepare-composio-discovery").addEventListener("click", prepareComposioDiscovery);
+      byId("prepare-composio-accounts").addEventListener("click", prepareComposioAccounts);
       byId("composio-discovery-toolkit").addEventListener("change", function () {
         state.composioDiscoveryStatusMessage = null;
+        state.composioAccountsStatusMessage = null;
         renderComposioDiscoveryControls();
       });
       byId("composio-discovery-query").addEventListener("input", function () {
