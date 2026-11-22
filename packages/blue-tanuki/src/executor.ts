@@ -183,6 +183,8 @@ export interface ExecutorDeps {
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
   /** Composioの最終作用境界で保存済みGateway設定を再読する。 */
   read_current_composio_environment?: () => Promise<Readonly<Record<string, string | undefined>>>;
+  /** Gateway設定変更後、再起動まで既存・新規のComposio credential consumerを遮断する。 */
+  composio_configuration_signal?: AbortSignal;
   /** Source-owned reviewed registry passed through Composio's governed path; provider metadata cannot populate it. */
   composio_action_effect_registry?: ComposioActionEffectRegistry;
   /** Owner-only WebChat reserves bounded volatile capacity before one Composio link mutation. */
@@ -3500,6 +3502,9 @@ export class Executor {
     }
     const record = APPROVED_COMMAND_RECORDS.get(command)!;
     const controller = new AbortController();
+    const composioConfigurationSignal = tool === composioSearchTool || tool === composioAccountsTool ||
+      tool === composioScopesTool || tool === composioExecuteTool || tool === composioConnectTool ||
+      tool === composioDisconnectTool ? this.deps.composio_configuration_signal : undefined;
     const observeLifecycle = (event: ToolExecutionLifecycleObservation): void => {
       try { this.deps.on_tool_execution_lifecycle?.({ ...event, command_id: id }); } catch { /* evidence failure cannot block the worker */ }
     };
@@ -3508,8 +3513,16 @@ export class Executor {
       observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
         state: "cancel_requested", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
     };
+    const abortFromComposioConfigurationChange = (): void => {
+      if (controller.signal.aborted) return;
+      controller.abort(new Error("composio_configuration_changed_restart_required"));
+      observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
+        state: "cancel_requested", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
+    };
     signal?.addEventListener("abort", abortFromCaller, { once: true });
     if (signal?.aborted) abortFromCaller();
+    composioConfigurationSignal?.addEventListener("abort", abortFromComposioConfigurationChange, { once: true });
+    if (composioConfigurationSignal?.aborted) abortFromComposioConfigurationChange();
     const remainingTimeoutMs = (): number | undefined => {
       if (constraints?.timeout_ms === undefined) return undefined;
       const remaining = constraints.timeout_ms - elapsedMilliseconds(start);
@@ -3531,7 +3544,11 @@ export class Executor {
           throw error;
         }
       }
-      if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
+      if (controller.signal.aborted) {
+        throw new Error(composioConfigurationSignal?.aborted
+          ? "composio_configuration_changed_restart_required; provider request not started"
+          : "Broker target resource wait cancelled");
+      }
       if (payload.tool_name === "shell.exec") {
         const observation = ShellExecTargetVersionObservationSchema.parse(record.target_version_observation);
         if (observation.schema_version !== "blue-tanuki.shell-exec-target-version.v2" ||
@@ -3581,8 +3598,13 @@ export class Executor {
         throw new Error("composio.connect requires the registered adapter and a reserved volatile owner handoff slot");
       }
       const invocation = Promise.resolve().then(() => {
-        if (signal?.aborted) throw new Error("Broker target resource wait cancelled");
+        if (controller.signal.aborted) throw new Error(composioConfigurationSignal?.aborted
+          ? "composio_configuration_changed_restart_required; provider request not started"
+          : "Broker target resource wait cancelled");
         before_action_dispatch?.();
+        if (controller.signal.aborted) throw new Error(composioConfigurationSignal?.aborted
+          ? "composio_configuration_changed_restart_required; provider request not started"
+          : "Broker tool call cancelled before adapter dispatch");
         const composioApiKey = tool === composioSearchTool || tool === composioAccountsTool ||
           tool === composioScopesTool || tool === composioExecuteTool || tool === composioDisconnectTool ||
           tool === composioConnectTool
@@ -3640,11 +3662,21 @@ export class Executor {
         };
         void invocation.then(settleTarget, settleTarget);
       }
-      const result = await this.withTimeout(invocation, adapterTimeout, controller);
-      if (signal?.aborted) {
+      let result: unknown;
+      try {
+        result = await this.withTimeout(invocation, adapterTimeout, controller);
+      } catch (error) {
+        if (composioConfigurationSignal?.aborted) {
+          throw new Error("composio_configuration_changed; operation outcome unknown; inspect provider state before retry");
+        }
+        throw error;
+      }
+      if (controller.signal.aborted) {
         observeLifecycle({ schema_version: "blue-tanuki.tool-execution-lifecycle.v1", source: "executor_tool_adapter",
           state: "late_result_discarded", observed_at_ms: Date.now(), used_for_authority: false, may_execute: false });
-        throw new Error("Tool result arrived after cancellation; result discarded and outcome unknown");
+        throw new Error(composioConfigurationSignal?.aborted
+          ? "composio_configuration_changed; operation outcome unknown; inspect provider state before retry"
+          : "Tool result arrived after cancellation; result discarded and outcome unknown");
       }
       if (isGitHubWriteProviderRejection(command, result)) {
         return {
@@ -3671,6 +3703,7 @@ export class Executor {
       };
     } finally {
       signal?.removeEventListener("abort", abortFromCaller);
+      composioConfigurationSignal?.removeEventListener("abort", abortFromComposioConfigurationChange);
       if (!adapterOwnsTargetLock) {
         for (const releaseTargetLock of acquiredTargetLocks.reverse()) releaseTargetLock();
       }

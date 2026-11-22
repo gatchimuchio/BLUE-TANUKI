@@ -249,6 +249,60 @@ describe("Composio connector", () => {
     }
   });
 
+  it("cancels active Composio consumers and blocks later calls after configuration invalidation", async () => {
+    vi.stubEnv("COMPOSIO_API_KEY", undefined);
+    vi.stubEnv("COMPOSIO_API_KEY_REF", credentialRef);
+    const configuration = new AbortController();
+    const tools = new ToolRegistry();
+    tools.register(composioSearchTool);
+    const firstAuthority = createExecutorApprovalAuthority();
+    const firstExecutor = new Executor({ approval_authority: firstAuthority, tools, llm: new StubBackend(),
+      composio_configuration_signal: configuration.signal,
+      resolve_composio_api_key: () => "synthetic-composio-key" });
+    let resolveStarted!: (signal: AbortSignal) => void;
+    const started = new Promise<AbortSignal>((resolve) => { resolveStarted = resolve; });
+    const invoke = vi.spyOn(composioSearchTool, "invoke").mockImplementation(async (_args, context) => {
+      const signal = context.signal;
+      if (!signal) throw new Error("Composio fixture did not receive its execution signal");
+      resolveStarted(signal);
+      return await new Promise((resolve) => {
+        const finish = () => resolve({ stopped_after_configuration_change: true });
+        if (signal.aborted) finish();
+        else signal.addEventListener("abort", finish, { once: true });
+      });
+    });
+    const dispatch = async (executor: Executor, authority: ReturnType<typeof createExecutorApprovalAuthority>) => {
+      const command = composioCommand(composioSearchTool);
+      const context = approvalContextFromCommand(command);
+      const final = finalReviewRequired(context);
+      const approved = authority.approve(command, { source: final ? "human_final_review" : "approval_gate",
+        decision: final ? "approve" : "allow", risk: context.risk, operation: context.operation, final_review_required: final,
+        approved_by: "fixture", approved_at_ms: Date.now(), upstream_commit_hash: command.upstream_decision.commit_hash,
+        reason: "configuration invalidation fixture" });
+      return executor.execute(approved);
+    };
+    try {
+      const activeCall = dispatch(firstExecutor, firstAuthority);
+      const activeSignal = await started;
+      expect(activeSignal.aborted).toBe(false);
+      configuration.abort(new Error("composio_configuration_changed_restart_required"));
+      expect(activeSignal.aborted).toBe(true);
+      await expect(activeCall).resolves.toMatchObject({ status: "failed",
+        error: expect.stringContaining("outcome unknown") });
+
+      const nextAuthority = createExecutorApprovalAuthority();
+      const nextExecutor = new Executor({ approval_authority: nextAuthority, tools, llm: new StubBackend(),
+        composio_configuration_signal: configuration.signal,
+        resolve_composio_api_key: () => "synthetic-composio-key" });
+      await expect(dispatch(nextExecutor, nextAuthority)).resolves.toMatchObject({ status: "failed",
+        error: expect.stringContaining("composio_configuration_changed_restart_required") });
+      expect(invoke).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("hashes schema objects independently of JSON key order", () => {
     expect(composioSchemaDigest({ type: "object", properties: { title: { type: "string" } } }))
       .toBe(composioSchemaDigest({ properties: { title: { type: "string" } }, type: "object" }));

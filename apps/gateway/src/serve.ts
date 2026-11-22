@@ -1485,6 +1485,7 @@ async function serveWithOwnerLease(
       unixSessionEnv.DBUS_SESSION_BUS_ADDRESS === process.env.DBUS_SESSION_BUS_ADDRESS)) &&
     nativeLlmCredentialPromptAvailable(nativePromptEnv);
   let activeLLMRegistryForSettings: LLMRegistry | undefined;
+  const composioConfigurationController = new AbortController();
   const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys, {
     available: nativeCredentialPromptAvailable,
     request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
@@ -1500,6 +1501,11 @@ async function serveWithOwnerLease(
     },
   }, {
     onLlmProviderConfigurationChanged: () => activeLLMRegistryForSettings?.invalidateProviderConfiguration(),
+    onComposioConfigurationChanged: () => {
+      if (!composioConfigurationController.signal.aborted) {
+        composioConfigurationController.abort(new Error("composio_configuration_changed_restart_required"));
+      }
+    },
   });
   tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
@@ -9189,6 +9195,7 @@ async function serveWithOwnerLease(
     tools,
     resolve_composio_api_key: ref => resolveSecretMaterial({ COMPOSIO_API_KEY_REF: ref }, "COMPOSIO_API_KEY"),
     read_current_composio_environment: () => readCurrentComposioEnvironment(process.env),
+    composio_configuration_signal: composioConfigurationController.signal,
     reserve_composio_connect_handoff: () => webchat.reserveComposioConnectHandoff(),
     resolve_github_write_credential: ref => resolveSecretMaterial({ GITHUB_TOKEN_REF: ref }, "GITHUB_TOKEN", { require_dpapi_key_match: true }),
     resolve_google_read_access_token: (key, ref) => resolveSecretMaterial({ [secretRefKey(key)]: ref }, key),

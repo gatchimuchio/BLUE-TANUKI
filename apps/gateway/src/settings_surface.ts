@@ -278,7 +278,7 @@ async function assertLocalCredentialTarget(target: string, file: { mode: number;
 
 export function createGatewaySettingsWritePort(env: Env = process.env,
   inheritedEnvKeys: readonly string[] = [], nativeRegistration?: NativeCredentialRegistration,
-  hooks?: { onLlmProviderConfigurationChanged?: () => void }): SettingsWritePort {
+  hooks?: { onLlmProviderConfigurationChanged?: () => void; onComposioConfigurationChanged?: () => void }): SettingsWritePort {
   const bindingKey = randomBytes(32);
   let writeTail: Promise<void> = Promise.resolve();
   const serializeWrite = async <T>(write: () => Promise<T>): Promise<T> => {
@@ -614,6 +614,7 @@ export function createGatewaySettingsWritePort(env: Env = process.env,
         throw new Error(stored ? `${registrationPrefix}_outcome_unknown` : "settings_write_readback_mismatch");
       }
       if (patch.llm) hooks?.onLlmProviderConfigurationChanged?.();
+      if (patch.composio) hooks?.onComposioConfigurationChanged?.();
       return { changed_keys: Object.keys(updates).sort(), restart_required: true as const };
     }),
   };

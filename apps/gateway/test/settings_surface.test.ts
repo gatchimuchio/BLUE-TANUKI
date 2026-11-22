@@ -383,7 +383,10 @@ describe("settings surface", () => {
       'COMPOSIO_LIVE_EXECUTION="true"',
     ].join("\n") + "\n", "utf8");
     try {
-      const settings = createGatewaySettingsWritePort({ BLUE_TANUKI_ENV_FILE: envFile });
+      let composioConfigurationChanges = 0;
+      const settings = createGatewaySettingsWritePort({ BLUE_TANUKI_ENV_FILE: envFile }, [], undefined, {
+        onComposioConfigurationChanged: () => { composioConfigurationChanges += 1; },
+      });
       const before = await settings.inspect();
       expect(before.values.composio).toMatchObject({
         api_key_configured: true,
@@ -393,15 +396,20 @@ describe("settings surface", () => {
         dry_run: false,
         live_execution: true,
       });
+      await expect(settings.apply({ composio: { allowed_actions: "github:GITHUB_DELETE_REPO" } }, "0".repeat(64))
+      ).rejects.toThrow("settings_write_target_changed_before_invoke");
+      expect(composioConfigurationChanges).toBe(0);
       const updated = await settings.apply({ composio: {
         allowed_actions: "github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE",
       } }, before.target_state_digest);
+      expect(composioConfigurationChanges).toBe(1);
       expect(updated).toMatchObject({ changed_keys: ["COMPOSIO_ALLOWED_ACTIONS"], restart_required: true });
       let after = await settings.inspect();
       expect(after.values.composio.allowed_actions).toBe("github:GITHUB_CREATE_AN_ISSUE,github:GITHUB_CLOSE_AN_ISSUE");
       expect(after.values.composio.api_key_configured).toBe(true);
 
       await settings.apply({ composio: { clear_api_key: true } }, after.target_state_digest);
+      expect(composioConfigurationChanges).toBe(2);
       after = await settings.inspect();
       expect(after.values.composio).toMatchObject({
         api_key_configured: false,
