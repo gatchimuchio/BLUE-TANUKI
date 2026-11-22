@@ -198,6 +198,38 @@ async function assertComposioDispatchCurrent(opts: ComposioOptions, input: {
   assertToolExecutionNotCancelled(opts.signal, input.operation);
 }
 
+async function assertComposioReadDispatchCurrent(opts: ComposioOptions, input: {
+  operation: "composio.search" | "composio.accounts" | "composio.scopes";
+  toolkit: string;
+  tools?: readonly string[];
+  apiKey: string;
+  apiBaseUrl: string;
+}): Promise<void> {
+  assertToolExecutionNotCancelled(opts.signal, input.operation);
+  const currentEnv = await opts.currentDispatchEnvironment?.();
+  if (currentEnv) {
+    const dispatchedEnv = opts.env ?? process.env;
+    const normalizedList = (values: readonly string[]): string[] => [...values].sort();
+    const sameList = (left: readonly string[], right: readonly string[]): boolean =>
+      JSON.stringify(normalizedList(left)) === JSON.stringify(normalizedList(right));
+    const sameConfiguration =
+      assertConfigured(currentEnv) === input.apiKey &&
+      envValue(currentEnv, "COMPOSIO_USER_ID") === envValue(dispatchedEnv, "COMPOSIO_USER_ID") &&
+      composioApiBaseUrl(currentEnv) === input.apiBaseUrl &&
+      sameList(composioAllowedToolkits(currentEnv), composioAllowedToolkits(dispatchedEnv)) &&
+      sameList(composioAllowedActions(currentEnv), composioAllowedActions(dispatchedEnv)) &&
+      sameList(composioRevokedActions(currentEnv), composioRevokedActions(dispatchedEnv));
+    if (!sameConfiguration) {
+      throw new Error(`${input.operation} provider configuration changed before dispatch; external_call_performed=false`);
+    }
+    assertToolkitAllowed(input.toolkit, composioAllowedToolkits(currentEnv));
+    for (const tool of input.tools ?? []) {
+      assertActionAllowed(input.toolkit, tool, composioAllowedActions(currentEnv), composioRevokedActions(currentEnv));
+    }
+  }
+  assertToolExecutionNotCancelled(opts.signal, input.operation);
+}
+
 const DEFAULT_DRY_RUN = true;
 const DEFAULT_API_BASE_URL = "https://backend.composio.dev";
 const COMPOSIO_API_VERSION = "v3.1";
@@ -1038,6 +1070,9 @@ export async function invokeComposioScopes(
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const apiBaseUrl = composioApiBaseUrl(env);
   const path = `/api/${COMPOSIO_API_VERSION}/toolkits/${encodeURIComponent(toolkit)}/scopes/recommended`;
+  await assertComposioReadDispatchCurrent(opts, {
+    operation: "composio.scopes", toolkit, tools, apiKey, apiBaseUrl,
+  });
   assertToolExecutionNotCancelled(opts.signal, "composio.scopes");
   const response = await (opts.scopesRequest ?? defaultComposioScopesRequest)({
     api_base_url: apiBaseUrl,
@@ -1226,6 +1261,9 @@ export async function invokeComposioAccounts(
   const limit = positiveIntArg(args, "limit", DEFAULT_ACCOUNT_LIMIT, MAX_ACCOUNT_LIMIT);
   const maxBytes = positiveIntArg(args, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES);
   const apiBaseUrl = composioApiBaseUrl(env);
+  await assertComposioReadDispatchCurrent(opts, {
+    operation: "composio.accounts", toolkit, apiKey, apiBaseUrl,
+  });
   const result = await readComposioAccounts({
     apiBaseUrl,
     apiKey,
@@ -2152,6 +2190,9 @@ export async function invokeComposioSearch(
   path.searchParams.set("limit", String(limit));
   path.searchParams.set("toolkit_versions", "latest");
   path.searchParams.set("include_deprecated", "false");
+  await assertComposioReadDispatchCurrent(opts, {
+    operation: "composio.search", toolkit, apiKey, apiBaseUrl,
+  });
   assertToolExecutionNotCancelled(opts.signal, "composio.search");
   const request = opts.searchRequest ?? defaultComposioSearchRequest;
   const response = await request({
@@ -2436,6 +2477,8 @@ export const composioSearchTool: Tool = {
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioSearch(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
       actionEffectRegistry: context.composio_action_effect_registry,
     });
   },
@@ -2450,6 +2493,8 @@ export const composioAccountsTool: Tool = {
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioAccounts(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
     });
   },
 };
@@ -2463,6 +2508,8 @@ export const composioScopesTool: Tool = {
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioScopes(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+      ...(context.current_composio_dispatch_environment
+        ? { currentDispatchEnvironment: context.current_composio_dispatch_environment } : {}),
     });
   },
 };

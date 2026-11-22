@@ -3571,7 +3571,9 @@ export class Executor {
         assertCurrentHdsGoalVersion(command);
         before_action_dispatch?.();
       } : undefined;
-      const currentComposioDispatchEnvironment = payload.tool_name === "composio.execute" ||
+      const currentComposioDispatchEnvironment = payload.tool_name === "composio.search" ||
+        payload.tool_name === "composio.accounts" || payload.tool_name === "composio.scopes" ||
+        payload.tool_name === "composio.execute" ||
         payload.tool_name === "composio.connect" || payload.tool_name === "composio.disconnect"
         ? async (): Promise<Readonly<Record<string, string | undefined>>> => {
           if (controller.signal.aborted) throw new Error("composio_dispatch_cancelled_before_provider_action");

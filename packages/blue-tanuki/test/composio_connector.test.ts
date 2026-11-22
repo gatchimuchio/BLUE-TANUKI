@@ -219,6 +219,7 @@ describe("Composio connector", () => {
         tools.register(tool);
         vi.spyOn(tool, "invoke").mockImplementation(async (_args, context) => {
           expect(context.composio_api_key).toBe(secret);
+          expect(context.current_composio_dispatch_environment).toBeTypeOf("function");
           return { checked: true };
         });
         expect(await dispatch(executor, tool)).toMatchObject({ status: "success", result: { checked: true } });
@@ -627,6 +628,93 @@ describe("Composio connector", () => {
       metadata_used_for_authority: false,
     });
     expect(JSON.stringify(result)).not.toContain("composio-secret-value");
+  });
+
+  it("blocks Composio read requests when persisted provider configuration changed before dispatch", async () => {
+    const env = {
+      COMPOSIO_API_KEY: "dispatch-key-fixture",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+    };
+    const searchRequest = vi.fn(async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"));
+    const accountsRequest = vi.fn(async () => accountResponse());
+    const scopesRequest = vi.fn(async () => ({
+      status: 200,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify({ toolkit_version: "latest", scopes: { least_privilege: ["repo"], fewest: ["repo"], conditional: [] } }),
+      truncated: false,
+      request_id: "req_scopes_fixture",
+    }));
+    const cases = [
+      {
+        operation: "search",
+        request: searchRequest,
+        invoke: () => invokeComposioSearch(
+          { toolkit: "github", query: "issues" },
+          { env, currentDispatchEnvironment: async () => ({ ...env, COMPOSIO_API_KEY: "rotated-key-fixture" }), searchRequest },
+        ),
+      },
+      {
+        operation: "accounts",
+        request: accountsRequest,
+        invoke: () => invokeComposioAccounts(
+          { toolkit: "github" },
+          { env, currentDispatchEnvironment: async () => ({ ...env, COMPOSIO_USER_ID: "different-owner" }), accountsRequest },
+        ),
+      },
+      {
+        operation: "scopes",
+        request: scopesRequest,
+        invoke: () => invokeComposioScopes(
+          { toolkit: "github", tools: ["GITHUB_CREATE_AN_ISSUE"] },
+          { env, currentDispatchEnvironment: async () => ({ ...env, COMPOSIO_REVOKED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE" }), scopesRequest },
+        ),
+      },
+    ];
+
+    for (const testCase of cases) {
+      let caught: unknown;
+      try { await testCase.invoke(); } catch (error) { caught = error; }
+      expect(caught, testCase.operation).toBeInstanceOf(Error);
+      expect((caught as Error).message, testCase.operation).toMatch(/external_call_performed=false/u);
+      expect(testCase.request, testCase.operation).not.toHaveBeenCalled();
+      expect((caught as Error).message, testCase.operation).not.toContain(env.COMPOSIO_API_KEY);
+    }
+  });
+
+  it("allows Composio read requests when the persisted dispatch configuration is unchanged", async () => {
+    const env = {
+      COMPOSIO_API_KEY: "dispatch-key-fixture",
+      COMPOSIO_ALLOWED_TOOLKITS: "github",
+      COMPOSIO_ALLOWED_ACTIONS: "github:GITHUB_CREATE_AN_ISSUE",
+      COMPOSIO_USER_ID: "owner-local",
+    };
+    const currentDispatchEnvironment = async () => ({ ...env });
+    const searchRequest = vi.fn(async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE"));
+    const accountsRequest = vi.fn(async () => accountResponse());
+    const scopesRequest = vi.fn(async () => ({
+      status: 200,
+      ok: true,
+      content_type: "application/json",
+      body: JSON.stringify({ toolkit_version: "latest", scopes: { least_privilege: ["repo"], fewest: ["repo"], conditional: [] } }),
+      truncated: false,
+      request_id: "req_scopes_fixture",
+    }));
+
+    await expect(invokeComposioSearch(
+      { toolkit: "github", query: "issues" }, { env, currentDispatchEnvironment, searchRequest },
+    )).resolves.toMatchObject({ operation: "search", external_call_performed: true });
+    await expect(invokeComposioAccounts(
+      { toolkit: "github" }, { env, currentDispatchEnvironment, accountsRequest },
+    )).resolves.toMatchObject({ operation: "accounts", external_call_performed: true });
+    await expect(invokeComposioScopes(
+      { toolkit: "github", tools: ["GITHUB_CREATE_AN_ISSUE"] }, { env, currentDispatchEnvironment, scopesRequest },
+    )).resolves.toMatchObject({ operation: "scopes", external_call_performed: true });
+    expect(searchRequest).toHaveBeenCalledTimes(1);
+    expect(accountsRequest).toHaveBeenCalledTimes(1);
+    expect(scopesRequest).toHaveBeenCalledTimes(1);
   });
 
   it("does not request scope recommendations for an action outside the explicit action allowlist", async () => {
