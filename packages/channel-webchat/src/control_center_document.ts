@@ -360,7 +360,7 @@ ${CONTROL_CENTER_STYLE}    </style>
           </div>
           <p class="muted">This submits only a proposed settings.write Operation Plan through the selected owner goal. Changed values use normal Owner Task Compute and appear in that conversation/plan, so do not enter secrets or sensitive personal data. It does not save settings or call Composio. Review the exact no-store L3 change list before approving. API key values never enter the plan; first registration uses a dedicated OS-protected input after approval. An approved change that clears a key removes only the local credential/reference and disables live execution; it does not disconnect the connected account at Composio.</p>
           <div class="status-grid">
-            <div class="metric"><span>Composio</span><span id="composio-configured-status">not loaded</span></div>
+            <div class="metric"><span>Composio API credential</span><span id="composio-configured-status">not loaded</span></div>
             <div class="metric"><span>Dry-run</span><span id="composio-dry-run-status">not loaded</span></div>
             <div class="metric"><span>Live opt-in</span><span id="composio-live-opt-in-status">not loaded</span></div>
             <div class="metric"><span>Live configuration prerequisites</span><span id="composio-live-status">not loaded</span></div>

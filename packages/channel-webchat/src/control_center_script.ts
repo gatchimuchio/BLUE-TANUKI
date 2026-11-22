@@ -5990,7 +5990,9 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.composioDisconnectStatusTone = "warn";
         byId("composio-disconnect-account-id").value = "";
         state.composioDisconnectAccountToolkit = null;
-        setText("composio-configured-status", composio.configured ? "configured" : "not configured");
+        setText("composio-configured-status", composio.configured
+          ? "configured; connected account not verified"
+          : "not configured");
         setText("composio-dry-run-status", composio.dry_run === false ? "false" : "true");
         setText("composio-live-opt-in-status", composio.live_execution_enabled ? "enabled" : "disabled");
         const liveConfigurationReady = composio.live_execution_configuration_ready === true ||
