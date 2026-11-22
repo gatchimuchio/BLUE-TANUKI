@@ -118,7 +118,7 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion, googleCalendarCreateEventId } from "./tools/google_write.js";
-import { parseBrowserFormGetArguments } from "./tools/browser_form_submission.js";
+import { parseBrowserFormGetArguments, parseBrowserLinkNavigationArguments } from "./tools/browser_form_submission.js";
 import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
@@ -346,6 +346,18 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
       request.action_url,
     ]), "utf8").digest("hex");
     return `browser-form-get:${targetDigest}`;
+  }
+  if (tool_name === "browser.automation" && args.action === "click") {
+    // A reviewed link can still target a GET endpoint with an external effect. Serialize the
+    // normalized destination; the adapter separately rechecks the exact reviewed href before goto.
+    const request = parseBrowserLinkNavigationArguments(args);
+    const targetUrl = new URL(request.target_url);
+    targetUrl.hash = "";
+    const targetDigest = createHash("sha256").update(JSON.stringify([
+      "blue-tanuki.browser-link-navigation-resource-lock.v1",
+      targetUrl.href,
+    ]), "utf8").digest("hex");
+    return `browser-link-navigation:${targetDigest}`;
   }
   if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
     // Validate the exact target first; shell.exec has a root-wide write set, so both share one workspace mutex.
