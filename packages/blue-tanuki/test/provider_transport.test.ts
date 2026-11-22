@@ -1,5 +1,5 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createServer as createTcpServer } from "node:net";
+import { createServer as createTcpServer, isIP } from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -149,6 +149,61 @@ describe("provider pinned egress transport", () => {
 
     await expect(resolveProviderTarget(url, new AbortController().signal, resolveHost))
       .rejects.toBeInstanceOf(ProviderEgressError);
+  });
+
+  it("rejects special-purpose, mapped, and non-global NAT64 destinations", async () => {
+    const addresses = [
+      "192.88.99.2",
+      "64:ff9b:1::1",
+      "100::1",
+      "100:0:0:1::1",
+      "2001::1",
+      "2001:2::1",
+      "2001:10::1",
+      "2002:c000:0201::1",
+      "3fff::1",
+      "5f00::1",
+      "::ffff:93.184.216.34",
+      "0:0:0:0:0:ffff:5db8:d822",
+      "64:ff9b::10.0.0.1",
+      "64:ff9b::127.0.0.1",
+    ];
+
+    for (const address of addresses) {
+      const family = isIP(address);
+      if (family !== 4 && family !== 6) throw new Error(`invalid test address: ${address}`);
+      await expect(resolveProviderTarget(
+        new URL("https://provider.invalid/v1"),
+        new AbortController().signal,
+        async () => [{ address, family }],
+      ), address).rejects.toBeInstanceOf(ProviderEgressError);
+    }
+  });
+
+  it("accepts globally reachable special assignments and NAT64 with a public IPv4 address", async () => {
+    const addresses = [
+      "93.184.216.34",
+      "192.0.0.9",
+      "192.0.0.10",
+      "2001:1::1",
+      "2001:1::2",
+      "2001:1::3",
+      "2001:3::1",
+      "2001:4:112::1",
+      "2001:20::1",
+      "2001:30::1",
+      "64:ff9b::8.8.8.8",
+    ];
+
+    for (const address of addresses) {
+      const family = isIP(address);
+      if (family !== 4 && family !== 6) throw new Error(`invalid test address: ${address}`);
+      await expect(resolveProviderTarget(
+        new URL("https://provider.invalid/v1"),
+        new AbortController().signal,
+        async () => [{ address, family }],
+      ), address).resolves.toMatchObject({ hostname: "provider.invalid" });
+    }
   });
 
   it("rejects credential-bearing endpoint query parameters", async () => {
