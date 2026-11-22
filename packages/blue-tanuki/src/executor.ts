@@ -128,6 +128,7 @@ import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDr
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
 import { isSettingsWriteTool, settingsWriteActivationReview } from "./tools/settings_write.js";
+import type { ComposioActionEffectRegistry } from "./tools/composio.js";
 import {
   advanceBrokerWorkspaceMutationRevisionDigest,
   brokerWorkspaceMutationRevisionDigest,
@@ -176,6 +177,8 @@ export interface ExecutorDeps {
   tools: ToolRegistry;
   /** Gatewayが保護参照を解決する。資格値を受け取るのはComposio組込みの経路だけ。 */
   resolve_composio_api_key?: (secretRef: string) => string | undefined;
+  /** Source-owned reviewed registry passed through Composio's governed path; provider metadata cannot populate it. */
+  composio_action_effect_registry?: ComposioActionEffectRegistry;
   /** Owner-only WebChat reserves bounded volatile capacity before one Composio link mutation. */
   reserve_composio_connect_handoff?: () => ComposioConnectHandoffReservation | undefined;
   /** Googleの組込み読取経路向けに、Gatewayで指定した資格参照だけを解決する。 */
@@ -1316,6 +1319,7 @@ function assertComposioTargetVersionBinding(
   commandDigest: string,
   operationPlanBindingDigest: string,
   env: Readonly<Record<string, string | undefined>>,
+  actionEffectRegistry?: ComposioActionEffectRegistry,
 ): ReturnType<typeof ComposioActionTargetVersionObservationSchema.parse> {
   const observation = ComposioActionTargetVersionObservationSchema.parse(rawObservation);
   const toolkit = typeof args.toolkit === "string" ? args.toolkit.toLowerCase() : "";
@@ -1340,7 +1344,7 @@ function assertComposioTargetVersionBinding(
     inputSchemaSha256: observation.input_schema_sha256,
     outputSchemaSha256: observation.output_schema_sha256,
     actionDefinitionSha256: observation.action_definition_sha256,
-  });
+  }, actionEffectRegistry);
   if (observation.toolkit !== toolkit || observation.tool !== tool ||
       !expectedEffectRegistryBinding ||
       operationPlanDigest(expectedEffectRegistryBinding) !== operationPlanDigest(observation.action_effect_registry) ||
@@ -1466,6 +1470,7 @@ export class Executor {
         operation_plan_binding_digest?: string;
         command_digest?: string;
         resolve_github_write_credential?: ExecutorDeps["resolve_github_write_credential"];
+        composio_action_effect_registry?: ExecutorDeps["composio_action_effect_registry"];
       } = {},
     ): Promise<BrokerTargetVersionObservation> => {
       if (!tool.inspect_target_version) throw new Error(`${tool.name} target version resolver is not connected`);
@@ -1517,9 +1522,11 @@ export class Executor {
         env: composioToolEnvironment(effectiveEnv, this.resolveComposioApiKey(effectiveEnv)),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
+        composio_action_effect_registry: this.deps.composio_action_effect_registry,
       });
       return Object.freeze(assertComposioTargetVersionBinding(command.payload.arguments, observation,
-        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv));
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv,
+        this.deps.composio_action_effect_registry));
     }
     if (command.payload.tool_name === "composio.disconnect") {
       const effectiveEnv = env ?? process.env;
@@ -1989,6 +1996,7 @@ export class Executor {
         ...(signal ? { signal } : {}),
         operation_plan_binding_digest: operationPlanBindingDigest,
         command_digest: operationPlanDigest(command),
+        composio_action_effect_registry: this.deps.composio_action_effect_registry,
       }));
       assertNotCancelled();
       const args = command.payload.arguments;
@@ -1998,7 +2006,8 @@ export class Executor {
       const userId = effectiveEnv.COMPOSIO_USER_ID?.trim() ?? "";
       const argumentsBody = parseComposioArguments(args.payload ?? args.arguments ?? {});
       const observation = assertComposioTargetVersionBinding(args, review.target_version_observation,
-        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv);
+        operationPlanDigest(command), operationPlanBindingDigest, effectiveEnv,
+        this.deps.composio_action_effect_registry);
       const actionDefinitionDigest = composioSchemaDigest({
         slug: review.tool,
         name: review.action_name,
@@ -2017,7 +2026,7 @@ export class Executor {
         inputSchemaSha256: review.input_schema_sha256,
         outputSchemaSha256: review.output_schema_sha256,
         actionDefinitionSha256: review.action_definition_sha256,
-      });
+      }, this.deps.composio_action_effect_registry);
       const descriptorEffects = getToolOperationDescriptor("composio.execute")?.effects ?? [];
       const { review_digest, ...reviewBase } = review;
       if (!toolkit || !action || !accountId || !userId || review.kind !== "composio_execute" ||
@@ -3551,6 +3560,8 @@ export class Executor {
           target_version_observation: record.target_version_observation,
           signal: controller.signal,
           ...(composioApiKey !== undefined ? { composio_api_key: composioApiKey } : {}),
+          ...(tool === composioSearchTool || tool === composioExecuteTool
+            ? { composio_action_effect_registry: this.deps.composio_action_effect_registry } : {}),
           ...(connectHandoff ? { composio_connect_handoff: connectHandoff } : {}),
           ...(googleReadAccessToken !== undefined ? { google_read_access_token: googleReadAccessToken } : {}),
           ...(githubCredentialResolver ? { resolve_github_write_credential: (secretRef: string) => {

@@ -151,6 +151,7 @@ export interface ComposioExecuteResponse {
 export interface ComposioOptions {
   env?: Env;
   signal?: AbortSignal;
+  actionEffectRegistry?: ComposioActionEffectRegistry;
   commandDigest?: string;
   operationPlanBindingDigest?: string;
   targetVersionObservation?: ComposioActionTargetVersionObservation;
@@ -186,7 +187,7 @@ function isPinnedComposioToolkitVersion(value: unknown): value is string {
 
 type ComposioRegisteredActionEffect = ComposioActionEffectRegistryBinding["effects"][number];
 
-interface ComposioActionEffectRegistryEntry {
+export interface ComposioActionEffectRegistryEntry {
   entry_id: string;
   toolkit: string;
   tool: string;
@@ -196,29 +197,27 @@ interface ComposioActionEffectRegistryEntry {
   effects: readonly ComposioRegisteredActionEffect[];
 }
 
+export interface ComposioActionEffectRegistry {
+  version: string;
+  entries: readonly ComposioActionEffectRegistryEntry[];
+}
+
 const COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION = "1.1.0";
 
-/**
- * Entries pin exact code-reviewed input/output schema and action-definition digests; provider
- * metadata and environment settings never populate the registry. The sole current row matches
- * the test fixture only; no live provider schema is registered. Provider schema drift stays unreviewed.
- */
-const COMPOSIO_ACTION_EFFECT_REGISTRY: readonly ComposioActionEffectRegistryEntry[] = Object.freeze([
-  Object.freeze({
-    entry_id: "github.issue.create.fixture-schema.v1",
-    toolkit: "github",
-    tool: "GITHUB_CREATE_AN_ISSUE",
-    input_schema_sha256: "75a323804435b510db3f8cc7fda9a750763b0ee894a8e28a00ffafc4823ee03a",
-    output_schema_sha256: "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0",
-    action_definition_sha256: "7490a21380a1c6e1f216ac8e8c2d777e85f27e67f6186316f97db6acd1264488",
-    effects: Object.freeze(["external_send", "write"] as const),
-  }),
-]);
+/** Runtime default is intentionally empty until a real provider action is reviewed in source. */
+const DEFAULT_COMPOSIO_ACTION_EFFECT_REGISTRY: ComposioActionEffectRegistry = Object.freeze({
+  version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+  entries: Object.freeze([]),
+});
 
-export function isComposioActionEffectRegistered(toolkit: string, tool: string): boolean {
+export function isComposioActionEffectRegistered(
+  toolkit: string,
+  tool: string,
+  registry: ComposioActionEffectRegistry = DEFAULT_COMPOSIO_ACTION_EFFECT_REGISTRY,
+): boolean {
   const normalizedToolkit = toolkit.trim().toLowerCase();
   const normalizedTool = tool.trim().toLowerCase();
-  return COMPOSIO_ACTION_EFFECT_REGISTRY.some((entry) =>
+  return registry.entries.some((entry) =>
     entry.toolkit === normalizedToolkit && entry.tool.toLowerCase() === normalizedTool);
 }
 
@@ -228,10 +227,10 @@ export function resolveComposioActionEffectRegistryBinding(params: {
   inputSchemaSha256: string;
   outputSchemaSha256: string;
   actionDefinitionSha256: string;
-}): ComposioActionEffectRegistryBinding | undefined {
+}, registry: ComposioActionEffectRegistry = DEFAULT_COMPOSIO_ACTION_EFFECT_REGISTRY): ComposioActionEffectRegistryBinding | undefined {
   const toolkit = params.toolkit.trim().toLowerCase();
   const tool = params.tool.trim();
-  const entry = COMPOSIO_ACTION_EFFECT_REGISTRY.find((candidate) =>
+  const entry = registry.entries.find((candidate) =>
     candidate.toolkit === toolkit && candidate.tool.toLowerCase() === tool.toLowerCase());
   if (!entry || ![params.inputSchemaSha256, params.outputSchemaSha256, params.actionDefinitionSha256]
     .every((digest) => /^[a-f0-9]{64}$/.test(digest)) ||
@@ -244,7 +243,7 @@ export function resolveComposioActionEffectRegistryBinding(params: {
 
   const entryBase = {
     schema_version: "blue-tanuki.composio-action-effect-registry-entry.v1" as const,
-    registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+    registry_version: registry.version,
     registry_entry_id: entry.entry_id,
     toolkit: entry.toolkit,
     tool: entry.tool,
@@ -257,7 +256,7 @@ export function resolveComposioActionEffectRegistryBinding(params: {
   const bindingBase = {
     schema_version: "blue-tanuki.composio-action-effect-registry-binding.v1" as const,
     status: "reviewed" as const,
-    registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+    registry_version: registry.version,
     registry_entry_id: entry.entry_id,
     registry_entry_sha256: entrySha256,
     toolkit,
@@ -1164,7 +1163,11 @@ export async function invokeComposioAccounts(
   };
 }
 
-function catalogToolProjection(value: unknown, expectedToolkit: string): Record<string, unknown> {
+function catalogToolProjection(
+  value: unknown,
+  expectedToolkit: string,
+  actionEffectRegistry: ComposioActionEffectRegistry = DEFAULT_COMPOSIO_ACTION_EFFECT_REGISTRY,
+): Record<string, unknown> {
   if (!isRecord(value) || !isRecord(value.toolkit)) {
     throw new Error("Composio catalog returned an invalid tool entry; catalog_status=not_confirmed");
   }
@@ -1194,21 +1197,21 @@ function catalogToolProjection(value: unknown, expectedToolkit: string): Record<
   const actionDefinitionSha256 = composioSchemaDigest(projection);
   const inputSchemaSha256 = composioSchemaDigest(inputParameters);
   const outputSchemaSha256 = composioSchemaDigest(outputParameters);
-  const actionEffectRegistry = resolveComposioActionEffectRegistryBinding({
+  const actionEffectRegistryBinding = resolveComposioActionEffectRegistryBinding({
     toolkit,
     tool: slug,
     inputSchemaSha256,
     outputSchemaSha256,
     actionDefinitionSha256,
-  });
+  }, actionEffectRegistry);
   return {
     ...projection,
     input_schema_sha256: inputSchemaSha256,
     output_schema_sha256: outputSchemaSha256,
     action_definition_sha256: actionDefinitionSha256,
-    action_effect_registry: actionEffectRegistry ?? {
+    action_effect_registry: actionEffectRegistryBinding ?? {
       status: "unreviewed",
-      registry_version: COMPOSIO_ACTION_EFFECT_REGISTRY_VERSION,
+      registry_version: actionEffectRegistry.version,
       effects: [],
       reason_code: "action_or_schema_not_in_reviewed_registry",
     },
@@ -1222,6 +1225,7 @@ async function readCurrentComposioAction(params: {
   apiKey: string;
   maxBytes: number;
   request: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  actionEffectRegistry?: ComposioActionEffectRegistry;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const path = new URL("/api/v3.1/tools", `${params.apiBaseUrl}/`);
@@ -1256,7 +1260,7 @@ async function readCurrentComposioAction(params: {
       !isRecord(exactItems[0].output_parameters) || exactItems[0].is_deprecated !== false) {
     throw new Error("Composio action schema was missing, ambiguous, incomplete, or deprecated; mutation_sent=false");
   }
-  return catalogToolProjection(exactItems[0], params.toolkit);
+  return catalogToolProjection(exactItems[0], params.toolkit, params.actionEffectRegistry);
 }
 
 async function assertComposioInputSchemaUnchanged(params: {
@@ -1268,6 +1272,7 @@ async function assertComposioInputSchemaUnchanged(params: {
   apiKey: string;
   maxBytes: number;
   request: (target: ComposioSearchTarget, signal?: AbortSignal) => Promise<ComposioExecuteResponse>;
+  actionEffectRegistry?: ComposioActionEffectRegistry;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   if (!/^[a-f0-9]{64}$/.test(params.expectedInputSchemaSha256)) {
@@ -1318,7 +1323,7 @@ async function inspectComposioLiveAction(
   if (tool === "unknown") throw new Error("tool/action must be supplied for composio.execute review");
   assertToolkitAllowed(toolkit, allowedToolkits);
   assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
-  if (!isComposioActionEffectRegistered(toolkit, tool)) {
+  if (!isComposioActionEffectRegistered(toolkit, tool, opts.actionEffectRegistry)) {
     throw new Error("Composio action is not registered with reviewed effects; live review is unavailable and no action may execute");
   }
   const apiKey = assertConfigured(env);
@@ -1370,6 +1375,7 @@ async function inspectComposioLiveAction(
     apiKey,
     maxBytes,
     request: opts.searchRequest ?? defaultComposioSearchRequest,
+    actionEffectRegistry: opts.actionEffectRegistry,
     signal: opts.signal,
   });
   if (projection.input_schema_sha256 !== inputSchemaSha256) {
@@ -1385,7 +1391,7 @@ async function inspectComposioLiveAction(
     inputSchemaSha256: String(projection.input_schema_sha256),
     outputSchemaSha256: String(projection.output_schema_sha256),
     actionDefinitionSha256: String(projection.action_definition_sha256),
-  });
+  }, opts.actionEffectRegistry);
   if (!actionEffectRegistryBinding) {
     throw new Error("Composio action definition or dynamic schema is not registered with reviewed effects; live review is unavailable");
   }
@@ -2068,7 +2074,7 @@ export async function invokeComposioSearch(
   if (!isRecord(data) || !Array.isArray(data.items)) {
     throw new Error("Composio catalog response did not contain a tools list; catalog_status=not_confirmed");
   }
-  const tools = data.items.slice(0, limit).map((item) => catalogToolProjection(item, toolkit));
+  const tools = data.items.slice(0, limit).map((item) => catalogToolProjection(item, toolkit, opts.actionEffectRegistry));
   return {
     provider: "composio",
     operation: "search",
@@ -2108,7 +2114,8 @@ export async function invokeComposioExecute(
   }
   assertActionAllowed(toolkit, tool, allowedActions, revokedActions);
   const dryRun = composioDryRun(env);
-  if (!dryRun && composioLiveExecutionEnabled(env) && !isComposioActionEffectRegistered(toolkit, tool)) {
+  if (!dryRun && composioLiveExecutionEnabled(env) &&
+      !isComposioActionEffectRegistered(toolkit, tool, opts.actionEffectRegistry)) {
     throw new Error("Composio action is not registered with reviewed effects; live execution is blocked before provider access");
   }
   const intent = classifyComposioAction(tool);
@@ -2258,6 +2265,7 @@ export async function invokeComposioExecute(
     apiKey,
     maxBytes,
     request: opts.searchRequest ?? defaultComposioSearchRequest,
+    actionEffectRegistry: opts.actionEffectRegistry,
     signal: opts.signal,
   });
   if (opts.requireTargetVersionObservation && plannedObservation &&
@@ -2272,7 +2280,7 @@ export async function invokeComposioExecute(
     inputSchemaSha256: String(currentAction.input_schema_sha256),
     outputSchemaSha256: String(currentAction.output_schema_sha256),
     actionDefinitionSha256: String(currentAction.action_definition_sha256),
-  });
+  }, opts.actionEffectRegistry);
   if (!actionEffectRegistryBinding || actionEffectRegistryBinding.binding_sha256 !== plannedEffectRegistryBindingSha256 ||
       operationPlanDigest(actionEffectRegistryBinding) !== operationPlanDigest(plannedObservation.action_effect_registry)) {
     throw new Error("Composio action schema/effects registry binding changed after owner review; mutation_sent=false");
@@ -2328,6 +2336,7 @@ export const composioSearchTool: Tool = {
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
     return await invokeComposioSearch(args, {
       env: composioToolEnvironment(process.env, context.composio_api_key), signal: context.signal,
+      actionEffectRegistry: context.composio_action_effect_registry,
     });
   },
 };
@@ -2373,6 +2382,7 @@ export const composioExecuteTool: Tool = {
       ...(inspectOptions.signal ? { signal: inspectOptions.signal } : {}),
       commandDigest: inspectOptions.command_digest,
       operationPlanBindingDigest: inspectOptions.operation_plan_binding_digest,
+      actionEffectRegistry: inspectOptions.composio_action_effect_registry,
     });
   },
   async inspect_content_review(args, reviewOptions) {
@@ -2384,6 +2394,7 @@ export const composioExecuteTool: Tool = {
       ...(reviewOptions.signal ? { signal: reviewOptions.signal } : {}),
       commandDigest: reviewOptions.command_digest,
       operationPlanBindingDigest: reviewOptions.operation_plan_binding_digest,
+      actionEffectRegistry: reviewOptions.composio_action_effect_registry,
     });
   },
   async invoke(args: Record<string, unknown>, context): Promise<unknown> {
@@ -2394,6 +2405,7 @@ export const composioExecuteTool: Tool = {
       ...(context.signal ? { signal: context.signal } : {}),
       ...(context.operation_plan_command_digest ? { commandDigest: context.operation_plan_command_digest } : {}),
       ...(observation ? { targetVersionObservation: observation } : {}),
+      actionEffectRegistry: context.composio_action_effect_registry,
       requireTargetVersionObservation: true,
     });
   },

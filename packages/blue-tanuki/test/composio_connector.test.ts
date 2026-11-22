@@ -6,12 +6,12 @@ import { StubBackend } from "../src/llm/stub.js";
 import {
   composioStatus,
   composioSchemaDigest,
-  inspectComposioActionTargetVersion,
-  inspectComposioActionContentReview,
+  inspectComposioActionTargetVersion as inspectComposioActionTargetVersionWithoutFixture,
+  inspectComposioActionContentReview as inspectComposioActionContentReviewWithoutFixture,
   invokeComposioAccounts,
-  invokeComposioExecute,
+  invokeComposioExecute as invokeComposioExecuteWithoutFixture,
   invokeComposioScopes,
-  invokeComposioSearch,
+  invokeComposioSearch as invokeComposioSearchWithoutFixture,
   registerBuiltinTools,
   ToolRegistry,
   type ComposioExecuteTarget,
@@ -19,15 +19,61 @@ import {
   type ComposioScopesTarget,
   type ComposioSearchTarget,
 } from "../src/tools/index.js";
+import type { ComposioActionEffectRegistry, ComposioOptions } from "../src/tools/composio.js";
 import { composioAccountsTool, composioExecuteTool, composioScopesTool, composioSearchTool } from "../src/tools/composio.js";
 
 const issueInputSchema = { type: "object", properties: { title: { type: "string" } } };
+const issueOutputSchema = { type: "object" };
 const issueInputSchemaSha256 = composioSchemaDigest(issueInputSchema);
+const issueActionDefinitionSha256 = composioSchemaDigest({
+  slug: "GITHUB_CREATE_AN_ISSUE",
+  name: "GITHUB_CREATE_AN_ISSUE",
+  toolkit: "github",
+  description: "Fixture action",
+  version: "20261001_00",
+  no_auth: false,
+  is_deprecated: false,
+  scopes: ["repo"],
+  input_parameters: issueInputSchema,
+  output_parameters: issueOutputSchema,
+});
+const composioFixtureActionEffectRegistry: ComposioActionEffectRegistry = {
+  version: "1.1.0",
+  entries: [{
+    entry_id: "github.issue.create.fixture-schema.v1",
+    toolkit: "github",
+    tool: "GITHUB_CREATE_AN_ISSUE",
+    input_schema_sha256: issueInputSchemaSha256,
+    output_schema_sha256: composioSchemaDigest(issueOutputSchema),
+    action_definition_sha256: issueActionDefinitionSha256,
+    effects: ["external_send", "write"],
+  }],
+};
 const credentialRef = "synthetic-composio-reference";
 const issueArgs = {
   toolkit: "github", tool: "GITHUB_CREATE_AN_ISSUE", connected_account_id: "conn_owner_github_1",
   input_schema_sha256: issueInputSchemaSha256, payload: { title: "fixture" },
 };
+
+function withComposioFixtureRegistry(options: ComposioOptions = {}): ComposioOptions {
+  return { ...options, actionEffectRegistry: options.actionEffectRegistry ?? composioFixtureActionEffectRegistry };
+}
+
+function inspectComposioActionTargetVersion(args: Record<string, unknown>, options: ComposioOptions) {
+  return inspectComposioActionTargetVersionWithoutFixture(args, withComposioFixtureRegistry(options));
+}
+
+function inspectComposioActionContentReview(args: Record<string, unknown>, options: ComposioOptions) {
+  return inspectComposioActionContentReviewWithoutFixture(args, withComposioFixtureRegistry(options));
+}
+
+function invokeComposioExecute(args: Record<string, unknown>, options: ComposioOptions = {}) {
+  return invokeComposioExecuteWithoutFixture(args, withComposioFixtureRegistry(options));
+}
+
+function invokeComposioSearch(args: Record<string, unknown>, options: ComposioOptions = {}) {
+  return invokeComposioSearchWithoutFixture(args, withComposioFixtureRegistry(options));
+}
 
 function composioCommand(tool: typeof composioExecuteTool, args = issueArgs): Extract<ExecuteCommand, { type: "tool_call" }> {
   return {
@@ -53,7 +99,7 @@ function actionSchemaResponse(toolkit: string, slug: string, inputParameters: Re
       is_deprecated: false,
       scopes: ["repo"],
       input_parameters: inputParameters,
-      output_parameters: { type: "object" },
+      output_parameters: issueOutputSchema,
     }] }),
     truncated: false,
     request_id: "req_action_schema_fixture",
@@ -110,14 +156,19 @@ describe("Composio connector", () => {
     const searchRequest = async () => actionSchemaResponse("github", "GITHUB_CREATE_AN_ISSUE");
     const target = vi.spyOn(composioExecuteTool, "inspect_target_version").mockImplementation((args, options) =>
       inspectComposioActionTargetVersion(args, { env: options?.env, commandDigest: options?.command_digest,
-        operationPlanBindingDigest: options?.operation_plan_binding_digest, accountsRequest, searchRequest }));
+        operationPlanBindingDigest: options?.operation_plan_binding_digest,
+        actionEffectRegistry: options?.composio_action_effect_registry ?? composioFixtureActionEffectRegistry,
+        accountsRequest, searchRequest }));
     const review = vi.spyOn(composioExecuteTool, "inspect_content_review").mockImplementation((args, options) =>
       inspectComposioActionContentReview(args, { env: options?.env, commandDigest: options?.command_digest,
-        operationPlanBindingDigest: options?.operation_plan_binding_digest, accountsRequest, searchRequest }));
+        operationPlanBindingDigest: options?.operation_plan_binding_digest,
+        actionEffectRegistry: options?.composio_action_effect_registry ?? composioFixtureActionEffectRegistry,
+        accountsRequest, searchRequest }));
     const tools = new ToolRegistry();
     tools.register(composioExecuteTool);
     const executor = new Executor({ approval_authority: createExecutorApprovalAuthority(), tools,
-      llm: new StubBackend(), resolve_composio_api_key: resolve });
+      llm: new StubBackend(), resolve_composio_api_key: resolve,
+      composio_action_effect_registry: composioFixtureActionEffectRegistry });
     const command = composioCommand(composioExecuteTool);
     const planDigest = "b".repeat(64);
     try {

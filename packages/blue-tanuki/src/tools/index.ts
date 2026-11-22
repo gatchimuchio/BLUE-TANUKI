@@ -57,6 +57,8 @@ export {
   type ComposioAuthConfigTarget,
   type ComposioConnectTarget,
   type ComposioOptions,
+  type ComposioActionEffectRegistry,
+  type ComposioActionEffectRegistryEntry,
 } from "./composio.js";
 export {
   fileSearchTool,

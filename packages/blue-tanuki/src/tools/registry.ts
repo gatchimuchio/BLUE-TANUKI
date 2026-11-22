@@ -16,6 +16,7 @@ import type { SettingsWriteActivation, SettingsWriteCredentialRotationReview, Se
 import type { ComposioActionTargetVersionObservation, ComposioActionContentReview,
   ComposioDisconnectTargetVersionObservation, ComposioDisconnectContentReview,
   ComposioConnectTargetVersionObservation, ComposioConnectContentReview } from "@blue-tanuki/protocol";
+import type { ComposioActionEffectRegistry } from "./composio.js";
 
 export type BrokerTargetVersionObservation = FileSearchTargetVersionObservation | FileWriteTargetVersionObservation |
   FileDeleteTargetVersionObservation | FileEditTargetVersionObservation | ShellExecTargetVersionObservation |
@@ -1027,6 +1028,8 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** 組込みComposio toolだけが受け取る一時的な接続資格。 */
   composio_api_key?: string;
+  /** Executorが組込みComposio discovery/executeだけへ渡す、コードレビュー済みaction登録。 */
+  composio_action_effect_registry?: ComposioActionEffectRegistry;
   /** no-store URLを一度だけ渡すため、Executorがcomposio.connectだけへ注入する。 */
   composio_connect_handoff?: ComposioConnectHandoffReservation;
   /** 選択されたGoogleの組込み読取toolだけが受け取る一時的な接続資格。 */
@@ -1061,6 +1064,7 @@ export interface Tool {
     operation_plan_binding_digest?: string;
     command_digest?: string;
     resolve_github_write_credential?: ToolContext["resolve_github_write_credential"];
+    composio_action_effect_registry?: ToolContext["composio_action_effect_registry"];
   }): Promise<BrokerTargetVersionObservation>;
   /** No-store content/target projection revealed only through the authenticated owner-review endpoint. */
   inspect_content_review?(args: Record<string, unknown>, options?: {
@@ -1069,6 +1073,7 @@ export interface Tool {
     operation_plan_binding_digest?: string;
     command_digest?: string;
     resolve_github_write_credential?: ToolContext["resolve_github_write_credential"];
+    composio_action_effect_registry?: ToolContext["composio_action_effect_registry"];
   }): Promise<ToolContentReview>;
   invoke(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;
 }
