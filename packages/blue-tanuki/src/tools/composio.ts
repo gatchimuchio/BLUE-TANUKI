@@ -234,6 +234,7 @@ export interface ComposioActionEffectRegistry {
 
 type ComposioActionEffectRegistryUnreviewedReasonCode =
   | "action_not_in_reviewed_registry"
+  | "provider_definition_incomplete"
   | "provider_definition_differs_from_reviewed_entry"
   | "ambiguous_reviewed_registry_entries"
   | "reviewed_effects_not_supported_by_executor"
@@ -315,6 +316,7 @@ function composioActionEffectRegistryProjection(params: {
   inputSchemaSha256: string;
   outputSchemaSha256: string;
   actionDefinitionSha256: string;
+  definitionComplete: boolean;
 }, registry: ComposioActionEffectRegistry): ComposioActionEffectRegistryBinding | {
   status: "unreviewed";
   registry_version: string;
@@ -331,6 +333,7 @@ function composioActionEffectRegistryProjection(params: {
     effects: [] as const,
     reason_code: reasonCode,
   });
+  if (!params.definitionComplete) return unreviewed("provider_definition_incomplete");
   if (matchingIdentity.length === 0) return unreviewed("action_not_in_reviewed_registry");
 
   const digests = [params.inputSchemaSha256, params.outputSchemaSha256, params.actionDefinitionSha256];
@@ -1269,8 +1272,10 @@ function catalogToolProjection(
   if (!slug || !name || toolkit !== expectedToolkit.toLowerCase()) {
     throw new Error("Composio catalog returned an out-of-scope tool entry; catalog_status=not_confirmed");
   }
-  const inputParameters = isRecord(value.input_parameters) ? value.input_parameters : {};
-  const outputParameters = isRecord(value.output_parameters) ? value.output_parameters : {};
+  const inputSchemaComplete = isRecord(value.input_parameters);
+  const outputSchemaComplete = isRecord(value.output_parameters);
+  const inputParameters = inputSchemaComplete ? value.input_parameters : null;
+  const outputParameters = outputSchemaComplete ? value.output_parameters : null;
   const scopes = Array.isArray(value.scopes)
     ? value.scopes.filter((scope): scope is string => typeof scope === "string").slice(0, 100)
     : [];
@@ -1295,6 +1300,7 @@ function catalogToolProjection(
     inputSchemaSha256,
     outputSchemaSha256,
     actionDefinitionSha256,
+    definitionComplete: inputSchemaComplete && outputSchemaComplete,
   }, actionEffectRegistry);
   return {
     ...projection,

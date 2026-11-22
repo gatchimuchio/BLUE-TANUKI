@@ -1692,6 +1692,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const effectsAllowed = new Set(["observe", "read", "write", "delete", "external_send", "process_spawn",
           "browser_action", "settings_change", "credential_access", "schedule_change", "rollback"]);
         const unreviewedReasonCodes = new Set(["action_not_in_reviewed_registry",
+          "provider_definition_incomplete",
           "provider_definition_differs_from_reviewed_entry", "ambiguous_reviewed_registry_entries",
           "reviewed_effects_not_supported_by_executor", "reviewed_registry_entry_invalid",
           "action_or_schema_not_in_reviewed_registry"]);
@@ -1806,6 +1807,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           button.disabled = !eligible;
           const registryReasonLabels = {
             action_not_in_reviewed_registry: "review registry未登録",
+            provider_definition_incomplete: "Providerのinput/output schemaが未取得",
             provider_definition_differs_from_reviewed_entry: "review済み定義とProvider schemaが不一致",
             ambiguous_reviewed_registry_entries: "review registryの一致が複数あり未確定",
             reviewed_effects_not_supported_by_executor: "登録effectsをexecutorが未対応",

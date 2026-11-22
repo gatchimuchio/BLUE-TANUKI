@@ -243,6 +243,7 @@ interface OperationPlanSavedResultReturnProjectionBase {
 
 type ComposioSearchRegistryUnreviewedReasonCode =
   | "action_not_in_reviewed_registry"
+  | "provider_definition_incomplete"
   | "provider_definition_differs_from_reviewed_entry"
   | "ambiguous_reviewed_registry_entries"
   | "reviewed_effects_not_supported_by_executor"
@@ -251,6 +252,7 @@ type ComposioSearchRegistryUnreviewedReasonCode =
 
 const COMPOSIO_SEARCH_REGISTRY_UNREVIEWED_REASON_CODES = new Set<string>([
   "action_not_in_reviewed_registry",
+  "provider_definition_incomplete",
   "provider_definition_differs_from_reviewed_entry",
   "ambiguous_reviewed_registry_entries",
   "reviewed_effects_not_supported_by_executor",
@@ -3150,7 +3152,8 @@ function composioSearchToolSummary(value: unknown, expectedToolkit: string): Com
       isDeprecated !== null && typeof isDeprecated !== "boolean" ||
       !Array.isArray(scopes) || scopes.length > 100 ||
       scopes.some((scope) => typeof scope !== "string" || scope.length > 2_000) ||
-      !isFileSearchResultRecord(inputParameters) || !isFileSearchResultRecord(outputParameters) ||
+      inputParameters !== null && !isFileSearchResultRecord(inputParameters) ||
+      outputParameters !== null && !isFileSearchResultRecord(outputParameters) ||
       !OperationJsonValueSchema.safeParse(inputParameters).success ||
       !OperationJsonValueSchema.safeParse(outputParameters).success) return undefined;
   const inputSchemaSha256 = operationPlanDigest(inputParameters);
@@ -3165,6 +3168,11 @@ function composioSearchToolSummary(value: unknown, expectedToolkit: string): Com
     toolkit, tool: slug, inputSchemaSha256, outputSchemaSha256, actionDefinitionSha256,
   });
   if (!registry) return undefined;
+  const definitionComplete = isFileSearchResultRecord(inputParameters) && isFileSearchResultRecord(outputParameters);
+  if ((!definitionComplete && (registry.status !== "unreviewed" ||
+      registry.reason_code !== "provider_definition_incomplete")) ||
+      (definitionComplete && registry.status === "unreviewed" &&
+        registry.reason_code === "provider_definition_incomplete")) return undefined;
   return { slug, name, toolkit, input_schema_sha256: inputSchemaSha256, output_schema_sha256: outputSchemaSha256,
     action_definition_sha256: actionDefinitionSha256, is_deprecated: isDeprecated, provider_version: version,
     action_effect_registry: registry };
