@@ -118,7 +118,8 @@ import { assertGitHubIssueCreateTargetVersion, assertGitHubIssueUpdateTargetVers
 import { gmailDraftSendRequestPayloadDigest, gmailWriteRequestPayloadDigest,
   gmailWriteTargetIdentityDigest, assertGoogleCalendarWriteTargetVersion,
   assertGoogleDriveWriteTargetVersion, googleCalendarCreateEventId } from "./tools/google_write.js";
-import { parseBrowserFormGetArguments, parseBrowserLinkNavigationArguments } from "./tools/browser_form_submission.js";
+import { parseBrowserDownloadArguments, parseBrowserFormGetArguments,
+  parseBrowserLinkNavigationArguments } from "./tools/browser_form_submission.js";
 import { GOOGLE_READ_TOKEN_KEYS, gmailReadTool, googleCalendarReadTool, googleDriveReadTool,
   type GoogleReadTokenKey } from "./tools/google_read.js";
 import { isMemoryPersonalizationStopTool } from "./tools/memory_personalization.js";
@@ -336,29 +337,6 @@ async function acquireTargetResourceLock(key: string): Promise<() => void> {
 async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "tool_call" }>,
   observation: BrokerTargetVersionObservation | undefined): Promise<string | undefined> {
   const { tool_name, arguments: args } = command.payload;
-  if (tool_name === "browser.automation" && args.action === "form_submit") {
-    // A GET form submission still has an unclassified external effect. Serialize submissions to
-    // the same normalized action endpoint while the one-shot L3 receipt and form-state precondition
-    // are consumed by the real adapter; never place URL or field contents in the lock key.
-    const request = parseBrowserFormGetArguments(args);
-    const targetDigest = createHash("sha256").update(JSON.stringify([
-      "blue-tanuki.browser-form-get-resource-lock.v1",
-      request.action_url,
-    ]), "utf8").digest("hex");
-    return `browser-form-get:${targetDigest}`;
-  }
-  if (tool_name === "browser.automation" && args.action === "click") {
-    // A reviewed link can still target a GET endpoint with an external effect. Serialize the
-    // normalized destination; the adapter separately rechecks the exact reviewed href before goto.
-    const request = parseBrowserLinkNavigationArguments(args);
-    const targetUrl = new URL(request.target_url);
-    targetUrl.hash = "";
-    const targetDigest = createHash("sha256").update(JSON.stringify([
-      "blue-tanuki.browser-link-navigation-resource-lock.v1",
-      targetUrl.href,
-    ]), "utf8").digest("hex");
-    return `browser-link-navigation:${targetDigest}`;
-  }
   if (tool_name === "file.write" || tool_name === "file.edit" || tool_name === "file.delete") {
     // Validate the exact target first; shell.exec has a root-wide write set, so both share one workspace mutex.
     await brokerFileResourceLockDigest(tool_name, args);
@@ -442,6 +420,46 @@ async function targetResourceLockKey(command: Extract<ExecuteCommand, { type: "t
   return undefined;
 }
 
+function browserHttpResourceLockKey(rawUrl: unknown): string {
+  if (typeof rawUrl !== "string") throw new Error("browser_resource_lock_target_invalid");
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    throw new Error("browser_resource_lock_target_invalid");
+  }
+  if ((targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") ||
+      targetUrl.username.length > 0 || targetUrl.password.length > 0) {
+    throw new Error("browser_resource_lock_target_invalid");
+  }
+  // Fragments are not sent in HTTP requests. Keep URL and query values out of the lock key.
+  targetUrl.hash = "";
+  const digest = createHash("sha256").update(JSON.stringify([
+    "blue-tanuki.browser-http-resource-lock.v1",
+    targetUrl.href,
+  ]), "utf8").digest("hex");
+  return `browser-http-resource:${digest}`;
+}
+
+function browserAutomationResourceLockKeys(args: Record<string, unknown>): string[] | undefined {
+  const action = args.action;
+  if (action !== "navigate" && action !== "click" && action !== "download" &&
+      action !== "form_fill" && action !== "form_submit") return undefined;
+
+  // Every implemented browser action performs a GET for its source page. Actions with an
+  // explicit destination also lock that resource, so navigate/click/download/form-submit paths
+  // aimed at the same normalized URL share one queue.
+  const urls: unknown[] = [args.url];
+  if (action === "click") {
+    urls.push(parseBrowserLinkNavigationArguments(args).target_url);
+  } else if (action === "download") {
+    urls.push(parseBrowserDownloadArguments(args).target_url);
+  } else if (action === "form_submit") {
+    urls.push(parseBrowserFormGetArguments(args).action_url);
+  }
+  return [...new Set(urls.map(browserHttpResourceLockKey))].sort();
+}
+
 function githubRepositoryResourceLockKey(repositoryId: number): string {
   const resourceDigest = createHash("sha256").update(JSON.stringify([
     "blue-tanuki.github-repository-resource-lock.v1", repositoryId,
@@ -451,6 +469,9 @@ function githubRepositoryResourceLockKey(repositoryId: number): string {
 
 async function targetResourceLockKeys(command: Extract<ExecuteCommand, { type: "tool_call" }>,
   observation: BrokerTargetVersionObservation | undefined): Promise<string[]> {
+  if (command.payload.tool_name === "browser.automation") {
+    return browserAutomationResourceLockKeys(command.payload.arguments) ?? [];
+  }
   if (command.payload.tool_name === "github.write" &&
       observation?.schema_version === "blue-tanuki.github-write-target-version.v1") {
     const githubObservation = GitHubWriteTargetVersionObservationSchema.parse(observation);
