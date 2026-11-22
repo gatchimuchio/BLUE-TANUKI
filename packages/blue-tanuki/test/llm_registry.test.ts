@@ -496,6 +496,55 @@ describe("LLMRegistry", () => {
     expect(fallback.seen).toHaveLength(0);
   });
 
+  it("aborts in-flight and blocks new provider calls after runtime configuration changes", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let providerCalls = 0;
+    const primary: LLMBackend = {
+      name: "primary",
+      async call(_request, signal) {
+        providerCalls += 1;
+        markStarted();
+        return await new Promise<LLMResponse>((_resolve, reject) => {
+          const abort = () => reject(signal?.reason ?? new Error("aborted"));
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+      },
+    };
+    const fallback = new NamedBackend("backup");
+    const registry = new LLMRegistry({ retry: { max_attempts: 3 } })
+      .register(primary)
+      .register(fallback)
+      .setDefault("primary")
+      .setFallback("backup")
+      .setFallbackProfile("primary", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.2, currency: "USD" },
+      })
+      .setFallbackProfile("backup", {
+        capabilities: ["llm.text.generate"],
+        max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+      });
+    const authorization = {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 1, currency: "USD" },
+    } as const;
+    const request = { messages: [{ role: "user" as const, content: "synthetic config-change fixture" }] };
+
+    const inFlight = registry.callWithFallbackAuthorization(request, undefined, authorization);
+    await started;
+    registry.invalidateProviderConfiguration();
+
+    await expect(inFlight).rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    await expect(registry.callWithFallbackAuthorization(request, undefined, authorization))
+      .rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    expect(providerCalls).toBe(1);
+    expect(fallback.seen).toHaveLength(0);
+  });
+
   it("does not hide non-retryable credential failures behind fallback", async () => {
     const primary = new FailingBackend("primary", "auth", false);
     const fallback = new NamedBackend("stub");

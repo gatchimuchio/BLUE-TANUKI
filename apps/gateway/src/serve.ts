@@ -44,6 +44,7 @@ import {
   buildOperationCoreApprovalTrace,
   Executor,
   LLMComputeAdapter,
+  LLMRegistry,
   ToolRegistry,
   createMemoryPersonalizationStopTool,
   createSettingsWriteTool,
@@ -1483,6 +1484,7 @@ async function serveWithOwnerLease(
     (process.platform !== "linux" || (unixSessionEnv.DBUS_SESSION_BUS_ADDRESS !== undefined &&
       unixSessionEnv.DBUS_SESSION_BUS_ADDRESS === process.env.DBUS_SESSION_BUS_ADDRESS)) &&
     nativeLlmCredentialPromptAvailable(nativePromptEnv);
+  let activeLLMRegistryForSettings: LLMRegistry | undefined;
   const settingsWritePort = createGatewaySettingsWritePort(process.env, inheritedEnvKeys, {
     available: nativeCredentialPromptAvailable,
     request: (provider, signal) => promptForLlmCredential(provider, signal, nativePromptEnv),
@@ -1496,6 +1498,8 @@ async function serveWithOwnerLease(
       if (!approval || approval.commandDigest !== commandDigest) throw new Error("llm_credential_registration_not_authorized");
       approval.assertCurrent();
     },
+  }, {
+    onLlmProviderConfigurationChanged: () => activeLLMRegistryForSettings?.invalidateProviderConfiguration(),
   });
   tools.register(createSettingsWriteTool(settingsWritePort));
   registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
@@ -1593,6 +1597,8 @@ async function serveWithOwnerLease(
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
+  if (!(llm instanceof LLMRegistry)) throw new Error("gateway_llm_provider_configuration_fence_unavailable");
+  activeLLMRegistryForSettings = llm;
 
   const runtimeSelfHealth = await probeGatewaySelfHealth(process.env);
   const operationPlanState = OperationPlanStateStore.fromEnvironment();

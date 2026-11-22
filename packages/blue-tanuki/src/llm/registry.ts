@@ -118,6 +118,7 @@ export class LLMRegistry implements LLMBackend {
   private readonly retryPolicy: LLMRetryPolicy;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly now: () => number;
+  private readonly providerConfigurationController = new AbortController();
   private defaultName: string | undefined;
   private fallbackName: string | undefined;
 
@@ -131,6 +132,30 @@ export class LLMRegistry implements LLMBackend {
     this.retryPolicy = normalizeRetryPolicy(opts.retry);
     this.sleep = opts.sleep ?? defaultSleep;
     this.now = opts.now ?? Date.now;
+  }
+
+  /** Fail closed for this Gateway process after its provider configuration is changed on disk. */
+  invalidateProviderConfiguration(): void {
+    if (!this.providerConfigurationController.signal.aborted) {
+      this.providerConfigurationController.abort(new Error("llm_provider_configuration_changed"));
+    }
+  }
+
+  isProviderConfigurationAvailable(): boolean {
+    return !this.providerConfigurationController.signal.aborted;
+  }
+
+  /** @internal Combine caller cancellation with the process-local provider configuration fence. */
+  bindProviderConfigurationSignal(signal?: AbortSignal): AbortSignal {
+    return signal
+      ? AbortSignal.any([signal, this.providerConfigurationController.signal])
+      : this.providerConfigurationController.signal;
+  }
+
+  assertProviderConfigurationAvailable(): void {
+    if (this.providerConfigurationController.signal.aborted) {
+      throw createLLMAbortError(this.name, this.providerConfigurationController.signal);
+    }
   }
 
   register(
@@ -343,7 +368,8 @@ export class LLMRegistry implements LLMBackend {
     fallbackAuthorization?: LLMFallbackAuthorization,
   ): Promise<LLMResponse> {
     const selected = this.resolveWithName(req.backend_hint);
-    if (signal?.aborted) throw createLLMAbortError(selected.name, signal);
+    const providerSignal = this.bindProviderConfigurationSignal(signal);
+    if (providerSignal.aborted) throw createLLMAbortError(selected.name, providerSignal);
     if (req.ephemeral_images?.length &&
         !backendSupportsCapability(selected.backend, LLM_IMAGE_INPUT_CAPABILITY, req.model)) {
       throw new LLMProviderError("Image input is not configured for the selected provider and model.", {
@@ -369,11 +395,11 @@ export class LLMRegistry implements LLMBackend {
       });
     }
     try {
-      const response = await this.callWithRetry(selected.backend, selected.name, req, signal);
+      const response = await this.callWithRetry(selected.backend, selected.name, req, providerSignal);
       return withoutRoutingTrace(response);
     } catch (error) {
       // Cancellation and command deadlines must not start another provider call.
-      if (signal?.aborted) throw error;
+      if (providerSignal.aborted) throw error;
       const classification = classifyLLMError(error);
       if (this.fallbackName && classification.retryable) {
         const fallback = this.resolveWithName(this.fallbackName);
@@ -385,7 +411,7 @@ export class LLMRegistry implements LLMBackend {
         );
         if (fallback.name !== selected.name && estimatedTotalCost) {
           const response = withoutRoutingTrace(
-            await this.callWithRetry(fallback.backend, fallback.name, req, signal),
+            await this.callWithRetry(fallback.backend, fallback.name, req, providerSignal),
           );
           return {
             ...response,

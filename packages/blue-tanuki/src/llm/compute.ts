@@ -221,14 +221,17 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);
-    throwIfComputeAborted(this.backend, signal);
+    const providerSignal = this.backend instanceof LLMRegistry
+      ? this.backend.bindProviderConfigurationSignal(signal)
+      : signal;
+    throwIfComputeAborted(this.backend, providerSignal);
     const timeoutMs = request.resource_limits.timeout_ms;
     const capacityLease = this.capacity
-      ? await this.capacity.acquire({ timeout_ms: timeoutMs ?? 30_000, signal })
+      ? await this.capacity.acquire({ timeout_ms: timeoutMs ?? 30_000, signal: providerSignal })
       : undefined;
     try {
-      throwIfComputeAborted(this.backend, signal);
-      return await this.computeWithCapacity(request, signal, fallbackAuthorization);
+      throwIfComputeAborted(this.backend, providerSignal);
+      return await this.computeWithCapacity(request, providerSignal, fallbackAuthorization);
     } finally {
       capacityLease?.release();
     }
@@ -274,7 +277,8 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         reserved_compute_ms: reservedComputeMs,
         reserved_cost: maxCost,
       });
-      if (signal?.aborted) {
+      if (signal?.aborted ||
+          (this.backend instanceof LLMRegistry && !this.backend.isProviderConfigurationAvailable())) {
         const notInvoked: ComputeBudgetSettlement = {
           state: "settled",
           tokens_used: 0,
@@ -298,6 +302,8 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
             reserved_cost: reservation.reserved_cost,
           }, unknown, true));
         }
+        if (signal?.aborted) throw createLLMAbortError(this.backend.name, signal);
+        if (this.backend instanceof LLMRegistry) this.backend.assertProviderConfigurationAvailable();
         throw createLLMAbortError(this.backend.name, signal);
       }
     }
@@ -435,6 +441,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
 
 function throwIfComputeAborted(backend: LLMBackend, signal?: AbortSignal): void {
   if (signal?.aborted) throw createLLMAbortError(backend.name, signal);
+  if (backend instanceof LLMRegistry) backend.assertProviderConfigurationAvailable();
 }
 
 function buildComputeResourceUse(

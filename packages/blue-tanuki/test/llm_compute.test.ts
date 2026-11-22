@@ -68,6 +68,103 @@ describe("LLMComputeAdapter", () => {
     expect(backend.seen).toHaveLength(0);
   });
 
+  it("does not reserve a budget after provider configuration has been invalidated", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    registry.invalidateProviderConfiguration();
+    const request = computeRequest();
+    request.budget_scope = { parent_task_identity_digest: "c".repeat(64), task_identity_digest: "d".repeat(64) };
+    let reservations = 0;
+    const budget: ComputeBudgetPort = {
+      reserve() {
+        reservations += 1;
+        throw new Error("invalidated provider must not reserve");
+      },
+      settle() {},
+    };
+
+    await expect(new LLMComputeAdapter(registry, budget).compute(request))
+      .rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    expect(reservations).toBe(0);
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("settles a pending reservation as not invoked if provider configuration changes", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequest();
+    request.budget_scope = { parent_task_identity_digest: "c".repeat(64), task_identity_digest: "d".repeat(64) };
+    let markReserveStarted!: () => void;
+    const reserveStarted = new Promise<void>((resolve) => { markReserveStarted = resolve; });
+    let resolveReservation!: (reservation: Awaited<ReturnType<ComputeBudgetPort["reserve"]>>) => void;
+    const reservationPending = new Promise<Awaited<ReturnType<ComputeBudgetPort["reserve"]>>>((resolve) => {
+      resolveReservation = resolve;
+    });
+    let settlement: Parameters<ComputeBudgetPort["settle"]>[1] | undefined;
+    const budget: ComputeBudgetPort = {
+      reserve() { markReserveStarted(); return reservationPending; },
+      settle(_id, value) { settlement = value; },
+    };
+    const pending = new LLMComputeAdapter(registry, budget).compute(request);
+    await reserveStarted;
+    registry.invalidateProviderConfiguration();
+    resolveReservation({
+      reservation_id: "9".repeat(64), reserved_tokens: 128, reserved_compute_ms: 2_000,
+      reserved_cost: { amount: 0.25, currency: "USD", source: "CONFIG" },
+    });
+
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    expect(backend.seen).toHaveLength(0);
+    expect(settlement).toEqual({
+      state: "settled", tokens_used: 0, tokens_usage_status: "not_invoked", compute_ms: 0,
+      cost: { status: "actual", amount: 0, currency: "USD", source: "not_invoked" },
+    });
+  });
+
+  it("keeps an in-flight provider result unknown when configuration changes", async () => {
+    let markProviderStarted!: () => void;
+    const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+    const backend: LLMBackend = {
+      name: "fixture-provider",
+      async call(_request, signal) {
+        markProviderStarted();
+        return await new Promise<LLMResponse>((_resolve, reject) => {
+          const abort = () => reject(signal?.reason ?? new Error("aborted"));
+          signal?.addEventListener("abort", abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+      },
+    };
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequest();
+    request.budget_scope = { parent_task_identity_digest: "c".repeat(64), task_identity_digest: "d".repeat(64) };
+    let settlement: Parameters<ComputeBudgetPort["settle"]>[1] | undefined;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        return {
+          reservation_id: "9".repeat(64), reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: input.reserved_cost,
+        };
+      },
+      settle(_id, value) { settlement = value; },
+    };
+    const pending = new LLMComputeAdapter(registry, budget).compute(request);
+    await providerStarted;
+    registry.invalidateProviderConfiguration();
+
+    await expect(pending).rejects.toThrow();
+    expect(settlement).toMatchObject({
+      state: "unknown", tokens_usage_status: "unknown",
+      cost: { status: "unknown", reason: "provider_call_outcome_unknown" },
+    });
+  });
+
   it("releases an acquired capacity lease when cancellation arrives while admission is pending", async () => {
     const backend = new CapturingBackend();
     const controller = new AbortController();
@@ -83,6 +180,29 @@ describe("LLMComputeAdapter", () => {
     resolveLease({ release() { released += 1; } });
 
     await expect(pending).rejects.toMatchObject({ kind: "cancelled" });
+    expect(released).toBe(1);
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("cancels a pending capacity admission when provider configuration changes", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend).setDefault("fixture-provider");
+    let resolveLease!: (lease: { release(): void }) => void;
+    let admissionSignal: AbortSignal | undefined;
+    let released = 0;
+    const capacity: ComputeCapacityPort = {
+      acquire({ signal }) {
+        admissionSignal = signal;
+        return new Promise((resolve) => { resolveLease = resolve; });
+      },
+    };
+    const pending = new LLMComputeAdapter(registry, undefined, capacity).compute(computeRequest());
+    await Promise.resolve();
+    registry.invalidateProviderConfiguration();
+
+    expect(admissionSignal?.aborted).toBe(true);
+    resolveLease({ release() { released += 1; } });
+    await expect(pending).rejects.toMatchObject({ kind: "cancelled", retryable: false });
     expect(released).toBe(1);
     expect(backend.seen).toHaveLength(0);
   });

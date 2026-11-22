@@ -133,6 +133,35 @@ it("rejects ambiguous LLM provider routing for a structured settings write", asy
   }
 });
 
+it("invalidates the active LLM runtime after a provider settings write is persisted", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bt-settings-provider-invalidation-"));
+  const envFile = path.join(root, "product.env");
+  const env = { BLUE_TANUKI_ENV_FILE: envFile, LLM_BACKEND: "stub", LLM_MODEL: "initial-model" };
+  let invalidations = 0;
+  try {
+    await fs.writeFile(envFile, "LLM_BACKEND=stub\nLLM_MODEL=initial-model\n", { mode: 0o600 });
+    const port = createGatewaySettingsWritePort(env, [], {
+      available: () => false,
+      request: async () => null,
+      assertCurrent: () => { throw new Error("no credential entry expected"); },
+    }, {
+      onLlmProviderConfigurationChanged: () => { invalidations += 1; },
+    });
+    const patch = { model: "replacement-model" } as const;
+    const target = await port.inspect("stub", patch);
+    expect(target.managed_llm_settings).toBe(true);
+    expect(invalidations).toBe(0);
+
+    const result = await port.apply({ llm: patch }, target.target_state_digest, "stub");
+
+    expect(result.restart_required).toBe(true);
+    expect(invalidations).toBe(1);
+    expect(await fs.readFile(envFile, "utf8")).toContain('LLM_MODEL="replacement-model"');
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 it.runIf(process.platform === "win32")("offers rotation only for a single managed protected reference active in the running Gateway", async () => {
   const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "bt-settings-rotate-target-"));
   const file = path.join(root, "product.env");
