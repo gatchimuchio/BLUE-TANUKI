@@ -448,6 +448,27 @@ export type OperationPlanSavedResultReturnProjection =
     readonly provider_result_digest: string;
     readonly operation_plan_binding_digest: string;
     readonly source_is_untrusted: true;
+  })
+  | (OperationPlanSavedResultReturnProjectionBase & {
+    readonly schema_version: "operation-plan-saved-result-return.v16";
+    readonly operation: "composio.disconnect";
+    readonly status: "verified";
+    readonly toolkit: string;
+    readonly connected_account_id_sha256: string;
+    readonly user_id_sha256: string;
+    readonly request_payload_digest: string;
+    readonly account_status: "REVOKED";
+    readonly disconnect_status: "confirmed";
+    readonly upstream_revocation: "best_effort";
+    readonly revoked_token_count_reported: number | null;
+    readonly account_deleted: false;
+    readonly external_call_performed: true;
+    readonly external_mutation_sent: true;
+    readonly automatic_retry: false;
+    readonly provider_request_id_digest: string | null;
+    readonly provider_result_digest: string;
+    readonly operation_plan_binding_digest: string;
+    readonly source_is_untrusted: true;
   });
 
 type MemoryInterpretationReviewSnapshot = {
@@ -3241,6 +3262,63 @@ function composioDisconnectPlanIdentity(step: OperationStep): {
       toolkit,
       connected_account_id_sha256: connectedAccountIdDigest,
     }),
+  };
+}
+
+function composioDisconnectStoredResultProjection(step: OperationStep, value: unknown): {
+  readonly toolkit: string;
+  readonly connected_account_id_sha256: string;
+  readonly user_id_sha256: string;
+  readonly request_payload_digest: string;
+  readonly account_status: "REVOKED";
+  readonly disconnect_status: "confirmed";
+  readonly upstream_revocation: "best_effort";
+  readonly revoked_token_count_reported: number | null;
+  readonly account_deleted: false;
+  readonly external_call_performed: true;
+  readonly external_mutation_sent: true;
+  readonly automatic_retry: false;
+  readonly provider_request_id_digest: string | null;
+  readonly provider_result_digest: string;
+} | undefined {
+  const identity = composioDisconnectPlanIdentity(step);
+  if (!identity || !isFileSearchResultRecord(value) || Object.keys(value).sort().join(",") !==
+      "account_deleted,account_status,automatic_retry,connected_account_id_sha256,disconnect_status,external_call_performed,external_mutation_sent,may_execute,operation,provider,provider_request_id_digest,request_payload_digest,result_digest,revoked_token_count_reported,schema_version,toolkit,upstream_revocation,used_for_authority,user_id_sha256") {
+    return undefined;
+  }
+  const { result_digest: resultDigest, ...result } = value;
+  if (value.schema_version !== "blue-tanuki.composio-disconnect-result.v1" || value.provider !== "composio" ||
+      value.operation !== "disconnect" || value.toolkit !== identity.toolkit ||
+      value.connected_account_id_sha256 !== identity.connectedAccountIdDigest ||
+      value.request_payload_digest !== identity.requestPayloadDigest ||
+      typeof value.user_id_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.user_id_sha256) ||
+      value.account_status !== "REVOKED" || value.disconnect_status !== "confirmed" ||
+      value.upstream_revocation !== "best_effort" ||
+      value.revoked_token_count_reported !== null && (typeof value.revoked_token_count_reported !== "number" ||
+        !Number.isSafeInteger(value.revoked_token_count_reported) || value.revoked_token_count_reported < 0 ||
+        value.revoked_token_count_reported > 100_000) || value.account_deleted !== false ||
+      value.external_call_performed !== true || value.external_mutation_sent !== true || value.automatic_retry !== false ||
+      value.provider_request_id_digest !== null && (typeof value.provider_request_id_digest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.provider_request_id_digest)) ||
+      value.used_for_authority !== false || value.may_execute !== false ||
+      typeof resultDigest !== "string" || !/^[a-f0-9]{64}$/.test(resultDigest) || operationPlanDigest(result) !== resultDigest) {
+    return undefined;
+  }
+  return {
+    toolkit: identity.toolkit,
+    connected_account_id_sha256: identity.connectedAccountIdDigest,
+    user_id_sha256: value.user_id_sha256,
+    request_payload_digest: identity.requestPayloadDigest,
+    account_status: "REVOKED",
+    disconnect_status: "confirmed",
+    upstream_revocation: "best_effort",
+    revoked_token_count_reported: value.revoked_token_count_reported as number | null,
+    account_deleted: false,
+    external_call_performed: true,
+    external_mutation_sent: true,
+    automatic_retry: false,
+    provider_request_id_digest: value.provider_request_id_digest as string | null,
+    provider_result_digest: resultDigest,
   };
 }
 
@@ -7357,6 +7435,42 @@ export class OperationPlanLedger {
       };
     }
     if (!result) throw new Error("plan_saved_result_result_unavailable");
+    if (step.operation === "composio.disconnect") {
+      const disconnectProjection = composioDisconnectStoredResultProjection(step, result.output);
+      const validations = step.preparation?.validation ?? [];
+      const expectedObservation = resultObservation(plan, binding) as Record<string, unknown>;
+      if (binding.status !== "verified" || !binding.operation_plan_binding_digest || !binding.executor_command_digest ||
+          !binding.execution_admission?.task_identity_digest ||
+          binding.execution_admission.task_identity_digest !== operationPlanTaskIdentityDigest(plan) ||
+          binding.revision_digest !== current.digest || binding.result_observed_at_ms === undefined ||
+          binding.result_observed_at_ms !== result.observed_at_ms ||
+          !disconnectProjection || !hasConnectedPlanTarget(step) || validations.length !== 1 ||
+          !operationPlanResultValidationMatches(validations[0]!, step, result.output, binding) ||
+          operationPlanDigest(result.target) !== operationPlanDigest(step.target) ||
+          committedObservation.schema_version !== "operation-action-result.v1" ||
+          committedObservation.record_type !== "action_result_observation" ||
+          operationPlanDigest(committedObservation) !== operationPlanDigest(expectedObservation) ||
+          committedObservation.operation !== "composio.disconnect" || committedObservation.plan_binding_status !== "verified" ||
+          committedObservation.plan_validation_status !== "matched" || committedObservation.effect_observation !== "reported_success" ||
+          committedObservation.observed_at_ms !== result.observed_at_ms ||
+          committedObservation.used_as_world_truth !== false || committedObservation.used_for_authority !== false ||
+          committedObservation.may_execute !== false) {
+        throw new Error("plan_saved_result_composio_disconnect_observation_mismatch");
+      }
+      if (operationPlanDigest(this.port.load()) !== this.savedDigest || this.resultMemory.snapshot()?.status !== "ready") {
+        throw new Error("plan_saved_result_state_changed");
+      }
+      return {
+        schema_version: "operation-plan-saved-result-return.v16",
+        plan_id_digest: operationPlanDigest(current.plan.plan_id), revision_digest: current.digest,
+        step_id_digest: operationPlanDigest(step.step_id), command_digest: binding.command_digest,
+        result_digest: binding.result_digest!, record_digest: operationPlanDigest(stored.value),
+        memory_revision: binding.memory_receipt!.revision, memory_receipt_digest: binding.memory_receipt!.receipt_digest,
+        observed_at_ms: binding.result_observed_at_ms, operation: "composio.disconnect", status: "verified",
+        ...disconnectProjection, operation_plan_binding_digest: binding.operation_plan_binding_digest,
+        source_is_untrusted: true, used_as_world_truth: false, used_for_authority: false, may_execute: false,
+      };
+    }
     if (step.operation === "composio.accounts") {
       const identity = composioAccountsPlanIdentity(step);
       const accountProjection = composioAccountsResultProjection(step, result.output);

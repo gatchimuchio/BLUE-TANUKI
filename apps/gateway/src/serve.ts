@@ -750,6 +750,25 @@ function savedResultReturnMessage(projection: OperationPlanSavedResultReturnProj
       "これは実行時点の報告で、現在状態を再読込していません。この照会はactionを再実行しません。",
     ].join("\n");
   }
+  if (projection.schema_version === "operation-plan-saved-result-return.v16") {
+    return [
+      "保存済みComposio disconnect結果です。J/M receiptを照合済みです。Provider account状態の再読込でREVOKEDを確認しています。",
+      `toolkit: ${JSON.stringify(projection.toolkit)}`,
+      `connected account digest: ${projection.connected_account_id_sha256}`,
+      `owner user digest: ${projection.user_id_sha256}`,
+      `request payload digest: ${projection.request_payload_digest}`,
+      `reported revoked token count: ${projection.revoked_token_count_reported ?? "unknown"}`,
+      `upstream token revocation: ${projection.upstream_revocation}`,
+      `account record deleted: ${projection.account_deleted}`,
+      `external mutation sent: ${projection.external_mutation_sent}`,
+      `provider request digest: ${projection.provider_request_id_digest ?? "not reported"}`,
+      `provider result digest: ${projection.provider_result_digest}`,
+      `operation plan binding digest: ${projection.operation_plan_binding_digest}`,
+      `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
+      "token数はProvider応答の報告値で、upstream token revocationはbest effortです。現在の状態は再取得していません。",
+      "この結果照会はComposioへ再接続せず、disconnectを再実行しません。unknown時の自動再送もしません。",
+    ].join("\n");
+  }
   const header = [
     "保存時点のfile.search結果です。現在のファイル状態は再検索していません。全内容は示しておらず、検索完全性は不明です。",
     `観測時刻: ${Number.isNaN(observedDate.getTime()) ? `${projection.observed_at_ms} ms` : observedDate.toISOString()}`,
