@@ -1726,14 +1726,17 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         }
 
         parsed.accounts.forEach(function (account) {
-          const eligible = account.status === "ACTIVE" && account.disabled === "false";
+          const accountIdTooLongForPlan = account.connected_account_id.length > 200;
+          const eligible = !accountIdTooLongForPlan && account.status === "ACTIVE" && account.disabled === "false";
           const button = document.createElement("button");
           button.type = "button";
           button.className = "secondary";
           button.disabled = !eligible;
-          button.textContent = eligible
-            ? "disconnect候補に選択: " + account.connected_account_id
-            : "選択対象外（status=" + account.status + "、disabled=" + account.disabled + "）: " + account.connected_account_id;
+          button.textContent = accountIdTooLongForPlan
+            ? "選択対象外（Plan上限200文字超過）: " + account.connected_account_id
+            : eligible
+              ? "disconnect候補に選択: " + account.connected_account_id
+              : "選択対象外（status=" + account.status + "、disabled=" + account.disabled + "）: " + account.connected_account_id;
           if (eligible) button.addEventListener("click", function () {
             const current = state.connectorsSnapshot;
             const currentToolkits = current && typeof current.allowed_toolkits === "string"
@@ -5519,9 +5522,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const accountsReady = ready && snapshot.user_id_set === true;
         prepareAccountsButton.disabled = !accountsReady || !toolkitSelect.value;
         disconnectIdInput.disabled = !accountsReady || !toolkitSelect.value;
-        const connectedAccountId = disconnectIdInput.value.trim();
+        const connectedAccountId = disconnectIdInput.value;
         prepareDisconnectButton.disabled = !accountsReady || !toolkitSelect.value || !connectedAccountId ||
-          connectedAccountId.length > 256 || /[\u0000-\u001f\u007f]/.test(connectedAccountId);
+          connectedAccountId.length > 200 || connectedAccountId.trim() !== connectedAccountId ||
+          /[\u0000-\u001f\u007f]/.test(connectedAccountId);
         if (state.composioAccountsStatusMessage) {
           accountsStatus.textContent = state.composioAccountsStatusMessage;
           accountsStatus.className = "badge " + state.composioAccountsStatusTone;
@@ -8220,10 +8224,10 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           if (!toolkit || !allowedToolkits.includes(toolkit)) {
             throw new Error("Select a toolkit from the currently loaded Composio allowlist");
           }
-          const connectedAccountId = byId("composio-disconnect-account-id").value.trim();
-          if (!connectedAccountId || connectedAccountId.length > 256 || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
-              connectedAccountId.toLowerCase() === "instant_account") {
-            throw new Error("Enter one exact connected account ID, up to 256 characters");
+          const connectedAccountId = byId("composio-disconnect-account-id").value;
+          if (!connectedAccountId || connectedAccountId.length > 200 || /[\u0000-\u001f\u007f]/.test(connectedAccountId) ||
+              connectedAccountId.trim() !== connectedAccountId || connectedAccountId.toLowerCase() === "instant_account") {
+            throw new Error("Enter one exact connected account ID, up to 200 characters, without surrounding whitespace");
           }
           const args = { toolkit: toolkit, connected_account_id: connectedAccountId };
           const task = [

@@ -373,7 +373,7 @@ ${CONTROL_CENTER_STYLE}    </style>
                 <option value="">Load Connectors first</option>
               </select>
               <input id="composio-discovery-query" type="search" maxlength="500" autocomplete="off" placeholder="Search query (max 500 characters)" disabled />
-              <input id="composio-disconnect-account-id" type="text" maxlength="256" autocomplete="off" placeholder="Exact connected account ID for revoke" disabled />
+              <input id="composio-disconnect-account-id" type="text" maxlength="200" autocomplete="off" placeholder="Exact connected account ID for revoke (max 200 characters)" disabled />
             </div>
             <div class="action-row">
               <button id="prepare-composio-discovery" class="primary" type="button" disabled>Prepare Composio search plan</button>
