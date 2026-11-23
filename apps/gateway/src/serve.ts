@@ -107,9 +107,9 @@ import { buildAuditLog } from "./audit_config.js";
 import { goalGovernanceConfigFromEnvironment } from "./goal_governance_config.js";
 import {
   buildLLMBackendFromEnv,
-  buildLLMCommandRouteFromEnv,
   describeLLMCommandRoute,
   describeLLMConfig,
+  resolveLLMCommandRouteFromEnv,
 } from "./llm_config.js";
 import {
   assertLoopbackListenerHost,
@@ -1741,7 +1741,7 @@ async function serveWithOwnerLease(
     operation_plan_broker_restore_dependency_verifier: verifyRecoveryDependenciesForFreshReview,
     audit: buildAuditLog(),
     memory: memoryStore,
-    llm_route: buildLLMCommandRouteFromEnv(),
+    llm_route: resolveLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     self_health: runtimeSelfHealth,
   });

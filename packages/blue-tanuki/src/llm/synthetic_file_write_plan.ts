@@ -589,6 +589,10 @@ export class SyntheticFileWritePlanBackend implements LLMBackend {
   readonly name = SYNTHETIC_FILE_WRITE_PLAN_BACKEND;
   readonly capabilities = ["llm.text.generate"] as const;
 
+  resolveModel(): string {
+    return "synthetic-file-write-plan-v1";
+  }
+
   constructor(private readonly env: SyntheticPlanEnv) {}
 
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {

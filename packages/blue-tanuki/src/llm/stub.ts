@@ -8,6 +8,10 @@ export class StubBackend implements LLMBackend {
   readonly name = "stub";
   readonly capabilities = ["llm.text.generate"] as const;
 
+  resolveModel(): string {
+    return "stub-v0";
+  }
+
   async call(req: LLMRequest): Promise<LLMResponse> {
     if (req.ephemeral_images?.length || req.ephemeral_audio?.length) {
       throw new LLMProviderError("Stub backend does not consume media input.", {

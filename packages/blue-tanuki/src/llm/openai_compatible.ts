@@ -281,6 +281,10 @@ export class OpenAICompatibleBackend implements LLMBackend {
     return headers;
   }
 
+  resolveModel(requestedModel?: string): string {
+    return requestedModel ?? this.opts.defaultModel;
+  }
+
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const images = validateLLMImageInputs(req.ephemeral_images);
     const audio = validateLLMAudioInputs(req.ephemeral_audio);

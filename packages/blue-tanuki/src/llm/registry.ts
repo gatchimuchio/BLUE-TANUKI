@@ -245,6 +245,18 @@ export class LLMRegistry implements LLMBackend {
     return this.resolveWithName(hint).backend;
   }
 
+  /** Resolve the configured route identity without calling its provider. */
+  resolveRequestIdentity(hint?: string, requestedModel?: string): {
+    provider: string;
+    model: string | undefined;
+  } {
+    const selected = this.resolveWithName(hint);
+    return {
+      provider: selected.name,
+      model: selected.backend.resolveModel?.(requestedModel) ?? requestedModel,
+    };
+  }
+
   healthSnapshot(): LLMRegistryHealthSnapshot {
     return {
       schema_version: 1,

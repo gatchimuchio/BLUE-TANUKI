@@ -333,6 +333,7 @@ export function buildLLMBackendFromEnv(env: Env = process.env): LLMBackend {
 /** Non-callable cost and routing projection. OS secret references are never opened. */
 export function inspectLLMRegistryConfiguration(env: Env): {
   provider: string;
+  model: string;
   maximumCostForCall: LLMRegistry["maximumCostForCall"];
   maximumCallsForRequest: LLMRegistry["maximumCallsForRequest"];
 } {
@@ -341,9 +342,12 @@ export function inspectLLMRegistryConfiguration(env: Env): {
     configEnv[key] = hasLLMSecretMaterial(env, key) ? "configured-credential-placeholder" : undefined;
   }
   const registry = buildLLMRegistry(configEnv, true);
-  const provider = registry.resolve(buildLLMCommandRouteFromEnv(env).backend_hint).name;
+  const route = buildLLMCommandRouteFromEnv(env);
+  const identity = registry.resolveRequestIdentity(route.backend_hint, route.model);
+  if (!identity.model) throw new Error("LLMRegistry: selected backend does not expose an effective model identity");
   return {
-    provider,
+    provider: identity.provider,
+    model: identity.model,
     maximumCostForCall: registry.maximumCostForCall.bind(registry),
     maximumCallsForRequest: registry.maximumCallsForRequest.bind(registry),
   };
@@ -583,6 +587,19 @@ export function buildLLMCommandRouteFromEnv(
     max_tokens: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_MAX_TOKENS"),
     timeout_ms: parsePositiveIntEnv(env, "BLUE_TANUKI_LLM_TIMEOUT_MS"),
     ...(fallbackAuthorization ? { fallback_authorization: fallbackAuthorization } : {}),
+  };
+}
+
+/** Resolve the exact configured provider/model pair for the runtime J compute contract. */
+export function resolveLLMCommandRouteFromEnv(
+  env: Env = process.env,
+): LLMCommandRoute {
+  const route = buildLLMCommandRouteFromEnv(env);
+  const identity = inspectLLMRegistryConfiguration(env);
+  return {
+    ...route,
+    backend_hint: identity.provider,
+    model: identity.model,
   };
 }
 

@@ -98,6 +98,8 @@ export interface LLMBackend {
   /** Static capabilities for custom backends. Provider adapters may make this model-specific below. */
   readonly capabilities?: readonly string[];
   supportsCapability?(capability: string, model?: string, backendHint?: string): boolean;
+  /** Resolve the model identifier this backend will request before provider I/O. */
+  resolveModel?(requestedModel?: string): string | undefined;
   /** Set only by a local registry that stamps its selected canonical backend on responses. */
   readonly canonical_provider_identity?: true;
   call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;

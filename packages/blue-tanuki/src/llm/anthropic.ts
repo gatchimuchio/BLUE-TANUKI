@@ -132,6 +132,10 @@ export class AnthropicBackend implements LLMBackend {
     return capability === LLM_IMAGE_INPUT_CAPABILITY && this.imageCapableModels.has(model ?? this.defaultModel);
   }
 
+  resolveModel(requestedModel?: string): string {
+    return requestedModel ?? this.defaultModel;
+  }
+
   async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
     const images = validateLLMImageInputs(req.ephemeral_images);
     const audio = validateLLMAudioInputs(req.ephemeral_audio);
