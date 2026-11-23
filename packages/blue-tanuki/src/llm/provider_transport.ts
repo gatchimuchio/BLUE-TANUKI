@@ -10,6 +10,7 @@ import {
   resolveNetworkAddresses,
   type ResolvedNetworkAddress,
 } from "../network_egress.js";
+import { hasCredentialQueryParameter } from "../url_security.js";
 
 export class ProviderEgressError extends Error {
   constructor() {
@@ -19,23 +20,6 @@ export class ProviderEgressError extends Error {
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const SENSITIVE_QUERY_KEYS = new Set([
-  "key",
-  "apikey",
-  "accesskey",
-  "token",
-  "accesstoken",
-  "auth",
-  "authorization",
-  "bearer",
-  "secret",
-  "clientsecret",
-  "password",
-  "passwd",
-  "credential",
-  "signature",
-  "sig",
-]);
 const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -60,21 +44,6 @@ function hostnameFor(url: URL): string {
   return url.hostname.replace(/^\[(.*)\]$/, "$1").replace(/\.$/u, "").toLowerCase();
 }
 
-function hasCredentialQuery(url: URL): boolean {
-  for (const [key] of url.searchParams) {
-    const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, "");
-    if (
-      SENSITIVE_QUERY_KEYS.has(normalized) ||
-      normalized.endsWith("apikey") ||
-      normalized.endsWith("accesstoken") ||
-      normalized.endsWith("clientsecret")
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isLoopbackHostname(hostname: string): boolean {
   if (hostname === "localhost") return true;
   const family = isIP(hostname);
@@ -95,7 +64,7 @@ export async function resolveProviderTarget(
     url.username.length > 0 ||
     url.password.length > 0 ||
     url.hash.length > 0 ||
-    hasCredentialQuery(url) ||
+    hasCredentialQueryParameter(url) ||
     hostname.length === 0
   ) {
     throw new ProviderEgressError();

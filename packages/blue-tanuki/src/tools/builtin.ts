@@ -5,6 +5,7 @@ import * as https from "node:https";
 import { type LookupFunction } from "node:net";
 import * as path from "node:path";
 import { isPublicNetworkAddress, resolveNetworkAddresses } from "../network_egress.js";
+import { hasCredentialQueryParameter } from "../url_security.js";
 import {
   canonicalFileSearchTargetVersionObservation,
   canonicalFileWriteTargetVersionObservation,
@@ -311,6 +312,9 @@ function parseHttpUrl(raw: string): URL {
   }
   if (url.username || url.password) {
     throw new Error("url credentials are not allowed");
+  }
+  if (hasCredentialQueryParameter(url)) {
+    throw new Error("url credential query parameters are not allowed");
   }
   return url;
 }

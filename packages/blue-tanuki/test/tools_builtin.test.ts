@@ -779,6 +779,49 @@ describe("built-in tools", () => {
     ).rejects.toThrow(/GET or HEAD/);
   });
 
+  it.each(["api_key", "access-token", "signature"])(
+    "http.fetch rejects credential-like query key %s before DNS or request",
+    async (queryKey) => {
+      const secretMarker = "synthetic-url-secret-marker";
+      let dnsLookups = 0;
+      let requests = 0;
+      const opts = fakeHttp(
+        { "example.test": { address: "93.184.216.34", family: 4 } },
+        async () => {
+          requests += 1;
+          return {
+            status: 200,
+            ok: true,
+            content_type: "text/plain",
+            location: null,
+            body: "unexpected request",
+            truncated: false,
+          };
+        },
+      );
+      let errorMessage = "";
+      try {
+        await invokeHttpFetch(
+          { url: `https://example.test/path?${encodeURIComponent(queryKey)}=${secretMarker}` },
+          {
+            ...opts,
+            async resolveHost(hostname) {
+              dnsLookups += 1;
+              return await opts.resolveHost!(hostname);
+            },
+          },
+        );
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(errorMessage).toBe("url credential query parameters are not allowed");
+      expect(errorMessage).not.toContain(secretMarker);
+      expect(dnsLookups).toBe(0);
+      expect(requests).toBe(0);
+    },
+  );
+
   it("propagates cancellation to HTTP, GitHub, and Google request adapters", async () => {
     const httpController = new AbortController();
     let httpSignal: AbortSignal | undefined;
