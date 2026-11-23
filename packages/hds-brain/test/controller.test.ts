@@ -481,10 +481,10 @@ describe("HDSUpperController.decide()", () => {
     });
   });
 
-  it("copies an explicit fallback grant into the HDS compute context", () => {
+  it("copies an explicit fallback grant only when it covers current session history", () => {
     const grant = {
       allowed_providers: ["backup"],
-      allowed_input_sources: ["accepted_inbound_request"],
+      allowed_input_sources: ["accepted_inbound_request", "session_history"],
       required_capabilities: ["llm.text.generate"],
       max_total_cost: { amount: 0.5, currency: "USD" },
     };
@@ -498,10 +498,28 @@ describe("HDSUpperController.decide()", () => {
     if (command?.type === "llm_call") {
       expect(command.payload.compute_context?.fallback_authorization).toEqual({
         allowed_providers: ["backup"],
-        allowed_input_sources: ["accepted_inbound_request"],
+        allowed_input_sources: ["accepted_inbound_request", "session_history"],
         required_capabilities: ["llm.text.generate"],
         max_total_cost: { amount: 0.5, currency: "USD" },
       });
+      expect(command.payload.compute_context?.data_exposure.input_sources).toContain("session_history");
+    }
+  });
+
+  it("withholds fallback when the current session history is outside its input scope", () => {
+    const controller = new HDSUpperController({ llm_route: { fallback_authorization: {
+      allowed_providers: ["backup"],
+      allowed_input_sources: ["accepted_inbound_request"],
+      required_capabilities: ["llm.text.generate"],
+      max_total_cost: { amount: 0.5, currency: "USD" },
+    } } });
+
+    const { command } = controller.decide(inbound("fallback without session scope"));
+    expect(command?.type).toBe("llm_call");
+    if (command?.type === "llm_call") {
+      expect(command.payload.session_id).toBeTruthy();
+      expect(command.payload.compute_context?.data_exposure.input_sources).toContain("session_history");
+      expect(command.payload.compute_context?.fallback_authorization).toBeUndefined();
     }
   });
 

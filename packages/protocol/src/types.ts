@@ -479,6 +479,7 @@ export const LLMComputeContextSchema = z.object({
       "failure_memory_digest_projection",
       "selected_operation_result_observations",
       "complete_history_digest_observations",
+      "session_history",
       "user_image",
       "user_audio",
       "user_canvas_artifact",

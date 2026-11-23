@@ -334,6 +334,18 @@ describe("LLMComputeContextSchema fallback authorization", () => {
     expect(parsed.fallback_authorization?.allowed_input_sources).toContain("user_audio");
   });
 
+  it("accepts session history as an explicitly declared compute input source", () => {
+    const parsed = LLMComputeContextSchema.parse({
+      ...context,
+      data_exposure: {
+        input_sources: ["accepted_inbound_request", "session_history"],
+        requested_egress_provider: "primary",
+      },
+    });
+
+    expect(parsed.data_exposure.input_sources).toEqual(["accepted_inbound_request", "session_history"]);
+  });
+
   it("rejects duplicate, empty, unbounded, or unknown fallback authorization data", () => {
     for (const authorization of [
       { allowed_providers: ["backup", "BACKUP"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "USD" } },

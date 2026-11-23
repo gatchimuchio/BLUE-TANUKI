@@ -6944,6 +6944,13 @@ ${planControl.question}`,
       ...(agentDelegationMessage ? [agentDelegationMessage] : []),
       ...(planComputeMcpCatalogOutputMessage ? [planComputeMcpCatalogOutputMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
+    // The executor may append stored messages after J issues this command, so declare that source with the session scope.
+    const computeSessionId = log.memory_retrieval_suppressed_for === "transient_document_organization" ||
+      log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" || planCompute?.requested
+      ? undefined
+      : isGatewayInternalInboundRequest(req) && req.session_id
+      ? req.session_id
+      : `${req.channel}:${req.user}`;
     const llmPayload: LLMCallPayload = {
       messages: [
         ...memoryMessages,
@@ -6974,14 +6981,7 @@ ${planControl.question}`,
         ...(planComputeComposioConnectMessage ? [planComputeComposioConnectMessage] : []),
         { role: "user", content: req.content },
       ],
-        ...(log.memory_retrieval_suppressed_for === "transient_document_organization" ||
-          log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" || planCompute?.requested
-        ? {}
-        : {
-            session_id: isGatewayInternalInboundRequest(req) && req.session_id
-              ? req.session_id
-              : `${req.channel}:${req.user}`,
-          }),
+        ...(computeSessionId ? { session_id: computeSessionId } : {}),
       backend_hint: backendHint,
       model: this.llm_route.model,
       temperature: this.llm_route.temperature,
@@ -7019,6 +7019,7 @@ ${planControl.question}`,
             ...(planComputeMcpCatalogMessage ? ["selected_mcp_tool_catalog" as const] : []),
             ...(planComputeObservationMessage || planComputeSelectedReflectionMessage || planComputeBrowserReadMessage || planComputeMcpResultMessage
               ? ["selected_operation_result_observations" as const] : []),
+            ...(computeSessionId ? ["session_history" as const] : []),
           ],
           requested_egress_provider: backendHint ?? "registry-default",
         },
@@ -7030,7 +7031,8 @@ ${planControl.question}`,
           (!planComputeParentMessage || this.llm_route.fallback_authorization.allowed_input_sources
             .includes("selected_operation_plan_context")) &&
           (!planComputeMcpCatalogMessage || this.llm_route.fallback_authorization.allowed_input_sources
-            .includes("selected_mcp_tool_catalog"))
+            .includes("selected_mcp_tool_catalog")) &&
+          (!computeSessionId || this.llm_route.fallback_authorization.allowed_input_sources.includes("session_history"))
           ? { fallback_authorization: this.llm_route.fallback_authorization }
           : {}),
       },
