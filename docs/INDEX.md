@@ -22,7 +22,7 @@
 - [QE対応OS正本](PLATFORM_TARGETS_QE.md) — Windows・Linux・macOS・Android・iOSの独立実装とOS別QC/QA
 - [Backup ref移行（MIGRATION_COMPLETE）](BACKUP_REF_MIGRATION.md) — local二世代branch／remote二世代tagへの移行結果と安全手順
 - [作業標準要領](作業標準要領.md) — 全要求・全機能・5OSのQE_BUILD一括施工、QC/QA後段、移行完了済みのremote tag正本
-- [現行QE三点正本ポインタ](QE_CURRENT_AUTHORITY.md) — 仕様書・工程表・Codex施工指示書の公開実体とhashを固定。独立の第四指示書は設けない
+- [現行QE五点正本ポインタ](QE_CURRENT_AUTHORITY.md) — 要求仕様書・設計仕様書・開発実装工程表・品質工程表・Codex施工指示書の原文とhashを固定。起動操作核は05の投影で独立規範にしない
 - [Roadmap](ROADMAP.md) — QE全体工程と独立した旧J/P13境界
 - [競合能力基準面](競合能力基準面.md) — OpenClaw／Meta Museの公開情報を版付き比較条件へ分解。実装・比較結果・公開claimではない
 

@@ -12,7 +12,7 @@ const requiredDocs = [
   "docs/BACKUP_REF_MIGRATION.md",
   "docs/QE_CURRENT_AUTHORITY.md",
   "docs/qe/現行/MANIFEST.json",
-  ...expectedCanonicalFiles.map(file => `${qeDirectory}/${file}`),
+  ...expectedCanonicalFiles.map(file => `${qeDirectory}/${file}${file === QE_FILES.指示 ? ".parts" : ""}`),
   "docs/ROADMAP.md",
   "docs/INDEX.md",
   "docs/FIRST_RUN_CHECKLIST.md",
@@ -144,10 +144,10 @@ if (!troubleshooting.includes("FIRST_RUN_CHECKLIST.md")) {
 // QE規定の現行文書間の構造的一致を確認する。
 // 文書整合だけを確認し、製品のQC/QAや実機成功は証明しない。
 const qeGovernanceRequired = {
-  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "必須参照閉包", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE", "三点セットの作成・提出はGitHub反映の許可ではない"],
-  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "現行ピンの三文書すべて", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
-  "docs/QE_CURRENT_AUTHORITY.md": ["現行正本", "三点一組", "履歴", "MANIFEST.json", "rev7.0", "P2"],
-  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "指示/読取宣言", "03内包本文", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main", "rev7.0"],
+  "AGENTS.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "必須参照閉包", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE", "資料作成・提出はGitHub反映の許可ではない"],
+  "docs/作業標準要領.md": ["QE_BUILD", "QE_QC", "QE_QA", "全5OS", "現行ピンの四上位文書すべて", "refs/tags/codex/backup-main", "Android", "iOS", "MIGRATION_COMPLETE"],
+  "docs/QE_CURRENT_AUTHORITY.md": ["現行正本", "五点一組", "履歴", "MANIFEST.json", "rev8.0", "P2"],
+  "docs/ROADMAP.md": ["QE_BUILD", "QE_QC", "QE_QA", "BUILD_COVERED", "指示/読取/自己完結", "05内包本文", "J4", "Android", "iOS", "MIGRATION_COMPLETE", "refs/tags/codex/backup-main", "rev8.0"],
   "docs/DEVELOPMENT_PRACTICE.md": ["QE_CURRENT_AUTHORITY.md", "作業標準要領.md", "履歴ログ", "必須本文閉包"],
   "docs/STRATEGY_FRAME.md": ["OpenClaw", "Muse", "D4Pocket", "QC", "QA"],
   "docs/NON_GOALS.md": ["ClawHub", "BUILD_GAP", "PENDING_OWNER_GO", "Android", "iOS"],
@@ -184,18 +184,18 @@ for (const [rel, patterns] of Object.entries(qeGovernanceForbidden)) {
   }
 }
 
-// 現行rev7の固定三点、上位内包bytes、全ID/参照/固有QC/操作対応、別採用eventを照合。
+// 現行rev8の固定五点、原文6分割、上位内包bytes、継承、全ID/固有QC/採用eventを照合。
 // 旧BT6.1復号器は履歴再現のため保存するが現行JSONLには適用しない。
 const qeResult = validateQeRepository(root);
 for (const error of qeResult.エラー) {
   failures.push("QE現行正本 " + error.検査 + ": " + error.内容);
 }
 if (exists("docs/IMPLEMENTATION_INSTRUCTIONS.md")) {
-  failures.push("廃止済みの第四施工指示書が復活している");
+  failures.push("廃止済みの第六施工指示書が復活している");
 }
 for (const rel of ["AGENTS.md", "README.md", "docs/INDEX.md", "docs/ROADMAP.md", "docs/作業標準要領.md", "docs/DEVELOPMENT_PRACTICE.md"]) {
   if (/\]\(IMPLEMENTATION_INSTRUCTIONS\.md\)/.test(read(rel))) {
-    failures.push(`${rel}: 削除済み第四施工指示書へのリンクが残存`);
+    failures.push(`${rel}: 削除済み第六施工指示書へのリンクが残存`);
   }
 }
 

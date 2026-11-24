@@ -1,6 +1,6 @@
 # BLUE-TANUKI QE 最終対応OS（5OS）
 
-**新AGI製品の完成対象はWindows、Linux、macOS、Android、iOS**。旧v1.0 RCではMobile機能が未搭載であり、これを現在の5OS完成証拠に転用しない。全431要求・全機能・全OS入口を常時一つの全体施工の対象にして結び、局所BUILD_BATCH選定で範囲を限定しない。`BUILD_COVERED`後にOS別QCを行う。現行施工条件は[三点正本](QE_CURRENT_AUTHORITY.md)を参照する。
+**新AGI製品の完成対象はWindows、Linux、macOS、Android、iOS**。旧v1.0 RCではMobile機能が未搭載であり、これを現在の5OS完成証拠に転用しない。全431要求・全機能・全OS入口を常時一つの全体施工の対象にして結び、局所BUILD_BATCH選定で範囲を限定しない。`BUILD_COVERED`後にOS別QCを行う。現行施工条件は[五点正本](QE_CURRENT_AUTHORITY.md)を参照する。
 
 ## 対応範囲と区分
 
@@ -28,7 +28,7 @@ manifest・preflightとx64 package builderのsource接続はQE_BUILDの一部。
 
 ## Mobileの構造と安全
 
-AndroidとiOSは一括した「モバイル対応」ではなく、独立した製品要求として管理する。画像・音声入力を扱うF16は共通媒体の責務であって、Android/iOSの製品完成ではない。[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)が指す公開QE三点正本の実装索引ではAndroid=G09、iOS=G10。旧G05・G06は別のQC親成果であり上書きしない。
+AndroidとiOSは一括した「モバイル対応」ではなく、独立した製品要求として管理する。画像・音声入力を扱うF16は共通媒体の責務であって、Android/iOSの製品完成ではない。[`QE_CURRENT_AUTHORITY.md`](QE_CURRENT_AUTHORITY.md)が指す公開QE五点正本の実装索引ではAndroid=G09、iOS=G10。旧G05・G06は別のQC親成果であり上書きしない。
 
 D4Pocket（旧GUI-Shell）は予定するMobile/OS Broker外殻であり、その既存契約を利用する。招待・端末資格・TLSの秘密情報はAndroid/iOS native層で扱い、Dartやplatform-channelの戻り値、アプリログ、監査投影へ露出しない。Mobile画面やC／J／Mの提案から権限を生成せず、Desktop Broker側の現在Permission・対象・Ownerの必要承認を独立に満たす。
 

@@ -1,42 +1,104 @@
 {
   "体系": "BLUE-TANUKI-HDS-QE",
-  "版": "7.0",
-  "改訂日": "2026-11-21",
-  "三点": {
-    "仕様": "01_BLUE-TANUKI_統合仕様書_rev7_0_日本語基底.jsonl",
-    "工程": "02_BLUE-TANUKI_全体施工工程表_rev7_0_日本語基底.jsonl",
-    "指示": "03_BLUE-TANUKI_Codex全域施工指示書_rev7_0_日本語基底.jsonl"
+  "版": "8.0",
+  "改訂日": "2026-11-25",
+  "五点": {
+    "要求": "01_BLUE-TANUKI_要求仕様書_rev8_0_案_日本語JSONL.jsonl",
+    "設計": "02_BLUE-TANUKI_設計仕様書_rev8_0_案_日本語JSONL.jsonl",
+    "実装": "03_BLUE-TANUKI_開発実装工程表_rev8_0_案_日本語JSONL.jsonl",
+    "品質": "04_BLUE-TANUKI_品質工程表_rev8_0_案_日本語JSONL.jsonl",
+    "指示": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl"
   },
   "文書": {
-    "01_BLUE-TANUKI_統合仕様書_rev7_0_日本語基底.jsonl": {
-      "SHA256": "b296369206762c7bf5573c31e13cb78f6c20f730d70246244120e422356c8cce",
-      "バイト数": 862799,
-      "記録数": 968,
-      "形式": "日本語基底・自己充足JSONL・UTF-8/BOMなし/LF"
+    "01_BLUE-TANUKI_要求仕様書_rev8_0_案_日本語JSONL.jsonl": {
+      "SHA256": "920ccf5ee820a5026f8d48a0782df20b962c7919c6ae1efbbbf1fb4e56202a89",
+      "バイト数": 880247,
+      "記録数": 654,
+      "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
     },
-    "02_BLUE-TANUKI_全体施工工程表_rev7_0_日本語基底.jsonl": {
-      "SHA256": "a5282ddb425903bc6059d7bf854d5930806b1eeca707bdcd4e57c961011f451c",
-      "バイト数": 1460636,
-      "記録数": 1095,
-      "形式": "日本語基底・自己充足JSONL・UTF-8/BOMなし/LF"
+    "02_BLUE-TANUKI_設計仕様書_rev8_0_案_日本語JSONL.jsonl": {
+      "SHA256": "dc8d7658d4a3e8970b6731d850e0426f6a10857e354b433fe3131266b51cbb84",
+      "バイト数": 717348,
+      "記録数": 494,
+      "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
     },
-    "03_BLUE-TANUKI_Codex全域施工指示書_rev7_0_日本語基底.jsonl": {
-      "SHA256": "0db1a52e6738fd05f952cb4f94e952c773dcf579e4371410fc9b82e22853ed8c",
-      "バイト数": 4974613,
-      "記録数": 3496,
-      "形式": "日本語基底・自己充足JSONL・UTF-8/BOMなし/LF"
+    "03_BLUE-TANUKI_開発実装工程表_rev8_0_案_日本語JSONL.jsonl": {
+      "SHA256": "cc754e531bd8270dd20ad21d2acbae8cdf98509f34b41b86a4046d9003288bdf",
+      "バイト数": 2720446,
+      "記録数": 1235,
+      "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+    },
+    "04_BLUE-TANUKI_品質工程表_rev8_0_案_日本語JSONL.jsonl": {
+      "SHA256": "39e233ae3377cadcb87d52ececcba5a66f934a5bf53ec5338d8b2f0cf172fed6",
+      "バイト数": 2364048,
+      "記録数": 1329,
+      "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+    },
+    "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl": {
+      "SHA256": "24e57d152843c3bdd7e75a0c98e676c27815f384340d928c5d2dc957238bea3b",
+      "バイト数": 10645410,
+      "記録数": 5645,
+      "形式": "日本語基底JSONL/UTF-8/BOMなし/LF",
+      "保存方式": "生JSONL連続6分割・順序連結で原本byte同一",
+      "分割": [
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/0001-1000.jsonl",
+          "SHA256": "363cc8eb1b821c4f2917cc27bb1bb0c963afa9a531449b8ac77d3c0440a328c2",
+          "バイト数": 2424413,
+          "記録数": 1000
+        },
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/1001-2000.jsonl",
+          "SHA256": "4483ed34246f900fc37a175b1ece3cbbee13629ac9b6caaecc66d73bcdc409d7",
+          "バイト数": 1625587,
+          "記録数": 1000
+        },
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/2001-3000.jsonl",
+          "SHA256": "0c38dc930f856a7fdbe6b36ac08a19bdb34f1e51b4623d84588500bc15a336cd",
+          "バイト数": 1322554,
+          "記録数": 1000
+        },
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/3001-4000.jsonl",
+          "SHA256": "7023fbbe2f10cf21a8a293fac50b90f6903b5a471e0e056dd4a7c0ae079bff6a",
+          "バイト数": 2209669,
+          "記録数": 1000
+        },
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/4001-5000.jsonl",
+          "SHA256": "4d5a2e02972203d9db942d9220792ad3ca7e37e4d409da010eeaaa176b564354",
+          "バイト数": 1829072,
+          "記録数": 1000
+        },
+        {
+          "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/5001-5645.jsonl",
+          "SHA256": "72ccd0437bfdc82040153d5c9d4262d814e2414ac58b94d61c62a9aab7bef631",
+          "バイト数": 1234115,
+          "記録数": 645
+        }
+      ]
     }
   },
-  "採用記録": {
-    "識別": "BT-QE-ADOPT-20261121-REV7",
-    "パス": "docs/qe/採用記録/2026-11-21-rev7.0.json",
-    "SHA256": "ca6818d22ce028bd91c2956421e59917013b8b0967a5ac0a845f96cf56ca225a"
+  "起動操作核": {
+    "ファイル": "00_BLUE-TANUKI_Codex起動操作核_rev8_0_案_日本語JSONL.jsonl",
+    "SHA256": "1a72bf0aca9edeef957354751faab147e9d36f88c2d1932a3fd4dde8c9029dfd",
+    "バイト数": 31959,
+    "記録数": 34,
+    "効力": "05先頭34行の同値投影、独立の施工規範ではない"
   },
   "要領": {
     "パス": "AGENTS.md",
-    "版": "7.0",
-    "SHA256": "e6f5f6b6f90b8665989bdc79ecf4605335e9f1e42fcaefad646494d8509db3bc",
-    "バイト数": 30321
+    "版": "8.0",
+    "SHA256": "44d4a7ded688dd177490bfafbe93b559928d629d993ee2aa941639a0f7f2bf5e",
+    "バイト数": 32510,
+    "記録数": 25
+  },
+  "採用記録": {
+    "識別": "BT-QE-ADOPT-20261125-REV8",
+    "パス": "docs/qe/採用記録/2026-11-25-rev8.0.json",
+    "SHA256": "ce65654e65eb5a96a82ced65adab15839f01d1673aa3b299a6c85fb0ef5ccdac",
+    "バイト数": 7718
   },
   "母集団": {
     "要求": 431,
@@ -48,35 +110,27 @@
     "局所QC": 396,
     "競合能力基準": 61,
     "対象OS": 5,
-    "親固有操作": 313
+    "親固有操作": 313,
+    "上位要求": 19,
+    "変更影響": 20,
+    "検査入口": 12,
+    "既知故障": 43,
+    "旧欠陥": 6,
+    "継承原記録": 3496,
+    "同梱標準": 276,
+    "上位四文書記録": 3712
   },
   "前版": {
-    "版": "6.1",
-    "目録": "docs/qe/履歴/rev6.1/MANIFEST.json",
-    "SHA256": "5c2c5eb0d5ecdf2514df4089bee53a91774f10313406e5c62c6ce4cc9d0e8040",
-    "文書": {
-      "01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json": {
-        "SHA256": "956373347dd68d460f08e1f8737a118f2dd48a9b56f8b54712f6d92f7094e47e",
-        "バイト数": 391977,
-        "種別": "日本語基底・JSON・現行三点施工正本"
-      },
-      "02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json": {
-        "SHA256": "88a86ab48cd22d7d49f9a3f4d8d41a89d0473a05dfdb68d84a08639298edee85",
-        "バイト数": 386375,
-        "種別": "日本語基底・JSON・現行三点施工正本"
-      },
-      "03_BLUE-TANUKI_指示書_rev6_1_LLM日本語意味圧縮.json": {
-        "SHA256": "dd912e82f856895978ea1132c932ad313d064ac9f2dd31eb25e56932cd001c6d",
-        "バイト数": 1128878,
-        "種別": "日本語基底・BT6.1/LLM-JP/1・現行施工指示書",
-        "復号SHA256": "131161ad5bf7264686bfd7c5b8f7fc64a2a4a646c848a8b0938ac366d82a0795"
-      }
-    }
+    "版": "7.0",
+    "目録": "docs/qe/履歴/rev7.0/MANIFEST.json",
+    "SHA256": "11c5c248c9154f2d92b919f0eab7fa272b2faffc2ebc0815e4efcf868505be6d",
+    "採用記録": "docs/qe/採用記録/2026-11-21-rev7.0.json",
+    "基点": "46b9b5f8b15963b9d2288cdfabc49cb0dbfb58bc"
   },
-  "現在状態の扱い": "採用する規範と製品の観測状態を分離。現工程/実装/QC/QA/GOは現在の対象版・条件・根拠で判定し、この目録の更新から成功/失敗/完成率を生成しない。",
+  "現在状態の扱い": "要求→設計→開発実装/品質→指示。製品完成=採用要求仕様との照合。P9は独立公開配布。文書変更から実装・品質・完成・GOを推定しない。",
   "検証": {
     "入口": "node scripts/check_docs.mjs",
-    "形式": "現行JSONLはJSON.parse各行と一意ID/参照/上位byte同一性/母集団/具体操作/QC/採用記録を照合。旧decodeQeInstructionを現行解読に用いない。",
-    "境界": "文書検査PASSは製品QC/QA/実製品GOではない。"
+    "形式": "固定原本SHA/byte/行数、全ID/原記録/内包4文書/起動操作核/母集団/採用境界/旧履歴の検査。",
+    "境界": "文書整合は製品QC/QA/完成/GOではない。"
   }
 }

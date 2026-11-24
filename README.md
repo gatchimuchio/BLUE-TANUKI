@@ -24,11 +24,11 @@
 | 系列 | 確認できる状態 |
 |---|---|
 | **公開済み技術RC** | <code>1.0.0-rc.1</code>。Windows／macOS／Linux向けのportable installerを配布。HDS-BRAIN・承認・監査・チャット／操作面などの局所実装を含む |
-| **現行の次世代開発** | rev7.0の仕様書・工程表・施工指示書を採用。431要求・全機能・全5OSの全域施工を維持し、現在のQE_BUILD／QE_QC／QE_QAと工程出口は対象版の実物証拠で判定。旧局所BUILD_BATCHや文書更新を全体完成へ変換しない |
+| **現行の次世代開発** | rev8.0の要求仕様書・設計仕様書・開発実装工程表・品質工程表・施工指示書を採用。431要求・全機能・全5OSの全域施工を維持し、現在のQE_BUILD／QE_QC／QE_QAと工程出口は対象版の実物証拠で判定。旧局所BUILD_BATCHや文書更新を全体完成へ変換しない |
 | **目標とする製品範囲** | Windows、Linux、macOS、Android、iOSの5OS。現在の対応・到達実績と、今後の完成目標は別 |
-| **未成立の全体条件** | 全能力の<code>BUILD_COVERED</code>、実物全体のQE_QC、対象別QE_QA、5OS製品受入、GA／owner GO |
+| **未成立の全体条件** | 全能力の<code>BUILD_COVERED</code>、実物全体のQE_QC、対象別QE_QA、5OS製品受入、要求充足による完成、別軸のGA／owner GO |
 
-この表は、新QE開発の局所成果を**製品全体の完成・AGI達成・5OS出荷可能**と読み替えるものではありません。旧RCのP13は<code>PENDING_OWNER_GO</code>、<code>public_claim_allowed=false</code>のままです。[現行三点正本](docs/QE_CURRENT_AUTHORITY.md)のみが仕様・工程・施工指示を定め、[ロードマップ](docs/ROADMAP.md)と[実装進捗](docs/開発進捗.md)は工程要約・履歴証拠です。三点の作成・提出は、それだけでGitHub反映や製品施工を許可するものではありません。実資格・個人情報・生の運転証拠は公開しません。
+この表は、新QE開発の局所成果を**製品全体の完成・AGI達成・5OS出荷可能**と読み替えるものではありません。旧RCのP13は<code>PENDING_OWNER_GO</code>、<code>public_claim_allowed=false</code>のままです。[現行五点正本](docs/QE_CURRENT_AUTHORITY.md)のみが要求・設計・実装工程・品質工程・施工指示を定め、[ロードマップ](docs/ROADMAP.md)と[実装進捗](docs/開発進捗.md)は工程要約・履歴証拠です。五点の作成・提出は、それだけでGitHub反映や製品施工を許可するものではありません。実資格・個人情報・生の運転証拠は公開しません。
 
 ---
 

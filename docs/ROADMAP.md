@@ -2,9 +2,9 @@
 
 ## 現行設計・工程の入口
 
-2026-11-21、ownerの「エージェントmdも揃えておいて／3点セットも更新しといて」に基づきrev7.0三点を採用。版・SHA・対象・効力は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)と採用イベントに固定する。本ロードマップは要約・時点付き証拠であり、独立の施工命令ではない。
+2026-11-25、ownerの直接更新指示に基づきrev8.0五点（要求・設計・開発実装工程・品質工程・施工指示）を採用。rev7.0は履歴へ保持。版・SHA・効力は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)と採用イベントに固定。本ロードマップは要約・時点付き証拠であり独立の施工命令ではない。
 
-全域P2一括施工→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→影響是正/再QC→QE_QA→owner独立GOの順を維持。起動時は実物に対応するP0～P9の現在工程を確認し、既済結果を保持する。J制御正本/M記憶保存/Broker開始消費の責務は分離する。文書採用から施工進捗・QC/QA・GOを推定しない。
+全域P2一括施工→SYSTEM_SHAPED→BUILD_COVERED→QE_QC→影響是正/再QC→QE_QAを維持。要求仕様書の受入条件との照合で製品完成を判定し、P9 owner独立GO・実配布は別軸とする。起動時は実物に対応するP0～P9の現在工程を確認し、既済結果を保持する。J制御正本/M記憶保存/Broker開始消費の責務は分離する。文書採用から施工進捗・QC/QA・GOを推定しない。
 
 ## 採用前の状態記録
 
@@ -679,6 +679,6 @@ Rustの`decision`は常に`hold`、作用権限・M正本writerなし。HDS Jの
 
 ## 維持する境界
 
-固定された現行三点セット全文は03内包本文で読める。独立作業・部分作業・再開はAGENTSの要領/受領と指示/読取宣言に従い、旧decoderや重複投入を要求しない。現行入口は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)。技術資料は公開可能、保護情報と実製品GOは別。完了履歴は[IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md)・[開発進捗.md](開発進捗.md)に保持する。J4 strict closureは通常docs gateから推定しない。
+固定された現行五点は05内包本文（原文6連続JSONL）で読める。独立作業・部分作業・再開はAGENTSの要領/受領と指示/読取/自己完結に従い、旧decoderや重複投入を要求しない。現行入口は[QE_CURRENT_AUTHORITY.md](QE_CURRENT_AUTHORITY.md)。技術資料は公開可能、保護情報と実製品GOは別。完了履歴は[IMPLEMENTATION_HISTORY.md](IMPLEMENTATION_HISTORY.md)・[開発進捗.md](開発進捗.md)に保持する。J4 strict closureは通常docs gateから推定しない。
 
 Approval Gate/L3、Broker現在権限、M非権限、監査、秘密、独立停止/復旧を維持。全5OSのWindows最終は所有実PC、Linux/macOS/Android/iOSは契約忠実な仮想/hosted等の対象別証拠を用いる。Gitはmain・単一統合writer、必要時の正規復旧ref保全。MIGRATION_COMPLETEとrefs/tags/codex/backup-main・refs/tags/codex/backup-main-prevの履歴を保持し、操作は要領/Gitの現在委任/対象/現SHAに従う。198索引をcommit/承認/品質ゲートにしない。

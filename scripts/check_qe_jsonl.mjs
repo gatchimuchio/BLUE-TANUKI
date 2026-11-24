@@ -1,548 +1,250 @@
-import fs from "node:fs";
-import path from "node:path";
-import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
-
-// 採用対象を発見結果やmanifestだけから逆定義しない。変更時は採用と検査をともに再監査する。
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { validateQeBundle as validateRev7Bundle, QE_FILES as OLD_FILES, QE_HISTORY_DIRECTORY as OLD_HISTORY, QE_HISTORY_PINS as OLD_HISTORY_PINS, QE_ADOPTION_PATH as OLD_ADOPTION_PATH } from './check_qe_rev7_history.mjs';
 export const QE_DIRECTORY = "docs/qe/現行";
 export const QE_FILES = Object.freeze({
-  仕様: "01_BLUE-TANUKI_統合仕様書_rev7_0_日本語基底.jsonl",
-  工程: "02_BLUE-TANUKI_全体施工工程表_rev7_0_日本語基底.jsonl",
-  指示: "03_BLUE-TANUKI_Codex全域施工指示書_rev7_0_日本語基底.jsonl",
+  "要求": "01_BLUE-TANUKI_要求仕様書_rev8_0_案_日本語JSONL.jsonl",
+  "設計": "02_BLUE-TANUKI_設計仕様書_rev8_0_案_日本語JSONL.jsonl",
+  "実装": "03_BLUE-TANUKI_開発実装工程表_rev8_0_案_日本語JSONL.jsonl",
+  "品質": "04_BLUE-TANUKI_品質工程表_rev8_0_案_日本語JSONL.jsonl",
+  "指示": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl"
 });
 export const QE_PINS = Object.freeze({
-  [QE_FILES.仕様]: Object.freeze({ SHA256: "b296369206762c7bf5573c31e13cb78f6c20f730d70246244120e422356c8cce", バイト数: 862799, 記録数: 968 }),
-  [QE_FILES.工程]: Object.freeze({ SHA256: "a5282ddb425903bc6059d7bf854d5930806b1eeca707bdcd4e57c961011f451c", バイト数: 1460636, 記録数: 1095 }),
-  [QE_FILES.指示]: Object.freeze({ SHA256: "0db1a52e6738fd05f952cb4f94e952c773dcf579e4371410fc9b82e22853ed8c", バイト数: 4974613, 記録数: 3496 }),
+  "01_BLUE-TANUKI_要求仕様書_rev8_0_案_日本語JSONL.jsonl": {
+    "SHA256": "920ccf5ee820a5026f8d48a0782df20b962c7919c6ae1efbbbf1fb4e56202a89",
+    "バイト数": 880247,
+    "記録数": 654,
+    "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+  },
+  "02_BLUE-TANUKI_設計仕様書_rev8_0_案_日本語JSONL.jsonl": {
+    "SHA256": "dc8d7658d4a3e8970b6731d850e0426f6a10857e354b433fe3131266b51cbb84",
+    "バイト数": 717348,
+    "記録数": 494,
+    "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+  },
+  "03_BLUE-TANUKI_開発実装工程表_rev8_0_案_日本語JSONL.jsonl": {
+    "SHA256": "cc754e531bd8270dd20ad21d2acbae8cdf98509f34b41b86a4046d9003288bdf",
+    "バイト数": 2720446,
+    "記録数": 1235,
+    "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+  },
+  "04_BLUE-TANUKI_品質工程表_rev8_0_案_日本語JSONL.jsonl": {
+    "SHA256": "39e233ae3377cadcb87d52ececcba5a66f934a5bf53ec5338d8b2f0cf172fed6",
+    "バイト数": 2364048,
+    "記録数": 1329,
+    "形式": "日本語基底JSONL/UTF-8/BOMなし/LF"
+  },
+  "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl": {
+    "SHA256": "24e57d152843c3bdd7e75a0c98e676c27815f384340d928c5d2dc957238bea3b",
+    "バイト数": 10645410,
+    "記録数": 5645,
+    "形式": "日本語基底JSONL/UTF-8/BOMなし/LF",
+    "保存方式": "生JSONL連続6分割・順序連結で原本byte同一",
+    "分割": [
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/0001-1000.jsonl",
+        "SHA256": "363cc8eb1b821c4f2917cc27bb1bb0c963afa9a531449b8ac77d3c0440a328c2",
+        "バイト数": 2424413,
+        "記録数": 1000
+      },
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/1001-2000.jsonl",
+        "SHA256": "4483ed34246f900fc37a175b1ece3cbbee13629ac9b6caaecc66d73bcdc409d7",
+        "バイト数": 1625587,
+        "記録数": 1000
+      },
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/2001-3000.jsonl",
+        "SHA256": "0c38dc930f856a7fdbe6b36ac08a19bdb34f1e51b4623d84588500bc15a336cd",
+        "バイト数": 1322554,
+        "記録数": 1000
+      },
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/3001-4000.jsonl",
+        "SHA256": "7023fbbe2f10cf21a8a293fac50b90f6903b5a471e0e056dd4a7c0ae079bff6a",
+        "バイト数": 2209669,
+        "記録数": 1000
+      },
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/4001-5000.jsonl",
+        "SHA256": "4d5a2e02972203d9db942d9220792ad3ca7e37e4d409da010eeaaa176b564354",
+        "バイト数": 1829072,
+        "記録数": 1000
+      },
+      {
+        "パス": "05_BLUE-TANUKI_Codex全域施工指示書_rev8_0_案_日本語JSONL.jsonl.parts/5001-5645.jsonl",
+        "SHA256": "72ccd0437bfdc82040153d5c9d4262d814e2414ac58b94d61c62a9aab7bef631",
+        "バイト数": 1234115,
+        "記録数": 645
+      }
+    ]
+  }
 });
-export const QE_ADOPTION_ID = "BT-QE-ADOPT-20261121-REV7";
-export const QE_ADOPTION_PATH = "docs/qe/採用記録/2026-11-21-rev7.0.json";
+export const QE_KERNEL = Object.freeze({
+  "ファイル": "00_BLUE-TANUKI_Codex起動操作核_rev8_0_案_日本語JSONL.jsonl",
+  "SHA256": "1a72bf0aca9edeef957354751faab147e9d36f88c2d1932a3fd4dde8c9029dfd",
+  "バイト数": 31959,
+  "記録数": 34,
+  "効力": "05先頭34行の同値投影、独立の施工規範ではない"
+});
+export const QE_AGENT_PIN = Object.freeze({
+  "パス": "AGENTS.md",
+  "版": "8.0",
+  "SHA256": "44d4a7ded688dd177490bfafbe93b559928d629d993ee2aa941639a0f7f2bf5e",
+  "バイト数": 32510,
+  "記録数": 25
+});
+export const QE_EVENT_PIN = Object.freeze({
+  "識別": "BT-QE-ADOPT-20261125-REV8",
+  "パス": "docs/qe/採用記録/2026-11-25-rev8.0.json",
+  "SHA256": "ce65654e65eb5a96a82ced65adab15839f01d1673aa3b299a6c85fb0ef5ccdac",
+  "バイト数": 7718
+});
 export const QE_POPULATION = Object.freeze({
-  要求: 431, 親成果: 65, 施工索引: 198, 詳細条項: 63, 不変契約: 34,
-  親QC: 260, 局所QC: 396, 競合能力基準: 61, 対象OS: 5, 親固有操作: 313,
+  "要求": 431,
+  "親成果": 65,
+  "施工索引": 198,
+  "詳細条項": 63,
+  "不変契約": 34,
+  "親QC": 260,
+  "局所QC": 396,
+  "競合能力基準": 61,
+  "対象OS": 5,
+  "親固有操作": 313,
+  "上位要求": 19,
+  "変更影響": 20,
+  "検査入口": 12,
+  "既知故障": 43,
+  "旧欠陥": 6,
+  "継承原記録": 3496,
+  "同梱標準": 276,
+  "上位四文書記録": 3712
 });
-export const QE_HISTORY_DIRECTORY = "docs/qe/履歴/rev6.1";
-export const QE_HISTORY_PINS = Object.freeze({
-  "MANIFEST.json": { SHA256: "5c2c5eb0d5ecdf2514df4089bee53a91774f10313406e5c62c6ce4cc9d0e8040", バイト数: 3870 },
-  "01_BLUE-TANUKI_統合仕様書_rev6_0_確定.json": { SHA256: "956373347dd68d460f08e1f8737a118f2dd48a9b56f8b54712f6d92f7094e47e", バイト数: 391977 },
-  "02_BLUE-TANUKI_全体施工工程表_rev6_0_確定.json": { SHA256: "88a86ab48cd22d7d49f9a3f4d8d41a89d0473a05dfdb68d84a08639298edee85", バイト数: 386375 },
-  "03_BLUE-TANUKI_指示書_rev6_1_LLM日本語意味圧縮.json": { SHA256: "dd912e82f856895978ea1132c932ad313d064ac9f2dd31eb25e56932cd001c6d", バイト数: 1128878 },
-  "AGENTS.rev6.md": { SHA256: "da0f3bb8b6b55e5ea7313ea9399fd0766244be631da3477436601514de3ef0de", バイト数: 18751 },
-  "QE_CURRENT_AUTHORITY.rev6.1.md": { SHA256: "a4a745a39ef3d656a1d301c1412fb3c46052efe9810df2f4dab4520ee1a1bfe1", バイト数: 3580 },
-  "作業標準要領.rev6.md": { SHA256: "387250a834ea1253d7559c184cac7b53bc995151e975dc34fde65deeb8b7d907", バイト数: 8211 },
+export const QE_PRIOR = Object.freeze({
+  "版": "7.0",
+  "目録": "docs/qe/履歴/rev7.0/MANIFEST.json",
+  "SHA256": "11c5c248c9154f2d92b919f0eab7fa272b2faffc2ebc0815e4efcf868505be6d",
+  "採用記録": "docs/qe/採用記録/2026-11-21-rev7.0.json",
+  "基点": "46b9b5f8b15963b9d2288cdfabc49cb0dbfb58bc"
 });
-// 採用イベントの権限境界は、語の出現だけで逆向きの文を通さないよう意味本文を固定する。
-const ADOPTION_EFFECTS = Object.freeze({
-  採用: "三点を現行製品仕様・全体工程・施工指示として採用し、本repoのAGENTS・pointer・目録・関連文書検査を同一反映単位で整合する。",
-  更新: "今回の直接更新依頼を対象repoの文書統治変更として扱い、有効な既存Git規律の範囲で限定commit/main反映を行う。製品コード変更をこの作業へ追加しない。",
-  既存委任: "旧採用記録の2026-11-19開発継続委任は、その対象/期間/取消/操作が現在も有効な範囲で保持。今回の採用は過去の停止/失効を自動解除せず、新しいlive/別repo/出荷許可を作らない。",
-  施工: "P0-P9の現在工程・成立済み出口・残課題を現物から再照合する。文書採用をP2再初期化や施工完了へ変換しない。",
-  保証: "この採用はSYSTEM_SHAPED/BUILD_COVERED/QC/QA/実製品GOの成立判定ではない。PENDING_OWNER_GO等の当時の証拠は当時の状態として保持する。",
-  公開: "技術設計文書を公開できる既存境界を保持し、実credential/秘密/本人情報/no-store審査/実運転rawは追加しない。実製品配布・実証済み主張は独立GOを要する。",
+export const QE_MANIFEST_PIN = Object.freeze({
+  "SHA256": "cd7877e10ea3294615e050be692bb1ef7195ba38bf55f5bd8b244be4576545e8",
+  "バイト数": 5786
 });
-const ADOPTION_EXCLUSIONS = [
-  "D4Pocket/MINIDORA等別repoの変更", "実credentialの取得/使用や本人データの公開",
-  "使用者のlive外部作用や支払", "OS署名/Store資格の新規付与", "製品QC/QA合格や出荷GOの認定",
-];
-const AGENT_IDS = [
-  "宣言", "責任", "採用", "受領", "作業単位", "分担", "全域工程", "限定確認",
-  "品質帰還", "状態証拠", "権限", "原子性", "独立停止", "復旧", "秘密", "保持終了",
-  "境界維持", "拡張", "五OS", "中断範囲", "環境", "CI", "Git", "日本語", "完了",
-].map(name => "要領/" + name);
-const REFERENCES = ["意味参照", "構成参照", "対応参照", "検証参照", "根拠参照", "来歴参照", "参考参照"];
-const FUNCTIONS = new Set(["宣言", "定義", "規則", "索引", "観測", "要件記録", "採用判断", "監査所見", "履歴", "例示"]);
-const FIELDS = new Set([
-  "識別", "機能", "適用域", "規範強度", "適用条件", "対象", "規定", "用語", "定義", "契約",
-  "記録", "名称", "版", "名前空間", "採用状態", "原識別", "原文", "観測時点", "判定状態",
-  "変更種別", "変更理由", "注記", ...REFERENCES,
+export const QE_ADOPTION_PATH = "docs/qe/採用記録/2026-11-25-rev8.0.json";
+export const OLD_PIN = Object.freeze({
+  "SHA256": "0db1a52e6738fd05f952cb4f94e952c773dcf579e4371410fc9b82e22853ed8c",
+  "バイト数": 4974613,
+  "記録数": 3496
+});
+export const OLD_INSTRUCTION = "docs/qe/履歴/rev7.0/03_BLUE-TANUKI_Codex全域施工指示書_rev7_0_日本語基底.jsonl";
+export const AGENT_IDS = Object.freeze([
+  "要領/宣言",
+  "要領/責任",
+  "要領/採用",
+  "要領/受領",
+  "要領/作業単位",
+  "要領/分担",
+  "要領/全域工程",
+  "要領/限定確認",
+  "要領/品質帰還",
+  "要領/状態証拠",
+  "要領/権限",
+  "要領/原子性",
+  "要領/独立停止",
+  "要領/復旧",
+  "要領/秘密",
+  "要領/保持終了",
+  "要領/境界維持",
+  "要領/拡張",
+  "要領/五OS",
+  "要領/中断範囲",
+  "要領/環境",
+  "要領/CI",
+  "要領/Git",
+  "要領/日本語",
+  "要領/完了"
 ]);
-const TYPES = {
-  "資料・設計・意味対応": 23, "実装調査・検査基盤": 4, "実運転・状態・作用": 143,
-  "製品入口・配布・OS": 16, 比較: 3, "比較・実験・測定": 7, "配布判定の隔離検査": 2,
-};
-const CORE = [
-  "宣言", "採用根拠", "読取宣言", "採用時点契約", "起動", "共通操作", "作業選択", "委譲",
-  "変更影響", "生成物", "索引実行規則", "要求実行規則", "QC実行", "停止復旧", "状態証拠",
-  "権限と秘密", "現在観測の使い方", "QC運用補助", "母集団", "内包原典索引",
-];
-const OLD_SECTIONS = [
-  "識別", "対象", "目的", "固定上位原典", "責任境界", "起動命令", "施工実行方式", "全域不変",
-  "原典不変契約34_逐語保全", "原典機能境界_逐語保全", "原典製品責務と状態_逐語保全",
-  "原典共通レコードと外部作用_逐語保全", "原典HDS学習と現状_逐語保全", "原典出荷制約_逐語保全",
-  "施工工程_一から十まで", "P2の四断面_工程表との逐語対応", "系統横断接続_施工固定",
-  "全65親成果別_固有施工命令", "全198索引別_十手順確定", "全431仕様要求別_実装命令",
-  "全63詳細条項別_実装命令", "五OS別_十操作固定", "全61比較基準別_施工とQC命令",
-  "P5全396局所QC_確定実行命令", "P6全260親QC_確定実行命令", "運転停止・復旧規則",
-  "逸脱再発防止_反例対照", "状態と報告の最小契約", "物差しと未成立", "出典照合", "版管理",
-  "変更影響の必須規則_rev6_1", "現行実装の変更時検査対応_rev6_1",
-  "監査発見欠陥の閉塞命令_rev6_1", "全域接続施工の一括施工法_rev6_1", "工程出口の厳格化_rev6_1",
-];
-const INSTRUCTION_CONDITION = {
-  全て: [
-    { 判定: "本指示が当該対象の適用規範として有効である" },
-    { 判定: "当該対象・段階・操作の実施又はその許否・中断・保護・復旧の判定を扱う" },
-  ],
-};
-const POPULATIONS = [
-  ["要求", "仕様/要求/", 431], ["親", "仕様/親/", 65], ["詳細", "仕様/詳細/", 63],
-  ["不変", "仕様/不変/", 34], ["比較", "仕様/比較/", 61], ["索引", "工程/施工索引/", 198],
-  ["局所QC", "工程/QC/BT-U-", 396], ["親QC", "工程/QC/BT-T-", 260], ["OS", "仕様/OS/", 5],
-  ["変更影響", "工程/変更影響/", 20], ["親操作", "指示/親操作/", 65],
-  ["索引操作対応", "指示/索引/", 198], ["要求実現対応", "指示/要求実現/", 431],
-  ["詳細適用対応", "指示/詳細適用/", 63], ["比較実行対応", "指示/比較実行/", 61],
-  ["QC束", "指示/QC束/", 65], ["工程操作", "指示/工程操作/", 10], ["OS操作", "指示/OS操作/", 5],
-  ["対象種別操作", "指示/型別/", 7], ["検査入口", "指示/検査入口/", 12],
-  ["既知欠陥系", "指示/既知欠陥/", 6], ["旧故障型", "指示/反例/", 43],
-  ["旧区画対応", "指示/履歴対応/", 36], ["P2断面接続", "指示/接続/断面/", 4],
-  ["系統接続", "指示/接続/系統/", 6], ["接続面", "指示/接続/接続面/", 6],
-];
-export const sha256 = raw => createHash("sha256").update(raw).digest("hex");
-const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const array = value => Array.isArray(value) ? value : [];
-const string = value => typeof value === "string" && value.length > 0;
-const contract = row => object(row?.契約) ? row.契約 : {};
-const suffix = row => row.識別.split("/").at(-1);
-const includesAll = (actual, expected) => expected.every(value => array(actual).includes(value));
-
-// JSON.parseだけでは後勝ちになる重複keyをescape復号後に拒否。文法検査は標準parserに任せる。
-export function parseUniqueJson(text) {
-  const value = JSON.parse(text);
-  let offset = 0;
-  const whitespace = () => { while (offset < text.length && /\s/.test(text[offset])) offset += 1; };
-  const scanString = () => {
-    const start = offset++;
-    while (offset < text.length) {
-      if (text[offset] === "\\") { offset += 2; continue; }
-      if (text[offset++] === '"') return JSON.parse(text.slice(start, offset));
-    }
-    throw new Error("JSON文字列の終端なし");
-  };
-  const visit = () => {
-    whitespace();
-    if (text[offset] === "{") {
-      offset += 1;
-      whitespace();
-      const keys = new Set();
-      if (text[offset] === "}") { offset += 1; return; }
-      while (offset < text.length) {
-        whitespace();
-        const key = scanString();
-        if (keys.has(key)) throw new Error("重複key: " + key);
-        keys.add(key);
-        whitespace();
-        offset += 1;
-        visit();
-        whitespace();
-        if (text[offset++] === "}") return;
-      }
-    } else if (text[offset] === "[") {
-      offset += 1;
-      whitespace();
-      if (text[offset] === "]") { offset += 1; return; }
-      while (offset < text.length) {
-        visit();
-        whitespace();
-        if (text[offset++] === "]") return;
-      }
-    } else if (text[offset] === '"') {
-      scanString();
-    } else {
-      while (offset < text.length && !/[\s,\]}]/.test(text[offset])) offset += 1;
-    }
-  };
-  visit();
-  return value;
+export const sha256 = s => createHash('sha256').update(s, 'utf8').digest('hex');
+const byteLength = s => Buffer.byteLength(s, 'utf8');
+export function parseUniqueJson(s){
+ const obj=JSON.parse(s);let i=0;const ws=()=>{while(i<s.length&&/\s/.test(s[i]))i++};const str=()=>{const start=i++;while(i<s.length){if(s[i]==="\\"){i+=2;continue}if(s[i++]==='"')return JSON.parse(s.slice(start,i))}throw Error("文字列終端")};
+ const visit=()=>{ws();if(s[i]==="{"){i++;ws();const keys=new Set();if(s[i]==="}"){i++;return}for(;;){ws();const key=str();if(keys.has(key))throw Error("重複key: "+key);keys.add(key);ws();i++;visit();ws();if(s[i++]==="}")return}}else if(s[i]==="["){i++;ws();if(s[i]==="]"){i++;return}for(;;){visit();ws();if(s[i++]==="]")return}}else if(s[i]==='"')str();else while(i<s.length&&!/[\s,\]}]/.test(s[i]))i++};
+ visit();return obj;
 }
-function conditionValid(value) {
-  if (!object(value) || Object.keys(value).length !== 1) return false;
-  const [key, child] = Object.entries(value)[0];
-  if (key === "判定") return string(child);
-  if (key === "全て" || key === "いずれか") return Array.isArray(child) && child.length > 0 && child.every(conditionValid);
-  return key === "否定" && conditionValid(child);
-}
-function checker() {
-  const errors = [];
-  let checks = 0;
-  return {
-    errors,
-    require(ok, label, detail = "") {
-      checks += 1;
-      if (!ok) errors.push({ 検査: label, 内容: typeof detail === "string" ? detail : JSON.stringify(detail) });
-    },
-    same(actual, expected, label) {
-      this.require(Array.isArray(actual) && Array.isArray(expected), label + ":配列");
-      const a = array(actual), e = array(expected), aset = new Set(a), eset = new Set(e);
-      this.require(a.length === aset.size, label + ":重複なし");
-      this.require(aset.size === eset.size && [...aset].every(x => eset.has(x)), label + ":全数一致",
-        { 欠落: [...eset].filter(x => !aset.has(x)), 余分: [...aset].filter(x => !eset.has(x)) });
-    },
-    result(extra = {}) {
-      return { 判定: errors.length ? "FAIL" : "PASS", 検査数: checks, エラー数: errors.length, エラー: errors, ...extra };
-    },
-  };
-}
-function parseLines(raw, check, label) {
-  const rows = [], by = new Map(), rawBy = new Map();
-  check.require(Buffer.isBuffer(raw), "文書byte存在", label);
-  if (!Buffer.isBuffer(raw)) return { rows, by, rawBy };
-  check.require(!raw.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), "UTF8 BOMなし", label);
-  check.require(raw.at(-1) === 10, "末尾LF", label);
-  check.require(!raw.includes(13), "LFのみ", label);
-  let text;
-  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw); }
-  catch (error) { check.require(false, "UTF8", label + ":" + error.message); return { rows, by, rawBy }; }
-  const lines = text.split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  for (const [i, line] of lines.entries()) {
-    check.require(line.length > 0, "空行なし", label + ":" + (i + 1));
-    try {
-      const row = parseUniqueJson(line);
-      check.require(object(row), "1行1object", label + ":" + (i + 1));
-      if (!object(row)) continue;
-      check.require(string(row.識別), "識別", label + ":" + (i + 1));
-      if (!string(row.識別)) continue;
-      check.require(!by.has(row.識別), "識別一意", row.識別);
-      rows.push(row);
-      by.set(row.識別, row);
-      rawBy.set(row.識別, Buffer.from(line + "\n", "utf8"));
-    } catch (error) { check.require(false, "JSONL構文", label + ":" + (i + 1) + ":" + error.message); }
-  }
-  return { rows, by, rawBy };
+function canonical(x){if(Array.isArray(x))return x.map(canonical);if(x!==null&&typeof x==="object")return Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])]));return x}
+function equal(a,b){return JSON.stringify(canonical(a))===JSON.stringify(canonical(b))}
+export function validateQeBundle(input){
+ const errors=[];let checks=0;const check=(ok,label,detail="")=>{checks++;if(!ok)errors.push({検査:label,内容:typeof detail==="string"?detail:JSON.stringify(detail)})};
+ const obj=x=>x!==null&&typeof x==="object"&&!Array.isArray(x);
+ const parse=(s,label)=>{try{const x=parseUniqueJson(s);check(obj(x),label+" object");return obj(x)?x:{}}catch(e){check(false,label+" JSON",e.message);return {}}};
+ const same=(a,b,label,detail="")=>check(equal(a,b),label,detail);
+ const set=(a,b,label)=>check(Array.isArray(a)&&Array.isArray(b)&&new Set(a).size===a.length&&new Set(b).size===b.length&&a.length===b.length&&a.every(x=>b.includes(x)),label);
+ const raw=(s,p,label)=>{const ok=typeof s==="string";check(ok,label+" 実体");if(!ok)return "";check(!s.startsWith("\ufeff")&&!s.includes("\r")&&s.endsWith("\n"),label+" UTF8/BOMなし/LF");check(byteLength(s)===p.バイト数&&sha256(s)===p.SHA256,label+" 固定SHA/byte");return s};
+ const lines=(s,label,n)=>{const a=[],raws=s.endsWith("\n")?s.slice(0,-1).split("\n"):s.split("\n"),seen=new Set();for(const [i,l] of raws.entries()){try{const z=parseUniqueJson(l);if(!obj(z)||typeof z.識別!=="string"||!z.識別||seen.has(z.識別))throw Error("識別欠落/重複又はobject不正");seen.add(z.識別);a.push(z)}catch(e){check(false,label+" JSONL/識別",`${i+1}:${e.message}`)}}check(a.length===n,label+" 記録数");return {rows:a,raws}};
+ const manifest=parse(raw(input.manifest,QE_MANIFEST_PIN,"manifest"),"manifest");
+ same(manifest.五点,QE_FILES,"五点の役割");same(manifest.文書,QE_PINS,"固定文書pin");same(manifest.起動操作核,QE_KERNEL,"起動核pin");same(manifest.要領,QE_AGENT_PIN,"要領pin");same(manifest.採用記録,QE_EVENT_PIN,"採用pin");same(manifest.母集団,QE_POPULATION,"固定母集団");same(manifest.前版,QE_PRIOR,"旧版系譜");check(manifest.版==="8.0","採用版");
+ set(input.activeNames,["MANIFEST.json",QE_KERNEL.ファイル,...Object.values(QE_FILES).filter(x=>x!==QE_FILES.指示),QE_FILES.指示+".parts"],"現行一組のみ");
+ const partPins=QE_PINS[QE_FILES.指示].分割;set(input.partNames,partPins.map(x=>x.パス.split("/").at(-1)),"原文分割全数");
+ check(input.parts?.length===partPins.length,"分割数");
+ const pieces=partPins.map((p,i)=>raw(input.parts?.[i],p,"05分割 "+p.パス));for(let i=0;i<pieces.length;i++)check(pieces[i].split("\n").length-1===partPins[i].記録数,"05分割行数",partPins[i].パス);
+ const full=raw(pieces.join(""),QE_PINS[QE_FILES.指示],"05原本"),body=lines(full,"05原本",QE_PINS[QE_FILES.指示].記録数),rows=body.rows,by=new Map(rows.map(x=>[x.識別,x]));
+ for(const [role,name] of Object.entries(QE_FILES)){if(role==="指示")continue;const s=raw(input.documents?.[name],QE_PINS[name],role),d=lines(s,role,QE_PINS[name].記録数);check(d.rows.every(x=>x.識別.startsWith(role+"/")),role+" 名前空間");const embedded=body.raws.filter((l,i)=>rows[i]?.識別.startsWith(role+"/")).join("\n")+"\n";check(embedded===s,role+" 内包原本byte一致");check(by.has(role+"/宣言"),role+" 宣言");}
+ const kernel=raw(input.kernel,QE_KERNEL,"00起動操作核");lines(kernel,"00起動操作核",QE_KERNEL.記録数);check(kernel===body.raws.slice(0,QE_KERNEL.記録数).join("\n")+"\n","00は05冒頭同値投影");
+ const declaration=by.get("指示/宣言");check(declaration?.版==="8.0案","原文候補表記保持");for(const entry of declaration?.上位四文書??[]){const p=QE_PINS[entry.文書];check(p?.SHA256===entry.SHA256&&p?.記録数===entry.行数&&p?.バイト数===entry.バイト,"宣言四文書pin",entry.文書)}check(declaration?.上位四文書?.length===4,"四文書宣言全数");
+ const old=lines(raw(input.oldInstruction,OLD_PIN,"旧rev7指示書"),"旧rev7指示書",OLD_PIN.記録数),oldBy=new Map(old.rows.map(x=>[x.識別,x]));const legacy=rows.filter(x=>x.種類==="原記録保持");const alias=new Map(legacy.map(x=>[x.元識別,x]));check(legacy.length===3496&&alias.size===3496,"3496原記録全数一意");for(const x of old.rows)check(equal(alias.get(x.識別)?.原記録,x),"rev7原記録object一致",x.識別);
+ const std=rows.filter(x=>x.種類==="同梱標準保持");check(std.length===276,"二標準全数");for(const d of declaration?.標準同梱??[]){const kind=d.文書.startsWith("自然言語コード")?"自然言語コード":"暗黙処理";const ss=std.filter(x=>x.標準===kind);check(ss.length===d.記録&&new Set(ss.map(x=>x.原識別)).size===ss.length,"標準記録全数",kind);const r=ss.map(x=>JSON.stringify(x.標準記録)).join("\n")+"\n";check(sha256(r)===d.SHA256&&byteLength(r)===d.バイト,"標準原文再現",kind)}
+ const groups=[["親別施工操作","親","仕様/親/",65],["実装索引操作","原索引","工程/施工索引/",198],["要求別実現操作","原要求ID","仕様/要求/",431],["詳細横断操作","条項ID","仕様/詳細/",63],["全域不変確認","不変ID","仕様/不変/",34],["競合比較操作","比較ID","仕様/比較/",61],["固有品質ケース","ケースID","工程/QC/BT-",656],["OS固有施工操作","OS","仕様/OS/",5]];
+ const kind=k=>rows.filter(x=>x.種類===k);
+ for(const [k,key,pre,n] of groups){const a=kind(k);check(a.length===n,k+" 母集団");const ids=old.rows.filter(x=>x.識別.startsWith(pre)).map(x=>x.識別.split("/").at(-1));set(a.map(x=>x[key]),ids,k+" 原識別全数");}
+ const get=id=>oldBy.get(id);
+ for(const z of kind("要求別実現操作")){const x=get("仕様/要求/"+z.原要求ID);check(!!x&&z.固有成立規定===x.規定&&z.規範強度===x.規範強度&&equal(z.適用条件,x.適用条件)&&equal(z.固有契約,x.契約)&&z.親===x.契約?.親,"要求固有成立/条件",z.識別);}
+ for(const z of kind("固有品質ケース")){const x=get("工程/QC/"+z.ケースID)?.契約;check(!!x&&z.前提入力===x.入力&&z.実行方法===x.実行&&z.合格期待===x.期待される観測&&z.工程===x.実施工程&&z.親===x.親&&z.対象種別===x.対象種別,"QC固有入力/実行/期待",z.識別);}
+ check(kind("固有品質ケース").filter(x=>x.工程==="P5").length===396&&kind("固有品質ケース").filter(x=>x.工程==="P6").length===260,"P5/P6品質母集団");
+ for(const z of kind("親別施工操作")){const x=get("指示/親操作/"+z.親)?.契約;check(equal(x,z.固有操作)&&Array.isArray(z.固有操作?.操作),"親固有操作本文",z.識別);check(by.has("設計/親設計/"+z.親)&&by.has("実装/親/"+z.親),"親設計実装追跡",z.識別);}
+ check(kind("親別施工操作").reduce((n,z)=>n+(z.固有操作?.操作?.length??0),0)===313,"313親固有操作");
+ for(const z of kind("実装索引操作")){const x=get("工程/施工索引/"+z.原索引)?.契約;check(!!x&&equal(z.個別要求,x.要求ID)&&z.固有成立===x.局所成立条件&&z.固有拒否===x.拒否条件,"索引固有要求/成立/拒否",z.識別)}
+ for(const z of kind("詳細横断操作")){const x=get("仕様/詳細/"+z.条項ID);check(!!x&&z.成立規定===x.規定&&z.固有成立===x.契約.成立判定&&z.固有拒否===x.契約.拒否&&equal(z.関連親,x.契約.関連親),"詳細固有成立/拒否/親",z.識別)}
+ for(const z of kind("全域不変確認")){const x=get("仕様/不変/"+z.不変ID);check(!!x&&z.固定規定===x.規定&&z.規範強度===x.規範強度&&equal(z.適用条件,x.適用条件),"不変契約",z.識別)}
+ for(const z of kind("競合比較操作")){const x=get("仕様/比較/"+z.比較ID);check(!!x&&z.要求規定===x.規定&&z.規範強度===x.規範強度,"比較固有規定",z.識別)}
+ for(const z of kind("OS固有施工操作")){const x=get("指示/OS操作/"+z.OS)?.契約;check(!!x&&equal(z.個別操作,x.操作)&&equal(z.保証媒体,x.保証媒体)&&equal(z.保留境界,x.保留境界),"OS固有操作",z.識別)}
+ for(const [k,n] of [["要求接続",19],["工程実行",10],["変更影響起動",20],["検査入口操作",12],["既知故障回避操作",43],["時点別不一致の照合",6],["設計追跡",65],["施工対象",65]])check(kind(k).length===n,k+" 全数");
+ const explicit=rows.filter(x=>x.識別.startsWith("指示/"));let refCount=0;
+ for(const x of explicit){for(const k of ["参照先","出典","根拠識別","関連上位要求","上位参照","source"]){for(const y of [x[k]].flat()){if(typeof y==="string"&&/^(指示|要求|設計|実装|品質|仕様|工程|読取|標準)\//.test(y)){refCount++;check(by.has(y)||alias.has(y),"施工明示参照閉包",x.識別+"→"+y)}}}}
+ for(const x of old.rows)for(const k of ["意味参照","構成参照","対応参照","検証参照","根拠参照","来歴参照","参考参照"])for(const y of x[k]??[]){refCount++;check(oldBy.has(y),"継承参照閉包",x.識別+"→"+y)}
+ const event=parse(raw(input.adoption,QE_EVENT_PIN,"採用記録"),"採用記録");
+ check(event.識別===QE_EVENT_PIN.識別&&event.版==="8.0"&&event.主体==="owner"&&event.対象repo==="gatchimuchio/BLUE-TANUKI","採用主体/対象/版");
+ same(event.採用対象,QE_PINS,"採用対象全pin");same(event.起動操作核,QE_KERNEL,"採用核pin");same(event.要領,QE_AGENT_PIN,"採用要領pin");
+ check(event.原文==="リポをいじっていいから\n資料を更新しといて\nあとエージェントMDも更新して\nリポの整合性も整えといて","採用owner原文");check(event.効力?.完成?.includes("製品完成はowner原要求")&&event.効力?.完成?.includes("製品完成そのものの必要条件ではない")&&event.非対象?.includes("製品QC/QA合格や出荷GOの認定"),"要求完成/公開GO境界");
+ const ag=lines(raw(input.agents,QE_AGENT_PIN,"AGENTS"),"AGENTS",QE_AGENT_PIN.記録数);set(ag.rows.map(x=>x.識別),AGENT_IDS,"要領全数");const agBy=new Map(ag.rows.map(x=>[x.識別,x]));check(agBy.get("要領/宣言")?.版==="8.0","要領版");
+ for(const x of ag.rows){for(const y of x.意味参照??[]){refCount++;check(by.has(y)||agBy.has(y),"要領参照閉包",x.識別+"→"+y)}if(x.識別!=="要領/宣言")check(x.規範強度==="必須"&&x.適用条件?.判定==="本repoの当該作業・許否・保護・停止・復旧を扱う","要領独立拒否/停止",x.識別);}
+ check(agBy.get("要領/完了")?.契約?.要求照合===event.効力?.完成,"要領完成境界一致");
+ const pointer=input.pointer??"";check(pointer.includes("rev8.0")&&pointer.includes("五点一組")&&pointer.includes(QE_EVENT_PIN.SHA256)&&pointer.includes(QE_EVENT_PIN.識別),"正本入口採用束縛");
+ for(const name of Object.values(QE_FILES)){const h=QE_PINS[name].SHA256;const p=name===QE_FILES.指示?name+".parts":name;check(pointer.split("\n").some(l=>l.includes("](qe/現行/"+p+")")&&l.includes(h)),"正本入口本文pin",name)}
+ check(pointer.includes(QE_KERNEL.SHA256)&&pointer.includes(event.効力?.完成??"\0"),"正本入口起動核/完成境界");
+ return {判定:errors.length?"FAIL":"PASS",検査数:checks,エラー数:errors.length,エラー:errors,記録数:rows.length,参照検査数:refCount,母集団:QE_POPULATION,採用識別:QE_EVENT_PIN.識別};
 }
 
-// 指示raw固定hashを前提にせず対応を検査する。反例もここを通し、hashだけの見かけ検出を避ける。
-export function validateQeInstruction(raw, sourceDocuments = {}) {
-  const check = checker();
-  const { rows, by, rawBy } = parseLines(raw, check, QE_FILES.指示);
-  const pref = prefix => rows.filter(row => row.識別.startsWith(prefix));
-  const at = identity => {
-    check.require(by.has(identity), "必須記録存在", identity);
-    return by.get(identity) ?? {};
-  };
-  const refs = Object.fromEntries(REFERENCES.map(key => [key, 0]));
-  const deep = (value, location) => {
-    if (value === null || typeof value === "boolean" || value === "") check.require(false, "禁止空値/真偽値", location);
-    else if (typeof value === "number") check.require(Number.isFinite(value), "有限JSON数値", location);
-    else if (Array.isArray(value)) value.forEach((child, i) => deep(child, location + "/" + i));
-    else if (object(value)) {
-      check.require(Object.keys(value).length > 0, "空objectなし", location);
-      Object.entries(value).forEach(([key, child]) => deep(child, location + "/" + key));
-    }
-  };
-  for (const row of rows) {
-    const id = row.識別;
-    deep(row, id);
-    check.require(Object.keys(row).every(key => FIELDS.has(key)), "外側欄定義済み", id);
-    check.require(["識別", "機能", "適用域"].every(key => string(row[key])), "共通必須欄", id);
-    check.require(FUNCTIONS.has(row.機能), "機能定義済み", id);
-    if (row.機能 === "規則") {
-      check.require(["規範強度", "適用条件", "対象", "規定"].every(key => Object.hasOwn(row, key)), "規則必須欄", id);
-      check.require(["必須", "禁止", "許可", "推奨"].includes(row.規範強度), "規範強度", id);
-      check.require(conditionValid(row.適用条件), "条件式", id);
-      check.require(string(row.規定), "規定非空", id);
-      if (id.startsWith("指示/")) check.require(isDeepStrictEqual(row.適用条件, INSTRUCTION_CONDITION), "拒否停止の適用を新規作用許可に従属させない", id);
-    }
-    if (row.機能 === "定義") check.require(string(row.用語) && string(row.定義), "定義必須欄", id);
-    for (const key of REFERENCES) {
-      const values = row[key] ?? [];
-      const valid = Array.isArray(values) && values.every(string);
-      check.require(valid, "参照型", id + "/" + key);
-      if (!valid) continue;
-      check.require(values.length === new Set(values).size, "参照重複なし", id + "/" + key);
-      for (const target of values) check.require(by.has(target), "同一指示書内参照解決", id + "/" + key + "→" + target);
-      refs[key] += values.length;
-    }
-  }
-  for (const name of CORE) check.require(by.has("指示/" + name), "操作共通必須", name);
-  for (const [id, type] of [["仕様/宣言", "仕様"], ["工程/宣言", "工程"], ["指示/宣言", "指示"]]) {
-    check.require(at(id).版 === "7.0", "三点宣言版7.0", type);
-  }
-  const originalIndex = array(contract(at("指示/内包原典索引")).文書);
-  const upperNames = [QE_FILES.仕様, QE_FILES.工程];
-  check.same(originalIndex.map(entry => entry?.名称), upperNames, "内包原典2文書");
-  const baseIds = new Set(), embedded = [];
-  for (const entry of originalIndex) {
-    if (!upperNames.includes(entry?.名称)) continue;
-    const name = entry.名称, pin = QE_PINS[name], ids = array(entry.原記録順);
-    check.require(entry.SHA256 === pin.SHA256, "固定上位pin", name);
-    check.require(entry.記録数 === pin.記録数 && ids.length === pin.記録数, "固定上位全記録数", name);
-    check.require(new Set(ids).size === ids.length, "原記録順重複なし", name);
-    for (const id of ids) {
-      check.require(typeof id === "string" && rawBy.has(id), "内包原記録存在", id);
-      check.require(!baseIds.has(id), "上位2文書ID非重複", id);
-      baseIds.add(id);
-    }
-    const reconstructed = Buffer.concat(ids.map(id => rawBy.get(id) ?? Buffer.alloc(0)));
-    check.require(sha256(reconstructed) === pin.SHA256, "上位原本bytes再現", name);
-    if (Object.hasOwn(sourceDocuments, name)) {
-      const origin = sourceDocuments[name];
-      check.require(Buffer.isBuffer(origin) && sha256(origin) === pin.SHA256, "外部上位固定SHA無変更", name);
-      check.require(Buffer.isBuffer(origin) && origin.equals(reconstructed), "原本と内包本文byte同一", name);
-    }
-    embedded.push({ 名称: name, 記録数: ids.length, 再現SHA256: sha256(reconstructed) });
-  }
-  check.require(baseIds.size === 2063, "固定上位2063全記録");
-  check.same(array(contract(at("指示/宣言")).上位固定).map(entry => entry?.SHA256), upperNames.map(name => QE_PINS[name].SHA256), "宣言と二pin一致");
-  const receipt = at("指示/採用根拠");
-  check.require(receipt.機能 === "要件記録", "採用原文は事実記録");
-  check.require(receipt.原文 === "ではその確定した仕様書、工程表を基に\n同じように指示書を作り直して\n詳細に精密に厳密に抜け漏れなく徹底的にね", "作成時採用根拠原文一致");
-  check.same(contract(receipt).対象SHA256, upperNames.map(name => QE_PINS[name].SHA256), "作成時採用対象二pin");
-  const counts = {};
-  for (const [label, prefix, count] of POPULATIONS) {
-    counts[label] = pref(prefix).length;
-    check.require(counts[label] === count, "母集団件数:" + label, counts[label]);
-  }
-  for (const [source, target] of [
-    ["仕様/親/", "指示/親操作/"], ["工程/施工索引/", "指示/索引/"],
-    ["仕様/要求/", "指示/要求実現/"], ["仕様/詳細/", "指示/詳細適用/"],
-    ["仕様/比較/", "指示/比較実行/"], ["仕様/OS/", "指示/OS操作/"],
-  ]) check.same(pref(target).map(row => row.識別.slice(target.length)), pref(source).map(row => row.識別.slice(source.length)), target + "原ID全数");
-  const phases = Array.from({ length: 10 }, (_, i) => "P" + i);
-  check.same(pref("指示/工程操作/").map(suffix), phases, "P0-P9全数");
-  phases.forEach(phase => check.require(by.has("工程/" + phase), "上位工程存在", phase));
-  check.same(pref("指示/OS操作/").map(suffix), ["Windows", "Linux", "macOS", "Android", "iOS"], "5OS独立");
-  check.same(pref("指示/履歴対応/").map(row => contract(row).旧区画), OLD_SECTIONS, "旧36区画対応");
-  pref("指示/履歴対応/").forEach(row => check.require(array(row.対応参照).length > 0, "旧区画対応先非空", row.識別));
-  check.same(pref("指示/反例/").map(suffix), Array.from({ length: 43 }, (_, i) => "DEVIATION-" + String(i + 1).padStart(2, "0")), "43故障型ID");
-
-  let operations = 0;
-  for (const row of pref("指示/親操作/")) {
-    const parent = suffix(row), c = contract(row), ledgerRow = at("工程/親台帳/" + parent), ledger = contract(ledgerRow);
-    check.require(c.親ID === parent, "親操作ID一致", parent);
-    check.require(c.対象 === ledger.対象, "親操作対象一致", parent);
-    check.require(Array.isArray(c.入力) && c.入力.length > 0, "親固有入力あり", parent);
-    const steps = array(c.操作);
-    check.require(Array.isArray(c.操作) && steps.length >= 3, "親有限操作3以上", parent);
-    check.require(new Set(steps.map(step => step?.段階)).size === steps.length, "親操作段階一意", parent);
-    for (const step of steps) check.require(object(step) && ["段階", "実施", "生成接続", "保持", "限定確認"].every(key => string(step[key])), "親操作5欄有意味", parent + "/" + step?.段階);
-    operations += steps.length;
-    for (const key of ["拒否中断", "後段QC接続", "旧指示との差"]) check.require(Array.isArray(c[key]) && c[key].length > 0 && c[key].every(string), "親固有" + key + "あり", parent);
-    check.same(c.固定要求, ledger.基底要求ID, "親要求一致:" + parent);
-    check.same(c.適用詳細, ledger.詳細化条項ID, "親詳細一致:" + parent);
-    check.same(row.検証参照, ledgerRow.検証参照, "親QC全対応:" + parent);
-    check.require(array(row.意味参照).includes("指示/共通操作"), "親共通継承", parent);
-  }
-  check.require(operations === 313, "親固有313操作保持", operations);
-  const classes = {}, edges = [];
-  for (const row of pref("指示/索引/")) {
-    const id = suffix(row), c = contract(row), source = at("工程/施工索引/" + id), unit = contract(source);
-    const parent = unit.親, qc = contract(at("工程/QC/BT-U-" + id + "-P"));
-    check.require(c.親 === parent, "索引親一致", id);
-    check.require(c.対象種別 === qc.対象種別, "索引型一致", id);
-    if (typeof c.対象種別 === "string") classes[c.対象種別] = (classes[c.対象種別] ?? 0) + 1;
-    check.same(c.要求ID, unit.要求ID, "索引要求一致:" + id);
-    check.same(c.詳細化条項ID, contract(at("工程/親台帳/" + parent)).詳細化条項ID, "索引修復詳細対応:" + id);
-    check.require(isDeepStrictEqual(c.局所成立条件, unit.局所成立条件), "索引固有成立不変", id);
-    check.require(isDeepStrictEqual(c.拒否条件, unit.拒否条件), "索引固有拒否不変", id);
-    check.require(includesAll(row.構成参照, [source.識別, "指示/親操作/" + parent, "指示/型別/" + qc.対象種別, ...array(unit.要求ID).map(req => "仕様/要求/" + req)]), "索引操作本文接続", id);
-    check.same(row.検証参照, source.検証参照, "索引正負親QC一致:" + id);
-    edges.push(...array(c.要求ID));
-  }
-  check.require(isDeepStrictEqual(classes, TYPES), "対象別7種の固定内訳", classes);
-  check.require(edges.length === 500, "索引要求500辺保持", edges.length);
-  check.same([...new Set(edges)], pref("仕様/要求/").map(row => row.原識別), "全431要求索引被覆");
-  for (const row of pref("指示/要求実現/")) {
-    const id = suffix(row), c = contract(row), origin = at("仕様/要求/" + id), parent = contract(origin).親;
-    const expected = pref("工程/施工索引/").filter(unit => array(contract(unit).要求ID).includes(id)).map(unit => unit.原識別);
-    check.require(c.親 === parent, "要求親一致", id);
-    check.require(c.原要求 === origin.識別, "要求本文不脱落", id);
-    check.same(c.実装索引ID, expected, "要求逆索引一致:" + id);
-    check.require(array(row.意味参照).includes("指示/要求実行規則"), "要求実操作継承", id);
-    check.require(array(row.構成参照).includes("指示/親操作/" + parent), "要求親実操作接続", id);
-  }
-  for (const row of pref("指示/詳細適用/")) {
-    const id = suffix(row), c = contract(row), origin = contract(at("仕様/詳細/" + id));
-    check.require(c.主担当親 === origin.主担当親, "詳細主親一致", id);
-    check.same(c.関連親, origin.関連親, "詳細関連親全数:" + id);
-    check.require(includesAll(row.構成参照, array(origin.関連親).map(parent => "指示/親操作/" + parent)), "詳細全親実操作接続", id);
-  }
-  const allQc = [];
-  for (const row of pref("指示/QC束/")) {
-    const parent = suffix(row), c = contract(row);
-    const local = pref("工程/QC/BT-U-").filter(q => contract(q).親 === parent).map(q => q.原識別);
-    const parentQc = pref("工程/QC/BT-T-").filter(q => contract(q).親 === parent).map(q => q.原識別);
-    check.same(c.P5局所, local, "親局所QC集合:" + parent);
-    check.same(c.P6親, parentQc, "親全体QC集合:" + parent);
-    check.same(row.構成参照, [...local, ...parentQc].map(id => "工程/QC/" + id), "QC実本文接続:" + parent);
-    allQc.push(...array(c.P5局所), ...array(c.P6親));
-  }
-  check.require(allQc.length === 656 && new Set(allQc).size === 656, "全656QC操作被覆重複欠落なし");
-  for (const row of pref("工程/QC/")) {
-    const c = contract(row);
-    for (const key of ["入力", "実行", "期待される観測"]) check.require(string(c[key]), "QC固有本文あり", row.識別 + "/" + key);
-    check.require(c.実施工程 === (row.識別.startsWith("工程/QC/BT-U-") ? "P5" : "P6"), "QC工程保持", row.識別);
-  }
-  // 意味参照の無基底循環と、工程P7の正常な帰還/構成対応の循環は区別する。
-  const colors = new Map();
-  for (const start of by.keys()) {
-    if (colors.has(start)) continue;
-    const stack = [{ id: start, leave: false }];
-    while (stack.length) {
-      const node = stack.pop();
-      if (node.leave) { colors.set(node.id, 2); continue; }
-      if (!by.has(node.id) || colors.get(node.id) === 2) continue;
-      if (colors.get(node.id) === 1) { check.require(false, "意味参照循環", node.id); continue; }
-      colors.set(node.id, 1);
-      stack.push({ id: node.id, leave: true });
-      const targets = array(by.get(node.id).意味参照).filter(string);
-      for (const target of targets.toReversed()) stack.push({ id: target, leave: false });
-    }
-  }
-  check.require(colors.size === by.size, "意味参照全記録走査");
-  for (const [id, required] of Object.entries({
-    "指示/停止復旧": ["仕様/停止/独立保護と再開", "仕様/永続/開始意思と単回消費", "仕様/状態/仕事遷移契約"],
-    "指示/権限と秘密": ["仕様/承認/L3最低対象と未分類", "仕様/境界/秘密入力", "仕様/保持/F20物理削除の決定"],
-    "指示/QC実行": ["工程/QC共通", "工程/P5", "工程/P6", "工程/P7", "工程/P8"],
-    "指示/変更影響": ["工程/変更影響/R-CROSS", "工程/変更影響/R-TEST", "工程/変更影響/R-QA"],
-  })) check.require(includesAll(at(id).意味参照, required), "意味下限の明示継承", id);
-  return check.result({
-    記録数: rows.length, SHA256: Buffer.isBuffer(raw) ? sha256(raw) : "未取得", バイト数: raw?.length ?? 0,
-    固定上位再現: embedded, 母集団: counts, 親固有操作数: operations, 対象種別: classes, 参照辺: refs,
-    検証射程: "文書形式・全数・上位bytes・参照閉包・操作対応。自然言語意味の完全性、製品実装/QC/QA/GOを単独では証明しない。",
-  });
+export function loadQeBundle(root = process.cwd()) {
+ const readErrors=[];
+ const read = rel => {try {const bytes=fs.readFileSync(path.join(root,rel));return new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes)}catch(error){readErrors.push({検査:'repo入力読取/UTF8',内容:rel+':'+error.message});return ''}};
+ const names=rel=>{try{return fs.readdirSync(path.join(root,rel))}catch(error){readErrors.push({検査:'directory読取',内容:rel+':'+error.message});return []}};
+ return {manifest:read(QE_DIRECTORY+'/MANIFEST.json'),adoption:read(QE_ADOPTION_PATH),agents:read('AGENTS.md'),pointer:read('docs/QE_CURRENT_AUTHORITY.md'),documents:Object.fromEntries(Object.values(QE_FILES).filter(n=>n!==QE_FILES.指示).map(n=>[n,read(QE_DIRECTORY+'/'+n)])),parts:QE_PINS[QE_FILES.指示].分割.map(p=>read(QE_DIRECTORY+'/'+p.パス)),kernel:read(QE_DIRECTORY+'/'+QE_KERNEL.ファイル),oldInstruction:read(OLD_INSTRUCTION),activeNames:names(QE_DIRECTORY),partNames:names(QE_DIRECTORY+'/'+QE_FILES.指示+'.parts'),readErrors};
 }
-
-// 採用eventは作成時の候補状態と区別し、実イベントの固定schemaに束縛する。
-function validateAdoption(event, manifest, input, instructionRows, check) {
-  check.require(object(event), "採用event object");
-  if (!object(event)) return;
-  check.require(event.識別 === QE_ADOPTION_ID, "採用event識別");
-  check.require(manifest.採用記録?.識別 === QE_ADOPTION_ID && manifest.採用記録?.パス === QE_ADOPTION_PATH, "採用event固定参照");
-  check.require(Buffer.isBuffer(input.adoption) && manifest.採用記録?.SHA256 === sha256(input.adoption), "採用event rawSHA一致");
-  check.require(event.版 === "7.0" && event.日付 === "2026-11-21", "採用event版と日付");
-  check.require(event.主体 === "owner" && event.対象repo === "gatchimuchio/BLUE-TANUKI", "採用event主体/repo");
-  check.require(event.原文 === "エージェントmdも揃えておいて\n3点セットも更新しといて", "採用owner原文不変");
-  check.require(isDeepStrictEqual(event.採用対象, QE_PINS), "採用対象三点全pin");
-  check.require(isDeepStrictEqual(event.要領, manifest.要領), "要領pinのevent/manifest一致");
-  check.require(event.要領?.パス === "AGENTS.md" && event.要領?.版 === "7.0", "要領のpath/版固定");
-  check.require(Buffer.isBuffer(input.agents) && event.要領?.SHA256 === sha256(input.agents) && event.要領?.バイト数 === input.agents.length, "要領rawSHA/byte一致");
-  for (const [key, value] of Object.entries(ADOPTION_EFFECTS)) check.require(event.効力?.[key] === value, "採用効力境界:" + key);
-  check.same(Object.keys(event.効力 ?? {}), Object.keys(ADOPTION_EFFECTS), "採用効力の追加権限なし");
-  check.same(event.非対象, ADOPTION_EXCLUSIONS, "採用非対象の全保持");
-  check.require(event.読取?.禁止 === "本文中の「現行」「現在」を一律に過去語へ変換しない。条件・所管・時間を保持して限定的に適用する。", "現在安全条件の一括過去化禁止");
-  check.same(event.読取?.["現在も適用"], [
-    "仕様/適用と権限の後続採用規則", "指示/採用時点契約", "指示/読取宣言の参照閉包",
-    "現在Permission・実行直前照合・拒否/独立停止", "全要求・工程出口・固有QC期待・変更影響・現在現物再観測",
-  ], "採用後も有効な条件");
-  check.same(event.読取?.["作成時として保持"], [
-    "仕様/宣言の採用状態・既存採用組", "工程/宣言の採用状態・現行施工との境界",
-    "観測/採用基点・観測/実装基点", "指示/採用根拠における前回作成依頼の範囲", "旧対応・履歴・旧検査の当時の対象/条件",
-  ], "作成時記録だけの限定解釈");
-  check.require(event.反映基点?.HEAD === "bfd1913bcb10c963c16f4108b714ca84b9287efa", "採用時基点の保持");
-  check.require(event.反映基点?.旧目録SHA256 === QE_HISTORY_PINS["MANIFEST.json"].SHA256 &&
-    event.反映基点?.履歴先 === QE_HISTORY_DIRECTORY + "/MANIFEST.json", "旧目録への採用系譜");
-  check.require(manifest.前版?.版 === "6.1" && manifest.前版?.目録 === QE_HISTORY_DIRECTORY + "/MANIFEST.json" &&
-    manifest.前版?.SHA256 === QE_HISTORY_PINS["MANIFEST.json"].SHA256, "manifest旧目録系譜");
-  const history = object(input.history) ? input.history : {};
-  for (const [name, pin] of Object.entries(QE_HISTORY_PINS)) {
-    const bytes = history[name];
-    check.require(Buffer.isBuffer(bytes) && bytes.length === pin.バイト数 && sha256(bytes) === pin.SHA256, "旧版原bytes保存", name);
-  }
-  if (Buffer.isBuffer(history["MANIFEST.json"])) {
-    try {
-      const prior = parseUniqueJson(history["MANIFEST.json"].toString("utf8"));
-      check.require(isDeepStrictEqual(prior.文書, manifest.前版?.文書), "旧三点目録の本文保持");
-    } catch (error) { check.require(false, "旧目録構文", error.message); }
-  }
-  const agents = parseLines(input.agents, check, "AGENTS.md");
-  check.same(agents.rows.map(row => row.識別), AGENT_IDS, "要領25記録全数");
-  check.require(agents.by.get("要領/宣言")?.版 === "7.0" && agents.by.get("要領/宣言")?.名称 === "AGENTS.md", "要領宣言版と名前");
-  const bodyIds = instructionRows?.by ?? new Map();
-  const checkValues = value => {
-    check.require(value !== null && typeof value !== "boolean" && value !== "", "要領禁止値なし");
-    if (Array.isArray(value)) value.forEach(checkValues);
-    else if (object(value)) {
-      check.require(Object.keys(value).length > 0, "要領空objectなし");
-      Object.values(value).forEach(checkValues);
-    }
-  };
-  for (const row of agents.rows) {
-    checkValues(row);
-    check.require(Object.keys(row).every(key => FIELDS.has(key)), "要領外側欄定義済み", row.識別);
-    check.require(string(row.適用域) && FUNCTIONS.has(row.機能), "要領共通欄", row.識別);
-    if (row.識別 !== "要領/宣言") {
-      check.require(row.機能 === "規則" && row.規範強度 === "必須" && string(row.対象) && string(row.規定), "要領規則の意味欄", row.識別);
-      check.require(isDeepStrictEqual(row.適用条件, { 判定: "本repoの当該作業・許否・保護・停止・復旧を扱う" }), "要領拒否停止の独立適用", row.識別);
-    }
-    for (const key of REFERENCES) {
-      const values = row[key] ?? [];
-      check.require(Array.isArray(values) && values.every(string), "要領参照型", row.識別 + "/" + key);
-      check.require(new Set(array(values)).size === array(values).length, "要領参照一意", row.識別 + "/" + key);
-      for (const target of array(values)) check.require(agents.by.has(target) || bodyIds.has(target), "要領参照閉包", row.識別 + "→" + target);
-    }
-  }
-  for (const [id, targets] of Object.entries({
-    "要領/受領": ["指示/起動", "指示/読取宣言", "指示/作業選択"],
-    "要領/限定確認": ["指示/生成物", "指示/変更影響", "工程/QC共通"],
-    "要領/原子性": ["仕様/永続/開始意思と単回消費", "仕様/永続/分離保存系の接続", "仕様/永続/並行確定とfencing"],
-    "要領/五OS": ["指示/OS操作/Windows", "指示/OS操作/Linux", "指示/OS操作/macOS", "指示/OS操作/Android", "指示/OS操作/iOS"],
-    "要領/CI": ["工程/Gitと自動化境界"],
-    "要領/完了": ["指示/状態証拠", "指示/工程操作/P9"],
-  })) check.require(includesAll(agents.by.get(id)?.意味参照, targets), "要領の上位意味接続", id);
+export function validateQeRepository(root=process.cwd()) {
+ const input=loadQeBundle(root),result=validateQeBundle(input);
+ result.エラー.push(...input.readErrors);
+ // rev7固有の全原本・意味参照・旧版履歴・旧採用規則は、その版の独立検証器で保持する。
+ try {
+   const hist='docs/qe/履歴/rev7.0',read=rel=>fs.readFileSync(path.join(root,rel));
+   const old=validateRev7Bundle({documents:Object.fromEntries(Object.values(OLD_FILES).map(n=>[n,read(hist+'/'+n)])),manifest:read(hist+'/MANIFEST.json'),pointer:read(hist+'/QE_CURRENT_AUTHORITY.rev7.md').toString('utf8'),adoption:read(OLD_ADOPTION_PATH),agents:read(hist+'/AGENTS.rev7.md'),history:Object.fromEntries(Object.keys(OLD_HISTORY_PINS).map(n=>[n,read(OLD_HISTORY+'/'+n)])),activeNames:fs.readdirSync(path.join(root,hist))});
+   result.旧版検査=old.判定; result.検査数+=old.検査数??0;
+   result.エラー.push(...old.エラー.map(x=>({検査:'rev7履歴/'+x.検査,内容:x.内容})));
+ } catch(error) {result.エラー.push({検査:'rev7履歴読取',内容:error.message})}
+ result.エラー数=result.エラー.length;result.判定=result.エラー数?'FAIL':'PASS';return result;
 }
-
-// テストは入力byteをmemory内だけで破損させる。repoや外部環境を書換えない。
-export function validateQeBundle(input) {
-  const check = checker(), documents = object(input.documents) ? input.documents : {};
-  const parse = (raw, label) => {
-    try {
-      check.require(Buffer.isBuffer(raw), label + " byte存在");
-      if (!Buffer.isBuffer(raw)) return {};
-      const parsed = parseUniqueJson(new TextDecoder("utf-8", { fatal: true }).decode(raw));
-      check.require(object(parsed), label + " object");
-      return object(parsed) ? parsed : {};
-    } catch (error) { check.require(false, label + "構文", error.message); return {}; }
-  };
-  const manifest = parse(input.manifest, "manifest"), adoption = parse(input.adoption, "採用event");
-  check.require(manifest.版 === "7.0", "manifest現行版7.0");
-  check.require(isDeepStrictEqual(manifest.三点, QE_FILES), "manifest三点役割固定");
-  check.same(Object.keys(manifest.文書 ?? {}), Object.values(QE_FILES), "manifest三点ちょうど");
-  check.same(array(input.activeNames).filter(name => /^0[1-3]_.*\.jsonl?$/u.test(name)), Object.values(QE_FILES), "現行三点以外の混在なし");
-  check.require(isDeepStrictEqual(manifest.母集団, QE_POPULATION), "manifest固定母集団");
-  const pointer = typeof input.pointer === "string" ? input.pointer : "";
-  const parsedDocuments = {};
-  for (const [role, name] of Object.entries(QE_FILES)) {
-    const bytes = documents[name], pin = QE_PINS[name], entry = manifest.文書?.[name];
-    check.require(Buffer.isBuffer(bytes), "現行三点実体存在", name);
-    for (const field of ["SHA256", "バイト数", "記録数"]) check.require(entry?.[field] === pin[field], "manifest固定" + field, name);
-    check.require(string(entry?.形式) && entry.形式.includes("JSONL"), "manifest JSONL形式", name);
-    if (!Buffer.isBuffer(bytes)) continue;
-    check.require(sha256(bytes) === pin.SHA256 && bytes.length === pin.バイト数, "三点固定rawSHA/byte", name);
-    const parsed = parseLines(bytes, check, name);
-    parsedDocuments[role] = parsed;
-    check.require(parsed.rows.length === pin.記録数, "三点記録数", name);
-    check.require(parsed.by.get(role + "/宣言")?.版 === "7.0", "各文書宣言版7.0", name);
-    check.require(pointer.split(/\r?\n/u).some(line => line.includes("](qe/現行/" + name + ")") && line.includes(pin.SHA256)), "pointer実体/hash同一行束縛", name);
-  }
-  check.require(pointer.includes("](qe/採用記録/2026-11-21-rev7.0.json)") && pointer.includes(QE_ADOPTION_ID), "pointer採用event導線");
-  check.require(Buffer.isBuffer(input.adoption) && pointer.split(/\r?\n/u).some(line =>
-    line.includes("](qe/採用記録/2026-11-21-rev7.0.json)") && line.includes(sha256(input.adoption))), "pointer採用event hash束縛");
-  validateAdoption(adoption, manifest, input, parsedDocuments.指示, check);
-  const instruction = validateQeInstruction(documents[QE_FILES.指示], documents);
-  for (const error of instruction.エラー) check.require(false, "本文/" + error.検査, error.内容);
-  return check.result({ 本文検査: instruction, 採用識別: QE_ADOPTION_ID });
-}
-
-export function validateQeRepository(root = process.cwd()) {
-  const readErrors = [];
-  const read = rel => {
-    try { return fs.readFileSync(path.join(root, rel)); }
-    catch (error) { readErrors.push({ 検査: "repo入力読取", 内容: rel + ":" + (error.code ?? error.message) }); return undefined; }
-  };
-  let activeNames = [];
-  try { activeNames = fs.readdirSync(path.join(root, QE_DIRECTORY)); }
-  catch (error) { readErrors.push({ 検査: "現行directory読取", 内容: error.code ?? error.message }); }
-  const result = validateQeBundle({
-    documents: Object.fromEntries(Object.values(QE_FILES).map(name => [name, read(QE_DIRECTORY + "/" + name)])),
-    manifest: read(QE_DIRECTORY + "/MANIFEST.json"),
-    pointer: read("docs/QE_CURRENT_AUTHORITY.md")?.toString("utf8"),
-    adoption: read(QE_ADOPTION_PATH),
-    agents: read("AGENTS.md"),
-    history: Object.fromEntries(Object.keys(QE_HISTORY_PINS).map(name => [name, read(QE_HISTORY_DIRECTORY + "/" + name)])),
-    activeNames,
-  });
-  result.エラー.push(...readErrors);
-  result.エラー数 = result.エラー.length;
-  result.判定 = result.エラー数 ? "FAIL" : "PASS";
-  return result;
+export function readQeInstruction(root=process.cwd()) {
+ const p=QE_PINS[QE_FILES.指示],pieces=p.分割.map(x=>{const b=fs.readFileSync(path.join(root,QE_DIRECTORY,x.パス));if(b.length!==x.バイト数||createHash('sha256').update(b).digest('hex')!==x.SHA256)throw Error('分割SHA不一致 '+x.パス);return b});
+ const b=Buffer.concat(pieces);if(b.length!==p.バイト数||createHash('sha256').update(b).digest('hex')!==p.SHA256)throw Error('05原本SHA不一致');return b;
 }
