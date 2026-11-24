@@ -51,7 +51,76 @@ function computeRequest(): ComputeRequest<LLMRequest> {
   };
 }
 
+function computeRequestWithGrant(): ComputeRequest<LLMRequest> {
+  const request = computeRequest();
+  const now = Date.now();
+  const grantRequestId = "task-1";
+  const taskIdentityDigest = createHash("sha256")
+    .update(`blue-tanuki.compute-budget.task.v1\0${grantRequestId}`)
+    .digest("hex");
+  request.budget_scope = {
+    parent_task_identity_digest: "c".repeat(64),
+    task_identity_digest: taskIdentityDigest,
+  };
+  request.compute_grant = {
+    schema_version: "blue-tanuki.compute-grant.v1",
+    grant_id: "00000000-0000-4000-8000-000000000001",
+    request_id: grantRequestId,
+    task_identity_digest: request.budget_scope.task_identity_digest,
+    projection_digest: request.current_projection_digest,
+    purpose_digest: "e".repeat(64),
+    local_p_version: request.local_p_version,
+    provider: "fixture-provider",
+    model: "fixture-model-v1",
+    allowed_input_sources: [...request.data_exposure_scope.input_sources],
+    max_tokens: request.resource_limits.max_tokens!,
+    max_compute_ms: request.resource_limits.timeout_ms!,
+    max_cost: { amount: 0.25, currency: "USD" },
+    issued_at_ms: now,
+    expires_at_ms: now + request.resource_limits.timeout_ms!,
+    issuer: "J",
+  };
+  return request;
+}
+
 describe("LLMComputeAdapter", () => {
+  it("accepts a current J grant only for its exact request scope and returns the grant receipt identity", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+
+    const result = await new LLMComputeAdapter(registry).compute(computeRequestWithGrant());
+
+    expect(backend.seen).toHaveLength(1);
+    expect(result.execution_identity.compute_grant_id).toBe("00000000-0000-4000-8000-000000000001");
+  });
+
+  it("rejects expired, out-of-scope, or over-cost J grants before provider invocation", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+
+    const expired = computeRequestWithGrant();
+    const expiredAt = Date.now();
+    expired.compute_grant!.issued_at_ms = expiredAt - 1_500;
+    expired.compute_grant!.expires_at_ms = expiredAt - 500;
+    await expect(new LLMComputeAdapter(registry).compute(expired)).rejects.toThrow("llm_compute_grant_expired");
+
+    const outOfScope = computeRequestWithGrant();
+    outOfScope.compute_grant!.allowed_input_sources = ["accepted_inbound_request"];
+    await expect(new LLMComputeAdapter(registry).compute(outOfScope))
+      .rejects.toThrow("llm_compute_grant_input_scope_exceeded");
+
+    const overCost = computeRequestWithGrant();
+    overCost.compute_grant!.max_cost.amount = 0.1;
+    await expect(new LLMComputeAdapter(registry).compute(overCost))
+      .rejects.toThrow("llm_compute_grant_cost_limit_exceeded");
+
+    expect(backend.seen).toHaveLength(0);
+  });
+
   it("rejects a provider input whose digest no longer matches before invocation", async () => {
     const backend = new CapturingBackend();
     const request = computeRequest();
@@ -130,6 +199,38 @@ describe("LLMComputeAdapter", () => {
     });
 
     await expect(pending).rejects.toMatchObject({ kind: "cancelled", retryable: false });
+    expect(backend.seen).toHaveLength(0);
+    expect(settlement).toEqual({
+      state: "settled", tokens_used: 0, tokens_usage_status: "not_invoked", compute_ms: 0,
+      cost: { status: "actual", amount: 0, currency: "USD", source: "not_invoked" },
+    });
+  });
+
+  it("settles a reservation as not invoked if the J grant expires while waiting for capacity", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequestWithGrant();
+    let settlement: Parameters<ComputeBudgetPort["settle"]>[1] | undefined;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        return {
+          reservation_id: "8".repeat(64), reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms, reserved_cost: input.reserved_cost,
+        };
+      },
+      settle(_id, value) { settlement = value; },
+    };
+    const capacity: ComputeCapacityPort = {
+      async acquire() {
+        request.compute_grant!.expires_at_ms = request.compute_grant!.issued_at_ms + 1;
+        return { release() {} };
+      },
+    };
+
+    await expect(new LLMComputeAdapter(registry, budget, capacity).compute(request))
+      .rejects.toThrow("llm_compute_grant_expired");
     expect(backend.seen).toHaveLength(0);
     expect(settlement).toEqual({
       state: "settled", tokens_used: 0, tokens_usage_status: "not_invoked", compute_ms: 0,

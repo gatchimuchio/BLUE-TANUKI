@@ -481,6 +481,49 @@ describe("HDSUpperController.decide()", () => {
     });
   });
 
+  it("issues a J ComputeGrant bound to the current provider request and configured cost ceiling", () => {
+    const controller = new HDSUpperController({
+      llm_route: {
+        backend_hint: "openai-compatible",
+        model: "gpt-4.1-mini",
+        max_tokens: 256,
+        timeout_ms: 5_000,
+        compute_cost_limit: { amount: 0.02, currency: "USD" },
+      },
+    });
+    const { command } = controller.decide(inbound("compute grant fixture", "compute-grant-task"));
+    expect(command?.type).toBe("llm_call");
+    if (command?.type !== "llm_call") return;
+    const context = command.payload.compute_context;
+    const grant = context?.compute_grant;
+    expect(grant).toBeDefined();
+    expect(grant).toMatchObject({
+      request_id: "compute-grant-task",
+      task_identity_digest: context?.budget_scope?.task_identity_digest,
+      projection_digest: context?.projection_digest,
+      local_p_version: context?.local_p_version,
+      provider: "openai-compatible",
+      model: "gpt-4.1-mini",
+      allowed_input_sources: context?.data_exposure.input_sources,
+      max_tokens: 256,
+      max_compute_ms: 5_000,
+      max_cost: { amount: 0.02, currency: "USD" },
+      issuer: "J",
+    });
+    expect(grant!.expires_at_ms).toBeGreaterThan(grant!.issued_at_ms);
+  });
+
+  it("does not issue a remote compute grant without a configured cost ceiling", () => {
+    const controller = new HDSUpperController({
+      llm_route: { backend_hint: "openai-compatible", model: "gpt-4.1-mini" },
+    });
+    const { command } = controller.decide(inbound("compute grant without budget"));
+    expect(command?.type).toBe("llm_call");
+    if (command?.type === "llm_call") {
+      expect(command.payload.compute_context?.compute_grant).toBeUndefined();
+    }
+  });
+
   it("copies an explicit fallback grant only when it covers current session history", () => {
     const grant = {
       allowed_providers: ["backup"],

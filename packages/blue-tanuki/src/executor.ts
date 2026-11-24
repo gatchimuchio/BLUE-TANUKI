@@ -4191,6 +4191,7 @@ function buildComputeRequest(input: {
       input_sources,
       requested_egress_provider: context.data_exposure.requested_egress_provider,
     },
+    ...(context.compute_grant ? { compute_grant: context.compute_grant } : {}),
     ...(context.fallback_authorization
       ? { fallback_authorization: context.fallback_authorization }
       : {}),
@@ -4393,7 +4394,11 @@ async function withAgentDelegationCandidates(input: {
             ...input.provider_request.messages.slice(firstUserMessage),
           ];
       const childContext = {
-        ...context!,
+        schema_version: context!.schema_version,
+        projection_digest: context!.projection_digest,
+        local_p_version: context!.local_p_version,
+        data_exposure: context!.data_exposure,
+        ...(context!.fallback_authorization ? { fallback_authorization: context!.fallback_authorization } : {}),
         budget_scope: {
           parent_task_identity_digest: contract.parent_budget_identity_digest,
           task_identity_digest: childTaskDigest,

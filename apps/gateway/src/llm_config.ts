@@ -596,10 +596,19 @@ export function resolveLLMCommandRouteFromEnv(
 ): LLMCommandRoute {
   const route = buildLLMCommandRouteFromEnv(env);
   const identity = inspectLLMRegistryConfiguration(env);
+  const computeCostLimit = identity.maximumCostForCall({
+    backend_hint: identity.provider,
+    model: identity.model,
+    messages: [{ role: "user", content: "" }],
+  }, route.fallback_authorization);
   return {
     ...route,
     backend_hint: identity.provider,
     model: identity.model,
+    ...(computeCostLimit ? { compute_cost_limit: {
+      amount: computeCostLimit.amount,
+      currency: computeCostLimit.currency,
+    } } : {}),
   };
 }
 

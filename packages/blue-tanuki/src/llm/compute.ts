@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { LLMFallbackAuthorizationSchema, type ComputeResourceUse, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
+import { ComputeGrantSchema, LLMFallbackAuthorizationSchema, type ComputeGrant, type ComputeResourceUse,
+  type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 import {
   LLM_ROUTING_TRACE,
   createLLMAbortError,
@@ -148,6 +149,7 @@ export interface ComputeRequest<TInput extends object = Record<string, never>> {
   input_digest: string;
   c_profile: ComputeProfile;
   local_p_version: string;
+  compute_grant?: ComputeGrant;
   data_exposure_scope: ComputeDataExposureScope;
   budget_scope?: ComputeBudgetScope;
   fallback_authorization?: LLMFallbackAuthorization;
@@ -170,6 +172,7 @@ export type ComputeResult<TOutput extends object = Record<string, never>> = TOut
     output_digest: string;
     c_profile: ComputeProfile;
     local_p_version: string;
+    compute_grant_id?: string;
     provider: {
       requested: string;
       actual: string;
@@ -240,6 +243,10 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
 
   async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);
+    const maximumCost = this.backend instanceof LLMRegistry
+      ? this.backend.maximumCostForCall(request.input, fallbackAuthorization)
+      : undefined;
+    validateComputeGrantCost(request.compute_grant, maximumCost);
     const providerSignal = this.backend instanceof LLMRegistry
       ? this.backend.bindProviderConfigurationSignal(signal)
       : signal;
@@ -250,7 +257,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       : undefined;
     try {
       throwIfComputeAborted(this.backend, providerSignal);
-      return await this.computeWithCapacity(request, providerSignal, fallbackAuthorization);
+      return await this.computeWithCapacity(request, providerSignal, fallbackAuthorization, maximumCost);
     } finally {
       capacityLease?.release();
     }
@@ -260,15 +267,14 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     request: ComputeRequest<LLMRequest>,
     signal: AbortSignal | undefined,
     fallbackAuthorization: LLMFallbackAuthorization | undefined,
+    maximumCost: ComputeBudgetCostBound | undefined,
   ): Promise<ComputeResult<LLMResponse>> {
     throwIfComputeAborted(this.backend, signal);
     let reservation: ComputeBudgetReservation | undefined;
     let maximumCalls = 1;
     if (this.budget) {
       if (!request.budget_scope) throw new Error("llm_compute_budget_scope_missing");
-      const maxCost = this.backend instanceof LLMRegistry
-        ? this.backend.maximumCostForCall(request.input, fallbackAuthorization)
-        : undefined;
+      const maxCost = this.backend instanceof LLMRegistry ? this.backend.maximumCostForCall(request.input, fallbackAuthorization) : undefined;
       if (!maxCost) throw new Error("llm_compute_budget_cost_upper_bound_unavailable");
       const maxTokens = request.resource_limits.max_tokens;
       const timeoutMs = request.resource_limits.timeout_ms;
@@ -328,7 +334,11 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     }
     const startedAt = performance.now();
     let response: LLMResponse;
+    let providerInvocationStarted = false;
     try {
+      validateComputeGrantBinding(request);
+      validateComputeGrantCost(request.compute_grant, maximumCost);
+      providerInvocationStarted = true;
       response = this.backend instanceof LLMRegistry
         ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization)
         : await this.backend.call(request.input, signal);
@@ -336,6 +346,32 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       const computeMs = Math.max(0, Math.ceil(performance.now() - startedAt));
       let computeResourceUse: ComputeResourceUse | undefined;
       if (reservation) {
+        if (!providerInvocationStarted) {
+          const notInvoked: ComputeBudgetSettlement = {
+            state: "settled",
+            tokens_used: 0,
+            tokens_usage_status: "not_invoked",
+            compute_ms: 0,
+            cost: { status: "actual", amount: 0, currency: reservation.reserved_cost.currency, source: "not_invoked" },
+          };
+          try {
+            await this.budget!.settle(reservation.reservation_id, notInvoked);
+          } catch (settlementError) {
+            const unknown: ComputeBudgetSettlement = {
+              state: "unknown",
+              tokens_used: 0,
+              tokens_usage_status: "unknown",
+              compute_ms: computeMs,
+              cost: { status: "unknown", reason: "not_invoked_settlement_failed" },
+            };
+            throw new LLMComputeResourceFailure(settlementError, buildComputeResourceUse(request.request_id, {
+              reserved_tokens: reservation.reserved_tokens,
+              reserved_compute_ms: reservation.reserved_compute_ms,
+              reserved_cost: reservation.reserved_cost,
+            }, unknown, true));
+          }
+          throw error;
+        }
         await this.budget!.settle(reservation.reservation_id, {
           state: "unknown",
           tokens_used: 0,
@@ -419,6 +455,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         output_digest: createHash("sha256").update(JSON.stringify(normalizedResponse)).digest("hex"),
         c_profile: { ...request.c_profile },
         local_p_version: request.local_p_version,
+        ...(request.compute_grant ? { compute_grant_id: request.compute_grant.grant_id } : {}),
         provider: {
           requested: request.data_exposure_scope.requested_egress_provider,
           actual: provider,
@@ -515,6 +552,7 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbac
   }
   if (!inputDigestMatches) throw new Error("llm_compute_input_digest_mismatch");
   if (!request.local_p_version.trim()) throw new Error("compute local P version is required");
+  validateComputeGrantBinding(request);
   if (
     request.c_profile.id !== LLM_COMPUTE_PROFILE.id ||
     request.c_profile.version !== LLM_COMPUTE_PROFILE.version
@@ -552,4 +590,50 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbac
     (source) => allowedInputSources.has(source),
   )) return undefined;
   return authorization;
+}
+
+function validateComputeGrantBinding(request: ComputeRequest<LLMRequest>): void {
+  if (request.compute_grant === undefined) return;
+  const parsed = ComputeGrantSchema.safeParse(request.compute_grant);
+  if (!parsed.success) throw new Error("llm_compute_grant_invalid");
+  const grant = parsed.data;
+  const now = Date.now();
+  if (grant.issued_at_ms > now || grant.expires_at_ms <= now) throw new Error("llm_compute_grant_expired");
+  if (request.fallback_authorization !== undefined) {
+    throw new Error("llm_compute_grant_fallback_scope_unbound");
+  }
+  const requestTaskDigest = createHash("sha256")
+    .update(`blue-tanuki.compute-budget.task.v1\0${grant.request_id}`)
+    .digest("hex");
+  if (!request.budget_scope || grant.task_identity_digest !== request.budget_scope.task_identity_digest) {
+    throw new Error("llm_compute_grant_task_mismatch");
+  }
+  if (grant.task_identity_digest !== requestTaskDigest) throw new Error("llm_compute_grant_request_mismatch");
+  if (grant.projection_digest !== request.current_projection_digest ||
+      grant.local_p_version !== request.local_p_version) {
+    throw new Error("llm_compute_grant_projection_mismatch");
+  }
+  if (grant.provider !== request.data_exposure_scope.requested_egress_provider ||
+      grant.model !== request.input.model) {
+    throw new Error("llm_compute_grant_provider_mismatch");
+  }
+  if (!request.data_exposure_scope.input_sources.every((source) => grant.allowed_input_sources.includes(source))) {
+    throw new Error("llm_compute_grant_input_scope_exceeded");
+  }
+  const maxTokens = request.resource_limits.max_tokens;
+  const timeoutMs = request.resource_limits.timeout_ms;
+  if (maxTokens === undefined || maxTokens > grant.max_tokens ||
+      timeoutMs === undefined || timeoutMs > grant.max_compute_ms) {
+    throw new Error("llm_compute_grant_resource_limit_exceeded");
+  }
+}
+
+function validateComputeGrantCost(
+  grant: ComputeGrant | undefined,
+  maximumCost: ComputeBudgetCostBound | undefined,
+): void {
+  if (!grant) return;
+  if (!maximumCost || maximumCost.currency !== grant.max_cost.currency || maximumCost.amount > grant.max_cost.amount) {
+    throw new Error("llm_compute_grant_cost_limit_exceeded");
+  }
 }

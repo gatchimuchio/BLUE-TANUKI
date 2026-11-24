@@ -465,25 +465,64 @@ export const AgentDelegationCandidateReviewPacketSchema = z.object({
 });
 export type AgentDelegationCandidateReviewPacket = z.infer<typeof AgentDelegationCandidateReviewPacketSchema>;
 
+export const LLMComputeInputSourceSchema = z.enum([
+  "accepted_inbound_request",
+  "selected_google_drive_document_content",
+  "selected_memory_references",
+  "selected_mcp_tool_catalog",
+  "selected_operation_plan_context",
+  "failure_memory_digest_projection",
+  "selected_operation_result_observations",
+  "complete_history_digest_observations",
+  "session_history",
+  "user_image",
+  "user_audio",
+  "user_canvas_artifact",
+]);
+export type LLMComputeInputSource = z.infer<typeof LLMComputeInputSourceSchema>;
+
+/** J's bounded authorization for one provider-compute task; it never authorizes tools or business effects. */
+export const ComputeGrantSchema = z.object({
+  schema_version: z.literal("blue-tanuki.compute-grant.v1"),
+  grant_id: z.string().uuid(),
+  request_id: z.string().trim().min(1).max(200),
+  task_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  purpose_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  local_p_version: z.string().trim().min(1).max(120),
+  provider: z.string().trim().min(1).max(120),
+  model: z.string().trim().min(1).max(200),
+  allowed_input_sources: z.array(LLMComputeInputSourceSchema).min(1).max(6),
+  max_tokens: z.number().int().safe().positive(),
+  max_compute_ms: z.number().int().safe().positive(),
+  max_cost: z.object({
+    amount: z.number().finite().min(0),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+  }).strict(),
+  issued_at_ms: z.number().int().safe().nonnegative(),
+  expires_at_ms: z.number().int().safe().positive(),
+  issuer: z.literal("J"),
+}).strict().superRefine((grant, context) => {
+  if (new Set(grant.allowed_input_sources).size !== grant.allowed_input_sources.length) {
+    context.addIssue({ code: "custom", message: "compute_grant_input_sources_duplicate" });
+  }
+  if (grant.expires_at_ms <= grant.issued_at_ms) {
+    context.addIssue({ code: "custom", message: "compute_grant_expiry_invalid" });
+  }
+  if (grant.expires_at_ms - grant.issued_at_ms > grant.max_compute_ms) {
+    context.addIssue({ code: "custom", message: "compute_grant_lifetime_exceeds_compute_limit" });
+  }
+});
+export type ComputeGrant = z.infer<typeof ComputeGrantSchema>;
+
 export const LLMComputeContextSchema = z.object({
   schema_version: z.literal("blue-tanuki.compute-context.v1"),
   projection_digest: z.string().regex(/^[a-f0-9]{64}$/),
   local_p_version: z.string().trim().min(1).max(120),
+  /** Optional only for local/legacy paths; external Provider use requires a current J grant. */
+  compute_grant: ComputeGrantSchema.optional(),
   data_exposure: z.object({
-    input_sources: z.array(z.enum([
-      "accepted_inbound_request",
-      "selected_google_drive_document_content",
-      "selected_memory_references",
-      "selected_mcp_tool_catalog",
-      "selected_operation_plan_context",
-      "failure_memory_digest_projection",
-      "selected_operation_result_observations",
-      "complete_history_digest_observations",
-      "session_history",
-      "user_image",
-      "user_audio",
-      "user_canvas_artifact",
-    ])).min(1).max(6),
+    input_sources: z.array(LLMComputeInputSourceSchema).min(1).max(6),
     requested_egress_provider: z.string().trim().min(1).max(120),
   }).strict(),
   /** Non-authority correlation scope for aggregate C resource accounting. */

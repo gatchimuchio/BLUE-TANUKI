@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentDelegationResultEvidenceSchema,
+  ComputeGrantSchema,
   ExecuteCommandSchema,
   ExecuteFeedbackSchema,
   LLMComputeContextSchema,
@@ -355,6 +356,47 @@ describe("LLMComputeContextSchema fallback authorization", () => {
       { allowed_providers: ["backup"], allowed_input_sources: ["accepted_inbound_request"], required_capabilities: ["llm.text.generate"], max_total_cost: { amount: 1, currency: "USD" }, approved: true },
     ]) {
       expect(LLMComputeContextSchema.safeParse({ ...context, fallback_authorization: authorization }).success).toBe(false);
+    }
+  });
+});
+
+describe("ComputeGrantSchema", () => {
+  const grant = {
+    schema_version: "blue-tanuki.compute-grant.v1",
+    grant_id: "00000000-0000-4000-8000-000000000001",
+    request_id: "request-1",
+    task_identity_digest: "a".repeat(64),
+    projection_digest: "b".repeat(64),
+    purpose_digest: "c".repeat(64),
+    local_p_version: "blue-tanuki.c-input-rules.v1",
+    provider: "openai-compatible",
+    model: "gpt-4.1-mini",
+    allowed_input_sources: ["accepted_inbound_request"],
+    max_tokens: 1024,
+    max_compute_ms: 30_000,
+    max_cost: { amount: 0.02, currency: "USD" },
+    issued_at_ms: 1_000,
+    expires_at_ms: 31_000,
+    issuer: "J",
+  };
+
+  it("accepts a bounded J grant for a single provider compute scope", () => {
+    expect(ComputeGrantSchema.parse(grant)).toMatchObject({
+      provider: "openai-compatible",
+      model: "gpt-4.1-mini",
+      max_cost: { amount: 0.02, currency: "USD" },
+    });
+  });
+
+  it("rejects duplicate input scope, unbounded limits, expired windows, and extra authority fields", () => {
+    for (const invalid of [
+      { ...grant, allowed_input_sources: ["accepted_inbound_request", "accepted_inbound_request"] },
+      { ...grant, max_tokens: 0 },
+      { ...grant, max_cost: { amount: 0.02, currency: "usd" } },
+      { ...grant, expires_at_ms: grant.issued_at_ms },
+      { ...grant, may_execute: true },
+    ]) {
+      expect(ComputeGrantSchema.safeParse(invalid).success).toBe(false);
     }
   });
 });
@@ -1332,7 +1374,7 @@ describe("InboundRequest boundary", () => {
     }
     expect(() => createGatewayInternalTransientAudioRequest(requestInput,
       { request_id: "another-request", ephemeral_images: [], ephemeral_audio: [{ format: "ogg", data: new Uint8Array([0x4f, 0x67, 0x67, 0x53]) }] }))
-      .toThrow("transient audio request is not bound to one validated Telegram or owner WebChat input");
+      .toThrow("transient audio request is not bound to one validated Telegram, owner WebChat, or D4 Runtime input");
   });
 
   it("binds owner WebChat transcription to a single validated audio input without granting authority", () => {
@@ -1382,7 +1424,7 @@ describe("InboundRequest boundary", () => {
       },
     }), { request_id: "owner-audio-task-plan-fixture", ephemeral_images: [],
       ephemeral_audio: [{ format: "ogg", data: bytes }] })).toThrow(
-        "transient audio request is not bound to one validated Telegram or owner WebChat input",
+        "transient audio request is not bound to one validated Telegram, owner WebChat, or D4 Runtime input",
       );
   });
 });

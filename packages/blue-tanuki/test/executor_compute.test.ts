@@ -366,7 +366,10 @@ describe("Executor compute boundary", () => {
   it("hashes effective provider input and records local resource and history scope", async () => {
     const backend = new CapturingBackend();
     const receipt = resourceUse("compute-1");
-    const compute = new CapturingCompute(new LLMComputeAdapter(backend), receipt);
+    const registry = new LLMRegistry({ retry: { max_attempts: 1 } }).register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.1, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const compute = new CapturingCompute(new LLMComputeAdapter(registry), receipt);
     const sessions = new MemorySessionStore();
     await sessions.append("test-session", { role: "user", content: "prior request", timestamp: 1 });
     const commandWithDeclaredHistory = command("compute-1");
@@ -374,6 +377,35 @@ describe("Executor compute boundary", () => {
       throw new Error("fixture command was not a contextual LLM call");
     }
     commandWithDeclaredHistory.payload.compute_context.data_exposure.input_sources.push("session_history");
+    commandWithDeclaredHistory.payload.model = "fixture-model-v1";
+    const grantRequestId = "compute-task-1";
+    const taskIdentityDigest = createHash("sha256")
+      .update(`blue-tanuki.compute-budget.task.v1\0${grantRequestId}`)
+      .digest("hex");
+    commandWithDeclaredHistory.payload.compute_context.budget_scope = {
+      parent_task_identity_digest: "b".repeat(64),
+      task_identity_digest: taskIdentityDigest,
+    };
+    const now = Date.now();
+    commandWithDeclaredHistory.payload.compute_context.compute_grant = {
+      schema_version: "blue-tanuki.compute-grant.v1",
+      grant_id: "00000000-0000-4000-8000-000000000002",
+      request_id: grantRequestId,
+      task_identity_digest: taskIdentityDigest,
+      projection_digest: commandWithDeclaredHistory.payload.compute_context.projection_digest,
+      purpose_digest: "d".repeat(64),
+      local_p_version: commandWithDeclaredHistory.payload.compute_context.local_p_version,
+      provider: "fixture-provider",
+      model: "fixture-model-v1",
+      allowed_input_sources: [...commandWithDeclaredHistory.payload.compute_context.data_exposure.input_sources],
+      max_tokens: 64,
+      max_compute_ms: 1_500,
+      max_cost: { amount: 0.1, currency: "USD" },
+      issued_at_ms: now,
+      expires_at_ms: now + 1_500,
+      issuer: "J",
+    };
+    const computeGrantId = commandWithDeclaredHistory.payload.compute_context.compute_grant.grant_id;
     const executor = new Executor({
       approval_authority: authority,
       llm: backend,
@@ -390,6 +422,7 @@ describe("Executor compute boundary", () => {
         { role: "user", content: "current request" },
       ],
       backend_hint: "fixture-provider",
+      model: "fixture-model-v1",
       max_tokens: 64,
       timeout_ms: 1_500,
     };
@@ -405,9 +438,11 @@ describe("Executor compute boundary", () => {
       "session_history",
     ]);
     expect(request.resource_limits).toEqual({ max_tokens: 64, timeout_ms: 1_500 });
+    expect(request.compute_grant?.grant_id).toBe(computeGrantId);
     expect(result.result).toMatchObject({
       execution_identity: {
         request_id: "compute-1",
+        compute_grant_id: computeGrantId,
         provider: { requested: "fixture-provider", actual: "fixture-provider" },
       },
       authority_boundary: {
@@ -415,7 +450,7 @@ describe("Executor compute boundary", () => {
         provider_metadata_used_for_authority: false,
       },
     });
-    expect(backend.seen[0]).toEqual(expectedRequest);
+    expect(backend.seen[0]).toEqual({ ...expectedRequest, backend_hint: undefined });
   });
 
   it.each([

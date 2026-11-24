@@ -37,7 +37,7 @@ import {
 import { buildAuditLog } from "./audit_config.js";
 import {
   buildLLMBackendFromEnv,
-  buildLLMCommandRouteFromEnv,
+  resolveLLMCommandRouteFromEnv,
   describeLLMCommandRoute,
   describeLLMConfig,
 } from "./llm_config.js";
@@ -274,7 +274,7 @@ async function runCliWithExecutionStore(
   const hds = new HDSUpperController({
     audit: buildAuditLog(),
     memory: memoryStore,
-    llm_route: buildLLMCommandRouteFromEnv(),
+    llm_route: resolveLLMCommandRouteFromEnv(),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(process.env),

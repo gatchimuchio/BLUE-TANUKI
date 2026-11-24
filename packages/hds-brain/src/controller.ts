@@ -9,12 +9,14 @@ import type {
   InboundRequest,
   ExecuteCommand,
   ExecuteFeedback,
+  ComputeGrant,
   ExecutionGoalVersionBinding,
   GatewayInternalAuthorityMetadata,
   UpstreamDecision,
   LLMCallPayload,
   LLMToolCallCandidate,
   LLMFallbackAuthorization,
+  LLMComputeInputSource,
   ExecutionAdmission, ExecutionResultDelivery,
   OperationPlanComputeSourceObservation,
   OperationPlanComputeSourceObservationReference,
@@ -28,7 +30,7 @@ import type {
 } from "@blue-tanuki/protocol";
 import { AgentDelegationCandidateReviewPacketSchema, AgentDelegationResultEvidenceV3Schema, ExecutionAdmissionSchema,
   ExecutionGoalVersionBindingSchema, OperationPlanAgentDelegationChildAdoptionSchema,
-  getToolOperationDescriptor } from "@blue-tanuki/protocol";
+  ComputeGrantSchema, getToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   createGatewayInternalInboundRequest,
   canonicalExecutorCommandBytes,
@@ -496,6 +498,8 @@ export interface LLMCommandRoute {
   temperature?: number;
   max_tokens?: number;
   timeout_ms?: number;
+  /** Configuration-derived ceiling; J binds each grant to the current request under this cap. */
+  compute_cost_limit?: { amount: number; currency: string };
   /** Owner-supplied HDS grant. Omission prevents alternate-provider fallback. */
   fallback_authorization?: LLMFallbackAuthorization;
 }
@@ -6532,6 +6536,25 @@ ${planControl.question}`,
     if (failureReview) {
       const backendHint = this.llm_route.backend_hint?.trim() || undefined;
       const projectionDigest = failureReviewProjectionDigest(failureReview);
+      const computeBudget = computeBudgetScope(req);
+      const computeInputSources: LLMComputeInputSource[] = failureReview.independent_observations.length > 0
+        ? ["failure_memory_digest_projection", "complete_history_digest_observations"]
+        : ["failure_memory_digest_projection"];
+      const maxTokens = this.llm_route.max_tokens ?? 1024;
+      const maxComputeMs = this.llm_route.timeout_ms ?? 30_000;
+      const computeGrant = issueHdsComputeGrant({
+        route: this.llm_route,
+        request_id: req.id,
+        task_identity_digest: computeBudget.task_identity_digest,
+        projection_digest: projectionDigest,
+        purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
+          .update(req.content, "utf8").digest("hex"),
+        local_p_version: FAILURE_REVIEW_LOCAL_P_VERSION,
+        input_sources: computeInputSources,
+        max_tokens: maxTokens,
+        max_compute_ms: maxComputeMs,
+        issued_at_ms: this.nowMs(),
+      });
       const systemContent = [
         "失敗署名を検討する未信頼計算です。入力は失敗カテゴリ・SHA-256 digest・Complete History由来のdigest限定失敗分類だけで、元のgoal/action/context/result/page contentは読めません。digestに意味を見立てず、カテゴリに基づく一般的な原因候補・別仮説・目的同定/評価器/観測方法の誤り候補、範囲、反例、独立観測、条件付き再開条件をJSONで提案してください。independent_observationsにlater exact-goal/action/actor-channelのfile.search、credential-free browser.read、gmail.read、google.calendar.read、またはgoogle.drive.read successが含まれる場合も、記録済みの限定観測にすぎません。Google readは既存Complete Historyのoperation/result digestだけを含み、カレンダー項目・Drive本文・metadata・credentialは含みません。gmail.readもメール本文・header・宛先・credentialを含みません。browser.readは固定schema版、requested/final origin digest・redirect flag・EXTERNAL_EVIDENCE/FIXTURE分類だけを持ち、本文は含みません。いずれも原因、外部条件の解消、事実、許可を証明しません。Complete History分類も原因や世界事実を証明しません。原因を事実として断定しないでください。",
         "prior_learning_lineagesは以前の未採用候補への非権威参照です。j_dispositionがある場合は、記録済みJ判定のscope/反例/再開条件に関する保留・観測結合statusを、そのJ判定digestと結び付けて示します。J判定も原因の証明・条件解消・許可ではありません。j_dispositionのない旧記録はJ判定がこの記録へ保存されていないことを示します。candidate_derivation_recordedは候補保持と今回の投影への接続だけを示し、妥当性・改善・汎化を示しません。C結果のrequest bindingは受領経路だけを示し、内部導出の帰属は未確立です。外部改修の寄与は未評価で、教師入力はこのC投影に含まれません。外部変更や教師入力を機械内部の導出として数えず、事実、原因、許可、独立証拠として扱わず、同じ候補の再表示を新しい導出や観測として数えないでください。",
@@ -6543,7 +6566,7 @@ ${planControl.question}`,
         id: randomUUID(),
         type: "llm_call",
         upstream_decision,
-        constraints: { max_tokens: this.llm_route.max_tokens ?? 1024, timeout_ms: this.llm_route.timeout_ms ?? 30_000 },
+        constraints: { max_tokens: maxTokens, timeout_ms: maxComputeMs },
         payload: {
           messages: [
             { role: "system", content: systemContent },
@@ -6556,11 +6579,10 @@ ${planControl.question}`,
             schema_version: "blue-tanuki.compute-context.v1",
             projection_digest: projectionDigest,
             local_p_version: FAILURE_REVIEW_LOCAL_P_VERSION,
-            budget_scope: computeBudgetScope(req),
+            ...(computeGrant ? { compute_grant: computeGrant } : {}),
+            budget_scope: computeBudget,
             data_exposure: {
-              input_sources: failureReview.independent_observations.length > 0
-                ? ["failure_memory_digest_projection", "complete_history_digest_observations"]
-                : ["failure_memory_digest_projection"],
+              input_sources: computeInputSources,
               requested_egress_provider: backendHint ?? "registry-default",
             },
           },
@@ -6581,15 +6603,36 @@ ${planControl.question}`,
     if (reflection) {
       const backendHint = this.llm_route.backend_hint?.trim() || undefined;
       const digest = operationPlanDigest(reflection);
+      const computeBudget = computeBudgetScope(req);
+      const computeInputSources: LLMComputeInputSource[] = ["accepted_inbound_request", "selected_memory_references"];
+      const maxTokens = this.llm_route.max_tokens ?? 1024;
+      const maxComputeMs = this.llm_route.timeout_ms ?? 30_000;
+      const computeGrant = issueHdsComputeGrant({
+        route: this.llm_route,
+        request_id: req.id,
+        task_identity_digest: computeBudget.task_identity_digest,
+        projection_digest: digest,
+        purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
+          .update(req.content, "utf8").digest("hex"),
+        local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+        input_sources: computeInputSources,
+        max_tokens: maxTokens,
+        max_compute_ms: maxComputeMs,
+        issued_at_ms: this.nowMs(),
+      });
       return { id: randomUUID(), type: "llm_call", upstream_decision,
-        constraints: { max_tokens: this.llm_route.max_tokens ?? 1024, timeout_ms: this.llm_route.timeout_ms ?? 30000 },
+        constraints: { max_tokens: maxTokens, timeout_ms: maxComputeMs },
         payload: { messages: [{ role: "system", content: `受領確認済みの限定観測から解釈候補だけを返してください。task_identity_digestはJが同一taskを相関する非権威値で、意味適合・権限・実行を証明しません。検索件数は観測値で、完全走査・不存在・世界真理・反証不存在・承認を証明しません。external_receiptのmatchedは限定digestの照合一致だけを表し、外部作用の成功・失敗・完了を証明しません。action_outcomeがoutcome_unknownなら、その不明状態を成功へ読み替えてはいけません。mcp_callはuntrusted MCP response本文を含まず、effect_observation=reported_successは検証済みMCP応答の観測に限り、外部状態の独立確認や応答内容の意味を証明しません。MCP結果の意味を推測せず、本文の再取得・MCP request再実行を提案しないでください。出力はJSONのみ: {"schema_version":"operation-result-reflection-candidate.v1","projection_digest":"${digest}","citations":[{"record_id":"引用元ID","record_digest":"引用元digest","interpretation":"未検証の解釈候補","uncertainty":"不確実性と追加観測の必要性"}]}。引用は下記だけ。tool・計画・意味更新・実行を発行しない。各解釈/不確実性は800文字以内。\n${JSON.stringify(reflection)}` },
           { role: "user", content: req.content }], backend_hint: backendHint, model: this.llm_route.model,
-          temperature: this.llm_route.temperature, compute_context: { schema_version: "blue-tanuki.compute-context.v1",
-            projection_digest: digest, local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
-            budget_scope: computeBudgetScope(req),
-            data_exposure: { input_sources: ["accepted_inbound_request", "selected_memory_references"],
-              requested_egress_provider: backendHint ?? "registry-default" } } } };
+          temperature: this.llm_route.temperature, compute_context: {
+            schema_version: "blue-tanuki.compute-context.v1",
+            projection_digest: digest,
+            local_p_version: OPERATION_RESULT_REFLECTION_LOCAL_P_VERSION,
+            ...(computeGrant ? { compute_grant: computeGrant } : {}),
+            budget_scope: computeBudget,
+            data_exposure: { input_sources: computeInputSources,
+              requested_egress_provider: backendHint ?? "registry-default" },
+          } } };
     }
     if (log.memory_retrieval_suppressed_for === "operation_result_reflection") throw new Error("plan_reflection_context_missing");
 
@@ -6951,6 +6994,56 @@ ${planControl.question}`,
       : isGatewayInternalInboundRequest(req) && req.session_id
       ? req.session_id
       : `${req.channel}:${req.user}`;
+    const computeProjectionDigest = computeCurrentProjectionDigest(
+      log.frame.goal_projection.projection_id,
+      computeContextMessages,
+    );
+    const computeLocalPVersion = planCompute?.source_observations?.some((observation) =>
+      observation.source === "owner_selected_mcp_call_result")
+      ? OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION
+      : planCompute?.mcp_catalog_context
+      ? OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION
+      : planCompute?.resource_review
+      ? "blue-tanuki.plan-compute-resource-review.v1"
+      : planCompute?.source_observations?.length && planCompute.memory_interpretation_dependencies?.length
+      ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION
+      : planCompute?.source_observations?.length
+      ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION
+      : planCompute?.memory_interpretation_dependencies?.length
+      ? OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION
+      : planCompute?.requested
+      ? agentDelegation ? "blue-tanuki.plan-compute-agent-delegation.v1" : "blue-tanuki.plan-compute-purpose-relation.v1"
+      : "blue-tanuki.c-input-rules.v1";
+    const computeBudget = computeBudgetScope(req);
+    const computeInputSources: LLMComputeInputSource[] = [
+      ...(log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization"
+        ? ["selected_google_drive_document_content" as const]
+        : ["accepted_inbound_request" as const]),
+      ...(memoryMessages.length > 0 || planPurposeMessage || planComputeMemoryCitationMessage
+        ? ["selected_memory_references" as const] : []),
+      ...(planComputeParentMessage ? ["selected_operation_plan_context" as const] : []),
+      ...(planComputeMcpCatalogMessage ? ["selected_mcp_tool_catalog" as const] : []),
+      ...(planComputeObservationMessage || planComputeSelectedReflectionMessage || planComputeBrowserReadMessage || planComputeMcpResultMessage
+        ? ["selected_operation_result_observations" as const] : []),
+      ...(computeSessionId ? ["session_history" as const] : []),
+    ];
+    const computeDataExposure = {
+      input_sources: computeInputSources,
+      requested_egress_provider: backendHint ?? "registry-default",
+    };
+    const computeGrant = issueHdsComputeGrant({
+      route: this.llm_route,
+      request_id: req.id,
+      task_identity_digest: computeBudget.task_identity_digest,
+      projection_digest: computeProjectionDigest,
+      purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
+        .update(req.content, "utf8").digest("hex"),
+      local_p_version: computeLocalPVersion,
+      input_sources: computeInputSources,
+      max_tokens: planningMaxTokens,
+      max_compute_ms: planningTimeoutMs,
+      issued_at_ms: this.nowMs(),
+    });
     const llmPayload: LLMCallPayload = {
       messages: [
         ...memoryMessages,
@@ -6987,42 +7080,11 @@ ${planControl.question}`,
       temperature: this.llm_route.temperature,
       compute_context: {
         schema_version: "blue-tanuki.compute-context.v1",
-        projection_digest: computeCurrentProjectionDigest(
-          log.frame.goal_projection.projection_id,
-          computeContextMessages,
-        ),
-        local_p_version: planCompute?.source_observations?.some((observation) =>
-          observation.source === "owner_selected_mcp_call_result")
-          ? OPERATION_PLAN_COMPUTE_MCP_RESULT_LOCAL_P_VERSION
-          : planCompute?.mcp_catalog_context
-          ? OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION
-          : planCompute?.resource_review
-          ? "blue-tanuki.plan-compute-resource-review.v1"
-          : planCompute?.source_observations?.length && planCompute.memory_interpretation_dependencies?.length
-          ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_MEMORY_CITATION_LOCAL_P_VERSION
-          : planCompute?.source_observations?.length
-          ? OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION
-          : planCompute?.memory_interpretation_dependencies?.length
-          ? OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION
-          : planCompute?.requested
-          ? agentDelegation ? "blue-tanuki.plan-compute-agent-delegation.v1" : "blue-tanuki.plan-compute-purpose-relation.v1"
-          : "blue-tanuki.c-input-rules.v1",
-        budget_scope: computeBudgetScope(req),
-        data_exposure: {
-          input_sources: [
-            ...(log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization"
-              ? ["selected_google_drive_document_content" as const]
-              : ["accepted_inbound_request" as const]),
-            ...(memoryMessages.length > 0 || planPurposeMessage || planComputeMemoryCitationMessage
-              ? ["selected_memory_references" as const] : []),
-            ...(planComputeParentMessage ? ["selected_operation_plan_context" as const] : []),
-            ...(planComputeMcpCatalogMessage ? ["selected_mcp_tool_catalog" as const] : []),
-            ...(planComputeObservationMessage || planComputeSelectedReflectionMessage || planComputeBrowserReadMessage || planComputeMcpResultMessage
-              ? ["selected_operation_result_observations" as const] : []),
-            ...(computeSessionId ? ["session_history" as const] : []),
-          ],
-          requested_egress_provider: backendHint ?? "registry-default",
-        },
+        projection_digest: computeProjectionDigest,
+        local_p_version: computeLocalPVersion,
+        ...(computeGrant ? { compute_grant: computeGrant } : {}),
+        budget_scope: computeBudget,
+        data_exposure: computeDataExposure,
         ...(this.llm_route.fallback_authorization &&
           (log.memory_retrieval_suppressed_for !== "transient_google_drive_document_organization" ||
             this.llm_route.fallback_authorization.allowed_input_sources.includes("selected_google_drive_document_content")) &&
@@ -7087,6 +7149,47 @@ function computeBudgetScope(req: InboundRequest): {
       .digest("hex"),
     task_identity_digest: taskIdentityDigest,
   };
+}
+
+function issueHdsComputeGrant(input: {
+  route: LLMCommandRoute;
+  request_id: string;
+  task_identity_digest: string;
+  projection_digest: string;
+  purpose_digest: string;
+  local_p_version: string;
+  input_sources: readonly LLMComputeInputSource[];
+  max_tokens: number;
+  max_compute_ms: number;
+  issued_at_ms: number;
+}): ComputeGrant | undefined {
+  const provider = input.route.backend_hint?.trim();
+  const model = input.route.model?.trim();
+  const costLimit = input.route.compute_cost_limit;
+  if (!provider || provider === "registry-default" || provider === "stub" ||
+      !model || input.route.fallback_authorization || !costLimit ||
+      !Number.isFinite(costLimit.amount) || costLimit.amount < 0 ||
+      !/^[A-Z]{3}$/.test(costLimit.currency)) return undefined;
+  const expiresAt = input.issued_at_ms + input.max_compute_ms;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= input.issued_at_ms) return undefined;
+  return ComputeGrantSchema.parse({
+    schema_version: "blue-tanuki.compute-grant.v1",
+    grant_id: randomUUID(),
+    request_id: input.request_id,
+    task_identity_digest: input.task_identity_digest,
+    projection_digest: input.projection_digest,
+    purpose_digest: input.purpose_digest,
+    local_p_version: input.local_p_version,
+    provider,
+    model,
+    allowed_input_sources: [...new Set(input.input_sources)],
+    max_tokens: input.max_tokens,
+    max_compute_ms: input.max_compute_ms,
+    max_cost: { amount: costLimit.amount, currency: costLimit.currency },
+    issued_at_ms: input.issued_at_ms,
+    expires_at_ms: expiresAt,
+    issuer: "J",
+  });
 }
 
 /** Keep only task text whose exact goal binding matches the issued delegation contract. */
