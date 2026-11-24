@@ -4168,7 +4168,9 @@ function buildComputeRequest(input: {
     throw new Error("LLM compute context is required when a compute adapter is configured");
   }
   const input_sources: ComputeInputSource[] = [...context.data_exposure.input_sources];
-  if (input.session_history_applied) input_sources.push("session_history");
+  if (input.session_history_applied && !input_sources.includes("session_history")) {
+    input_sources.push("session_history");
+  }
   if (input.provider_request.ephemeral_images?.length && !input_sources.includes("user_image")) {
     input_sources.push("user_image");
   }

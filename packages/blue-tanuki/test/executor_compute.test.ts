@@ -368,6 +368,11 @@ describe("Executor compute boundary", () => {
     const compute = new CapturingCompute(new LLMComputeAdapter(backend), receipt);
     const sessions = new MemorySessionStore();
     await sessions.append("test-session", { role: "user", content: "prior request", timestamp: 1 });
+    const commandWithDeclaredHistory = command("compute-1");
+    if (commandWithDeclaredHistory.type !== "llm_call" || !commandWithDeclaredHistory.payload.compute_context) {
+      throw new Error("fixture command was not a contextual LLM call");
+    }
+    commandWithDeclaredHistory.payload.compute_context.data_exposure.input_sources.push("session_history");
     const executor = new Executor({
       approval_authority: authority,
       llm: backend,
@@ -376,7 +381,7 @@ describe("Executor compute boundary", () => {
       session_store: sessions,
     });
 
-    const result = await executor.execute(approved(command("compute-1")));
+    const result = await executor.execute(approved(commandWithDeclaredHistory));
     const request = compute.requests[0]!;
     const expectedRequest = {
       messages: [
