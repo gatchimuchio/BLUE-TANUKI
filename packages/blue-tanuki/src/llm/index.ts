@@ -37,6 +37,7 @@ export {
   LLMRegistry,
 } from "./registry.js";
 export {
+  digestLLMRequest,
   LLMComputeAdapter,
   LLMComputeResourceFailure,
   LLM_COMPUTE_PROFILE,

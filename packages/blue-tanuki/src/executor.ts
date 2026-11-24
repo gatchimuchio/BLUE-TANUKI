@@ -104,6 +104,7 @@ import {
 import {
   LLM_COMPUTE_PROFILE,
   LLMComputeResourceFailure,
+  digestLLMRequest,
   type ComputeBackend,
   type ComputeInputSource,
   type ComputeRequest,
@@ -4200,24 +4201,6 @@ function buildComputeRequest(input: {
     },
     input: input.provider_request,
   };
-}
-
-function digestLLMRequest(request: LLMRequest): string {
-  const { ephemeral_images: images, ephemeral_audio: audio, ...textRequest } = request;
-  const digest = createHash("sha256").update(JSON.stringify(textRequest));
-  for (const image of images ?? []) {
-    digest.update("\0blue-tanuki.llm-image.v1\0");
-    digest.update(image.media_type);
-    digest.update("\0");
-    digest.update(image.data);
-  }
-  for (const input of audio ?? []) {
-    digest.update("\0blue-tanuki.llm-audio.v1\0");
-    digest.update(input.format);
-    digest.update("\0");
-    digest.update(input.data);
-  }
-  return digest.digest("hex");
 }
 
 function digestAgentChildLateOutput(content: string): string {

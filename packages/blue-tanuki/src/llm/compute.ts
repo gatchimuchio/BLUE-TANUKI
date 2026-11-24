@@ -16,6 +16,25 @@ export const LLM_COMPUTE_PROFILE = Object.freeze({
   version: "1",
 } as const);
 
+/** Canonical digest of the exact provider request, including volatile media bytes. */
+export function digestLLMRequest(request: LLMRequest): string {
+  const { ephemeral_images: images, ephemeral_audio: audio, ...textRequest } = request;
+  const digest = createHash("sha256").update(JSON.stringify(textRequest));
+  for (const image of images ?? []) {
+    digest.update("\0blue-tanuki.llm-image.v1\0");
+    digest.update(image.media_type);
+    digest.update("\0");
+    digest.update(image.data);
+  }
+  for (const input of audio ?? []) {
+    digest.update("\0blue-tanuki.llm-audio.v1\0");
+    digest.update(input.format);
+    digest.update("\0");
+    digest.update(input.data);
+  }
+  return digest.digest("hex");
+}
+
 export interface ComputeProfile {
   id: string;
   version: string;
@@ -488,6 +507,13 @@ function validateComputeRequest(request: ComputeRequest<LLMRequest>): LLMFallbac
   if (!digest.test(request.input_digest)) {
     throw new Error("compute input digest must be a SHA-256 hex digest");
   }
+  let inputDigestMatches = false;
+  try {
+    inputDigestMatches = digestLLMRequest(request.input) === request.input_digest;
+  } catch {
+    // Invalid or non-serializable input must fail before budget reservation or provider I/O.
+  }
+  if (!inputDigestMatches) throw new Error("llm_compute_input_digest_mismatch");
   if (!request.local_p_version.trim()) throw new Error("compute local P version is required");
   if (
     request.c_profile.id !== LLM_COMPUTE_PROFILE.id ||

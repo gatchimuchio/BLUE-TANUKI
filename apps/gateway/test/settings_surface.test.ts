@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
-import { LLMComputeAdapter, LLM_COMPUTE_PROFILE, type ComputeRequest, type LLMRequest } from "@blue-tanuki/core";
+import { digestLLMRequest, LLMComputeAdapter, LLM_COMPUTE_PROFILE, type ComputeRequest, type LLMRequest } from "@blue-tanuki/core";
 import { WebChatChannel } from "@blue-tanuki/channel-webchat";
 import { PluginRuntime } from "../src/plugin_loader.js";
 import { GatewayComputeBudgetStore } from "../src/compute_budget_store.js";
@@ -999,10 +999,16 @@ describe("settings surface", () => {
       }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
       const budget = GatewayComputeBudgetStore.fromEnvironment(runtimeEnv);
       try {
+        const input: LLMRequest = {
+          backend_hint: "openai-compatible",
+          model: "fixture-model",
+          max_tokens: 128,
+          messages: [{ role: "user", content: "synthetic saved GUI settings" }],
+        };
         const request: ComputeRequest<LLMRequest> = {
           request_id: "settings-saved-normal-compute",
           current_projection_digest: "a".repeat(64),
-          input_digest: "b".repeat(64),
+          input_digest: digestLLMRequest(input),
           c_profile: LLM_COMPUTE_PROFILE,
           local_p_version: "blue-tanuki.c-input-rules.v1",
           data_exposure_scope: {
@@ -1014,12 +1020,7 @@ describe("settings surface", () => {
             task_identity_digest: "d".repeat(64),
           },
           resource_limits: { max_tokens: 128, timeout_ms: 5_000 },
-          input: {
-            backend_hint: "openai-compatible",
-            model: "fixture-model",
-            max_tokens: 128,
-            messages: [{ role: "user", content: "synthetic saved GUI settings" }],
-          },
+          input,
         };
         const result = await new LLMComputeAdapter(buildLLMBackendFromEnv(runtimeEnv), budget).compute(request);
         expect(result.content).toBe("saved GUI settings reached normal Compute");

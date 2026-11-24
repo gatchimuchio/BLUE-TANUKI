@@ -5,6 +5,7 @@ import { LLMRegistry } from "../src/llm/registry.js";
 import {
   LLMComputeAdapter,
   LLM_COMPUTE_PROFILE,
+  digestLLMRequest,
   type ComputeBackend,
   type ComputeBudgetPort,
   type ComputeCapacityPort,
@@ -30,10 +31,15 @@ class CapturingBackend implements LLMBackend {
 }
 
 function computeRequest(): ComputeRequest<LLMRequest> {
+  const input: LLMRequest = {
+    backend_hint: "fixture-provider",
+    model: "fixture-model-v1",
+    messages: [{ role: "user", content: "fixture prompt" }],
+  };
   return {
     request_id: "request-1",
     current_projection_digest: "a".repeat(64),
-    input_digest: "b".repeat(64),
+    input_digest: digestLLMRequest(input),
     c_profile: LLM_COMPUTE_PROFILE,
     local_p_version: "blue-tanuki.c-input-rules.v1",
     data_exposure_scope: {
@@ -41,15 +47,21 @@ function computeRequest(): ComputeRequest<LLMRequest> {
       requested_egress_provider: "fixture-provider",
     },
     resource_limits: { max_tokens: 128, timeout_ms: 2_000 },
-    input: {
-      backend_hint: "fixture-provider",
-      model: "fixture-model-v1",
-      messages: [{ role: "user", content: "fixture prompt" }],
-    },
+    input,
   };
 }
 
 describe("LLMComputeAdapter", () => {
+  it("rejects a provider input whose digest no longer matches before invocation", async () => {
+    const backend = new CapturingBackend();
+    const request = computeRequest();
+    request.input.messages[0]!.content = "changed after the digest was created";
+
+    await expect(new LLMComputeAdapter(backend).compute(request))
+      .rejects.toThrow("llm_compute_input_digest_mismatch");
+    expect(backend.seen).toHaveLength(0);
+  });
+
   it("does not acquire provider capacity for an already-aborted compute", async () => {
     const backend = new CapturingBackend();
     const controller = new AbortController();
@@ -443,9 +455,10 @@ describe("LLMComputeAdapter", () => {
   it("binds provider execution identity and keeps compute metadata local", async () => {
     const backend = new CapturingBackend();
     const controller = new AbortController();
-    const result = await new LLMComputeAdapter(backend).compute(computeRequest(), controller.signal);
+    const request = computeRequest();
+    const result = await new LLMComputeAdapter(backend).compute(request, controller.signal);
 
-    expect(backend.seen).toEqual([computeRequest().input]);
+    expect(backend.seen).toEqual([request.input]);
     expect(backend.lastSignal).toBe(controller.signal);
     expect(backend.seen[0]).not.toHaveProperty("execution_identity");
     expect(result).not.toHaveProperty("raw");
@@ -453,7 +466,7 @@ describe("LLMComputeAdapter", () => {
     expect(result.execution_identity).toMatchObject({
       request_id: "request-1",
       current_projection_digest: "a".repeat(64),
-      input_digest: "b".repeat(64),
+      input_digest: request.input_digest,
       output_digest: createHash("sha256").update(JSON.stringify({
         content: "fixture response",
         tokens_used: 7,
@@ -517,6 +530,7 @@ describe("LLMComputeAdapter", () => {
     const request = computeRequest();
     request.data_exposure_scope.requested_egress_provider = "registry-default";
     request.input.backend_hint = undefined;
+    request.input_digest = digestLLMRequest(request.input);
     request.fallback_authorization = {
       allowed_providers: ["backup"],
       allowed_input_sources: ["accepted_inbound_request", "selected_memory_references"],
@@ -599,6 +613,7 @@ describe("LLMComputeAdapter", () => {
       input_sources: ["accepted_inbound_request", "session_history"],
     };
     historyRequest.input.backend_hint = undefined;
+    historyRequest.input_digest = digestLLMRequest(historyRequest.input);
     historyRequest.fallback_authorization = {
       allowed_providers: ["backup"],
       allowed_input_sources: ["accepted_inbound_request"],
@@ -615,6 +630,7 @@ describe("LLMComputeAdapter", () => {
       input_sources: ["accepted_inbound_request", "failure_memory_digest_projection"],
     };
     failureReviewRequest.input.backend_hint = undefined;
+    failureReviewRequest.input_digest = digestLLMRequest(failureReviewRequest.input);
     failureReviewRequest.fallback_authorization = {
       allowed_providers: ["backup"],
       allowed_input_sources: ["accepted_inbound_request"],
