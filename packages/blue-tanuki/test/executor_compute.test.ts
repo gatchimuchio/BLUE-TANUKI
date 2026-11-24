@@ -5,6 +5,7 @@ import {
   OPERATION_PLAN_COMPUTE_MCP_CATALOG_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_MEMORY_CITATION_LOCAL_P_VERSION,
   OPERATION_PLAN_COMPUTE_SOURCE_OBSERVATION_LOCAL_P_VERSION,
+  requireToolOperationDescriptor,
   type ComputeResourceUse,
   type ExecuteCommand,
 } from "@blue-tanuki/protocol";
@@ -773,7 +774,14 @@ describe("Executor compute boundary", () => {
     });
     const invoke = vi.fn(async () => ({ executed: true }));
     const tools = new ToolRegistry();
-    tools.register({ name: "shell.exec", description: "fixture", invoke });
+    const shellDescriptor = requireToolOperationDescriptor("shell.exec");
+    tools.register({
+      name: "shell.exec",
+      adapter_version: shellDescriptor.adapter_version,
+      required_capabilities: shellDescriptor.required_capabilities,
+      description: "fixture",
+      invoke,
+    });
     const executor = new Executor({
       approval_authority: authority,
       llm: backend,
