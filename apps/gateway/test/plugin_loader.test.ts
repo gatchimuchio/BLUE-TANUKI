@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ToolRegistry } from "@blue-tanuki/core";
+import { requireToolOperationDescriptor } from "@blue-tanuki/protocol";
 import {
   loadPluginRuntime,
   parseWorkspacePackagePatterns,
@@ -101,7 +102,10 @@ describe("plugin loader", () => {
         "tool:google.calendar.write",
         "tool:google.drive.write",
         "tool:composio.search",
+        "tool:composio.accounts",
         "tool:composio.execute",
+        "tool:composio.disconnect",
+        "tool:composio.connect",
         "tool:browser.read",
         "tool:browser.snapshot",
         "tool:browser.automation",
@@ -138,6 +142,7 @@ describe("plugin loader", () => {
           registry.register({
             name: "echo",
             description: "fake",
+            adapter_version: ${JSON.stringify(requireToolOperationDescriptor("echo").adapter_version)},
             required_capabilities: ["tool:echo"],
             async invoke() { return { ok: true }; }
           });
