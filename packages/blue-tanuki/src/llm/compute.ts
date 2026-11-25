@@ -651,8 +651,16 @@ function validateComputeGrantBinding(request: ComputeRequest<LLMRequest>): void 
   if (!request.data_exposure_scope.input_sources.every((source) => grant.allowed_input_sources.includes(source))) {
     throw new Error("llm_compute_grant_input_scope_exceeded");
   }
-  const purposeMessageMatches = request.input.messages.some((message) =>
-    message.role === "user" && computeGrantPurposeDigest(message.content) === grant.purpose_digest);
+  let currentPurposeMessage: LLMRequest["messages"][number] | undefined;
+  for (let index = request.input.messages.length - 1; index >= 0; index -= 1) {
+    const message = request.input.messages[index];
+    if (message?.role === "user") {
+      currentPurposeMessage = message;
+      break;
+    }
+  }
+  const purposeMessageMatches = currentPurposeMessage !== undefined &&
+    computeGrantPurposeDigest(currentPurposeMessage.content) === grant.purpose_digest;
   const failureReviewProjectionMatches = grant.local_p_version === FAILURE_REVIEW_LOCAL_P_VERSION &&
     request.data_exposure_scope.input_sources.includes("failure_memory_digest_projection") &&
     grant.allowed_input_sources.includes("failure_memory_digest_projection");
