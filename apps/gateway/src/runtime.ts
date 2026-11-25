@@ -73,6 +73,7 @@ import { OperationPlanStateStore } from "./operation_plan_store.js";
 import { documentOrganizationMemoryStorage, goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
+import { createOneShotOpenAITextEgressPermission } from "./provider_egress_permission.js";
 import { resolveSecretMaterial, secretRefKey } from "./secret_store.js";
 
 const gatewayLog = createLogger({ scope: "gateway" });
@@ -294,6 +295,9 @@ async function runCliWithExecutionStore(
       },
     })
     : cliInbound;
+  const providerEgressPermission = externalTextOptIn
+    ? createOneShotOpenAITextEgressPermission(inbound)
+    : undefined;
 
   const plugins = goalCompletionStatus ? undefined : await loadPluginRuntime();
   plugins?.enforceLLMConfig(process.env);
@@ -704,6 +708,7 @@ async function runCliWithExecutionStore(
   const requestCommandStop = (signal: NodeJS.Signals): void => {
     if (requestedStopSignal) return;
     requestedStopSignal = signal;
+    providerEgressPermission?.revoke();
     process.exitCode = signal === "SIGINT" ? 130 : 143;
     gatewayLog.warn("CLI command stop requested", {
       signal,
@@ -803,6 +808,18 @@ async function runCliWithExecutionStore(
     feedback = await executor.execute(approvedCommand, {
       signal: commandAbortController.signal,
       save_result_delivery: planBound,
+      before_action_dispatch: () => {
+        ownerLease.assertActive();
+        const currentStop = emergencyStopStateStore?.load();
+        if (!currentStop || currentStop.active) throw new Error("gateway_emergency_stop_currently_active");
+        if (command.type === "llm_call") {
+          const grant = command.payload.compute_context?.compute_grant;
+          if (grant?.egress) {
+            if (!providerEgressPermission) throw new Error("openai_text_egress_permission_unavailable");
+            providerEgressPermission.assertCurrent(grant);
+          }
+        }
+      },
       before_execute: () => {
         const admission = resourceBackpressure.tryAcquireExecution();
         if (!admission.ok) throw new Error(admission.reason);
@@ -880,6 +897,7 @@ async function runCliWithExecutionStore(
     chain_valid: hds.getAudit().verify(),
   });
   } finally {
+    providerEgressPermission?.revoke();
     emergencyStopStateStore?.close();
     hds.closeOperationPlanMemory();
     hds.close();
