@@ -5392,3 +5392,27 @@ payload ZIP SHA-256 `1632d16b437815756fd01ff7e3414592f90eb26d28c4c398bb32a41bf95
 ### Git・作業資産
 
 package構築開始／終了時のsource `main`は`49a6e75d1c1c4c0d0383040c1dc8362d81709380`でremoteと一致。履歴追記前の復旧2世代はlocal branch／remote tagともcurrent=`49a6e75d1c1c4c0d0383040c1dc8362d81709380`、previous=`1da7e95d65fea5d9973b4fbc3f10d5ea3999906f`。`.codex-attachments/`、`.codex-remote-attachments/`、既存Linux isolation `target/`は変更していない。生成installerはローカルtempに保持し、公開・Git管理していない。
+
+## 2026-11-25 — rev8.0 P2 / Android unsigned package build
+
+### 主語・目的
+
+主語はBLUE-TANUKI製品全体。目的はAndroid native入口へ適合するAPK/AABをsourceから生成し、G09.01のpackage構築段階を前進させること。これはP2全域施工の一部分であり、Android installed製品・G09全体・製品完成を意味しない。
+
+### 構築・限定確認
+
+repo `main` sourceは`d3790c51aabf5acaab8f98e1bf12437c5a166127`。Windows x64、Node `v22.23.3`、pnpm `9.12.0`、OpenJDK `17.0.20.1`、Android compile/target SDK 37で、repo HEADを固定した非OneDrive一時cloneからrelease buildした。package manifestは最後に変更されたAndroid package source commit `7959893f51eab7294a8317fe82d70b0bab9d0582`とAndroid source SHA-256 `0562f7056d1b20f8cb56ba94fe26fb9b8fb372fe91f3a27cafaf1f5a88ed40ef`へ束縛する。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm package:android` | PASS。Gradle release buildからAPK/AABを生成。SDK XML形式とGradle deprecationの警告あり。 |
+| `corepack pnpm package:android:verify` | PASS。source-bound manifest、package構造、サイズ、SHA-256を再照合。 |
+| Android Emulator／実機へのinstall・起動、Device Link、Desktop Broker→BLUE C/J/Mの実consumer、署名、Store、secrets review | `NOT_RUN`。 |
+
+APK `blue-tanuki-android-0.1.0-0562f7056d1b20f8-unsigned.apk`は705,774 bytes、SHA-256 `ff3e092b64d043f0b3117bb137f99196afa0ba9acd40f4b4ffff23a12f907cde`。AAB `blue-tanuki-android-0.1.0-0562f7056d1b20f8-unsigned.aab`は707,427 bytes、SHA-256 `f02a3b9531e421c627a775dae970f9d62f55e4762f9a609ce69dc02f1e082881`。manifestは1,124 bytes、SHA-256 `67eac111facaa349df32d6ca1f2cd061f4524274f318182250eacd556a2bf1f4`。3成果物は`C:\Users\ohira\AppData\Local\Temp\blue-tanuki-android-g09.01-artifacts-d3790c51-7959893f`へ保管し、build clone内の各原物とのSHA-256一致を確認した。
+
+生成物はunsignedで、インストール・runtime・公開・配布の根拠にしない。Androidから同一Task/目的版をC→J→必要review→Broker→実consumer→結果/Mへ通す経路、Device Linkの実接続、更新・rollback・uninstallは未成立または未確認のままで、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、完成、P9 GOへ換算しない。
+
+### Git・作業資産
+
+履歴編集前にlocal復旧branchとremote tagをcurrent=`d3790c51aabf5acaab8f98e1bf12437c5a166127`、previous=`49a6e75d1c1c4c0d0383040c1dc8362d81709380`へ期待SHA照合付きで回転した。build clone `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-g09-android-mwvtdwe0ng1dl`は17,690 files・230,672,837 bytesで、成果物転記後は不要と判定。標準ゴミ箱APIが`Unauthorized operation`で拒否し、ゴミ箱に該当itemがないことを確認したため、cloneは保持・片付け保留とし、ACL変更や別削除経路は使っていない。
