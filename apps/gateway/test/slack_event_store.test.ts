@@ -322,4 +322,33 @@ describe("GatewaySlackEventStore", () => {
       reopened.close();
     }
   });
+
+  it("does not recommend replay after an ambiguous persisted Slack send", async () => {
+    const { store } = makeStore();
+    const transport = new ReplayTransport(event(), [{
+      ok: false,
+      delivery_status: "unknown",
+      error: "request timed out after dispatch",
+    }]);
+    const channel = new SlackChannel({ transport, delivery_store: store, log: () => {} });
+    try {
+      await channel.start(async () => {});
+      const result = await channel.send(
+        { channel: "slack", target: "C1", content: "possibly delivered" },
+        { command_id: "ambiguous-persisted-send", upstream_commit_hash: "h" },
+      );
+      expect(result).toMatchObject({
+        delivered: false,
+        delivery_status: "unknown",
+        error_kind: "non_recoverable",
+        error_code: "delivery_outcome_unknown",
+      });
+      expect(result.next_action).toContain("Slack may already have accepted this reply.");
+      expect(result.next_action).toContain("do not retry or resend automatically.");
+      expect(transport.posts).toHaveLength(1);
+    } finally {
+      await channel.stop();
+      store.close();
+    }
+  });
 });

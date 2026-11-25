@@ -460,6 +460,10 @@ describe("SlackChannel — retry/backoff on rate limits", () => {
     );
     expect(result.delivered).toBe(false);
     expect(result.delivery_status).toBe("unknown");
+    expect(result.error_kind).toBe("non_recoverable");
+    expect(result.error_code).toBe("delivery_outcome_unknown");
+    expect(result.next_action).toContain("Slack may already have accepted this reply.");
+    expect(result.next_action).toContain("do not retry or resend automatically.");
     expect(calls).toBe(1);
     await ch.stop();
   });

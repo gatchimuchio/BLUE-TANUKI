@@ -343,6 +343,13 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
           error: r.error ?? "post_failed",
           retry_after_ms: r.retry_after_ms,
         });
+    const deliveryOutcomeUnknown = !r.ok && r.delivery_status === "unknown";
+    const errorKind = deliveryOutcomeUnknown
+      ? "non_recoverable"
+      : r.error_kind ?? failureDetails?.error_kind;
+    const errorCode = deliveryOutcomeUnknown
+      ? "delivery_outcome_unknown"
+      : r.error_code ?? failureDetails?.error_code;
     const external_id = r.ts ?? `slack-${meta.command_id}-${this.counter}`;
     this.history.push({
       payload,
@@ -351,8 +358,8 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
       external_id,
       ok: r.ok,
       error: r.error,
-      error_kind: r.error_kind ?? failureDetails?.error_kind,
-      error_code: r.error_code ?? failureDetails?.error_code,
+      error_kind: errorKind,
+      error_code: errorCode,
       retry_after_ms: r.retry_after_ms ?? failureDetails?.retry_after_ms,
       next_action: r.ok ? undefined : slackNextAction(r),
     });
@@ -374,8 +381,8 @@ export class SlackChannel implements InboundChannel, OutboundChannel {
       delivered: false,
       ...(r.delivery_status ? { delivery_status: r.delivery_status } : {}),
       error,
-      error_kind: r.error_kind ?? details.error_kind,
-      error_code: r.error_code ?? details.error_code,
+      error_kind: errorKind ?? details.error_kind,
+      error_code: errorCode ?? details.error_code,
       retry_after_ms: r.retry_after_ms ?? details.retry_after_ms,
       next_action: slackNextAction(r),
     };
@@ -542,6 +549,9 @@ function truncate(s: string, n: number): string {
 }
 
 function slackNextAction(result: SlackPostResult): string {
+  if (result.delivery_status === "unknown") {
+    return "Slack may already have accepted this reply. Check the destination's delivery status before deciding whether to send again; do not retry or resend automatically.";
+  }
   const error = result.error ?? "post_failed";
   const details = classifyChannelDeliveryError({
     error,
