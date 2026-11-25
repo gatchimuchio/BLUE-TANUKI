@@ -45,13 +45,14 @@ interface ProviderEgressScope {
   body: string;
   expires_at_ms: number;
   assert_current: () => void;
-  mark_started?: () => void;
+  mark_started: () => void;
 }
 
 const providerEgressScopes = new WeakMap<ProviderEgressAuthorization, ProviderEgressScope>();
 
 /** Called only after the approved command and its reserved compute grant are checked. */
 export function createProviderEgressAuthorization(scope: ProviderEgressScope): ProviderEgressAuthorization {
+  if (typeof scope.mark_started !== "function") throw new ProviderEgressError();
   const authorization = Object.freeze({ [providerEgressAuthorizationBrand]: true as const });
   providerEgressScopes.set(authorization, { ...scope });
   return authorization;
@@ -286,7 +287,7 @@ export async function fetchProviderWithPinnedEgress(
     if (scope && authorization) {
       assertProviderEgressCurrent(scope, request.signal);
       if (!providerEgressScopes.delete(authorization)) throw new ProviderEgressError();
-      scope.mark_started?.();
+      scope.mark_started();
     }
     const req = url.protocol === "https:"
       ? https.request(requestOptions, onResponse)

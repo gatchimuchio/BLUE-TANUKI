@@ -154,8 +154,10 @@ describe("provider pinned egress transport", () => {
   describe("OpenAI transport authorization", () => {
     it("does not accept a copy of an authorization or resolve credentials without authority", async () => {
       const assertCurrent = vi.fn();
+      const markStarted = vi.fn();
       const authorization = createProviderEgressAuthorization({
-        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: assertCurrent,
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: assertCurrent, mark_started: markStarted,
       });
       const resolveHost = vi.fn(async () => publicAddresses);
       const resolveHeaders = vi.fn(async () => ({}));
@@ -167,6 +169,7 @@ describe("provider pinned egress transport", () => {
       })).rejects.toBeInstanceOf(ProviderEgressError);
 
       expect(assertCurrent).not.toHaveBeenCalled();
+      expect(markStarted).not.toHaveBeenCalled();
       expect(resolveHost).not.toHaveBeenCalled();
       expect(resolveHeaders).not.toHaveBeenCalled();
       expect(https.request).not.toHaveBeenCalled();
@@ -181,8 +184,10 @@ describe("provider pinned egress transport", () => {
       ["body", openaiEndpoint, { ...approvedRequest, body: "changed synthetic input" }],
     ])("rejects a mismatched %s before DNS or credential resolution", async (_case, endpoint, request) => {
       const assertCurrent = vi.fn();
+      const markStarted = vi.fn();
       const authorization = createProviderEgressAuthorization({
-        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: assertCurrent,
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: assertCurrent, mark_started: markStarted,
       });
       const resolveHost = vi.fn(async () => publicAddresses);
       const resolveHeaders = vi.fn(async () => ({}));
@@ -200,7 +205,8 @@ describe("provider pinned egress transport", () => {
       { name: "mixed", addresses: [...publicAddresses, { address: "127.0.0.1", family: 4 as const }] },
     ])("rejects $name DNS answers even with a current authorization", async ({ addresses }) => {
       const authorization = createProviderEgressAuthorization({
-        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: () => {},
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: () => {}, mark_started: vi.fn(),
       });
       const resolveHost = vi.fn(async () => addresses);
       const resolveHeaders = vi.fn(async () => ({}));
@@ -219,7 +225,8 @@ describe("provider pinned egress transport", () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
       try {
         const authorization = createProviderEgressAuthorization({
-          endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: 2_000, assert_current: () => {},
+          endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: 2_000,
+          assert_current: () => {}, mark_started: vi.fn(),
         });
         const resolveHost = vi.fn(async () => {
           now.mockReturnValue(2_000);
@@ -243,9 +250,11 @@ describe("provider pinned egress transport", () => {
     it.each(["DNS", "credentials"])("rechecks permission after %s resolution before opening a socket", async (stage) => {
       const revoked = new Error("synthetic permission revocation");
       let current = true;
+      const markStarted = vi.fn();
       const authorization = createProviderEgressAuthorization({
         endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
         assert_current: () => { if (!current) throw revoked; },
+        mark_started: markStarted,
       });
       const resolveHost = vi.fn(async () => {
         if (stage === "DNS") current = false;
@@ -263,14 +272,44 @@ describe("provider pinned egress transport", () => {
       expect(resolveHost).toHaveBeenCalledTimes(1);
       expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
       expect(resolveHeaders).toHaveBeenCalledTimes(stage === "credentials" ? 1 : 0);
+      expect(markStarted).not.toHaveBeenCalled();
+      expect(https.request).not.toHaveBeenCalled();
+    });
+
+    it("requires a start-boundary guard and rejects before opening HTTPS when it fails", async () => {
+      const missingGuard = {
+        endpoint: openaiEndpoint,
+        body: approvedBody,
+        expires_at_ms: Date.now() + 60_000,
+        assert_current: vi.fn(),
+      };
+      expect(() => createProviderEgressAuthorization(missingGuard as never))
+        .toThrow(ProviderEgressError);
+
+      const revoked = new Error("synthetic current execution permission revocation");
+      const markStarted = vi.fn(() => { throw revoked; });
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: () => {}, mark_started: markStarted,
+      });
+      const resolveHost = vi.fn(async () => publicAddresses);
+      const resolveHeaders = vi.fn(async () => ({ authorization: "Bearer synthetic-provider-key" }));
+
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, {
+        authorization, resolveHeaders,
+      })).rejects.toBe(revoked);
+
+      expect(markStarted).toHaveBeenCalledTimes(1);
       expect(https.request).not.toHaveBeenCalled();
     });
 
     it("consumes an authorization before invoking HTTPS even when the attempt fails", async () => {
       const startFailure = new Error("synthetic request start failure");
       vi.mocked(https.request).mockImplementationOnce(() => { throw startFailure; });
+      const markStarted = vi.fn();
       const authorization = createProviderEgressAuthorization({
-        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: () => {},
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: () => {}, mark_started: markStarted,
       });
       const resolveHost = vi.fn(async () => publicAddresses);
       const resolveHeaders = vi.fn(async () => ({ authorization: "Bearer synthetic-provider-key" }));
@@ -284,6 +323,7 @@ describe("provider pinned egress transport", () => {
       expect(resolveHost).toHaveBeenCalledTimes(1);
       expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
       expect(resolveHeaders).toHaveBeenCalledTimes(1);
+      expect(markStarted).toHaveBeenCalledTimes(1);
       expect(https.request).toHaveBeenCalledTimes(1);
     });
   });
