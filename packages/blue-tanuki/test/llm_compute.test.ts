@@ -764,6 +764,7 @@ describe("LLMComputeAdapter", () => {
         used: true,
         from_provider: "primary",
         failure_kind: "remote_service_unavailable",
+        allowed_providers: ["backup"],
         allowed_input_sources: ["accepted_inbound_request", "selected_memory_references"],
         required_capabilities: ["llm.text.generate"],
         max_total_cost: { amount: 0.3, currency: "USD" },

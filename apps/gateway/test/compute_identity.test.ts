@@ -64,7 +64,7 @@ describe("HDS to Gateway compute identity", () => {
       schema_version: "blue-tanuki.compute-context.v1",
       local_p_version: "blue-tanuki.c-input-rules.v1",
       data_exposure: {
-        input_sources: ["accepted_inbound_request"],
+        input_sources: ["accepted_inbound_request", "session_history"],
         requested_egress_provider: "registry-default",
       },
     });
@@ -157,7 +157,7 @@ describe("HDS to Gateway compute identity", () => {
         backend_hint: "primary",
         fallback_authorization: {
           allowed_providers: ["backup"],
-          allowed_input_sources: ["accepted_inbound_request"],
+          allowed_input_sources: ["accepted_inbound_request", "session_history"],
           required_capabilities: ["llm.text.generate"],
           max_total_cost: { amount: 0.3, currency: "USD" },
         },
@@ -197,13 +197,14 @@ describe("HDS to Gateway compute identity", () => {
             used: true,
             from_provider: "primary",
             failure_kind: "remote_service_unavailable",
-            allowed_input_sources: ["accepted_inbound_request"],
+            allowed_providers: ["backup"],
+            allowed_input_sources: ["accepted_inbound_request", "session_history"],
             max_total_cost: { amount: 0.3, currency: "USD" },
             estimated_total_cost: { amount: 0.3, currency: "USD", source: "CONFIG" },
           },
         },
         data_exposure_scope: {
-          input_sources: ["accepted_inbound_request"],
+          input_sources: ["accepted_inbound_request", "session_history"],
           requested_egress_provider: "primary",
         },
       },
@@ -255,6 +256,7 @@ describe("HDS to Gateway compute identity", () => {
     expect(command.payload.compute_context?.data_exposure.input_sources).toEqual([
       "accepted_inbound_request",
       "selected_memory_references",
+      "session_history",
     ]);
   });
 

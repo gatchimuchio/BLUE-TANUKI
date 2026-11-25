@@ -182,6 +182,7 @@ export type ComputeResult<TOutput extends object = Record<string, never>> = TOut
         used: true;
         from_provider: string;
         failure_kind: LLMErrorKind;
+        allowed_providers: string[];
         allowed_input_sources: string[];
         required_capabilities: string[];
         max_total_cost: { amount: number; currency: string };
@@ -493,6 +494,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
                 used: true,
                 from_provider: fallbackTrace.from_provider,
                 failure_kind: fallbackTrace.failure_kind,
+                allowed_providers: [...fallbackAuthorization.allowed_providers],
                 allowed_input_sources: [...fallbackAuthorization.allowed_input_sources],
                 required_capabilities: [...fallbackAuthorization.required_capabilities],
                 max_total_cost: { ...fallbackAuthorization.max_total_cost },
