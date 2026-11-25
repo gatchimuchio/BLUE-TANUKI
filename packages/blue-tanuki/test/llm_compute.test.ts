@@ -68,7 +68,10 @@ function computeRequestWithGrant(): ComputeRequest<LLMRequest> {
     request_id: grantRequestId,
     task_identity_digest: request.budget_scope.task_identity_digest,
     projection_digest: request.current_projection_digest,
-    purpose_digest: "e".repeat(64),
+    purpose_digest: createHash("sha256")
+      .update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update(request.input.messages[0]!.content, "utf8")
+      .digest("hex"),
     local_p_version: request.local_p_version,
     provider: "fixture-provider",
     model: "fixture-model-v1",
@@ -119,6 +122,57 @@ describe("LLMComputeAdapter", () => {
       .rejects.toThrow("llm_compute_grant_cost_limit_exceeded");
 
     expect(backend.seen).toHaveLength(0);
+  });
+
+  it("rejects a J grant whose purpose digest does not match a user task message", async () => {
+    const backend = new CapturingBackend();
+    const request = computeRequestWithGrant();
+    request.compute_grant!.purpose_digest = createHash("sha256")
+      .update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update("a different task", "utf8")
+      .digest("hex");
+
+    await expect(new LLMComputeAdapter(backend).compute(request))
+      .rejects.toThrow("llm_compute_grant_purpose_mismatch");
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("does not let the failure-review version bypass purpose binding without its projection source", async () => {
+    const backend = new CapturingBackend();
+    const request = computeRequestWithGrant();
+    const projectionVersion = "blue-tanuki.failure-review.v1";
+    request.local_p_version = projectionVersion;
+    request.compute_grant!.local_p_version = projectionVersion;
+    request.compute_grant!.purpose_digest = createHash("sha256")
+      .update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update("a different task", "utf8")
+      .digest("hex");
+
+    await expect(new LLMComputeAdapter(backend).compute(request))
+      .rejects.toThrow("llm_compute_grant_purpose_mismatch");
+    expect(backend.seen).toHaveLength(0);
+  });
+
+  it("accepts a failure-review grant bound through its projected input source", async () => {
+    const backend = new CapturingBackend();
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"], max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequestWithGrant();
+    const projectionVersion = "blue-tanuki.failure-review.v1";
+    request.local_p_version = projectionVersion;
+    request.compute_grant!.local_p_version = projectionVersion;
+    request.compute_grant!.purpose_digest = createHash("sha256")
+      .update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update("original failure-review command", "utf8")
+      .digest("hex");
+    request.data_exposure_scope.input_sources = ["failure_memory_digest_projection"];
+    request.compute_grant!.allowed_input_sources = ["failure_memory_digest_projection"];
+
+    const result = await new LLMComputeAdapter(registry).compute(request);
+
+    expect(backend.seen).toHaveLength(1);
+    expect(result.execution_identity.compute_grant_id).toBe("00000000-0000-4000-8000-000000000001");
   });
 
   it("rejects a provider input whose digest no longer matches before invocation", async () => {

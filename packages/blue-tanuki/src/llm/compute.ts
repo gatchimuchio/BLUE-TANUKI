@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ComputeGrantSchema, LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS, type ComputeGrant, type ComputeResourceUse,
+import { ComputeGrantSchema, FAILURE_REVIEW_LOCAL_P_VERSION, LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS, type ComputeGrant, type ComputeResourceUse,
   type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 import {
   LLM_ROUTING_TRACE,
@@ -651,12 +651,27 @@ function validateComputeGrantBinding(request: ComputeRequest<LLMRequest>): void 
   if (!request.data_exposure_scope.input_sources.every((source) => grant.allowed_input_sources.includes(source))) {
     throw new Error("llm_compute_grant_input_scope_exceeded");
   }
+  const purposeMessageMatches = request.input.messages.some((message) =>
+    message.role === "user" && computeGrantPurposeDigest(message.content) === grant.purpose_digest);
+  const failureReviewProjectionMatches = grant.local_p_version === FAILURE_REVIEW_LOCAL_P_VERSION &&
+    request.data_exposure_scope.input_sources.includes("failure_memory_digest_projection") &&
+    grant.allowed_input_sources.includes("failure_memory_digest_projection");
+  if (!purposeMessageMatches && !failureReviewProjectionMatches) {
+    throw new Error("llm_compute_grant_purpose_mismatch");
+  }
   const maxTokens = request.resource_limits.max_tokens;
   const timeoutMs = request.resource_limits.timeout_ms;
   if (maxTokens === undefined || maxTokens > grant.max_tokens ||
       timeoutMs === undefined || timeoutMs > grant.max_compute_ms) {
     throw new Error("llm_compute_grant_resource_limit_exceeded");
   }
+}
+
+function computeGrantPurposeDigest(content: string): string {
+  return createHash("sha256")
+    .update("blue-tanuki.compute-grant.purpose.v1\0")
+    .update(content, "utf8")
+    .digest("hex");
 }
 
 function authorizeOpenAITextEgress(
@@ -677,7 +692,7 @@ function authorizeOpenAITextEgress(
       request.fallback_authorization || input.ephemeral_images?.length || input.ephemeral_audio?.length || input.audio_transcript_for_compute ||
       input.messages.length !== 1 || message?.role !== "user" || Object.keys(message).length !== 2 ||
       input.max_tokens !== request.resource_limits.max_tokens || input.timeout_ms !== request.resource_limits.timeout_ms ||
-      createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0").update(message.content, "utf8").digest("hex") !== grant.purpose_digest) {
+      computeGrantPurposeDigest(message.content) !== grant.purpose_digest) {
     throw new Error("llm_compute_egress_scope_unbound");
   }
   authority.assertCurrent();

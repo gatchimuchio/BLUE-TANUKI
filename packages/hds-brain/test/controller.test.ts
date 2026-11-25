@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -510,6 +511,10 @@ describe("HDSUpperController.decide()", () => {
       max_cost: { amount: 0.02, currency: "USD" },
       issuer: "J",
     });
+    expect(grant?.purpose_digest).toBe(createHash("sha256")
+      .update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update("compute grant fixture", "utf8")
+      .digest("hex"));
     expect(grant!.expires_at_ms).toBeGreaterThan(grant!.issued_at_ms);
   });
 

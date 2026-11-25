@@ -393,7 +393,10 @@ describe("Executor compute boundary", () => {
       request_id: grantRequestId,
       task_identity_digest: taskIdentityDigest,
       projection_digest: commandWithDeclaredHistory.payload.compute_context.projection_digest,
-      purpose_digest: "d".repeat(64),
+      purpose_digest: createHash("sha256")
+        .update("blue-tanuki.compute-grant.purpose.v1\0")
+        .update("current request", "utf8")
+        .digest("hex"),
       local_p_version: commandWithDeclaredHistory.payload.compute_context.local_p_version,
       provider: "fixture-provider",
       model: "fixture-model-v1",
