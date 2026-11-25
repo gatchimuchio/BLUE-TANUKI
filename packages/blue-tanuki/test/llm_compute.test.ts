@@ -591,6 +591,92 @@ describe("LLMComputeAdapter", () => {
     expect(result.execution_identity.provider.fallback).toEqual({ used: false });
   });
 
+  it("settles a bounded backend cost estimate without exposing the estimate in the response", async () => {
+    const backend: LLMBackend = {
+      name: "fixture-provider",
+      async call(): Promise<LLMResponse> {
+        return {
+          content: "estimated response",
+          tokens_used: 7,
+          model: "fixture-model-v1",
+          resource_cost_estimate: { amount: 0, currency: "USD", source: "local_synthetic_backend" },
+        };
+      },
+    };
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+    const request = computeRequest();
+    request.budget_scope = {
+      parent_task_identity_digest: "c".repeat(64),
+      task_identity_digest: "d".repeat(64),
+    };
+    let settledCost: unknown;
+    const budget: ComputeBudgetPort = {
+      reserve(input) {
+        return {
+          reservation_id: "9".repeat(64),
+          reserved_tokens: input.reserved_tokens,
+          reserved_compute_ms: input.reserved_compute_ms,
+          reserved_cost: input.reserved_cost,
+        };
+      },
+      settle(_id, settlement) {
+        settledCost = settlement.cost;
+      },
+    };
+
+    const result = await new LLMComputeAdapter(registry, budget).compute(request);
+
+    expect(settledCost).toEqual({
+      status: "estimated",
+      amount: 0,
+      currency: "USD",
+      source: "local_synthetic_backend",
+    });
+    expect(result.cost).toEqual(settledCost);
+    expect(result).not.toHaveProperty("resource_cost_estimate");
+    expect(result.compute_resource_use).toMatchObject({
+      cost_status: "estimated",
+      charged_cost_amount: 0,
+      currency: "USD",
+      charge_basis: "configured_estimate",
+      used_for_authority: false,
+      may_execute: false,
+    });
+  });
+
+  it.each([
+    ["over the configured bound", { amount: 0.26, currency: "USD", source: "provider" }],
+    ["in another currency", { amount: 0.1, currency: "EUR", source: "provider" }],
+    ["without a source", { amount: 0.1, currency: "USD", source: "  " }],
+  ] as const)("keeps a cost estimate unknown when it is %s", async (_reason, estimate) => {
+    const backend: LLMBackend = {
+      name: "fixture-provider",
+      async call(): Promise<LLMResponse> {
+        return {
+          content: "estimated response",
+          tokens_used: 7,
+          model: "fixture-model-v1",
+          resource_cost_estimate: estimate,
+        };
+      },
+    };
+    const registry = new LLMRegistry().register(backend, [], {
+      capabilities: ["llm.text.generate"],
+      max_cost_per_attempt: { amount: 0.25, currency: "USD" },
+    }).setDefault("fixture-provider");
+
+    const result = await new LLMComputeAdapter(registry).compute(computeRequest());
+
+    expect(result.cost).toEqual({
+      status: "unknown",
+      reason: "provider_did_not_report_monetary_cost",
+    });
+    expect(result).not.toHaveProperty("resource_cost_estimate");
+  });
+
   it("records a permitted provider switch and bounded estimated cost in execution identity", async () => {
     class Primary implements LLMBackend {
       readonly name = "primary";

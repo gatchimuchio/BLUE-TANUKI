@@ -81,6 +81,8 @@ export interface LLMResponse {
   tokens_used: number;
   /** True only when the provider explicitly returned usage; absence means unknown. */
   tokens_usage_status?: "provider_reported" | "unknown";
+  /** Backend-supplied estimate, accepted only when it fits the configured call-cost bound. */
+  resource_cost_estimate?: { amount: number; currency: string; source: string };
   model: string;
   /** Native provider calls are data for J review, never dispatched here. */
   tool_calls?: LLMToolCallCandidate[];

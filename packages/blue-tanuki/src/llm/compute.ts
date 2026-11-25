@@ -418,9 +418,21 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
         response.tokens_usage_status === "unknown")
       ? response.tokens_usage_status ?? "unknown" : "unknown";
     const settlementTokens = measuredTokensValid ? response.tokens_used : 0;
+    const reportedCostEstimate = response.resource_cost_estimate;
+    const configuredCostEstimate = maximumCost && reportedCostEstimate &&
+        Object.getPrototypeOf(reportedCostEstimate) === Object.prototype &&
+        Object.keys(reportedCostEstimate).sort().join(",") === "amount,currency,source" &&
+        Number.isFinite(reportedCostEstimate.amount) && reportedCostEstimate.amount >= 0 &&
+        typeof reportedCostEstimate.currency === "string" && /^[A-Z]{3}$/u.test(reportedCostEstimate.currency) &&
+        reportedCostEstimate.currency === maximumCost.currency && reportedCostEstimate.amount <= maximumCost.amount &&
+        typeof reportedCostEstimate.source === "string" && reportedCostEstimate.source.trim().length > 0 &&
+        reportedCostEstimate.source.length <= 120
+      ? reportedCostEstimate : undefined;
     const cost: ComputeCost = fallbackTrace
       ? { status: "estimated", ...fallbackTrace.estimated_total_cost }
-      : { status: "unknown", reason: "provider_did_not_report_monetary_cost" };
+      : configuredCostEstimate
+        ? { status: "estimated", ...configuredCostEstimate }
+        : { status: "unknown", reason: "provider_did_not_report_monetary_cost" };
     let computeResourceUse: ComputeResourceUse | undefined;
     if (reservation) {
       const settlement: ComputeBudgetSettlement = {
@@ -455,6 +467,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     const normalizedResponse = { ...response };
     delete normalizedResponse.raw;
     delete normalizedResponse.tokens_usage_status;
+    delete normalizedResponse.resource_cost_estimate;
     delete normalizedResponse[LLM_ROUTING_TRACE];
     Object.assign(normalizedResponse, {
       provider,

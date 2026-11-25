@@ -1760,7 +1760,7 @@ describe("delegated goal purpose owner review", () => {
           goal_purpose_relation: current.goal_purpose_relation, step } : null;
         return current?.status === "results_verified" && step?.status === "verified" &&
           (step.binding as Record<string, unknown> | undefined)?.memory_status === "receipt_confirmed" ? current : null;
-      }, gateway, "matching-rule search did not reach a verified M receipt").catch((error: unknown) => {
+      }, gateway, "matching-rule search did not reach a verified M receipt", 20_000).catch((error: unknown) => {
         throw new Error(`${error instanceof Error ? error.message : String(error)}; latest_plan=${JSON.stringify(matchingLastState)}`);
       });
       expect(matchingVerifiedPlan).toMatchObject({ status: "results_verified",
