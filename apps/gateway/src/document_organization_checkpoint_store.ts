@@ -208,7 +208,7 @@ function initializeSchema(database: DatabaseSyncType): void {
       CREATE TABLE document_organization_checkpoints (
         actor_digest TEXT NOT NULL CHECK(length(actor_digest) = 64),
         source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64),
-        status TEXT NOT NULL CHECK(status IN ('ready', 'continuing', 'completed', 'held')),
+        status TEXT NOT NULL CHECK(status IN ('ready', 'memory_pending', 'continuing', 'completed', 'held')),
         checkpoint_json TEXT NOT NULL,
         checkpoint_digest TEXT NOT NULL CHECK(length(checkpoint_digest) = 64),
         updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
@@ -233,6 +233,42 @@ function initializeSchema(database: DatabaseSyncType): void {
     return !item || column.name !== item[0] || column.type !== item[1] ||
       Number(column.notnull) !== item[2] || Number(column.pk) !== item[3];
   })) {
+    throw new DocumentOrganizationCheckpointIntegrityError();
+  }
+  if (typeof existing.sql !== "string" || !existing.sql.includes("'memory_pending'")) {
+    migrateCheckpointStatusConstraint(database);
+  }
+}
+
+function migrateCheckpointStatusConstraint(database: DatabaseSyncType): void {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(`
+      CREATE TABLE document_organization_checkpoints_next (
+        actor_digest TEXT NOT NULL CHECK(length(actor_digest) = 64),
+        source_sha256 TEXT NOT NULL CHECK(length(source_sha256) = 64),
+        status TEXT NOT NULL CHECK(status IN ('ready', 'memory_pending', 'continuing', 'completed', 'held')),
+        checkpoint_json TEXT NOT NULL,
+        checkpoint_digest TEXT NOT NULL CHECK(length(checkpoint_digest) = 64),
+        updated_at INTEGER NOT NULL CHECK(updated_at >= 0),
+        PRIMARY KEY(actor_digest, source_sha256)
+      ) STRICT
+    `);
+    database.exec(`
+      INSERT INTO document_organization_checkpoints_next
+        (actor_digest, source_sha256, status, checkpoint_json, checkpoint_digest, updated_at)
+      SELECT actor_digest, source_sha256, status, checkpoint_json, checkpoint_digest, updated_at
+      FROM document_organization_checkpoints
+    `);
+    database.exec("DROP TABLE document_organization_checkpoints");
+    database.exec("ALTER TABLE document_organization_checkpoints_next RENAME TO document_organization_checkpoints");
+    database.exec("COMMIT");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Preserve the migration failure.
+    }
     throw new DocumentOrganizationCheckpointIntegrityError();
   }
 }

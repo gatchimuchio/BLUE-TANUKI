@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Executor, ToolRegistry, createExecutorApprovalAuthority } from "@blue-tanuki/core";
-import { DocumentOrganizationCoordinator, FailureMemoryStore, HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
+import { AuditLog, DocumentOrganizationCoordinator, FailureMemoryStore, HDSUpperController, LongTermMemoryStore } from "@blue-tanuki/hds-brain";
 import { createGatewayInternalInboundRequest, type InboundRequest } from "@blue-tanuki/protocol";
 import { buildApprovalRuntime } from "../src/approval_runtime.js";
 import { DocumentOrganizationCheckpointStore } from "../src/document_organization_checkpoint_store.js";
+import { documentOrganizationMemoryStorage } from "../src/operation_result_memory_config.js";
 import {
   createDocumentOrganizationCoordinator,
   prepareDocumentOrganizationSession,
@@ -42,7 +43,15 @@ function authenticatedD4Request(sessionDigest: string): InboundRequest {
 
 describe("document organization runtime cancellation", () => {
   it.each(["explicit_cancel", "shutdown"])("discards a late successful C result on %s", async (mode) => {
-    const hds = new HDSUpperController({ memory: new LongTermMemoryStore() });
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "bt-organize-cancel-"));
+    const hds = new HDSUpperController({
+      audit: new AuditLog({ filepath: join(temporaryRoot, "audit.jsonl") }),
+      memory: new LongTermMemoryStore(),
+      document_organization_memory: documentOrganizationMemoryStorage({
+        BLUE_TANUKI_STATE_ROOT: join(temporaryRoot, "state"),
+      }),
+    });
+    try {
     const memoryBefore = hds.documentOrganizationMemoryVersion();
     const origin = authenticatedD4Request("b".repeat(64));
     const coordinator = createDocumentOrganizationCoordinator(origin, source, memoryBefore);
@@ -105,24 +114,32 @@ describe("document organization runtime cancellation", () => {
     });
     expect(hds.documentOrganizationMemoryVersion()).toEqual(memoryBefore);
     expect(checkpoints[0]).toMatchObject({
-      status: "continuing", completed_cycles: 1, revision: 1, accepted_spans: [{ start: 0, end: firstQuote.length }],
+      status: "memory_pending", completed_cycles: 1, revision: 1,
+      accepted_spans: [{ start: 0, end: firstQuote.length }], memory_receipts: [],
+    });
+    expect(checkpoints[1]).toMatchObject({
+      status: "continuing", completed_cycles: 1, revision: 1, memory_receipts: [{ task_revision: 1 }],
     });
 
     if (mode === "shutdown") {
       expect(result).toBeNull();
-      expect(checkpoints).toHaveLength(1);
-      expect(coordinator.checkpoint()).toEqual(checkpoints[0]);
+      expect(checkpoints).toHaveLength(2);
+      expect(coordinator.checkpoint()).toEqual(checkpoints[1]);
     } else {
       expect(result).toMatchObject({ status: "held", command_id: null, projection: { terminal_reason: "task_cancelled" } });
       expect(result?.rendered_output).not.toContain(firstQuote);
       expect(result?.rendered_output).not.toContain(secondQuote);
-      expect(checkpoints).toHaveLength(2);
-      expect(checkpoints[1]).toEqual({
-        ...checkpoints[0], status: "held", issue_codes: ["task_cancelled"], terminal_reason: "task_cancelled",
+      expect(checkpoints).toHaveLength(3);
+      expect(checkpoints[2]).toEqual({
+        ...checkpoints[1], status: "held", issue_codes: ["task_cancelled"], terminal_reason: "task_cancelled",
       });
-      const restored = DocumentOrganizationCoordinator.restore({ source_text: source }, checkpoints[1]);
+      const restored = DocumentOrganizationCoordinator.restore({ source_text: source }, checkpoints[2]);
       expect(restored.snapshot().accepted_excerpts.map(({ quote }) => quote)).toEqual([firstQuote]);
       expect(() => restored.buildComputePrompt()).toThrow("not accepting another C cycle");
+    }
+    } finally {
+      hds.close();
+      rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
 
@@ -145,6 +162,110 @@ describe("document organization runtime cancellation", () => {
       }
     } finally {
       store.close();
+      hds.close();
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for a verified M receipt before issuing the next C cycle and resumes by the same task identity", async () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "bt-organize-memory-receipt-"));
+    const store = new DocumentOrganizationCheckpointStore(join(temporaryRoot, "checkpoint.sqlite"));
+    const memoryStorage = documentOrganizationMemoryStorage({
+      BLUE_TANUKI_STATE_ROOT: join(temporaryRoot, "state"),
+    });
+    const hds = new HDSUpperController({
+      audit: new AuditLog({ filepath: join(temporaryRoot, "audit.jsonl") }),
+      memory: new LongTermMemoryStore(),
+      document_organization_memory: memoryStorage,
+    });
+    try {
+      const origin = authenticatedD4Request("d".repeat(64));
+      const session = prepareDocumentOrganizationSession({ request: origin, source_text: source, hds, store });
+      const authority = createExecutorApprovalAuthority();
+      const executor = new Executor({
+        approval_authority: authority,
+        tools: new ToolRegistry(),
+        llm: { name: "fixture", call: async () => { throw new Error("fixture must use stubbed Executor feedback"); } },
+      });
+      const execute = vi.spyOn(executor, "execute");
+      execute.mockImplementationOnce(async (command) => ({
+        command_id: command.id, status: "success", metrics: { duration_ms: 1 },
+        result: { content: candidate(0, firstQuote) },
+      }));
+      execute.mockImplementationOnce(async (command) => ({
+        command_id: command.id, status: "success", metrics: { duration_ms: 1 },
+        result: { content: candidate(firstQuote.length + 1, secondQuote) },
+      }));
+
+      const firstDecision = hds.decide({ ...origin, content: session.coordinator.buildComputePrompt() }, {
+        transient_content: "document_organization",
+      });
+      const completeReceipt = hds.completeDocumentOrganizationMemoryReceipt.bind(hds);
+      vi.spyOn(hds, "completeDocumentOrganizationMemoryReceipt").mockImplementationOnce((input) => {
+        expect(completeReceipt(input).status).toBe("ready");
+        return { status: "pending", reason: "document_organization_m_receipt_pending" };
+      });
+      const firstRun = await runDocumentOrganizationTask({
+        coordinator: session.coordinator,
+        origin,
+        hds,
+        executor,
+        executorApproval: authority,
+        approval: buildApprovalRuntime({}),
+        failureMemory: new FailureMemoryStore(),
+        target_surface: "channel",
+        first_decision: firstDecision,
+        persist_checkpoint: session.persist_checkpoint,
+        current_memory_version: () => hds.documentOrganizationMemoryVersion(),
+      });
+
+      expect(firstRun).toMatchObject({ status: "pending", projection: { status: "memory_pending", revision: 1 } });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(session.coordinator.checkpoint().memory_receipts).toHaveLength(0);
+      const pendingProjection = session.coordinator.snapshot();
+      const checkpoint = session.coordinator.checkpoint();
+      const mismatchedReceipt = hds.completeDocumentOrganizationMemoryReceipt({
+        projection: pendingProjection,
+        prior_receipts: checkpoint.memory_receipts,
+        command_id: "wrong-compute-command",
+        command_request_id: checkpoint.pending_memory_command_request_id!,
+        allow_new_commit: false,
+      });
+      expect(mismatchedReceipt).toMatchObject({ status: "blocked", reason: "document_organization_m_record_conflict" });
+
+      const resumed = prepareDocumentOrganizationSession({ request: origin, source_text: source, hds, store });
+      expect(resumed.coordinator.snapshot()).toMatchObject({ status: "continuing", revision: 1, memory_receipt_status: "confirmed" });
+      expect(resumed.coordinator.checkpoint().memory_receipts).toHaveLength(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      const secondDecision = hds.decide({
+        ...origin,
+        id: randomUUID(),
+        content: resumed.coordinator.buildComputePrompt(),
+      }, { transient_content: "document_organization" });
+      const secondRun = await runDocumentOrganizationTask({
+        coordinator: resumed.coordinator,
+        origin,
+        hds,
+        executor,
+        executorApproval: authority,
+        approval: buildApprovalRuntime({}),
+        failureMemory: new FailureMemoryStore(),
+        target_surface: "channel",
+        first_decision: secondDecision,
+        persist_checkpoint: resumed.persist_checkpoint,
+        current_memory_version: () => hds.documentOrganizationMemoryVersion(),
+      });
+
+      expect(secondRun).toMatchObject({ status: "completed", projection: { status: "completed", revision: 2 } });
+      expect(secondRun?.projection.memory_receipt_status).toBe("confirmed");
+      expect(secondRun?.projection.accepted_excerpts.map((item) => item.quote)).toEqual([firstQuote, secondQuote]);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(readFileSync(memoryStorage.memory_database_path).includes(Buffer.from(source))).toBe(false);
+      expect(readFileSync(join(temporaryRoot, "audit.jsonl"), "utf8")).not.toContain(source);
+    } finally {
+      store.close();
+      hds.close();
       rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });

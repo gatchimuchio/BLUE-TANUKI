@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createMemoryUpdateReceipt, MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import {
   DOCUMENT_ORGANIZATION_MAX_CYCLES,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   DocumentOrganizationCoordinator,
+  documentOrganizationMemoryIdentity,
   renderDocumentOrganizationProjection,
 } from "../src/document_organization.js";
 import { HDSUpperController } from "../src/controller.js";
@@ -20,13 +22,39 @@ function candidate(excerpts: Array<{ start: number; end: number; quote: string }
   });
 }
 
+function confirmMemoryReceipt(coordinator: DocumentOrganizationCoordinator, commandId: string) {
+  const pending = coordinator.snapshot();
+  const commandRequestId = `${pending.source_ref.request_id}-cycle-${pending.revision + 1}`;
+  coordinator.beginMemoryCommit(commandId, commandRequestId);
+  const identity = documentOrganizationMemoryIdentity(pending.task_id, pending.revision);
+  const receipt = createMemoryUpdateReceipt({
+    schema_version: MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
+    update_id: identity.update_id,
+    event_id: identity.j_event_id,
+    previous_revision: pending.revision - 1,
+    revision: pending.revision,
+    content_digest: "a".repeat(64),
+    event_digest: "b".repeat(64),
+    committed_at_utc: new Date().toISOString(),
+  });
+  return coordinator.confirmMemoryReceipt({
+    task_revision: pending.revision,
+    update_id: identity.update_id,
+    j_event_id: identity.j_event_id,
+    content_digest: receipt.content_digest,
+    receipt,
+  });
+}
+
 describe("HDS J document organization cycle", () => {
   it("BT-U-C08.01-P: accepts exact citations, asks the next question, updates and stops after complete coverage", () => {
     const j = new DocumentOrganizationCoordinator({ task_id: "task-c08-positive", request_id: "request-c08-positive", source_text: source });
 
     expect(j.buildComputePrompt()).toContain(source);
     expect(j.buildComputePrompt()).toContain('"citations":[]');
-    const first = j.applyComputeOutput(candidate([{ start: 0, end: firstQuote.length, quote: firstQuote }]));
+    const uncommittedFirst = j.applyComputeOutput(candidate([{ start: 0, end: firstQuote.length, quote: firstQuote }]));
+    expect(uncommittedFirst).toMatchObject({ status: "memory_pending", memory_receipt_status: "pending", next_question: null });
+    const first = confirmMemoryReceipt(j, "command-c08-positive-1");
     expect(first).toMatchObject({
       status: "continuing",
       revision: 1,
@@ -44,11 +72,13 @@ describe("HDS J document organization cycle", () => {
       end: source.length,
       quote: secondQuote,
     }]);
-    const second = j.applyComputeOutput(JSON.stringify({
+    const uncommittedSecond = j.applyComputeOutput(JSON.stringify({
       schema_version: "blue-tanuki.memory-citation-response.v1",
       answer: secondCandidate,
       citations: [],
     }));
+    expect(uncommittedSecond).toMatchObject({ status: "memory_pending", memory_receipt_status: "pending", next_question: null });
+    const second = confirmMemoryReceipt(j, "command-c08-positive-2");
     expect(second).toMatchObject({
       status: "completed",
       revision: 2,
@@ -114,6 +144,7 @@ describe("HDS J document organization cycle", () => {
 
     const duplicate = new DocumentOrganizationCoordinator({ task_id: "task-c08-overlap", request_id: "request-c08-overlap", source_text: source });
     duplicate.applyComputeOutput(candidate([{ start: 0, end: firstQuote.length, quote: firstQuote }]));
+    confirmMemoryReceipt(duplicate, "command-c08-overlap-1");
     const overlap = duplicate.applyComputeOutput(candidate([{ start: 0, end: source.length, quote: source }]));
     expect(overlap.status).toBe("held");
     expect(overlap.issue_codes).toContain("citation_span_overlap");
@@ -143,6 +174,7 @@ describe("HDS J document organization cycle", () => {
       end: sourceFirst.length,
       quote: sourceFirst,
     }], { sections: [{ label, excerpts: [{ start: 0, end: sourceFirst.length, quote: sourceFirst }] }] }));
+    confirmMemoryReceipt(coordinator, "command-c08-02-positive-1");
 
     const checkpoint = coordinator.checkpoint();
     const checkpointJson = JSON.stringify(checkpoint);
@@ -171,11 +203,12 @@ describe("HDS J document organization cycle", () => {
 
     const secondStart = sourceFirst.length + 1;
     const secondQuote = sourceText.slice(secondStart);
-    const completed = restored.applyComputeOutput(candidate([{
+    restored.applyComputeOutput(candidate([{
       start: secondStart,
       end: sourceText.length,
       quote: secondQuote,
     }]));
+    const completed = confirmMemoryReceipt(restored, "command-c08-02-positive-2");
     expect(completed).toMatchObject({
       status: "completed",
       revision: 2,
@@ -203,6 +236,7 @@ describe("HDS J document organization cycle", () => {
     });
     const quote = "C08_PRIVATE_CHECKPOINT_SOURCE";
     coordinator.applyComputeOutput(candidate([{ start: 0, end: quote.length, quote }]));
+    confirmMemoryReceipt(coordinator, "command-c08-02-negative-1");
     const checkpoint = coordinator.checkpoint();
 
     expect(() => DocumentOrganizationCoordinator.restore({ source_text: `${sourceText}!` }, checkpoint)).toThrow(/source digest mismatch/);

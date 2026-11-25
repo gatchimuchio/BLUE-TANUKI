@@ -26,11 +26,14 @@ export {
   validateDocumentOrganizationCheckpointShape,
   renderDocumentOrganizationProjection,
   type DocumentOrganizationCheckpoint,
+  type DocumentOrganizationMemoryReceiptBinding,
+  type DocumentOrganizationMemoryReceiptStatus,
   type DocumentOrganizationMemoryVersion,
   type DocumentOrganizationAcceptedExcerpt,
   type DocumentOrganizationProjection,
   type DocumentOrganizationStatus,
 } from "./document_organization.js";
+export { type DocumentOrganizationMemoryResolution } from "./document_organization_memory.js";
 export { frame, type FrameConfig } from "./frame.js";
 export {
   createUnidentifiedGoalProjection,

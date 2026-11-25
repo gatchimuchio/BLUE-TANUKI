@@ -1,12 +1,22 @@
 import { createHash } from "node:crypto";
+import { parseMemoryUpdateReceipt, type MemoryUpdateReceiptV1 } from "@blue-tanuki/protocol";
 import type { MemoryStoreStateVersion } from "./long-term-memory/types.js";
 
 export const DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS = 12_000;
 export const DOCUMENT_ORGANIZATION_MAX_CYCLES = 3;
-export const DOCUMENT_ORGANIZATION_SCHEMA_VERSION = "blue-tanuki.document-organization.v1" as const;
+export const DOCUMENT_ORGANIZATION_SCHEMA_VERSION = "blue-tanuki.document-organization.v2" as const;
 export const DOCUMENT_ORGANIZATION_PROMPT_PREFIX = "資料整理の限定計算を行ってください。" as const;
 
-export type DocumentOrganizationStatus = "ready" | "continuing" | "completed" | "held";
+export type DocumentOrganizationStatus = "ready" | "memory_pending" | "continuing" | "completed" | "held";
+export type DocumentOrganizationMemoryReceiptStatus = "not_required" | "pending" | "confirmed" | "unverified";
+
+export interface DocumentOrganizationMemoryReceiptBinding {
+  readonly task_revision: number;
+  readonly update_id: string;
+  readonly j_event_id: string;
+  readonly content_digest: string;
+  readonly receipt: MemoryUpdateReceiptV1;
+}
 
 export interface DocumentOrganizationMemoryVersion {
   readonly schema_version: MemoryStoreStateVersion["schema_version"];
@@ -16,7 +26,7 @@ export interface DocumentOrganizationMemoryVersion {
 }
 
 export interface DocumentOrganizationCheckpoint {
-  readonly schema_version: "blue-tanuki.document-organization.checkpoint.v1";
+  readonly schema_version: "blue-tanuki.document-organization.checkpoint.v2";
   readonly task_id: string;
   readonly request_id: string;
   readonly source_sha256: string;
@@ -25,6 +35,9 @@ export interface DocumentOrganizationCheckpoint {
   readonly completed_cycles: number;
   readonly status: DocumentOrganizationStatus;
   readonly accepted_spans: readonly { readonly start: number; readonly end: number }[];
+  readonly pending_memory_command_id: string | null;
+  readonly pending_memory_command_request_id: string | null;
+  readonly memory_receipts: readonly DocumentOrganizationMemoryReceiptBinding[];
   readonly issue_codes: readonly string[];
   readonly terminal_reason: string | null;
 }
@@ -47,6 +60,7 @@ export interface DocumentOrganizationProjection {
   readonly task_id: string;
   readonly revision: number;
   readonly status: DocumentOrganizationStatus;
+  readonly memory_receipt_status: DocumentOrganizationMemoryReceiptStatus;
   readonly completed_cycles: number;
   readonly source_ref: {
     readonly request_id: string;
@@ -90,6 +104,10 @@ export class DocumentOrganizationCoordinator {
   private issueCodes: string[] = [];
   private terminalReason: string | null = null;
   private readonly accepted: DocumentOrganizationAcceptedExcerpt[] = [];
+  private pendingMemoryCommandId: string | null = null;
+  private pendingMemoryCommandRequestId: string | null = null;
+  private readonly memoryReceipts: DocumentOrganizationMemoryReceiptBinding[] = [];
+  private legacyReceiptGap = false;
   private readonly sourceHash: string;
   private restoredFromCheckpoint = false;
   private readonly memoryVersion: DocumentOrganizationMemoryVersion;
@@ -153,6 +171,10 @@ export class DocumentOrganizationCoordinator {
     coordinator.status = parsed.status;
     coordinator.issueCodes = [...parsed.issue_codes];
     coordinator.terminalReason = parsed.terminal_reason;
+    coordinator.pendingMemoryCommandId = parsed.pending_memory_command_id;
+    coordinator.pendingMemoryCommandRequestId = parsed.pending_memory_command_request_id;
+    coordinator.memoryReceipts.push(...parsed.memory_receipts);
+    coordinator.legacyReceiptGap = parsed.legacy_receipt_gap;
     coordinator.nextQuestion = parsed.status === "ready"
       ? FIRST_QUESTION
       : parsed.status === "continuing"
@@ -166,7 +188,7 @@ export class DocumentOrganizationCoordinator {
   checkpoint(): DocumentOrganizationCheckpoint {
     const projection = this.snapshot();
     return Object.freeze({
-      schema_version: "blue-tanuki.document-organization.checkpoint.v1",
+      schema_version: "blue-tanuki.document-organization.checkpoint.v2",
       task_id: projection.task_id,
       request_id: projection.source_ref.request_id,
       source_sha256: projection.source_ref.content_sha256,
@@ -175,13 +197,60 @@ export class DocumentOrganizationCoordinator {
       completed_cycles: this.completedCycles,
       status: this.status,
       accepted_spans: Object.freeze(this.accepted.map(({ source_start, source_end }) => Object.freeze({ start: source_start, end: source_end }))),
+      pending_memory_command_id: this.pendingMemoryCommandId,
+      pending_memory_command_request_id: this.pendingMemoryCommandRequestId,
+      memory_receipts: Object.freeze([...this.memoryReceipts]),
       issue_codes: Object.freeze([...this.issueCodes]),
       terminal_reason: this.terminalReason,
     });
   }
 
-  holdForRecovery(reason: "memory_state_changed" | "memory_state_unverified" | "checkpoint_capacity" | "checkpoint_integrity_failed"): DocumentOrganizationProjection {
-    return this.holdWithoutCompletingCycle(reason);
+  holdForRecovery(reason: "memory_state_changed" | "memory_state_unverified" | "memory_receipt_unverified" | "checkpoint_capacity" | "checkpoint_integrity_failed"): DocumentOrganizationProjection {
+    if (this.status === "held") return this.snapshot();
+    this.issueCodes = [reason];
+    this.hold(reason);
+    return this.snapshot();
+  }
+
+  beginMemoryCommit(commandId: string, commandRequestId: string): DocumentOrganizationProjection {
+    if (this.status !== "memory_pending" || !isSafeIdentifier(commandId) || !isSafeIdentifier(commandRequestId) ||
+        this.revision !== this.memoryReceipts.length + 1 || this.pendingMemoryCommandId !== null) {
+      throw new Error("document organization memory commit binding is invalid");
+    }
+    this.pendingMemoryCommandId = commandId;
+    this.pendingMemoryCommandRequestId = commandRequestId;
+    return this.snapshot();
+  }
+
+  confirmMemoryReceipt(binding: DocumentOrganizationMemoryReceiptBinding): DocumentOrganizationProjection {
+    const parsed = parseMemoryUpdateReceipt(binding.receipt);
+    const identity = documentOrganizationMemoryIdentity(this.input.task_id, this.revision);
+    if (this.status !== "memory_pending" || !this.pendingMemoryCommandId ||
+        binding.task_revision !== this.revision || binding.update_id !== identity.update_id ||
+        binding.j_event_id !== identity.j_event_id || !parsed.ok ||
+        parsed.receipt.update_id !== binding.update_id || parsed.receipt.content_digest !== binding.content_digest ||
+        this.revision !== this.memoryReceipts.length + 1) {
+      throw new Error("document organization M receipt does not match the pending J revision");
+    }
+    this.memoryReceipts.push(Object.freeze({ ...binding, receipt: parsed.receipt }));
+    this.pendingMemoryCommandId = null;
+    this.pendingMemoryCommandRequestId = null;
+    if (this.uncoveredRanges().length === 0) {
+      this.status = "completed";
+      this.nextQuestion = null;
+      this.terminalReason = "all_non_whitespace_source_spans_have_exact_citations; section_semantics_unverified";
+    } else if (this.completedCycles >= DOCUMENT_ORGANIZATION_MAX_CYCLES) {
+      this.status = "held";
+      this.nextQuestion = null;
+      this.terminalReason = "cycle_limit_with_uncovered_source";
+    } else {
+      this.status = "continuing";
+      this.nextQuestion = FOLLOWUP_QUESTION;
+      this.terminalReason = null;
+    }
+    this.issueCodes = [];
+    this.legacyReceiptGap = false;
+    return this.snapshot();
   }
 
   cancel(): DocumentOrganizationProjection {
@@ -265,18 +334,9 @@ export class DocumentOrganizationCoordinator {
     this.accepted.push(...additions);
     this.revision += 1;
     this.issueCodes = [];
-
-    if (this.uncoveredRanges().length === 0) {
-      this.status = "completed";
-      this.nextQuestion = null;
-      this.terminalReason = "all_non_whitespace_source_spans_have_exact_citations; section_semantics_unverified";
-    } else if (this.completedCycles >= DOCUMENT_ORGANIZATION_MAX_CYCLES) {
-      this.hold("cycle_limit_with_uncovered_source");
-    } else {
-      this.status = "continuing";
-      this.nextQuestion = FOLLOWUP_QUESTION;
-      this.terminalReason = null;
-    }
+    this.status = "memory_pending";
+    this.nextQuestion = null;
+    this.terminalReason = "memory_receipt_pending";
     return this.snapshot();
   }
 
@@ -296,6 +356,9 @@ export class DocumentOrganizationCoordinator {
       task_id: this.input.task_id,
       revision: this.revision,
       status: this.status,
+      memory_receipt_status: this.status === "memory_pending" ? "pending"
+        : this.revision === 0 ? "not_required"
+          : this.memoryReceipts.length === this.revision ? "confirmed" : "unverified",
       completed_cycles: this.completedCycles,
       source_ref: Object.freeze({
         request_id: this.input.request_id,
@@ -366,15 +429,25 @@ export class DocumentOrganizationCoordinator {
       throw new Error("document organization checkpoint counters are invalid");
     }
     if (this.status === "ready" && (this.completedCycles !== 0 || this.revision !== 0 || this.accepted.length !== 0 ||
+        this.memoryReceipts.length !== 0 || this.pendingMemoryCommandId !== null || this.pendingMemoryCommandRequestId !== null ||
         this.issueCodes.length !== 0 || this.terminalReason !== null)) {
       throw new Error("document organization ready checkpoint is inconsistent");
     }
+    if (this.status === "memory_pending" && (this.completedCycles === 0 || this.revision === 0 ||
+        this.revision !== this.memoryReceipts.length + 1 || !this.pendingMemoryCommandId || !this.pendingMemoryCommandRequestId ||
+        !isSafeIdentifier(this.pendingMemoryCommandId) || !isSafeIdentifier(this.pendingMemoryCommandRequestId) || this.issueCodes.length !== 0 ||
+        this.terminalReason !== "memory_receipt_pending" || this.nextQuestion !== null)) {
+      throw new Error("document organization pending-memory checkpoint is inconsistent");
+    }
     if (this.status === "continuing" && (this.completedCycles === 0 || this.revision === 0 ||
         this.completedCycles >= DOCUMENT_ORGANIZATION_MAX_CYCLES || uncovered.length === 0 ||
-        this.issueCodes.length !== 0 || this.terminalReason !== null)) {
+        this.memoryReceipts.length !== this.revision && !this.legacyReceiptGap ||
+        this.pendingMemoryCommandId !== null || this.pendingMemoryCommandRequestId !== null || this.issueCodes.length !== 0 || this.terminalReason !== null)) {
       throw new Error("document organization continuing checkpoint is inconsistent");
     }
     if (this.status === "completed" && (this.revision === 0 || uncovered.length !== 0 || this.issueCodes.length !== 0 ||
+        this.memoryReceipts.length !== this.revision && !this.legacyReceiptGap || this.pendingMemoryCommandId !== null ||
+        this.pendingMemoryCommandRequestId !== null ||
         this.terminalReason !== "all_non_whitespace_source_spans_have_exact_citations; section_semantics_unverified")) {
       throw new Error("document organization completed checkpoint is inconsistent");
     }
@@ -382,6 +455,7 @@ export class DocumentOrganizationCoordinator {
       const holdWithoutCycleReasons = new Set([
         "memory_state_changed",
         "memory_state_unverified",
+        "memory_receipt_unverified",
         "checkpoint_capacity",
         "checkpoint_integrity_failed",
         "task_cancelled",
@@ -405,27 +479,35 @@ export class DocumentOrganizationCoordinator {
   }
 }
 
-function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizationCheckpoint {
+function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizationCheckpoint & { readonly legacy_receipt_gap: boolean } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("document organization checkpoint is invalid");
   }
   const record = value as Record<string, unknown>;
-  const expectedKeys = ["schema_version", "task_id", "request_id", "source_sha256", "memory_version", "revision", "completed_cycles", "status", "accepted_spans", "issue_codes", "terminal_reason"];
+  const legacy = record.schema_version === "blue-tanuki.document-organization.checkpoint.v1";
+  const legacyKeys = ["schema_version", "task_id", "request_id", "source_sha256", "memory_version", "revision", "completed_cycles", "status", "accepted_spans", "issue_codes", "terminal_reason"];
+  const expectedKeys = legacy ? legacyKeys : [...legacyKeys, "pending_memory_command_id", "pending_memory_command_request_id", "memory_receipts"];
   if (Object.keys(record).length !== expectedKeys.length || expectedKeys.some((key) => !Object.hasOwn(record, key))) {
     throw new Error("document organization checkpoint fields are invalid");
   }
-  if (record.schema_version !== "blue-tanuki.document-organization.checkpoint.v1" ||
+  if ((!legacy && record.schema_version !== "blue-tanuki.document-organization.checkpoint.v2") ||
       typeof record.task_id !== "string" || !isSafeIdentifier(record.task_id) ||
       typeof record.request_id !== "string" || !isSafeIdentifier(record.request_id) ||
       typeof record.source_sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(record.source_sha256) ||
       !Number.isInteger(record.revision) || (record.revision as number) < 0 ||
       !Number.isInteger(record.completed_cycles) || (record.completed_cycles as number) < 0 ||
-      !["ready", "continuing", "completed", "held"].includes(String(record.status)) ||
+      !["ready", "memory_pending", "continuing", "completed", "held"].includes(String(record.status)) ||
+      (legacy && record.status === "memory_pending") ||
       !Array.isArray(record.accepted_spans) || record.accepted_spans.length > DOCUMENT_ORGANIZATION_MAX_CYCLES * 24 ||
       !Array.isArray(record.issue_codes) || record.issue_codes.length > 4 ||
       record.issue_codes.some((code) => typeof code !== "string" || !isSafeIssueCode(code)) ||
       new Set(record.issue_codes as unknown[]).size !== record.issue_codes.length ||
-      !(record.terminal_reason === null || typeof record.terminal_reason === "string")) {
+      !(record.terminal_reason === null || typeof record.terminal_reason === "string") ||
+      (!legacy && !(record.pending_memory_command_id === null ||
+        (typeof record.pending_memory_command_id === "string" && isSafeIdentifier(record.pending_memory_command_id)))) ||
+      (!legacy && !(record.pending_memory_command_request_id === null ||
+        (typeof record.pending_memory_command_request_id === "string" && isSafeIdentifier(record.pending_memory_command_request_id)))) ||
+      (!legacy && (!Array.isArray(record.memory_receipts) || record.memory_receipts.length > DOCUMENT_ORGANIZATION_MAX_CYCLES))) {
     throw new Error("document organization checkpoint values are invalid");
   }
   const memoryVersion = parseMemoryVersion(record.memory_version);
@@ -440,8 +522,33 @@ function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizati
     if (start < 0 || end <= start) throw new Error("document organization checkpoint span is invalid");
     return Object.freeze({ start, end });
   });
+  const memoryReceipts: DocumentOrganizationMemoryReceiptBinding[] = legacy ? [] :
+    (record.memory_receipts as unknown[]).map((binding) => {
+      if (!binding || typeof binding !== "object" || Array.isArray(binding)) {
+        throw new Error("document organization M receipt binding is invalid");
+      }
+      const item = binding as Record<string, unknown>;
+      if (Object.keys(item).length !== 5 || !Object.hasOwn(item, "task_revision") ||
+          !Object.hasOwn(item, "update_id") || !Object.hasOwn(item, "j_event_id") ||
+          !Object.hasOwn(item, "content_digest") || !Object.hasOwn(item, "receipt") ||
+          !Number.isSafeInteger(item.task_revision) || (item.task_revision as number) < 1 ||
+          typeof item.update_id !== "string" || !isSafeIdentifier(item.update_id) ||
+          typeof item.j_event_id !== "string" || !isSafeIdentifier(item.j_event_id) ||
+          typeof item.content_digest !== "string" || !/^[a-f0-9]{64}$/u.test(item.content_digest)) {
+        throw new Error("document organization M receipt binding fields are invalid");
+      }
+      const receipt = parseMemoryUpdateReceipt(item.receipt);
+      if (!receipt.ok || receipt.receipt.update_id !== item.update_id ||
+          receipt.receipt.content_digest !== item.content_digest) {
+        throw new Error("document organization M receipt binding does not match its receipt");
+      }
+      return Object.freeze({ task_revision: item.task_revision as number, update_id: item.update_id,
+        j_event_id: item.j_event_id, content_digest: item.content_digest, receipt: receipt.receipt });
+    });
+  const pendingMemoryCommandId = legacy ? null : record.pending_memory_command_id as string | null;
+  const pendingMemoryCommandRequestId = legacy ? null : record.pending_memory_command_request_id as string | null;
   return Object.freeze({
-    schema_version: record.schema_version as DocumentOrganizationCheckpoint["schema_version"],
+    schema_version: "blue-tanuki.document-organization.checkpoint.v2",
     task_id: record.task_id,
     request_id: record.request_id,
     source_sha256: record.source_sha256,
@@ -450,9 +557,13 @@ function parseDocumentOrganizationCheckpoint(value: unknown): DocumentOrganizati
     completed_cycles: record.completed_cycles as number,
     status: record.status as DocumentOrganizationStatus,
     accepted_spans: Object.freeze(acceptedSpans),
+    pending_memory_command_id: pendingMemoryCommandId,
+    pending_memory_command_request_id: pendingMemoryCommandRequestId,
+    memory_receipts: Object.freeze(memoryReceipts),
     issue_codes: Object.freeze([...(record.issue_codes as string[])]),
     terminal_reason: record.terminal_reason as string | null,
-  });
+    legacy_receipt_gap: legacy && (record.revision as number) > 0,
+  }) as DocumentOrganizationCheckpoint & { readonly legacy_receipt_gap: boolean };
 }
 
 /** Validate the checkpoint's stored shape without exposing its contents or claiming source-span validity. */
@@ -498,7 +609,8 @@ export function renderDocumentOrganizationProjection(projection: DocumentOrganiz
   const lines = [
     "資料整理結果",
     `資料整理状態（引用範囲）: ${projection.status}`,
-    "目的達成判定: 未判定（この結果は引用範囲の完了のみを示す。目的達成には、owner明示規則・同一revisionの検証済み結果・M receiptのJ照合が必要）",
+    `目的達成判定: 未判定（引用範囲の完了は目的達成ではない。owner明示規則・同一revisionの検証済み結果・M receiptのJ照合が必要）`,
+    `M receipt: ${projection.memory_receipt_status}（保存対象は引用本文を含まない作業metadata）`,
     `J更新版: ${projection.revision} / 計算周期: ${projection.completed_cycles}`,
     `原資料ダイジェスト: SHA-256 ${projection.source_ref.content_sha256}`,
     "引用採否:",
@@ -508,8 +620,11 @@ export function renderDocumentOrganizationProjection(projection: DocumentOrganiz
     `未被覆範囲: ${projection.uncovered_ranges.length > 0 ? projection.uncovered_ranges.map(({ start, end }) => `[${start},${end})`).join(", ") : "なし"}`,
     `次の問い: ${projection.next_question ?? "なし"}`,
     `終了理由: ${projection.terminal_reason ?? "継続中"}`,
-    "権限利用: false / 実行可能: false / 永続記憶反映: false",
+    "権限利用: false / 実行可能: false / 引用本文の永続記憶反映: false",
   ];
+  if (projection.status === "memory_pending") {
+    lines.push("次の行動: M更新receiptを照合中です。確認が終わるまで次の計算は実行しません。");
+  }
   if (projection.status === "held") {
     lines.push(`次の行動: ${documentOrganizationHoldNextAction(projection.terminal_reason)}`);
   }
@@ -523,6 +638,8 @@ function documentOrganizationHoldNextAction(reason: string | null): string {
       return "M世代の整合を確認する。この資料整理は終端保留であり、同じactorと原文の再送では再開しない。";
     case "memory_state_unverified":
       return "Mのhash-chainと保存状態を確認する。この資料整理は終端保留であり、自動再開しない。";
+    case "memory_receipt_unverified":
+      return "M receiptを検証できません。未確認の保存状態から次の計算へ進みません。";
     case "checkpoint_capacity":
       return "保存領域とterminal checkpointの保持方針を確認する。進行中checkpointは自動削除されていない。";
     case "checkpoint_integrity_failed":
@@ -532,6 +649,23 @@ function documentOrganizationHoldNextAction(reason: string | null): string {
     default:
       return "未被覆範囲と問題理由を確認し、原資料を見直してからowner判断で次のtaskを開始する。";
   }
+}
+
+export function documentOrganizationMemoryIdentity(taskId: string, revision: number): {
+  readonly record_id: string;
+  readonly update_id: string;
+  readonly j_event_id: string;
+} {
+  if (!isSafeIdentifier(taskId) || !Number.isSafeInteger(revision) || revision < 1 ||
+      revision > DOCUMENT_ORGANIZATION_MAX_CYCLES) {
+    throw new Error("document organization memory identity is invalid");
+  }
+  const taskDigest = sha256(taskId).slice(0, 32);
+  return Object.freeze({
+    record_id: `document-organization:${taskDigest}:${revision}`,
+    update_id: `document-organization:${taskDigest}:${revision}`,
+    j_event_id: `document-organization-memory:${taskDigest}:${revision}`,
+  });
 }
 
 function parseCandidate(raw: unknown): CandidateParseResult {

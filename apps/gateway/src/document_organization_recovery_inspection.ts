@@ -9,7 +9,7 @@ import { recoveryRequestScopeDigest } from "./recovery_request_scope.js";
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ROW_LIMIT = 128;
-const CHECKPOINT_STATUSES = ["ready", "continuing", "completed", "held"] as const;
+const CHECKPOINT_STATUSES = ["ready", "memory_pending", "continuing", "completed", "held"] as const;
 
 export type DocumentOrganizationCheckpointStatus = typeof CHECKPOINT_STATUSES[number];
 export type DocumentOrganizationCheckpointLedgerStatus =

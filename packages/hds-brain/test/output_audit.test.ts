@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { createMemoryUpdateReceipt, MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION } from "@blue-tanuki/protocol";
 import type { ExecuteCommand, ExecuteFeedback } from "@blue-tanuki/protocol";
 import {
   buildOutputAuditLog,
   classifyOutputKind,
 } from "../src/output_audit.js";
 import { HDSUpperController } from "../src/controller.js";
-import { DocumentOrganizationCoordinator, renderDocumentOrganizationProjection } from "../src/document_organization.js";
+import { DocumentOrganizationCoordinator, documentOrganizationMemoryIdentity, renderDocumentOrganizationProjection } from "../src/document_organization.js";
 
 const upstream = {
   frame_goal: "goal",
@@ -143,6 +144,25 @@ describe("OutputAudit", () => {
       schema_version: "blue-tanuki.document-organization.candidate.v1",
       sections: [{ label: "復旧検査", excerpts: [{ start: 0, end: source.length, quote: source }] }],
     }));
+    coordinator.beginMemoryCommit("command-restored-projection", "request-restored-projection");
+    const identity = documentOrganizationMemoryIdentity("task-restored-projection", 1);
+    const receipt = createMemoryUpdateReceipt({
+      schema_version: MEMORY_UPDATE_RECEIPT_SCHEMA_VERSION,
+      update_id: identity.update_id,
+      event_id: identity.j_event_id,
+      previous_revision: 0,
+      revision: 1,
+      content_digest: "a".repeat(64),
+      event_digest: "b".repeat(64),
+      committed_at_utc: new Date().toISOString(),
+    });
+    coordinator.confirmMemoryReceipt({
+      task_revision: 1,
+      update_id: identity.update_id,
+      j_event_id: identity.j_event_id,
+      content_digest: receipt.content_digest,
+      receipt,
+    });
     const projection = DocumentOrganizationCoordinator.restore(
       { source_text: source },
       coordinator.checkpoint(),

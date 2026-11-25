@@ -55,7 +55,7 @@ export interface DocumentOrganizationTaskResult {
   readonly output_audit: ReturnType<HDSUpperController["onOutputAudit"]> | ProjectionOutputAuditLog;
   readonly command_id: string | null;
   readonly upstream_commit_hash: string;
-  readonly status: "completed" | "held";
+  readonly status: "completed" | "held" | "pending";
   readonly restored_from_checkpoint: boolean;
 }
 
@@ -131,17 +131,84 @@ export function prepareDocumentOrganizationSession(input: {
     expectedDigest = stored.digest;
   };
 
-  let terminal = coordinator.snapshot().status === "completed" || coordinator.snapshot().status === "held";
-  if (!terminal) {
-    const checkpointMemoryVersion = coordinator.checkpoint().memory_version;
-    const validCurrentMemory = currentMemoryVersion.status === "verified";
-    if (!validCurrentMemory || !sameMemoryVersion(checkpointMemoryVersion, currentMemoryVersion)) {
-      coordinator.holdForRecovery(validCurrentMemory ? "memory_state_changed" : "memory_state_unverified");
-      try {
-        persist_checkpoint();
-      } catch {
-        coordinator.holdForRecovery("checkpoint_integrity_failed");
+  let projection = coordinator.snapshot();
+  let terminal = projection.status === "completed" || projection.status === "held";
+  if (projection.status === "memory_pending") {
+    const checkpoint = coordinator.checkpoint();
+    const commandId = checkpoint.pending_memory_command_id;
+    const commandRequestId = checkpoint.pending_memory_command_request_id;
+    if (!commandId || !commandRequestId) {
+      projection = coordinator.holdForRecovery("memory_receipt_unverified");
+      try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+      terminal = true;
+    } else {
+      let resolved = input.hds.completeDocumentOrganizationMemoryReceipt({
+        projection,
+        prior_receipts: checkpoint.memory_receipts,
+        command_id: commandId,
+        command_request_id: commandRequestId,
+        allow_new_commit: false,
+      });
+      if (resolved.status === "ready") {
+        projection = coordinator.confirmMemoryReceipt(resolved.binding);
+        try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+      } else if (resolved.status === "missing") {
+        const current = input.hds.documentOrganizationMemoryVersion();
+        const samePinnedMemory = current.status === "verified" &&
+          sameMemoryVersion(checkpoint.memory_version, current);
+        if (samePinnedMemory) {
+          resolved = input.hds.completeDocumentOrganizationMemoryReceipt({
+            projection,
+            prior_receipts: checkpoint.memory_receipts,
+            command_id: commandId,
+            command_request_id: commandRequestId,
+            allow_new_commit: true,
+          });
+        }
+        if (resolved.status === "ready") {
+          projection = coordinator.confirmMemoryReceipt(resolved.binding);
+          try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+        } else if (resolved.status === "pending") {
+          terminal = true;
+        } else {
+          projection = coordinator.holdForRecovery(samePinnedMemory ? "memory_receipt_unverified"
+            : current.status === "verified" ? "memory_state_changed" : "memory_state_unverified");
+          try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+          terminal = true;
+        }
+      } else if (resolved.status === "pending") {
+        terminal = true;
+      } else {
+        projection = coordinator.holdForRecovery("memory_receipt_unverified");
+        try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+        terminal = true;
       }
+      projection = coordinator.snapshot();
+      terminal ||= projection.status !== "continuing";
+    }
+  }
+
+  if (projection.revision > 0 && projection.status !== "memory_pending" && projection.status !== "held" &&
+      !input.hds.verifyDocumentOrganizationMemoryReceipts({
+        projection,
+        receipts: coordinator.checkpoint().memory_receipts,
+      })) {
+    if (projection.status === "completed") {
+      initial.holdForRecovery("memory_receipt_unverified");
+      return { coordinator: initial, restored_terminal_state: true, persist_checkpoint: () => undefined };
+    }
+    projection = coordinator.holdForRecovery("memory_receipt_unverified");
+    try { persist_checkpoint(); } catch { projection = coordinator.holdForRecovery("checkpoint_integrity_failed"); }
+    terminal = true;
+  }
+
+  if (!terminal && projection.status === "continuing") {
+    const checkpointMemoryVersion = coordinator.checkpoint().memory_version;
+    const current = input.hds.documentOrganizationMemoryVersion();
+    const validCurrentMemory = current.status === "verified";
+    if (!validCurrentMemory || !sameMemoryVersion(checkpointMemoryVersion, current)) {
+      coordinator.holdForRecovery(validCurrentMemory ? "memory_state_changed" : "memory_state_unverified");
+      try { persist_checkpoint(); } catch { coordinator.holdForRecovery("checkpoint_integrity_failed"); }
       terminal = true;
     }
   }
@@ -157,8 +224,8 @@ export function presentRestoredDocumentOrganizationProjection(input: {
   readonly target_surface: OutputTargetSurface;
 }): DocumentOrganizationTaskResult {
   const projection = input.coordinator.snapshot();
-  if (projection.status !== "completed" && projection.status !== "held") {
-    throw new Error("document organization recovery projection is not terminal");
+  if (projection.status !== "completed" && projection.status !== "held" && projection.status !== "memory_pending") {
+    throw new Error("document organization recovery projection is not displayable");
   }
   const rendered_output = renderDocumentOrganizationProjection(projection);
   const output_audit = input.hds.onDocumentOrganizationProjectionOutputAudit({
@@ -174,7 +241,7 @@ export function presentRestoredDocumentOrganizationProjection(input: {
     output_audit,
     command_id: null,
     upstream_commit_hash: input.upstream_commit_hash,
-    status: projection.status === "completed" ? "completed" : "held",
+    status: projection.status === "completed" ? "completed" : projection.status === "memory_pending" ? "pending" : "held",
     restored_from_checkpoint: true,
   };
 }
@@ -354,7 +421,27 @@ export async function runDocumentOrganizationTask(
         ? input.coordinator.rejectCycle("c_output_missing")
         : input.coordinator.applyComputeOutput(content);
     }
-    input.persist_checkpoint();
+    if (projection.status === "memory_pending") {
+      projection = input.coordinator.beginMemoryCommit(command.id, log.request_id);
+      input.persist_checkpoint();
+      const checkpoint = input.coordinator.checkpoint();
+      const receipt = input.hds.completeDocumentOrganizationMemoryReceipt({
+        projection,
+        prior_receipts: checkpoint.memory_receipts,
+        command_id: command.id,
+        command_request_id: log.request_id,
+        allow_new_commit: true,
+      });
+      if (receipt.status === "ready") {
+        projection = input.coordinator.confirmMemoryReceipt(receipt.binding);
+        input.persist_checkpoint();
+      } else if (receipt.status === "blocked") {
+        projection = input.coordinator.holdForRecovery("memory_receipt_unverified");
+        input.persist_checkpoint();
+      }
+    } else {
+      input.persist_checkpoint();
+    }
     if (projection.status !== "continuing") break;
 
     const nextRequest = normalizeInboundRequestForAuthority({
@@ -386,7 +473,7 @@ export async function runDocumentOrganizationTask(
     output_audit,
     command_id: lastCommand.id,
     upstream_commit_hash: lastCommand.upstream_decision.commit_hash,
-    status: projection.status === "completed" ? "completed" : "held",
+    status: projection.status === "completed" ? "completed" : projection.status === "memory_pending" ? "pending" : "held",
     restored_from_checkpoint: false,
   };
 }

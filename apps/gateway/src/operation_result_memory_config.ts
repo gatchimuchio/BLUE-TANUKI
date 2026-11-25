@@ -17,6 +17,11 @@ export function meaningUpdateMemoryStorage(env: NodeJS.ProcessEnv = process.env)
   return privateJMMemoryStorage(env, "meaning-update-memory");
 }
 
+/** Private J/M namespace for citation-free document-organization receipts. */
+export function documentOrganizationMemoryStorage(env: NodeJS.ProcessEnv = process.env): OperationPlanMemoryStorage {
+  return privateJMMemoryStorage(env, "document-organization-memory");
+}
+
 function privateJMMemoryStorage(env: NodeJS.ProcessEnv, directoryName: string): OperationPlanMemoryStorage {
   const stateRoot = resolve(env.BLUE_TANUKI_STATE_ROOT ?? ".blue-tanuki");
   mkdirSync(stateRoot, { recursive: true });

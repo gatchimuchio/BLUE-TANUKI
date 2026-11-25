@@ -73,7 +73,7 @@ import { GatewayResourceBackpressure } from "./resource_backpressure.js";
 import { GatewayRuntimeOwnerLease } from "./runtime_owner_lease.js";
 import { executionAdmissionForCommand, reconcileExecutionResults, reconcilePendingExecutionResults,
   reconcileStartupExecutionState } from "./reconcile_execution_results.js";
-import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { documentOrganizationMemoryStorage, goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { localInspectionReconciliationMessage, refreshOwnerSelectedFileStateObservations,
   runLocalInspectionReconciliation } from "./local_inspection_runtime.js";
 import { createFileSearchWorker } from "./file_search_worker.js";
@@ -1735,6 +1735,7 @@ async function serveWithOwnerLease(
     operation_plan_memory: operationResultMemoryStorage(),
     goal_purpose_memory: goalPurposeMemoryStorage(),
     meaning_update_memory: meaningUpdateMemoryStorage(),
+    document_organization_memory: documentOrganizationMemoryStorage(),
     failure_memory_store: failureMemory,
     operation_plan_recovery_evidence: startupOperationPlanRecoveryEvidence,
     operation_plan_broker_restore_dependency_evidence: startupBrokerRestoreDependencyEvidence,
@@ -9387,7 +9388,9 @@ async function serveWithOwnerLease(
         replyPayload(input.original_request, result.rendered_output),
         { command_id: `notify-${input.authority_request.id}`, upstream_commit_hash: log.commit.hash },
       );
-      return "drive_document_organization_restored";
+      return result.status === "pending"
+        ? "drive_document_organization_pending"
+        : "drive_document_organization_restored";
     }
 
     if (command) {
@@ -9463,7 +9466,9 @@ async function serveWithOwnerLease(
       );
       return result.status === "completed"
         ? "drive_document_organization_completed"
-        : "drive_document_organization_held";
+        : result.status === "pending"
+          ? "drive_document_organization_pending"
+          : "drive_document_organization_held";
     }
 
     if (log.commit.decision === "SUSPEND") {

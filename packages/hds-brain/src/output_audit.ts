@@ -57,7 +57,7 @@ export interface ProjectionOutputAuditLog {
   upstream_commit_hash: string;
   task_id: string;
   projection_revision: number;
-  projection_status: "completed" | "held";
+  projection_status: "completed" | "held" | "memory_pending";
   target_surface: OutputTargetSurface;
   rendered_output_digest: string;
   rendered_output_chars: number;
@@ -75,7 +75,7 @@ export interface ProjectionOutputAuditInput {
   readonly upstream_commit_hash: string;
   readonly task_id: string;
   readonly projection_revision: number;
-  readonly projection_status: "completed" | "held";
+  readonly projection_status: "completed" | "held" | "memory_pending";
   readonly rendered_output: string;
   readonly target_surface: OutputTargetSurface;
   readonly timestamp?: number;

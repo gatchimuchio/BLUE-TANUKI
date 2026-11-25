@@ -264,9 +264,16 @@ import {
 import { fReferenceForId } from "./f_reference.js";
 import {
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
+  type DocumentOrganizationCheckpoint,
+  type DocumentOrganizationMemoryReceiptBinding,
   type DocumentOrganizationMemoryVersion,
   type DocumentOrganizationProjection,
 } from "./document_organization.js";
+import {
+  DocumentOrganizationMemoryConsumer,
+  documentOrganizationMemoryStateDigest,
+  type DocumentOrganizationMemoryResolution,
+} from "./document_organization_memory.js";
 import type { MemoryStoreStateVersion } from "./long-term-memory/types.js";
 import type { CurrentMemoryReferenceVersionSnapshot } from "./long-term-memory/store.js";
 import {
@@ -479,6 +486,8 @@ export interface ControllerOptions {
   goal_purpose_memory?: OperationPlanMemoryStorage;
   /** Private J/M store for exact owner-approved meaning candidates. */
   meaning_update_memory?: OperationPlanMemoryStorage;
+  /** Private J/M store for citation-free document-organization receipts. */
+  document_organization_memory?: OperationPlanMemoryStorage;
   /** Failure-memory reference store. HDS may append only digest-bound, non-authoritative lineage records. */
   failure_memory_store?: FailureMemoryStore;
   operation_plan_state?: OperationPlanStatePort;
@@ -727,6 +736,14 @@ interface MemoryJudgmentReassessmentApprovalContext extends JMemoryApprovalRefer
   readonly args: MemoryJudgmentReassessmentArguments;
   readonly reassesses_judgment_refs: readonly string[];
   readonly evaluation: ApprovalEvaluation;
+}
+
+interface DocumentOrganizationMemoryApprovalContext extends JMemoryApprovalReference {
+  readonly task_id: string;
+  readonly request_id: string;
+  readonly command_id: string;
+  readonly command_request_id: string;
+  readonly state_digest: string;
 }
 
 type MeaningUpdateCommitResult =
@@ -1276,6 +1293,8 @@ export class HDSUpperController {
   private goal_governance?: GoalGovernanceLedger;
   private readonly goalPurposeMemory?: GoalPurposeMemoryConsumer;
   private goalPurposeMemoryApprovalContext?: GoalPurposeMemoryApprovalContext;
+  private readonly documentOrganizationMemory?: DocumentOrganizationMemoryConsumer;
+  private documentOrganizationMemoryApprovalContext?: DocumentOrganizationMemoryApprovalContext;
   private meaningUpdateMemory?: MeaningUpdateMemoryConsumer;
   private meaningUpdateMemoryStorage?: OperationPlanMemoryStorage;
   private meaningUpdateMemoryQuiesced = false;
@@ -1326,6 +1345,15 @@ export class HDSUpperController {
         readVerifiedMemoryApproval: (reference) => this.readGoalPurposeMemoryApproval(reference),
       });
       if (!this.goalPurposeMemory.recoverPending()) throw new Error("goal purpose J/M recovery is not verified");
+    }
+    if (opts.document_organization_memory) {
+      try {
+        this.documentOrganizationMemory = new DocumentOrganizationMemoryConsumer(opts.document_organization_memory, {
+          readVerifiedMemoryApproval: (reference) => this.readDocumentOrganizationMemoryApproval(reference),
+        });
+      } catch {
+        // Feature-local storage failure holds this task without preventing other HDS work.
+      }
     }
     if (opts.meaning_update_memory) {
       this.meaningUpdateMemoryStorage = opts.meaning_update_memory;
@@ -6131,6 +6159,103 @@ ${planControl.question}`,
     return version;
   }
 
+  verifyDocumentOrganizationMemoryReceipts(input: {
+    readonly projection: DocumentOrganizationProjection;
+    readonly receipts: readonly DocumentOrganizationMemoryReceiptBinding[];
+  }): boolean {
+    if (input.projection.revision === 0) return input.receipts.length === 0;
+    return this.documentOrganizationMemory?.verifyReceiptChain({
+      task_id: input.projection.task_id,
+      request_id: input.projection.source_ref.request_id,
+      source_sha256: input.projection.source_ref.content_sha256,
+      revision: input.projection.revision,
+      receipts: input.receipts,
+      projection: input.projection,
+    }) ?? false;
+  }
+
+  completeDocumentOrganizationMemoryReceipt(input: {
+    readonly projection: DocumentOrganizationProjection;
+    readonly prior_receipts: readonly DocumentOrganizationMemoryReceiptBinding[];
+    readonly command_id: string;
+    readonly command_request_id: string;
+    readonly allow_new_commit: boolean;
+  }): DocumentOrganizationMemoryResolution {
+    const memory = this.documentOrganizationMemory;
+    if (!memory) return { status: "blocked", reason: "document_organization_m_unavailable" };
+    if (input.projection.status !== "memory_pending" || input.projection.used_for_authority ||
+        input.projection.may_execute || input.projection.may_commit_to_memory ||
+        input.projection.task_id !== `document-organization:${input.projection.source_ref.request_id}` ||
+        input.projection.accepted_excerpts.some((excerpt) => excerpt.used_for_authority ||
+          excerpt.may_execute || excerpt.may_commit_to_memory) ||
+        input.prior_receipts.length !== input.projection.revision - 1) {
+      return { status: "blocked", reason: "document_organization_memory_binding_invalid" };
+    }
+    const existing = memory.resolve({
+      projection: input.projection,
+      prior_receipts: input.prior_receipts,
+      command_id: input.command_id,
+      command_request_id: input.command_request_id,
+    });
+    if (existing.status !== "missing" || !input.allow_new_commit) return existing;
+    if (!this.documentOrganizationComputeResultVerified({
+      command_id: input.command_id,
+      command_request_id: input.command_request_id,
+    })) {
+      return { status: "blocked", reason: "document_organization_compute_result_unverified" };
+    }
+    const stateDigest = documentOrganizationMemoryStateDigest(input.projection);
+    try {
+      return memory.commit({
+        projection: input.projection,
+        prior_receipts: input.prior_receipts,
+        command_id: input.command_id,
+        command_request_id: input.command_request_id,
+        authorize: (reference) => {
+          this.documentOrganizationMemoryApprovalContext = {
+            ...reference,
+            task_id: input.projection.task_id,
+            request_id: input.projection.source_ref.request_id,
+            command_id: input.command_id,
+            command_request_id: input.command_request_id,
+            state_digest: stateDigest,
+          };
+        },
+      });
+    } catch {
+      return { status: "blocked", reason: "document_organization_m_commit_failed" };
+    } finally {
+      this.documentOrganizationMemoryApprovalContext = undefined;
+    }
+  }
+
+  private documentOrganizationComputeResultVerified(input: {
+    readonly command_id: string;
+    readonly command_request_id: string;
+  }): boolean {
+    if (!this.audit.isPersistent() || !this.audit.verify()) return false;
+    const matches = this.audit.list().filter(({ log }) => "kind" in log && log.kind === "executor_feedback" &&
+      log.command_id === input.command_id && log.request_id === input.command_request_id);
+    if (matches.length !== 1) return false;
+    const log = matches[0]?.log;
+    return !!log && "kind" in log && log.kind === "executor_feedback" && log.known_command &&
+      log.upstream_decision === "ASSERT" && log.upstream_commit_hash !== null &&
+      log.feedback.status === "success" && log.feedback.result_digest_status === "recorded";
+  }
+
+  private readDocumentOrganizationMemoryApproval(reference: JMemoryApprovalReference): unknown {
+    const context = this.documentOrganizationMemoryApprovalContext;
+    if (!context || context.update_id !== reference.update_id || context.j_event_id !== reference.j_event_id ||
+        context.content_digest !== reference.content_digest || !/^[a-f0-9]{64}$/u.test(context.state_digest) ||
+        context.task_id !== `document-organization:${context.request_id}` ||
+        !this.audit.isPersistent() || !this.audit.verify()) return null;
+    if (!this.documentOrganizationComputeResultVerified({
+      command_id: context.command_id,
+      command_request_id: context.command_request_id,
+    })) return null;
+    return Object.freeze({ ...reference });
+  }
+
   /** Audit a terminal J projection restored without a new C execution. */
   onDocumentOrganizationProjectionOutputAudit(input: {
     readonly request_id: string;
@@ -6141,8 +6266,8 @@ ${planControl.question}`,
     readonly timestamp?: number;
   }): ProjectionOutputAuditLog {
     const projection = input.projection;
-    if (projection.status !== "completed" && projection.status !== "held") {
-      throw new Error("only terminal document organization projections may be restored for display");
+    if (projection.status !== "completed" && projection.status !== "held" && projection.status !== "memory_pending") {
+      throw new Error("document organization projection is not safe for restored display");
     }
     if (projection.used_for_authority || projection.may_execute || projection.may_commit_to_memory ||
         projection.accepted_excerpts.some((excerpt) => excerpt.used_for_authority || excerpt.may_execute || excerpt.may_commit_to_memory)) {
@@ -6438,6 +6563,7 @@ ${planControl.question}`,
 
   close(): void {
     this.goalPurposeMemory?.close();
+    this.documentOrganizationMemory?.close();
     this.meaningUpdateMemory?.close();
   }
 

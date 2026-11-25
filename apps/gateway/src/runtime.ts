@@ -70,7 +70,7 @@ import { resolveFailureMemoryFilePath } from "./failure_memory_paths.js";
 import { registerMcpCallToolFromEnvironment } from "./mcp_connection_client.js";
 import { McpRuntimeObservationStore } from "./mcp_connection_observation.js";
 import { OperationPlanStateStore } from "./operation_plan_store.js";
-import { goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
+import { documentOrganizationMemoryStorage, goalPurposeMemoryStorage, meaningUpdateMemoryStorage, operationResultMemoryStorage } from "./operation_result_memory_config.js";
 import { EmergencyStopControl } from "./emergency_stop_control.js";
 import { EmergencyStopStateStore } from "./emergency_stop_state_store.js";
 import { resolveSecretMaterial, secretRefKey } from "./secret_store.js";
@@ -311,6 +311,7 @@ async function runCliWithExecutionStore(
     operation_plan_memory: operationResultMemoryStorage(process.env),
     goal_purpose_memory: goalPurposeMemoryStorage(process.env),
     meaning_update_memory: meaningUpdateMemoryStorage(process.env),
+    document_organization_memory: documentOrganizationMemoryStorage(process.env),
   });
   let emergencyStopStateStore: EmergencyStopStateStore | undefined;
   try {

@@ -81,7 +81,7 @@ describe("document organization ordinary entries", () => {
       expect(cliOutput).toContain("決定事項:青");
       expect(cliOutput).toContain("未確認:期限");
       expect(cliOutput).toContain("分類意味:未検証");
-      expect(cliOutput).toContain("権限利用: false / 実行可能: false / 永続記憶反映: false");
+      expect(cliOutput).toContain("権限利用: false / 実行可能: false / 引用本文の永続記憶反映: false");
 
       gateway = spawnGateway(runtimeEnv);
       await waitForHealth(gatewayPort, gateway);
@@ -119,7 +119,7 @@ describe("document organization ordinary entries", () => {
       expect(webchatOutput).toContain("決定事項:青");
       expect(webchatOutput).toContain("未確認:期限");
       expect(webchatOutput).toContain("分類意味:未検証");
-      expect(webchatOutput).toContain("権限利用: false / 実行可能: false / 永続記憶反映: false");
+      expect(webchatOutput).toContain("権限利用: false / 実行可能: false / 引用本文の永続記憶反映: false");
       expect(cliOutput).toBe(webchatOutput);
       let resolveOwnerRequestId!: (requestId: string) => void;
       const ownerRequestId = new Promise<string>((resolve) => { resolveOwnerRequestId = resolve; });
@@ -146,7 +146,7 @@ describe("document organization ordinary entries", () => {
       expect(ownerOutput).toContain("目的達成判定: 未判定");
       expect(ownerOutput).toContain("決定事項:青");
       expect(ownerOutput).toContain("未確認:期限");
-      expect(ownerOutput).toContain("権限利用: false / 実行可能: false / 永続記憶反映: false");
+      expect(ownerOutput).toContain("権限利用: false / 実行可能: false / 引用本文の永続記憶反映: false");
       expect(upstreamCallCount).toBe(6);
       expect(upstreamPrompts[1]).toContain(`"start":0,"end":${firstExcerpt.length}`);
       expect(upstreamPrompts[3]).toContain(`"start":0,"end":${firstExcerpt.length}`);
@@ -4592,7 +4592,7 @@ async function closeServer(server: Server): Promise<void> {
 function extractProjection(output: string): string {
   const start = output.indexOf("資料整理結果\n");
   if (start < 0) throw new Error(`CLI did not print a canonical projection:\n${output}`);
-  const terminal = "権限利用: false / 実行可能: false / 永続記憶反映: false";
+  const terminal = "権限利用: false / 実行可能: false / 引用本文の永続記憶反映: false";
   const end = output.indexOf(terminal, start);
   if (end < 0) throw new Error(`CLI projection had no non-authority footer:\n${output}`);
   return output.slice(start, end + terminal.length);
