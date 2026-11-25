@@ -546,6 +546,7 @@ function replyTarget(req: InboundRequest): string {
 export function replyPayload(req: InboundRequest, content: string): ChannelSendPayload {
   const replyThread = req.channel === "slack" ? req.metadata?.["slack_reply_thread_ts"] : undefined;
   const discordReply = req.channel === "discord" ? req.metadata?.["discord_message_id"] : undefined;
+  const telegramReply = req.channel === "telegram" ? req.metadata?.["telegram_message_id"] : undefined;
   const payload: ChannelSendPayload = {
     channel: req.channel,
     target: replyTarget(req),
@@ -556,6 +557,9 @@ export function replyPayload(req: InboundRequest, content: string): ChannelSendP
     ...(typeof discordReply === "string" && /^(?:0|[1-9]\d{0,19})$/u.test(discordReply) &&
       BigInt(discordReply) <= 18_446_744_073_709_551_615n
       ? { reply_to_message_id: discordReply }
+      : {}),
+    ...(typeof telegramReply === "number" && Number.isSafeInteger(telegramReply) && telegramReply > 0
+      ? { reply_to_message_id: String(telegramReply) }
       : {}),
   };
   const validRequestId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(req.id);

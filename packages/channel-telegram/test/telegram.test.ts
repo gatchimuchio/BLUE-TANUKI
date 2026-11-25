@@ -14,6 +14,7 @@ interface FixtureUpdate {
   update_id: number;
   message?: {
     message_id: number;
+    ephemeral_message_id?: number;
     message_thread_id?: number;
     text?: string;
     caption?: string;
@@ -251,6 +252,19 @@ describe("Telegram inbound identity and update handoff", () => {
     ]);
 
     expect(received).toHaveLength(0);
+  });
+
+  it("does not route zero-id ephemeral or unsent messages into public conversation replies", async () => {
+    const { received, inbox, fileRequests } = await receiveOnePoll([
+      { update_id: 23, message: { message_id: 0, ephemeral_message_id: 7, text: "private ephemeral fixture",
+        chat: { id: 12345, type: "private" }, from: { id: 12345 } } },
+      { update_id: 24, message: { message_id: 0, text: "unsent message fixture",
+        chat: { id: 12345, type: "private" }, from: { id: 12345 } } },
+    ]);
+
+    expect(received).toHaveLength(0);
+    expect(inbox.state()).toBe("handler_returned");
+    expect(fileRequests).toEqual([]);
   });
 
   it("keeps unsupported attachment presence explicit without retaining Telegram file identifiers", async () => {
@@ -836,6 +850,15 @@ describe("Telegram message splitting", () => {
     expect(diagnostics).not.toContain(responseDescription);
   });
 
+  it("rejects an invalid native reply message id before dispatch", async () => {
+    const fetch = vi.fn<TelegramFetch>();
+    const channel = new TelegramChannel({ bot_token: "fixture-token", fetch });
+    const result = await channel.send({ channel: "telegram", target: "12345", content: "fixture reply",
+      reply_to_message_id: "0" }, { command_id: "fixture", upstream_commit_hash: "a".repeat(64) });
+    expect(result).toMatchObject({ delivered: false, delivery_status: "not_delivered", error_code: "invalid_reply_target" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("sends all chunks to the original Telegram forum topic", async () => {
     const sent: Array<Record<string, unknown>> = [];
     const fetch: TelegramFetch = async (_input, init) => {
@@ -843,11 +866,16 @@ describe("Telegram message splitting", () => {
       return new Response(JSON.stringify({ ok: true, result: { message_id: sent.length } }));
     };
     const channel = new TelegramChannel({ bot_token: "fixture-token", fetch, inbox: new MemoryTelegramInbox() });
-    const result = await channel.send({ channel: "telegram", target: "-1001|41", content: "x".repeat(4097) },
+    const result = await channel.send({ channel: "telegram", target: "-1001|41", content: "x".repeat(4097),
+      reply_to_message_id: "52" },
       { command_id: "fixture", upstream_commit_hash: "a".repeat(64) });
     expect(result.delivered).toBe(true);
     expect(sent).toHaveLength(2);
     expect(sent.map((body) => body.message_thread_id)).toEqual([41, 41]);
     expect(sent.every((body) => body.chat_id === "-1001")).toBe(true);
+    expect(sent.map((body) => body.reply_parameters)).toEqual([
+      { message_id: 52, allow_sending_without_reply: false },
+      { message_id: 52, allow_sending_without_reply: false },
+    ]);
   });
 });

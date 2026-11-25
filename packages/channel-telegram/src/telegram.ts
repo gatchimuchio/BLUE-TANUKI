@@ -210,9 +210,14 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
       error_kind: "non_recoverable", error_code: "invalid_target" };
     if (payload.content.length === 0) return { delivered: false, delivery_status: "not_delivered",
       error: "telegram_empty_message_rejected", error_kind: "non_recoverable", error_code: "empty_message" };
+    const replyToMessageId = parseTelegramReplyMessageId(payload.reply_to_message_id);
+    if (payload.reply_to_message_id !== undefined && replyToMessageId === null) {
+      return { delivered: false, delivery_status: "not_delivered", error: "telegram_reply_target_invalid",
+        error_kind: "non_recoverable", error_code: "invalid_reply_target" };
+    }
     const store = this.opts.delivery_store;
     if (!store) {
-      if (this.opts.fetch) return this.sendChunks(payload, meta, target, signal, at);
+      if (this.opts.fetch) return this.sendChunks(payload, meta, target, signal, at, replyToMessageId ?? undefined);
       return deliveryStoreUnavailable();
     }
     let delivery: ReturnType<TelegramOutboundDeliveryStore["beginDelivery"]>;
@@ -229,7 +234,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         error_kind: "non_recoverable", error_code: "duplicate_delivery" };
     }
 
-    const result = await this.sendChunks(payload, meta, target, signal, at);
+    const result = await this.sendChunks(payload, meta, target, signal, at, replyToMessageId ?? undefined);
     const state = result.delivered ? "delivered"
       : result.delivery_status === "not_delivered" ? "not_delivered" : "outcome_unknown";
     try {
@@ -247,6 +252,7 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     target: TelegramTarget,
     signal: AbortSignal,
     at: number,
+    replyToMessageId?: number,
   ): Promise<SendResult> {
     const chunks = splitTelegramText(payload.content);
     const sentIds: string[] = [];
@@ -258,6 +264,10 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
         const r = await this.call("sendMessage", {
           chat_id: target.chat_id,
           ...(target.message_thread_id !== undefined ? { message_thread_id: target.message_thread_id } : {}),
+          ...(replyToMessageId !== undefined ? { reply_parameters: {
+            message_id: replyToMessageId,
+            allow_sending_without_reply: false,
+          } } : {}),
           text: chunks[index],
           disable_web_page_preview: true,
         }, signal);
@@ -361,6 +371,10 @@ export class TelegramChannel implements InboundChannel, OutboundChannel {
     const chatId = normalizeTelegramChatId(msg.chat?.id);
     if (!chatId || !Number.isSafeInteger(msg.message_id) || msg.message_id < 0) {
       this.log("[telegram] ignored inbound message with invalid chat or message identity");
+      return null;
+    }
+    if (msg.message_id === 0) {
+      this.log("[telegram] ignored zero-id inbound message; ephemeral and unsent-message replies are unsupported");
       return null;
     }
     const threadId = normalizeTelegramThreadId(msg.message_thread_id);
@@ -915,6 +929,13 @@ function parseTelegramTarget(value: string): TelegramTarget | null {
   return Number.isSafeInteger(message_thread_id) && message_thread_id > 0
     ? { chat_id, message_thread_id }
     : null;
+}
+
+function parseTelegramReplyMessageId(value: string | undefined): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[1-9]\d{0,15}$/u.test(value)) return null;
+  const messageId = Number(value);
+  return Number.isSafeInteger(messageId) ? messageId : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
