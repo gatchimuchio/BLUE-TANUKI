@@ -5,6 +5,7 @@ import {
   type TransientImageInput,
   type TransientAudioInput,
 } from "@blue-tanuki/protocol";
+import type { ProviderEgressAuthorization } from "./provider_transport.js";
 
 export const LLM_IMAGE_INPUT_CAPABILITY = "llm.image.input";
 export const LLM_AUDIO_TRANSCRIPTION_CAPABILITY = "llm.audio.transcription";
@@ -102,7 +103,7 @@ export interface LLMBackend {
   resolveModel?(requestedModel?: string): string | undefined;
   /** Set only by a local registry that stamps its selected canonical backend on responses. */
   readonly canonical_provider_identity?: true;
-  call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse>;
+  call(req: LLMRequest, signal?: AbortSignal, egressAuthorization?: ProviderEgressAuthorization): Promise<LLMResponse>;
 }
 
 export type LLMProviderCredentialAction = "llm.text.generate" | "llm.audio.transcription";

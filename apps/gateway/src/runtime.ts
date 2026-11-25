@@ -8,6 +8,7 @@ import {
   DOCUMENT_ORGANIZATION_MAX_SOURCE_CHARS,
   DOCUMENT_ORGANIZATION_PROMPT_PREFIX,
   extractFailureSignatures,
+  normalizeForDetection,
 } from "@blue-tanuki/hds-brain";
 import {
   Executor,
@@ -22,7 +23,7 @@ import {
   type AgentWorkerLifecycleEvent,
   type SessionStore,
 } from "@blue-tanuki/core";
-import type { ExecuteFeedback, InboundRequest } from "@blue-tanuki/protocol";
+import { createGatewayInternalInboundRequest, type ExecuteFeedback } from "@blue-tanuki/protocol";
 import {
   createCliInboundRequest,
   createCliGoalCompletionStatusRequest,
@@ -78,6 +79,7 @@ const gatewayLog = createLogger({ scope: "gateway" });
 const hdsLog = createLogger({ scope: "hds-brain" });
 const coreLog = createLogger({ scope: "blue-tanuki" });
 const auditLog = createLogger({ scope: "audit" });
+const ALLOW_OPENAI_TEXT_EGRESS = "--allow-openai-text-egress";
 
 /**
  * Build the HDS memory store from Setup-managed or explicit env configuration.
@@ -140,10 +142,20 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
   let operationPlanState: OperationPlanStateStore | undefined;
   try {
     const cleanArgs = stripEnvFileArgs([...argv]);
-    const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
-    const goalCompletionStatus = parseCliGoalCompletionStatusArguments(cleanArgs);
+    const externalTextOptInCount = cleanArgs.filter((arg) => arg === ALLOW_OPENAI_TEXT_EGRESS).length;
+    if (externalTextOptInCount > 1) throw new Error("openai_text_egress_flag_repeated");
+    const externalTextOptIn = externalTextOptInCount === 1;
+    const requestArgs = externalTextOptIn
+      ? cleanArgs.filter((arg, index) => arg !== ALLOW_OPENAI_TEXT_EGRESS && (index !== 0 || arg !== "--"))
+      : cleanArgs;
+    const completionRulesRequested = cliGoalCompletionRulesRequested(requestArgs);
+    const goalCompletionStatus = parseCliGoalCompletionStatusArguments(requestArgs);
     if (completionRulesRequested && goalCompletionStatus) {
       throw new Error("--goal-completion-status cannot be combined with --goal-completion-rules-stdin");
+    }
+    if (externalTextOptIn && (completionRulesRequested || goalCompletionStatus ||
+        requestArgs.some((arg) => arg.startsWith("--") && arg !== "--json" && arg !== CLI_TASK_STDIN_FLAG))) {
+      throw new Error("openai_text_egress_requires_one_shot_chat");
     }
     mcpRuntimeObservations = McpRuntimeObservationStore.fromEnvironment(process.env);
     executionStore = GatewayExecutionIntentStore.fromEnvironment(ownerLease.executionEpoch, process.env);
@@ -152,8 +164,8 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     operationPlanState = OperationPlanStateStore.fromEnvironment(process.env);
     computeBudget = GatewayComputeBudgetStore.fromEnvironment(process.env);
     resourceBackpressure = GatewayResourceBackpressure.fromEnvironment(process.env);
-    await runCliWithExecutionStore(argv, executionStore, ownerLease, computeBudget, resourceBackpressure,
-      mcpRuntimeObservations, operationPlanState, goalCompletionStatus);
+    await runCliWithExecutionStore(requestArgs, executionStore, ownerLease, computeBudget, resourceBackpressure,
+      mcpRuntimeObservations, operationPlanState, goalCompletionStatus, externalTextOptIn);
   } finally {
     computeBudget?.close();
     executionStore?.close();
@@ -164,7 +176,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
 }
 
 async function runCliWithExecutionStore(
-  argv: readonly string[],
+  cleanArgs: string[],
   executionStore: GatewayExecutionIntentStore,
   ownerLease: GatewayRuntimeOwnerLease,
   computeBudget: GatewayComputeBudgetStore,
@@ -172,8 +184,8 @@ async function runCliWithExecutionStore(
   mcpRuntimeObservations: McpRuntimeObservationStore,
   operationPlanState: OperationPlanStateStore,
   goalCompletionStatus: ReturnType<typeof parseCliGoalCompletionStatusArguments>,
+  externalTextOptIn: boolean,
 ): Promise<void> {
-  const cleanArgs = stripEnvFileArgs([...argv]);
   const completionRulesRequested = cliGoalCompletionRulesRequested(cleanArgs);
   const taskStdinCount = cleanArgs.filter((arg) => arg === CLI_TASK_STDIN_FLAG).length;
   if (taskStdinCount > 1) throw new Error("--task-stdin cannot be repeated");
@@ -250,11 +262,18 @@ async function runCliWithExecutionStore(
   if (goalCompletionRules && userInput.length === 0) {
     throw new Error("--goal-completion-rules-stdin requires an explicit CLI task");
   }
+  if (externalTextOptIn) {
+    const { normalized_content } = normalizeForDetection(taskStdinRequested ? taskStdinInput : userInput);
+    const explicitText = normalized_content.trim();
+    if (!explicitText || /^(?:\/|--|(?:tool|plan|failure):)/iu.test(explicitText)) {
+      throw new Error("openai_text_egress_requires_explicit_chat_text");
+    }
+  }
   const content = organizationSource !== null
     ? `/organize\n${organizationSource}`
     : taskStdinRequested ? taskStdinInput : userInput || "Hello, BLUE-TANUKI";
 
-  const inbound: InboundRequest = goalCompletionStatus
+  const cliInbound = goalCompletionStatus
     ? createCliGoalCompletionStatusRequest({ id: randomUUID(), timestamp: Date.now(),
       request_id_digest: goalCompletionStatus.request_id_digest })
     : createCliInboundRequest({
@@ -263,6 +282,18 @@ async function runCliWithExecutionStore(
       timestamp: Date.now(),
       ...(goalCompletionRules ? { goal_completion_rules: goalCompletionRules } : {}),
     });
+  const inbound = externalTextOptIn
+    ? createGatewayInternalInboundRequest({
+      ...cliInbound,
+      metadata: {
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer",
+      },
+    })
+    : cliInbound;
 
   const plugins = goalCompletionStatus ? undefined : await loadPluginRuntime();
   plugins?.enforceLLMConfig(process.env);
@@ -274,7 +305,7 @@ async function runCliWithExecutionStore(
   const hds = new HDSUpperController({
     audit: buildAuditLog(),
     memory: memoryStore,
-    llm_route: resolveLLMCommandRouteFromEnv(),
+    llm_route: resolveLLMCommandRouteFromEnv(process.env, externalTextOptIn ? inbound : undefined),
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(process.env),
@@ -373,11 +404,13 @@ async function runCliWithExecutionStore(
   gatewayLog.info("LLM command route", describeLLMCommandRoute());
 
   const tools = new ToolRegistry();
-  tools.register(createMemoryPersonalizationStopTool(memoryStore));
-  registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
-  plugins.registerTools(tools);
-  const runtimeSchedules = await RuntimeScheduleManager.open({ env: process.env });
-  for (const tool of runtimeSchedules.tools()) tools.register(tool);
+  if (!externalTextOptIn) {
+    tools.register(createMemoryPersonalizationStopTool(memoryStore));
+    registerMcpCallToolFromEnvironment(tools, process.env, mcpRuntimeObservations);
+    plugins.registerTools(tools);
+    const runtimeSchedules = await RuntimeScheduleManager.open({ env: process.env });
+    for (const tool of runtimeSchedules.tools()) tools.register(tool);
+  }
   const llm = buildLLMBackendFromEnv();
   const session_store = buildSessionStore(plugins);
 
@@ -456,7 +489,7 @@ async function runCliWithExecutionStore(
     session_store,
   });
 
-  const organizationSourceText = documentOrganizationSourceFromRequest(inbound);
+  const organizationSourceText = externalTextOptIn ? null : documentOrganizationSourceFromRequest(inbound);
   const organizationStore = organizationSourceText === null
     ? null
     : DocumentOrganizationCheckpointStore.fromEnvironment(process.env);
@@ -588,6 +621,13 @@ async function runCliWithExecutionStore(
       chain_valid: hds.getAudit().verify(),
     });
     return;
+  }
+
+  if (externalTextOptIn && (command.type !== "llm_call" || !command.payload.compute_context?.compute_grant?.egress)) {
+    hds.onCommandLifecycle(command.id, "approval_cancelled", {
+      actor: inbound.user, reason: "openai_text_egress_requires_bound_text_compute",
+    });
+    throw new Error("openai_text_egress_requires_bound_text_compute");
   }
 
   const failureGate = failureMemory.evaluateCommandGate(command, {

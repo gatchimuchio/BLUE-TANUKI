@@ -492,6 +492,9 @@ export const ComputeGrantSchema = z.object({
   local_p_version: z.string().trim().min(1).max(120),
   provider: z.string().trim().min(1).max(120),
   model: z.string().trim().min(1).max(200),
+  egress: z.object({
+    endpoint: z.string().max(2048).url().startsWith("https://"),
+  }).strict().optional(),
   allowed_input_sources: z.array(LLMComputeInputSourceSchema).min(1).max(6),
   max_tokens: z.number().int().safe().positive(),
   max_compute_ms: z.number().int().safe().positive(),

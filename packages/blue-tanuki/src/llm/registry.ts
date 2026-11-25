@@ -15,6 +15,7 @@ import {
   type LLMResponse,
 } from "./base.js";
 import { LLMFallbackAuthorizationSchema, type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
+import type { ProviderEgressAuthorization } from "./provider_transport.js";
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase();
@@ -378,6 +379,7 @@ export class LLMRegistry implements LLMBackend {
     req: LLMRequest,
     signal: AbortSignal | undefined,
     fallbackAuthorization?: LLMFallbackAuthorization,
+    egressAuthorization?: ProviderEgressAuthorization,
   ): Promise<LLMResponse> {
     const selected = this.resolveWithName(req.backend_hint);
     const providerSignal = this.bindProviderConfigurationSignal(signal);
@@ -407,11 +409,11 @@ export class LLMRegistry implements LLMBackend {
       });
     }
     try {
-      const response = await this.callWithRetry(selected.backend, selected.name, req, providerSignal);
+      const response = await this.callWithRetry(selected.backend, selected.name, req, providerSignal, egressAuthorization);
       return withoutRoutingTrace(response);
     } catch (error) {
       // Cancellation and command deadlines must not start another provider call.
-      if (providerSignal.aborted) throw error;
+      if (providerSignal.aborted || egressAuthorization) throw error;
       const classification = classifyLLMError(error);
       if (this.fallbackName && classification.retryable) {
         const fallback = this.resolveWithName(this.fallbackName);
@@ -501,6 +503,7 @@ export class LLMRegistry implements LLMBackend {
     name: string,
     req: LLMRequest,
     signal?: AbortSignal,
+    egressAuthorization?: ProviderEgressAuthorization,
   ): Promise<LLMResponse> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.retryPolicy.max_attempts; attempt += 1) {
@@ -509,7 +512,7 @@ export class LLMRegistry implements LLMBackend {
         const response = await backend.call({
           ...req,
           backend_hint: undefined,
-        }, signal);
+        }, signal, egressAuthorization);
         // AbortSignalを無視するproviderがowner取消後に応答しても、その応答を健全性の証拠にしない。
         if (signal?.aborted) throw createLLMAbortError(name, signal);
         this.recordSuccess(name);
@@ -528,7 +531,7 @@ export class LLMRegistry implements LLMBackend {
         }
         const classification = classifyLLMError(error);
         this.recordFailure(name, classification.kind, classification.retryable, classification.retry_after_ms);
-        const mayRetry = classification.retryable && attempt < this.retryPolicy.max_attempts;
+        const mayRetry = !egressAuthorization && classification.retryable && attempt < this.retryPolicy.max_attempts;
         if (!mayRetry) break;
         try {
           await this.sleep(this.retryDelayMs(attempt, classification.retry_after_ms), signal);

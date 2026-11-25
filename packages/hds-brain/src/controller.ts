@@ -57,6 +57,7 @@ import {
   RuntimeScheduleDeleteArgumentsSchema,
   runtimeScheduleDeleteResult,
   settingsWriteRequiresNativeCredentialEntry,
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_GOOGLE_READ_CREDENTIAL_TARGETS,
   SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   llmSettingsWriteEnvKeys,
@@ -500,6 +501,8 @@ export interface LLMCommandRoute {
   timeout_ms?: number;
   /** Configuration-derived ceiling; J binds each grant to the current request under this cap. */
   compute_cost_limit?: { amount: number; currency: string };
+  /** CLIで本人が指定した一回のテキスト送信。Provider設定や資格とは別に照合する。 */
+  external_text_egress?: { request_id: string; purpose_digest: string; endpoint: string };
   /** Owner-supplied HDS grant. Omission prevents alternate-provider fallback. */
   fallback_authorization?: LLMFallbackAuthorization;
 }
@@ -1267,6 +1270,7 @@ export class HDSUpperController {
   private readonly detectors: DetectorRegistry;
   private readonly memory?: LongTermMemoryPort;
   private readonly llm_route: LLMCommandRoute;
+  private externalTextEgressIssued = false;
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
   private goal_governance?: GoalGovernanceLedger;
@@ -6987,9 +6991,23 @@ ${planControl.question}`,
       ...(agentDelegationMessage ? [agentDelegationMessage] : []),
       ...(planComputeMcpCatalogOutputMessage ? [planComputeMcpCatalogOutputMessage] : [])];
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
+    const purposeDigest = createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
+      .update(req.content, "utf8").digest("hex");
+    const externalEgress = this.llm_route.external_text_egress;
+    const allowExternalText = !this.externalTextEgressIssued && externalEgress !== undefined &&
+      externalEgress.request_id === req.id && externalEgress.purpose_digest === purposeDigest &&
+      externalEgress.endpoint === SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai &&
+      backendHint === "openai-compatible" && !this.llm_route.fallback_authorization &&
+      this.llm_route.compute_cost_limit !== undefined &&
+      Number.isFinite(this.llm_route.compute_cost_limit.amount) && this.llm_route.compute_cost_limit.amount > 0 &&
+      req.channel === "cli" && req.user === "local-user" && isGatewayInternalInboundRequest(req) &&
+      req.metadata?.["blue_tanuki.actor_kind"] === "owner" && req.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+      !req.session_id && req.goal_completion_rules === undefined && !isGatewayInternalTransientAudioRequest(req) &&
+      !planCompute && !agentDelegation && !log.memory_retrieval_suppressed_for && computeContextMessages.length === 0;
     // The executor may append stored messages after J issues this command, so declare that source with the session scope.
     const computeSessionId = log.memory_retrieval_suppressed_for === "transient_document_organization" ||
-      log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" || planCompute?.requested
+      log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" ||
+      planCompute?.requested || allowExternalText
       ? undefined
       : isGatewayInternalInboundRequest(req) && req.session_id
       ? req.session_id
@@ -7036,14 +7054,17 @@ ${planControl.question}`,
       request_id: req.id,
       task_identity_digest: computeBudget.task_identity_digest,
       projection_digest: computeProjectionDigest,
-      purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
-        .update(req.content, "utf8").digest("hex"),
+      purpose_digest: purposeDigest,
       local_p_version: computeLocalPVersion,
       input_sources: computeInputSources,
       max_tokens: planningMaxTokens,
       max_compute_ms: planningTimeoutMs,
       issued_at_ms: this.nowMs(),
+      ...(allowExternalText && computeLocalPVersion === "blue-tanuki.c-input-rules.v1" &&
+        computeInputSources.length === 1 && computeInputSources[0] === "accepted_inbound_request"
+        ? { egress: { endpoint: externalEgress.endpoint } } : {}),
     });
+    if (computeGrant?.egress) this.externalTextEgressIssued = true;
     const llmPayload: LLMCallPayload = {
       messages: [
         ...memoryMessages,
@@ -7162,6 +7183,7 @@ function issueHdsComputeGrant(input: {
   max_tokens: number;
   max_compute_ms: number;
   issued_at_ms: number;
+  egress?: ComputeGrant["egress"];
 }): ComputeGrant | undefined {
   const provider = input.route.backend_hint?.trim();
   const model = input.route.model?.trim();
@@ -7182,6 +7204,7 @@ function issueHdsComputeGrant(input: {
     local_p_version: input.local_p_version,
     provider,
     model,
+    ...(input.egress ? { egress: input.egress } : {}),
     allowed_input_sources: [...new Set(input.input_sources)],
     max_tokens: input.max_tokens,
     max_compute_ms: input.max_compute_ms,

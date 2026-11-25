@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ComputeGrantSchema, LLMFallbackAuthorizationSchema, type ComputeGrant, type ComputeResourceUse,
+import { ComputeGrantSchema, LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS, type ComputeGrant, type ComputeResourceUse,
   type LLMFallbackAuthorization } from "@blue-tanuki/protocol";
 import {
   LLM_ROUTING_TRACE,
@@ -11,6 +11,8 @@ import {
   type LLMResponse,
 } from "./base.js";
 import { LLMRegistry } from "./registry.js";
+import { encodeOpenAIChatCompletionBody } from "./openai_compatible.js";
+import { createProviderEgressAuthorization, type ProviderEgressAuthorization } from "./provider_transport.js";
 
 export const LLM_COMPUTE_PROFILE = Object.freeze({
   id: "blue-tanuki.llm-call",
@@ -220,13 +222,18 @@ export class LLMComputeResourceFailure extends Error {
 }
 
 /** Cの計算契約。権限・承認・操作発行はこの境界に含めない。 */
+export interface ComputeEgressAuthority {
+  assertCurrent: () => void;
+  markStarted: () => void;
+}
+
 export interface ComputeBackend<
   TInput extends object = Record<string, never>,
   TOutput extends object = Record<string, never>,
 > {
   /** True only when every call reserves its resource bound before invoking the provider. */
   readonly budget_reservations_enabled?: boolean;
-  compute(request: ComputeRequest<TInput>, signal?: AbortSignal): Promise<ComputeResult<TOutput>>;
+  compute(request: ComputeRequest<TInput>, signal?: AbortSignal, egressAuthority?: ComputeEgressAuthority): Promise<ComputeResult<TOutput>>;
 }
 
 /** 既存のLLM providerを共通Compute契約へ接続するadapter。 */
@@ -241,7 +248,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     this.budget_reservations_enabled = budget !== undefined;
   }
 
-  async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal): Promise<ComputeResult<LLMResponse>> {
+  async compute(request: ComputeRequest<LLMRequest>, signal?: AbortSignal, egressAuthority?: ComputeEgressAuthority): Promise<ComputeResult<LLMResponse>> {
     const fallbackAuthorization = validateComputeRequest(request);
     const maximumCost = this.backend instanceof LLMRegistry
       ? this.backend.maximumCostForCall(request.input, fallbackAuthorization)
@@ -257,7 +264,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
       : undefined;
     try {
       throwIfComputeAborted(this.backend, providerSignal);
-      return await this.computeWithCapacity(request, providerSignal, fallbackAuthorization, maximumCost);
+      return await this.computeWithCapacity(request, providerSignal, fallbackAuthorization, maximumCost, egressAuthority);
     } finally {
       capacityLease?.release();
     }
@@ -268,6 +275,7 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     signal: AbortSignal | undefined,
     fallbackAuthorization: LLMFallbackAuthorization | undefined,
     maximumCost: ComputeBudgetCostBound | undefined,
+    egressAuthority: ComputeEgressAuthority | undefined,
   ): Promise<ComputeResult<LLMResponse>> {
     throwIfComputeAborted(this.backend, signal);
     let reservation: ComputeBudgetReservation | undefined;
@@ -335,12 +343,20 @@ export class LLMComputeAdapter implements ComputeBackend<LLMRequest, LLMResponse
     const startedAt = performance.now();
     let response: LLMResponse;
     let providerInvocationStarted = false;
+    const markProviderStarted = () => {
+      egressAuthority!.markStarted();
+      providerInvocationStarted = true;
+    };
     try {
       validateComputeGrantBinding(request);
       validateComputeGrantCost(request.compute_grant, maximumCost);
-      providerInvocationStarted = true;
+      const egressAuthorization = request.compute_grant?.egress
+        ? authorizeOpenAITextEgress(request, Boolean(reservation) && maximumCalls === 1 && this.backend instanceof LLMRegistry,
+          egressAuthority, markProviderStarted)
+        : undefined;
+      if (!egressAuthorization) providerInvocationStarted = true;
       response = this.backend instanceof LLMRegistry
-        ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization)
+        ? await this.backend.callWithFallbackAuthorization(request.input, signal, fallbackAuthorization, egressAuthorization)
         : await this.backend.call(request.input, signal);
     } catch (error) {
       const computeMs = Math.max(0, Math.ceil(performance.now() - startedAt));
@@ -626,6 +642,34 @@ function validateComputeGrantBinding(request: ComputeRequest<LLMRequest>): void 
       timeoutMs === undefined || timeoutMs > grant.max_compute_ms) {
     throw new Error("llm_compute_grant_resource_limit_exceeded");
   }
+}
+
+function authorizeOpenAITextEgress(
+  request: ComputeRequest<LLMRequest>,
+  budgetReservedForSingleCall: boolean,
+  authority: ComputeEgressAuthority | undefined,
+  markStarted: () => void,
+): ProviderEgressAuthorization {
+  const grant = request.compute_grant!;
+  const endpoint = grant.egress?.endpoint;
+  const { input } = request;
+  const message = input.messages[0];
+  if (!budgetReservedForSingleCall || !authority ||
+      endpoint !== SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai || grant.provider !== "openai-compatible" ||
+      grant.local_p_version !== "blue-tanuki.c-input-rules.v1" || grant.max_cost.amount <= 0 ||
+      grant.allowed_input_sources.length !== 1 || grant.allowed_input_sources[0] !== "accepted_inbound_request" ||
+      request.data_exposure_scope.input_sources.length !== 1 || request.data_exposure_scope.input_sources[0] !== "accepted_inbound_request" ||
+      request.fallback_authorization || input.ephemeral_images?.length || input.ephemeral_audio?.length || input.audio_transcript_for_compute ||
+      input.messages.length !== 1 || message?.role !== "user" || Object.keys(message).length !== 2 ||
+      input.max_tokens !== request.resource_limits.max_tokens || input.timeout_ms !== request.resource_limits.timeout_ms ||
+      createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0").update(message.content, "utf8").digest("hex") !== grant.purpose_digest) {
+    throw new Error("llm_compute_egress_scope_unbound");
+  }
+  authority.assertCurrent();
+  return createProviderEgressAuthorization({
+    endpoint, body: encodeOpenAIChatCompletionBody(input, grant.model), expires_at_ms: grant.expires_at_ms,
+    assert_current: authority.assertCurrent, mark_started: markStarted,
+  });
 }
 
 function validateComputeGrantCost(

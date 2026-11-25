@@ -6,6 +6,7 @@ import {
 import {
   fetchProviderWithPinnedEgress,
   ProviderEgressError,
+  type ProviderDispatch,
 } from "./provider_transport.js";
 
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_MS = 30_000;
@@ -18,6 +19,7 @@ export async function fetchWithProviderTimeout<T>(
   timeout_ms: number | undefined,
   consumeResponse: (response: Response) => Promise<T>,
   callerSignal?: AbortSignal,
+  dispatch?: ProviderDispatch,
 ): Promise<T> {
   if (callerSignal?.aborted) throw createLLMAbortError(provider, callerSignal);
   const timeoutMs = timeout_ms ?? DEFAULT_PROVIDER_HTTP_TIMEOUT_MS;
@@ -40,7 +42,7 @@ export async function fetchWithProviderTimeout<T>(
       // the egress destination; providers that need a redirect must be configured at its final URL.
       redirect: "error",
       signal: controller.signal,
-    });
+    }, undefined, dispatch);
     return await consumeResponse(response);
   } catch (error) {
     if (timedOut) throw createLLMAbortError(provider, controller.signal);

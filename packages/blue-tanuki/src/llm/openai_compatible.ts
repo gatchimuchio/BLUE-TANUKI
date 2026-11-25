@@ -16,6 +16,7 @@ import {
 } from "./base.js";
 import type { TransientAudioInput } from "@blue-tanuki/protocol";
 import { fetchWithProviderTimeout, readProviderJson } from "./fetch_timeout.js";
+import type { ProviderEgressAuthorization } from "./provider_transport.js";
 
 export interface OpenAICompatibleBackendOptions {
   apiKey?: string;
@@ -37,6 +38,10 @@ function normalizeEndpoint(endpoint: string): string {
   if (trimmed.endsWith("/chat/completions")) return trimmed;
   if (trimmed.endsWith("/v1")) return `${trimmed}/chat/completions`;
   return trimmed;
+}
+
+export function encodeOpenAIChatCompletionBody(req: LLMRequest, model: string, messages: unknown = req.messages): string {
+  return JSON.stringify({ model, messages, max_tokens: req.max_tokens, temperature: req.temperature });
 }
 
 function normalizeTranscriptionEndpoint(endpoint: string): string {
@@ -285,7 +290,7 @@ export class OpenAICompatibleBackend implements LLMBackend {
     return requestedModel ?? this.opts.defaultModel;
   }
 
-  async call(req: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
+  async call(req: LLMRequest, signal?: AbortSignal, authorization?: ProviderEgressAuthorization): Promise<LLMResponse> {
     const images = validateLLMImageInputs(req.ephemeral_images);
     const audio = validateLLMAudioInputs(req.ephemeral_audio);
     if (req.audio_transcript_for_compute !== undefined &&
@@ -345,25 +350,14 @@ export class OpenAICompatibleBackend implements LLMBackend {
     const messages = images.length > 0
       ? openAICompatibleMessages(req.messages, images)
       : req.messages;
-    const body: {
-      model: string;
-      messages: unknown;
-      max_tokens?: number;
-      temperature?: number;
-    } = {
-      model: req.model ?? this.opts.defaultModel,
-      messages,
-    };
-    if (req.max_tokens !== undefined) body.max_tokens = req.max_tokens;
-    if (req.temperature !== undefined) body.temperature = req.temperature;
+    const model = req.model ?? this.opts.defaultModel;
 
     return fetchWithProviderTimeout(
       this.name,
       this.endpoint,
       {
         method: "POST",
-        headers: await this.headersForCredential("llm.text.generate", this.endpoint),
-        body: JSON.stringify(body),
+        body: encodeOpenAIChatCompletionBody(req, model, messages),
       },
       req.timeout_ms,
       async (response) => {
@@ -380,9 +374,10 @@ export class OpenAICompatibleBackend implements LLMBackend {
             },
           );
         }
-        return parseResponse(this.name, await readProviderJson(this.name, response), body.model);
+        return parseResponse(this.name, await readProviderJson(this.name, response), model);
       },
       signal,
+      { authorization, resolveHeaders: () => this.headersForCredential("llm.text.generate", this.endpoint) },
     );
   }
 

@@ -1,17 +1,28 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import * as https from "node:https";
 import { createServer as createTcpServer, isIP } from "node:net";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createProviderEgressAuthorization,
   fetchProviderWithPinnedEgress,
   ProviderEgressError,
   resolveProviderTarget,
 } from "../src/llm/provider_transport.js";
 import { OpenAICompatibleBackend } from "../src/llm/openai_compatible.js";
 
+vi.mock("node:https", () => ({
+  request: vi.fn(() => { throw new Error("Unexpected HTTPS socket in transport test"); }),
+}));
+
+const openaiEndpoint = "https://api.openai.com/v1/chat/completions";
+const approvedBody = JSON.stringify({ model: "fixture-model", messages: [{ role: "user", content: "synthetic prompt" }] });
+const approvedRequest = { method: "POST", body: approvedBody };
+const publicAddresses = [{ address: "93.184.216.34", family: 4 as const }];
 const servers: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
+  vi.mocked(https.request).mockClear();
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
 
@@ -138,6 +149,143 @@ describe("provider pinned egress transport", () => {
     )).rejects.toBeInstanceOf(ProviderEgressError);
 
     expect(dnsLookups).toBe(0);
+  });
+
+  describe("OpenAI transport authorization", () => {
+    it("does not accept a copy of an authorization or resolve credentials without authority", async () => {
+      const assertCurrent = vi.fn();
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: assertCurrent,
+      });
+      const resolveHost = vi.fn(async () => publicAddresses);
+      const resolveHeaders = vi.fn(async () => ({}));
+
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, { resolveHeaders }))
+        .rejects.toBeInstanceOf(ProviderEgressError);
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, {
+        authorization: { ...authorization }, resolveHeaders,
+      })).rejects.toBeInstanceOf(ProviderEgressError);
+
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect(resolveHost).not.toHaveBeenCalled();
+      expect(resolveHeaders).not.toHaveBeenCalled();
+      expect(https.request).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["host", "https://provider.invalid/v1/chat/completions", approvedRequest],
+      ["path", "https://api.openai.com/v1/other", approvedRequest],
+      ["query", `${openaiEndpoint}?extra=1`, approvedRequest],
+      ["scheme", "http://api.openai.com/v1/chat/completions", approvedRequest],
+      ["method", openaiEndpoint, { ...approvedRequest, method: "PUT" }],
+      ["body", openaiEndpoint, { ...approvedRequest, body: "changed synthetic input" }],
+    ])("rejects a mismatched %s before DNS or credential resolution", async (_case, endpoint, request) => {
+      const assertCurrent = vi.fn();
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: assertCurrent,
+      });
+      const resolveHost = vi.fn(async () => publicAddresses);
+      const resolveHeaders = vi.fn(async () => ({}));
+
+      await expect(fetchProviderWithPinnedEgress(endpoint, request, resolveHost, { authorization, resolveHeaders }))
+        .rejects.toBeInstanceOf(ProviderEgressError);
+
+      expect(resolveHost).not.toHaveBeenCalled();
+      expect(resolveHeaders).not.toHaveBeenCalled();
+      expect(https.request).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "private", addresses: [{ address: "10.0.0.1", family: 4 as const }] },
+      { name: "mixed", addresses: [...publicAddresses, { address: "127.0.0.1", family: 4 as const }] },
+    ])("rejects $name DNS answers even with a current authorization", async ({ addresses }) => {
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: () => {},
+      });
+      const resolveHost = vi.fn(async () => addresses);
+      const resolveHeaders = vi.fn(async () => ({}));
+
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, {
+        authorization, resolveHeaders,
+      })).rejects.toBeInstanceOf(ProviderEgressError);
+
+      expect(resolveHost).toHaveBeenCalledTimes(1);
+      expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
+      expect(resolveHeaders).not.toHaveBeenCalled();
+      expect(https.request).not.toHaveBeenCalled();
+    });
+
+    it("rejects an authorization that expires during DNS resolution", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      try {
+        const authorization = createProviderEgressAuthorization({
+          endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: 2_000, assert_current: () => {},
+        });
+        const resolveHost = vi.fn(async () => {
+          now.mockReturnValue(2_000);
+          return publicAddresses;
+        });
+        const resolveHeaders = vi.fn(async () => ({}));
+
+        await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, {
+          authorization, resolveHeaders,
+        })).rejects.toBeInstanceOf(ProviderEgressError);
+
+        expect(resolveHost).toHaveBeenCalledTimes(1);
+        expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
+        expect(resolveHeaders).not.toHaveBeenCalled();
+        expect(https.request).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it.each(["DNS", "credentials"])("rechecks permission after %s resolution before opening a socket", async (stage) => {
+      const revoked = new Error("synthetic permission revocation");
+      let current = true;
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000,
+        assert_current: () => { if (!current) throw revoked; },
+      });
+      const resolveHost = vi.fn(async () => {
+        if (stage === "DNS") current = false;
+        return publicAddresses;
+      });
+      const resolveHeaders = vi.fn(async () => {
+        current = false;
+        return { authorization: "Bearer synthetic-provider-key" };
+      });
+
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, {
+        authorization, resolveHeaders,
+      })).rejects.toBe(revoked);
+
+      expect(resolveHost).toHaveBeenCalledTimes(1);
+      expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
+      expect(resolveHeaders).toHaveBeenCalledTimes(stage === "credentials" ? 1 : 0);
+      expect(https.request).not.toHaveBeenCalled();
+    });
+
+    it("consumes an authorization before invoking HTTPS even when the attempt fails", async () => {
+      const startFailure = new Error("synthetic request start failure");
+      vi.mocked(https.request).mockImplementationOnce(() => { throw startFailure; });
+      const authorization = createProviderEgressAuthorization({
+        endpoint: openaiEndpoint, body: approvedBody, expires_at_ms: Date.now() + 60_000, assert_current: () => {},
+      });
+      const resolveHost = vi.fn(async () => publicAddresses);
+      const resolveHeaders = vi.fn(async () => ({ authorization: "Bearer synthetic-provider-key" }));
+      const dispatch = { authorization, resolveHeaders };
+
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, dispatch))
+        .rejects.toBe(startFailure);
+      await expect(fetchProviderWithPinnedEgress(openaiEndpoint, approvedRequest, resolveHost, dispatch))
+        .rejects.toBeInstanceOf(ProviderEgressError);
+
+      expect(resolveHost).toHaveBeenCalledTimes(1);
+      expect(resolveHost).toHaveBeenCalledWith("api.openai.com");
+      expect(resolveHeaders).toHaveBeenCalledTimes(1);
+      expect(https.request).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("rejects mixed public and private DNS answers", async () => {

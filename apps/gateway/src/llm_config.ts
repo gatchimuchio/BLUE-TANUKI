@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   AnthropicBackend,
   LLMRegistry,
@@ -12,7 +13,7 @@ import {
   type LLMRetryPolicy,
 } from "@blue-tanuki/core";
 import type { LLMCommandRoute } from "@blue-tanuki/hds-brain";
-import { LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
+import { LLMFallbackAuthorizationSchema, SETTINGS_WRITE_ACTIVATION_DESTINATIONS, type InboundRequest } from "@blue-tanuki/protocol";
 import {
   hasLLMSecretMaterial,
   LLM_SECRET_KEYS,
@@ -286,7 +287,10 @@ function credentialResolverFor(
     if (direct) return direct;
     const reference = env[secretRefKey(key)];
     if (!reference) return undefined;
-    return resolveSecretMaterial({ [secretRefKey(key)]: reference }, key);
+    const requireDpapiKeyMatch = key === "OPENAI_API_KEY" &&
+      configuredEndpoint === SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai;
+    return resolveSecretMaterial({ [secretRefKey(key)]: reference }, key,
+      requireDpapiKeyMatch ? { require_dpapi_key_match: true } : {});
   };
 }
 
@@ -593,6 +597,7 @@ export function buildLLMCommandRouteFromEnv(
 /** Resolve the exact configured provider/model pair for the runtime J compute contract. */
 export function resolveLLMCommandRouteFromEnv(
   env: Env = process.env,
+  externalTextRequest?: Pick<InboundRequest, "id" | "content">,
 ): LLMCommandRoute {
   const route = buildLLMCommandRouteFromEnv(env);
   const identity = inspectLLMRegistryConfiguration(env);
@@ -601,6 +606,28 @@ export function resolveLLMCommandRouteFromEnv(
     model: identity.model,
     messages: [{ role: "user", content: "" }],
   }, route.fallback_authorization);
+  if (externalTextRequest) {
+    const reference = envValue(env, "OPENAI_API_KEY_REF");
+    if (!reference || envValue(env, "OPENAI_API_KEY", "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_API_KEY_REF",
+        "LLM_API_KEY", "LLM_API_KEY_REF", "OPENAI_COMPAT_ENDPOINT", "OPENAI_ENDPOINT", "LLM_ENDPOINT",
+        "OPENAI_COMPAT_HEADERS_JSON", "LLM_HEADERS_JSON", "LLM_PROVIDERS_JSON",
+        "BLUE_TANUKI_SECRET_DIR", "BLUE_TANUKI_POWERSHELL")) {
+      throw new Error("openai_text_egress_requires_unmodified_protected_credential_route");
+    }
+    validateLLMSecretReferences({ OPENAI_API_KEY_REF: reference });
+    if (!wantsBackend(env, "openai") || identity.provider !== "openai-compatible" ||
+        route.fallback_authorization || envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND") ||
+        buildLLMRetryPolicyFromEnv(env).max_attempts !== 1 ||
+        !computeCostLimit || !Number.isFinite(computeCostLimit.amount) || computeCostLimit.amount <= 0) {
+      throw new Error("openai_text_egress_requires_funded_single_openai_attempt");
+    }
+    route.external_text_egress = {
+      request_id: externalTextRequest.id,
+      purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
+        .update(externalTextRequest.content, "utf8").digest("hex"),
+      endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+    };
+  }
   return {
     ...route,
     backend_hint: identity.provider,

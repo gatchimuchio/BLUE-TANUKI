@@ -4,6 +4,7 @@ import * as https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { Readable, type Transform } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS } from "@blue-tanuki/protocol";
 import {
   isLoopbackNetworkAddress,
   isPublicNetworkAddress,
@@ -34,6 +35,38 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
 export type ProviderHostResolver = (
   hostname: string,
 ) => Promise<ResolvedNetworkAddress[]>;
+
+const providerEgressAuthorizationBrand: unique symbol = Symbol("provider egress authorization");
+
+export type ProviderEgressAuthorization = { readonly [providerEgressAuthorizationBrand]: true };
+
+interface ProviderEgressScope {
+  endpoint: string;
+  body: string;
+  expires_at_ms: number;
+  assert_current: () => void;
+  mark_started?: () => void;
+}
+
+const providerEgressScopes = new WeakMap<ProviderEgressAuthorization, ProviderEgressScope>();
+
+/** Called only after the approved command and its reserved compute grant are checked. */
+export function createProviderEgressAuthorization(scope: ProviderEgressScope): ProviderEgressAuthorization {
+  const authorization = Object.freeze({ [providerEgressAuthorizationBrand]: true as const });
+  providerEgressScopes.set(authorization, { ...scope });
+  return authorization;
+}
+
+export interface ProviderDispatch {
+  authorization?: ProviderEgressAuthorization;
+  resolveHeaders: () => Promise<Record<string, string>>;
+}
+
+function assertProviderEgressCurrent(scope: ProviderEgressScope, signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
+  if (Date.now() >= scope.expires_at_ms) throw new ProviderEgressError();
+  scope.assert_current();
+}
 
 export interface ProviderEgressTarget {
   hostname: string;
@@ -171,6 +204,7 @@ export async function fetchProviderWithPinnedEgress(
   input: string | URL | Request,
   init: RequestInit = {},
   resolveHost: ProviderHostResolver = resolveNetworkAddresses,
+  dispatch?: ProviderDispatch,
 ): Promise<Response> {
   let request: Request;
   let url: URL;
@@ -181,15 +215,23 @@ export async function fetchProviderWithPinnedEgress(
     throw new ProviderEgressError();
   }
 
-  // A reachable Provider endpoint is not permission to transfer Owner data.
-  // The runtime does not yet carry a J-issued ComputeGrant to this transport,
-  // so only explicitly local loopback Providers may receive request content.
-  if (!isLoopbackHostname(hostnameFor(url))) throw new ProviderEgressError();
+  const remote = !isLoopbackHostname(hostnameFor(url));
+  const authorization = dispatch?.authorization;
+  const scope = authorization && providerEgressScopes.get(authorization);
+  if (remote || authorization) {
+    if (!scope || url.href !== SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai ||
+        url.href !== scope.endpoint || request.method !== "POST" || init.body !== scope.body) {
+      throw new ProviderEgressError();
+    }
+    assertProviderEgressCurrent(scope, request.signal);
+  }
 
   const target = await resolveProviderTarget(url, request.signal, resolveHost);
   const { hostname, addresses } = target;
 
-  const headers = new Headers(request.headers);
+  if (scope) assertProviderEgressCurrent(scope, request.signal);
+  const headers = new Headers(dispatch ? await dispatch.resolveHeaders() : request.headers);
+  if (scope && !/^Bearer \S+$/u.test(headers.get("authorization") ?? "")) throw new ProviderEgressError();
   headers.delete("host");
   const normalizedHeaders = Object.fromEntries(headers.entries());
   const lookup = buildPinnedLookup(addresses);
@@ -201,6 +243,7 @@ export async function fetchProviderWithPinnedEgress(
     method: request.method,
     headers: normalizedHeaders,
     lookup,
+    ...(remote ? { agent: false, rejectUnauthorized: true } : {}),
     ...(addresses.length > 1 ? { autoSelectFamily: true } : {}),
     ...(url.protocol === "https:" && isIP(hostname) === 0 ? { servername: hostname } : {}),
     signal: request.signal,
@@ -240,6 +283,11 @@ export async function fetchProviderWithPinnedEgress(
         reject(error);
       }
     };
+    if (scope && authorization) {
+      assertProviderEgressCurrent(scope, request.signal);
+      if (!providerEgressScopes.delete(authorization)) throw new ProviderEgressError();
+      scope.mark_started?.();
+    }
     const req = url.protocol === "https:"
       ? https.request(requestOptions, onResponse)
       : http.request(requestOptions, onResponse);

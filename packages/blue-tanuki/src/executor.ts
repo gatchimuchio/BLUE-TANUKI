@@ -108,6 +108,7 @@ import {
   type ComputeBackend,
   type ComputeInputSource,
   type ComputeRequest,
+  type ComputeEgressAuthority,
 } from "./llm/compute.js";
 import type { BrokerTargetVersionObservation, ComposioConnectHandoffReservation, GmailDraftContentReview, Tool, ToolContentReview, ToolRegistry,
   ToolExecutionLifecycleObservation } from "./tools/registry.js";
@@ -3071,11 +3072,27 @@ export class Executor {
       context.before_execute?.();
       observation = captureOperationCommandObservation(cmd);
       switch (cmd.type) {
-        case "llm_call":
+        case "llm_call": {
+          const grant = cmd.payload.compute_context?.compute_grant;
+          const assertEgressCurrent = grant?.egress ? () => {
+            const record = APPROVED_COMMAND_RECORDS.get(cmd);
+            if (!record?.ticket.hds_source_context_digest || !record.runtime.require_hds_execution_binding ||
+                !record.runtime.store || !record.runtime.assert_execution_owner ||
+                grant.request_id !== cmd.upstream_decision.request_id) {
+              throw new Error("llm_compute_egress_authority_unbound");
+            }
+            context.before_action_dispatch?.();
+            assertCurrentHdsGoalVersion(cmd);
+            record.runtime.assert_execution_owner();
+            assertTicketCurrent(record);
+          } : undefined;
           feedback = await this.executeLLMCall(cmd.id, cmd.payload, cmd.constraints, start, context.signal,
             context.ephemeral_images, context.ephemeral_audio, context.ephemeral_canvas_artifact,
-            context.require_audio_task_compute, markInvoked);
+            context.require_audio_task_compute, markInvoked, assertEgressCurrent ? {
+              assertCurrent: assertEgressCurrent, markStarted: () => markInvoked("llm_adapter"),
+            } : undefined);
           break;
+        }
         case "tool_call":
           feedback = await this.executeToolCall(cmd, start, markInvoked, context.signal,
             context.before_tool_dispatch, context.before_browser_form_submit, () => {
@@ -3162,6 +3179,7 @@ export class Executor {
     transientCanvasArtifact?: TransientCanvasArtifactInput,
     requireAudioTaskCompute = false,
     markInvoked?: (boundary: ExecutionInvocationBoundary) => void,
+    egressAuthority?: ComputeEgressAuthority,
   ): Promise<ExecuteFeedback> {
     const ephemeralImages = validateLLMImageInputs(transientImages);
     const ephemeralAudio = validateLLMAudioInputs(transientAudio);
@@ -3269,12 +3287,13 @@ export class Executor {
               timeout_ms: payload.agent_delegation?.parent_resource_limits.timeout_ms ?? constraints?.timeout_ms,
               session_history_applied: sessionHistoryApplied,
             });
-            markInvoked?.("llm_adapter");
-            const computed = await this.deps.compute.compute(request, signal);
+            if (!egressAuthority) markInvoked?.("llm_adapter");
+            const computed = await this.deps.compute.compute(request, signal, egressAuthority);
             computeResourceUse = computed.compute_resource_use;
             const { compute_resource_use: _resourceUse, ...response } = computed;
             return response;
           }
+          if (egressAuthority) throw new Error("llm_compute_egress_unavailable");
           if (payload.agent_delegation) throw new Error("agent_delegation_compute_unavailable");
           markInvoked?.("llm_adapter");
           return this.deps.llm.call(providerRequest, signal);
