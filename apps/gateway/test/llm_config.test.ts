@@ -1,15 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { LLMRegistry } from "@blue-tanuki/core";
 import {
   buildLLMBackendFromEnv,
   buildLLMCommandRouteFromEnv,
   describeLLMCommandRoute,
   describeLLMConfig,
+  isSameOneShotOpenAITextEgressRoute,
+  resolveLLMCommandRouteFromEnv,
 } from "../src/llm_config.js";
 import { approvalContextFromCommand } from "@blue-tanuki/hds-brain";
 import type { ExecuteCommand } from "@blue-tanuki/protocol";
+import { storeLlmApiKeySecret, type SecretProtector } from "../src/secret_store.js";
+
+const fixtureSecretProtector: SecretProtector = {
+  protect: (plaintext) => Buffer.from(`test-only:${plaintext}`, "utf8").toString("base64url"),
+  unprotect: (protectedValue) => {
+    const value = Buffer.from(protectedValue, "base64url").toString("utf8");
+    if (!value.startsWith("test-only:")) throw new Error("invalid fixture secret");
+    return value.slice("test-only:".length);
+  },
+};
 
 describe("buildLLMBackendFromEnv", () => {
   it("defaults to an offline stub registry", async () => {
@@ -289,6 +304,64 @@ describe("buildLLMBackendFromEnv", () => {
       timeout_ms: 4567,
     });
     expect(describeLLMCommandRoute({}).backend_hint).toBe("(registry default)");
+    expect(describeLLMCommandRoute({}).one_shot_openai_text_egress_available).toBe(false);
+  });
+
+  it("shows one-shot egress readiness only for a protected single-attempt OpenAI route", () => {
+    let root: string | undefined;
+    let apiKeyRef: string;
+    if (process.platform === "win32") {
+      root = mkdtempSync(join(tmpdir(), "blue-tanuki-openai-route-test-"));
+      apiKeyRef = storeLlmApiKeySecret("OPENAI_API_KEY", "fixture-only-not-a-real-key", {
+        envFilePath: join(root, "blue-tanuki.env"),
+        platform: "win32",
+        protector: fixtureSecretProtector,
+      }).ref;
+    } else if (process.platform === "linux" || process.platform === "darwin") {
+      apiKeyRef = `os-keyring:v2:${process.platform}:OPENAI_API_KEY:00000000-0000-4000-8000-000000000001`;
+    } else {
+      expect(describeLLMCommandRoute({
+        LLM_BACKEND: "openai",
+        OPENAI_MODEL: "fixture-model",
+        BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+          "openai-compatible": {
+            capabilities: ["llm.text.generate"],
+            max_cost_per_attempt: { amount: 0.02, currency: "USD" },
+          },
+        }),
+      }).one_shot_openai_text_egress_available).toBe(false);
+      return;
+    }
+    const env = {
+      LLM_BACKEND: "openai",
+      OPENAI_MODEL: "fixture-model",
+      OPENAI_API_KEY_REF: apiKeyRef,
+      BLUE_TANUKI_LLM_FALLBACK_PROFILES_JSON: JSON.stringify({
+        "openai-compatible": {
+          capabilities: ["llm.text.generate"],
+          max_cost_per_attempt: { amount: 0.02, currency: "USD" },
+        },
+      }),
+    };
+    try {
+      const startup = resolveLLMCommandRouteFromEnv(env, { id: "startup", content: "" });
+      const readiness = describeLLMCommandRoute(env);
+      expect(readiness).toMatchObject({
+        compute_cost_limit: { amount: 0.02, currency: "USD" },
+        one_shot_openai_text_egress_available: true,
+      });
+
+      const current = resolveLLMCommandRouteFromEnv(env, { id: "request", content: "owner text" });
+      expect(isSameOneShotOpenAITextEgressRoute(startup, current)).toBe(true);
+      expect(isSameOneShotOpenAITextEgressRoute(startup, {
+        ...current,
+        maximum_provider_attempts: 2,
+      })).toBe(false);
+      expect(describeLLMCommandRoute({ ...env, OPENAI_API_KEY_REF: undefined })
+        .one_shot_openai_text_egress_available).toBe(false);
+    } finally {
+      if (root) rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("parses an explicit HDS fallback authorization without reading credentials", () => {

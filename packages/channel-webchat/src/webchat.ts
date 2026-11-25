@@ -2924,12 +2924,40 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
       const planId = typeof body?.plan_id === "string" ? body.plan_id : undefined;
       const revisionDigest = typeof body?.revision_digest === "string" ? body.revision_digest : undefined;
       const waitId = typeof body?.wait_id === "string" ? body.wait_id : undefined;
+      const providerEgressIntent = body?.provider_egress;
+      if (providerEgressIntent !== undefined && providerEgressIntent !== "openai_text_once") {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "invalid_provider_egress_intent" }));
+        return;
+      }
+      const oneShotOpenAITextEgress = providerEgressIntent === "openai_text_once";
+      if (oneShotOpenAITextEgress) {
+        res.setHeader("cache-control", "no-store");
+        const bodyKeys = body && typeof body === "object" && !Array.isArray(body)
+          ? Object.keys(body).sort().join(",")
+          : "";
+        if (bodyKeys !== "content,provider_egress,user") {
+          res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "provider_egress_requires_text_only_request" }));
+          return;
+        }
+        if (!this.handler) {
+          res.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ accepted: false, error: "owner_inbound_handler_unavailable" }));
+          return;
+        }
+      }
       if (!replyTo || !content) {
-        res.writeHead(400, { "content-type": "application/json" });
+        res.writeHead(400, { "content-type": "application/json", ...(oneShotOpenAITextEgress ? { "cache-control": "no-store" } : {}) });
         res.end(JSON.stringify({ error: "user and content are required strings" }));
         return;
       }
       if (rejectReservedWebChatAudience(res, replyTo)) return;
+      if (oneShotOpenAITextEgress && (planId !== undefined || revisionDigest !== undefined || waitId !== undefined)) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ accepted: false, error: "provider_egress_cannot_bind_plan_or_wait" }));
+        return;
+      }
       if ((planId === undefined) !== (revisionDigest === undefined) ||
           (planId !== undefined && (!/^[a-f0-9]{64}$/.test(planId) || !/^[a-f0-9]{64}$/.test(revisionDigest!))) ||
           (body && Object.hasOwn(body, "wait_id") && (!planId || !revisionDigest || !waitId || !/^[a-f0-9]{64}$/.test(waitId)))) {
@@ -2958,7 +2986,19 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
         ...(planId && revisionDigest ? { session_id: ownerPlanWaitSessionId(planId, revisionDigest) } : {}),
         metadata: { reply_to: replyTo },
       };
-      const inboundReq: InboundRequest = planId && revisionDigest
+      const inboundReq: InboundRequest = oneShotOpenAITextEgress
+        ? createGatewayInternalInboundRequest({
+          ...inboundRequest,
+          metadata: {
+            reply_to: replyTo,
+            "blue_tanuki.authority_context": "gateway_internal_v1",
+            "blue_tanuki.actor_kind": "owner",
+            "blue_tanuki.trust_level": "owner",
+            "blue_tanuki.process_kind": "chat",
+            "blue_tanuki.operator_surface": "developer",
+          },
+        })
+        : planId && revisionDigest
         ? createGatewayInternalInboundRequest({
             ...inboundRequest,
             metadata: {
@@ -2979,11 +3019,14 @@ export class WebChatChannel implements InboundChannel, OutboundChannel {
             },
           })
         : inboundRequest;
-      this.handler?.(inboundReq).catch((e: unknown) => {
+      const ephemeralContext: InboundEphemeralContext | undefined = oneShotOpenAITextEgress
+        ? { request_id: requestId, ephemeral_images: [], one_shot_openai_text_egress: true }
+        : undefined;
+      this.handler?.(inboundReq, ephemeralContext).catch((e: unknown) => {
         // eslint-disable-next-line no-console
         console.error("[webchat] owner inbound handler error:", e);
       });
-      res.writeHead(202, { "content-type": "application/json" });
+      res.writeHead(202, { "content-type": "application/json", ...(oneShotOpenAITextEgress ? { "cache-control": "no-store" } : {}) });
       res.end(JSON.stringify({ accepted: true, request_id: inboundReq.id }));
       return;
     }

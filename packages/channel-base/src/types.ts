@@ -24,6 +24,8 @@ export interface InboundEphemeralContext {
   readonly request_id: string;
   readonly ephemeral_images: readonly TransientImageInput[];
   readonly ephemeral_audio?: readonly TransientAudioInput[];
+  /** Authenticated owner requested one OpenAI text send for this exact WebChat request. */
+  readonly one_shot_openai_text_egress?: true;
   /** Require an audio-task-capable C model; do not degrade an owner task to transcription-only. */
   readonly require_audio_task_compute?: boolean;
   readonly ephemeral_canvas_artifact?: TransientCanvasArtifactInput;

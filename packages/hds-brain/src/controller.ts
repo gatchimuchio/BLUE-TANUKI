@@ -309,6 +309,8 @@ interface LongTermMemoryPort {
 }
 
 export interface HDSDecisionOptions {
+  /** Request-scoped owner permission supplied by the authenticated Gateway; never persisted or replayed. */
+  readonly one_shot_external_text_egress?: OneShotProviderTextEgressBinding;
   /** Prevent transient document-organization input from reading/writing memory or persisting session history. */
   readonly transient_content?: "document_organization" | "google_drive_document_organization";
   /** Fail closed when a selected local file-state observation could not be refreshed before C. */
@@ -508,12 +510,22 @@ export interface LLMCommandRoute {
   temperature?: number;
   max_tokens?: number;
   timeout_ms?: number;
+  /** Provider retry/fallback configuration captured with the live runtime registry. */
+  maximum_provider_attempts?: number;
+  configured_fallback_backend?: string;
   /** Configuration-derived ceiling; J binds each grant to the current request under this cap. */
   compute_cost_limit?: { amount: number; currency: string };
   /** CLIで本人が指定した一回のテキスト送信。Provider設定や資格とは別に照合する。 */
-  external_text_egress?: { request_id: string; purpose_digest: string; endpoint: string };
+  external_text_egress?: OneShotProviderTextEgressBinding;
   /** Owner-supplied HDS grant. Omission prevents alternate-provider fallback. */
   fallback_authorization?: LLMFallbackAuthorization;
+}
+
+export interface OneShotProviderTextEgressBinding {
+  request_id: string;
+  purpose_digest: string;
+  endpoint: string;
+  model: string;
 }
 
 export interface ControllerSelfHealthOptions {
@@ -1279,6 +1291,11 @@ function isMemoryCitationReviewLog(value: unknown): value is MemoryCitationRevie
   return value !== null && typeof value === "object" && "kind" in value && value.kind === "memory_citation_review";
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+}
+
 export class HDSUpperController {
   private state: ControllerState = "IDLE";
   private readonly wall_clock: () => number;
@@ -1288,6 +1305,7 @@ export class HDSUpperController {
   private readonly memory?: LongTermMemoryPort;
   private readonly llm_route: LLMCommandRoute;
   private externalTextEgressIssued = false;
+  private readonly issuedRequestScopedTextEgress = new WeakSet<object>();
   private readonly self_health: ControllerSelfHealthOptions;
   private readonly goal_relation_tree?: ReadonlyGoalRelationTreeView;
   private goal_governance?: GoalGovernanceLedger;
@@ -1469,9 +1487,23 @@ export class HDSUpperController {
     command: ExecuteCommand | null;
   } {
     if (Object.keys(options).some((key) => ![
-          "transient_content", "plan_compute_source_refresh_failure", "plan_compute_mcp_catalog_refresh_failure",
+          "one_shot_external_text_egress", "transient_content", "plan_compute_source_refresh_failure", "plan_compute_mcp_catalog_refresh_failure",
           "plan_compute_mcp_catalog_context",
         ].includes(key)) ||
+        (options.one_shot_external_text_egress !== undefined &&
+          (!isPlainObject(options.one_shot_external_text_egress) ||
+            Object.keys(options.one_shot_external_text_egress).sort().join(",") !== "endpoint,model,purpose_digest,request_id" ||
+            typeof options.one_shot_external_text_egress.request_id !== "string" ||
+            options.one_shot_external_text_egress.request_id.trim() !== options.one_shot_external_text_egress.request_id ||
+            options.one_shot_external_text_egress.request_id.length === 0 ||
+            options.one_shot_external_text_egress.request_id.length > 200 ||
+            typeof options.one_shot_external_text_egress.purpose_digest !== "string" ||
+            !/^[a-f0-9]{64}$/u.test(options.one_shot_external_text_egress.purpose_digest) ||
+            options.one_shot_external_text_egress.endpoint !== SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai ||
+            typeof options.one_shot_external_text_egress.model !== "string" ||
+            options.one_shot_external_text_egress.model.trim() !== options.one_shot_external_text_egress.model ||
+            options.one_shot_external_text_egress.model.length === 0 ||
+            options.one_shot_external_text_egress.model.length > 256)) ||
         (options.transient_content !== undefined &&
           options.transient_content !== "document_organization" &&
           options.transient_content !== "google_drive_document_organization") ||
@@ -2181,7 +2213,8 @@ ${planControl.question}`,
             task_identity_digest: planComputeResourceReview.task_identity_digest,
           } } : {}),
           ...(planComputeParentContext ? { parent_context: planComputeParentContext } : {}),
-          ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined);
+          ...(planComputeWaitResume ? { wait_resume: planComputeWaitResume } : {}) } : undefined,
+        options.one_shot_external_text_egress);
       if (selectedNativeCredentialEntry && candidate.type === "tool_call" && candidate.payload.tool_name === "settings.write") {
         candidate.constraints = { ...candidate.constraints, timeout_ms: SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS };
       }
@@ -6654,6 +6687,7 @@ ${planControl.question}`,
       readonly resource_review?: { readonly wait_id: string; readonly task_identity_digest: string };
       readonly wait_resume?: { readonly wait_id: string; readonly task_identity_digest: string;
         readonly reason: "reply" | "deadline" | "recovery" } },
+    oneShotExternalTextEgress?: OneShotProviderTextEgressBinding,
   ): ExecuteCommand {
     const upstream_decision: UpstreamDecision = {
       frame_goal: log.frame.goal,
@@ -7119,17 +7153,29 @@ ${planControl.question}`,
     const backendHint = this.llm_route.backend_hint?.trim() || undefined;
     const purposeDigest = createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
       .update(req.content, "utf8").digest("hex");
-    const externalEgress = this.llm_route.external_text_egress;
-    const allowExternalText = !this.externalTextEgressIssued && externalEgress !== undefined &&
+    const requestScopedExternalEgress = oneShotExternalTextEgress;
+    const externalEgress = requestScopedExternalEgress ?? this.llm_route.external_text_egress;
+    const externalEgressUnused = requestScopedExternalEgress
+      ? !this.issuedRequestScopedTextEgress.has(requestScopedExternalEgress)
+      : !this.externalTextEgressIssued;
+    const ownerWebChatTextEgressRequest = requestScopedExternalEgress !== undefined &&
+      req.channel === "webchat" && req.user === "webchat-owner-token-holder" && isGatewayInternalInboundRequest(req) &&
+      req.metadata?.["blue_tanuki.actor_kind"] === "owner" && req.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+      req.metadata?.["blue_tanuki.process_kind"] === "chat" && req.metadata?.["blue_tanuki.operator_surface"] === "developer";
+    const ownerCliTextEgressRequest = requestScopedExternalEgress === undefined &&
+      req.channel === "cli" && req.user === "local-user" && isGatewayInternalInboundRequest(req) &&
+      req.metadata?.["blue_tanuki.actor_kind"] === "owner" && req.metadata?.["blue_tanuki.trust_level"] === "owner";
+    const allowExternalText = externalEgressUnused && externalEgress !== undefined &&
       externalEgress.request_id === req.id && externalEgress.purpose_digest === purposeDigest &&
       externalEgress.endpoint === SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai &&
-      backendHint === "openai-compatible" && !this.llm_route.fallback_authorization &&
+      externalEgress.model === this.llm_route.model && backendHint === "openai-compatible" &&
+      !this.llm_route.fallback_authorization &&
       this.llm_route.compute_cost_limit !== undefined &&
       Number.isFinite(this.llm_route.compute_cost_limit.amount) && this.llm_route.compute_cost_limit.amount > 0 &&
-      req.channel === "cli" && req.user === "local-user" && isGatewayInternalInboundRequest(req) &&
-      req.metadata?.["blue_tanuki.actor_kind"] === "owner" && req.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+      (ownerCliTextEgressRequest || ownerWebChatTextEgressRequest) &&
       !req.session_id && req.goal_completion_rules === undefined && !isGatewayInternalTransientAudioRequest(req) &&
-      !planCompute && !agentDelegation && !log.memory_retrieval_suppressed_for && computeContextMessages.length === 0;
+      !planCompute && !agentDelegation && !log.memory_retrieval_suppressed_for &&
+      memoryMessages.length === 0 && computeContextMessages.length === 0;
     // The executor may append stored messages after J issues this command, so declare that source with the session scope.
     const computeSessionId = log.memory_retrieval_suppressed_for === "transient_document_organization" ||
       log.memory_retrieval_suppressed_for === "transient_google_drive_document_organization" ||
@@ -7190,7 +7236,10 @@ ${planControl.question}`,
         computeInputSources.length === 1 && computeInputSources[0] === "accepted_inbound_request"
         ? { egress: { endpoint: externalEgress.endpoint } } : {}),
     });
-    if (computeGrant?.egress) this.externalTextEgressIssued = true;
+    if (computeGrant?.egress) {
+      if (requestScopedExternalEgress) this.issuedRequestScopedTextEgress.add(requestScopedExternalEgress);
+      else this.externalTextEgressIssued = true;
+    }
     const llmPayload: LLMCallPayload = {
       messages: [
         ...memoryMessages,

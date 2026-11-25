@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   createGatewayInternalInboundRequest,
   meaningUpdateCandidateDigest,
+  SETTINGS_WRITE_ACTIVATION_DESTINATIONS,
   SETTINGS_WRITE_NATIVE_CREDENTIAL_OPERATION_TIMEOUT_MS,
   type ExecuteCommand,
   type ExecuteFeedback,
@@ -516,6 +517,82 @@ describe("HDSUpperController.decide()", () => {
       .update("compute grant fixture", "utf8")
       .digest("hex"));
     expect(grant!.expires_at_ms).toBeGreaterThan(grant!.issued_at_ms);
+  });
+
+  it("issues at most one request-scoped OpenAI grant for authenticated owner WebChat text without history", () => {
+    const content = "one explicit owner message";
+    const id = "owner-webchat-openai-once";
+    const request = createGatewayInternalInboundRequest({
+      id,
+      channel: "webchat",
+      user: "webchat-owner-token-holder",
+      content,
+      timestamp: Date.now(),
+      metadata: {
+        reply_to: "owner-ui",
+        "blue_tanuki.authority_context": "gateway_internal_v1",
+        "blue_tanuki.actor_kind": "owner",
+        "blue_tanuki.trust_level": "owner",
+        "blue_tanuki.process_kind": "chat",
+        "blue_tanuki.operator_surface": "developer",
+      },
+    });
+    const binding = {
+      request_id: id,
+      purpose_digest: createHash("sha256")
+        .update("blue-tanuki.compute-grant.purpose.v1\0")
+        .update(content, "utf8")
+        .digest("hex"),
+      endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+      model: "gpt-4.1-mini",
+    };
+    const controller = new HDSUpperController({
+      llm_route: {
+        backend_hint: "openai-compatible",
+        model: binding.model,
+        max_tokens: 256,
+        timeout_ms: 5_000,
+        compute_cost_limit: { amount: 0.02, currency: "USD" },
+      },
+    });
+
+    const first = controller.decide(request, { one_shot_external_text_egress: binding });
+    expect(first.command?.type).toBe("llm_call");
+    if (first.command?.type !== "llm_call") return;
+    expect(first.command.payload.compute_context?.compute_grant).toMatchObject({
+      request_id: id,
+      model: binding.model,
+      allowed_input_sources: ["accepted_inbound_request"],
+      max_cost: { amount: 0.02, currency: "USD" },
+      egress: { endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai },
+    });
+
+    const replay = controller.decide(request, { one_shot_external_text_egress: binding });
+    expect(replay.command?.type).toBe("llm_call");
+    if (replay.command?.type === "llm_call") {
+      expect(replay.command.payload.compute_context?.compute_grant?.egress).toBeUndefined();
+    }
+
+    const ordinaryBinding = {
+      ...binding,
+      request_id: "untrusted-openai-request",
+    };
+    const ordinaryController = new HDSUpperController({
+      llm_route: {
+        backend_hint: "openai-compatible",
+        model: binding.model,
+        max_tokens: 256,
+        timeout_ms: 5_000,
+        compute_cost_limit: { amount: 0.02, currency: "USD" },
+      },
+    });
+    const ordinary = ordinaryController.decide(inbound(content, ordinaryBinding.request_id), {
+      one_shot_external_text_egress: ordinaryBinding,
+    });
+    expect(ordinary.command?.type).toBe("llm_call");
+    if (ordinary.command?.type === "llm_call") {
+      expect(ordinary.command.payload.compute_context?.compute_grant?.egress).toBeUndefined();
+    }
   });
 
   it("does not issue a remote compute grant without a configured cost ceiling", () => {

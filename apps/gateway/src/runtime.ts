@@ -295,8 +295,9 @@ async function runCliWithExecutionStore(
       },
     })
     : cliInbound;
+  const llmRoute = resolveLLMCommandRouteFromEnv(process.env, externalTextOptIn ? inbound : undefined);
   const providerEgressPermission = externalTextOptIn
-    ? createOneShotOpenAITextEgressPermission(inbound)
+    ? createOneShotOpenAITextEgressPermission(inbound, llmRoute.model ?? "")
     : undefined;
 
   const plugins = goalCompletionStatus ? undefined : await loadPluginRuntime();
@@ -309,7 +310,7 @@ async function runCliWithExecutionStore(
   const hds = new HDSUpperController({
     audit: buildAuditLog(),
     memory: memoryStore,
-    llm_route: resolveLLMCommandRouteFromEnv(process.env, externalTextOptIn ? inbound : undefined),
+    llm_route: llmRoute,
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     operation_plan_state: operationPlanState,
     operation_plan_memory: operationResultMemoryStorage(process.env),

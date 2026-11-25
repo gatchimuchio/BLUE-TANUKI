@@ -630,6 +630,8 @@ describe("WebChatChannel — Control Center shell", () => {
     expect(shell).toContain("GatewayローカルのJ Operation Plan SQLiteへ永続保存されます");
     expect(shell).toContain("この画面では保持期間や削除を管理しません");
     expect(shell).toContain('id="owner-task-include-mcp-catalog"');
+    expect(shell).toContain('id="chat-provider-egress" type="checkbox" disabled');
+    expect(shell).toContain('id="chat-provider-egress-status"');
     expect(shell).toContain("この計画のC providerへ送信します");
     expect(CONTROL_CENTER_SCRIPT).toContain('role === "assistant" && bubble && isCanvasPreviewContent(text)');
     expect(CONTROL_CENTER_SCRIPT).toContain("escapeHtml(text)");
@@ -1269,7 +1271,9 @@ describe("WebChatChannel — Control Center shell", () => {
     const computeReady = { status: "ready", detail: "state admits one request",
       current_window_usage_checked: false, evidence_source: ["CONFIG"] };
     const snapshot = { llm: { provider: "openai-compatible", model: "fixture-provider-model", max_tokens: 128, timeout_ms: 5000,
-      temperature: 0, command_route: { model: "fixture-running-model" }, api_key_set: true, compute_readiness: computeReady } };
+      temperature: 0, command_route: { backend_hint: "openai-compatible", model: "fixture-running-model",
+        compute_cost_limit: { amount: 0.02, currency: "USD" }, one_shot_openai_text_egress_available: true },
+      api_key_set: true, compute_readiness: computeReady } };
     let currentSettings: Record<string, unknown> = snapshot;
     let result: Record<string, unknown> = { status: "pass", detail: "configuration only",
       evidence_source: ["CONFIG"], provider_connection_checked: false, credential_access_checked: false,
@@ -1285,6 +1289,7 @@ describe("WebChatChannel — Control Center shell", () => {
     const settingsState = {};
     const api = new Script([
       section("function renderSettingsComputeReadiness(", "function renderAboutSnapshot("),
+      section("function renderChatProviderEgressControl(", "function isDirectToolShortcutInput("),
       section("function resetSettingsProposalGoals(", "function connectorsPayload("),
       section("async function loadSettings()", "async function loadConnectors("),
       section("async function verifyLlmSettings(", "function setRuntimeSnapshotObservation("),
@@ -1323,6 +1328,9 @@ describe("WebChatChannel — Control Center shell", () => {
     api.renderSettingsSnapshot(snapshot);
     expect(node("settings-model").value).toBe("fixture-running-model");
     expect(node("settings-temperature").value).toBe("0");
+    expect(node("chat-provider-egress").disabled).toBe(false);
+    expect(node("chat-provider-egress-status").textContent).toContain("fixture-running-model");
+    expect(node("chat-provider-egress-status").textContent).toContain("0.02 USD");
     await preparePlan();
     expect(planStatus.textContent).toContain("差分がありません");
 
@@ -4377,6 +4385,49 @@ describe("WebChatChannel — Control Center shell", () => {
       .toEqual({ text: "プロバイダー設定リセット・設定変更済み", className: "badge good" });
   });
 
+  it("uses the dedicated owner route and no-store for an explicitly selected one-shot text message", async () => {
+    const start = CONTROL_CENTER_SCRIPT.indexOf("async function sendChat()");
+    const end = CONTROL_CENTER_SCRIPT.indexOf("\n      function renderOwnerTaskGoalOptions(", start + 1);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const source = CONTROL_CENTER_SCRIPT.slice(start, end);
+    const nodes = new Map<string, { value: string; checked?: boolean }>([
+      ["chat-token", { value: "webchat-token" }],
+      ["chat-user", { value: "owner-ui" }],
+      ["chat-content", { value: "  send this text once  " }],
+      ["chat-provider-egress", { value: "", checked: true }],
+      ["owner-task-token", { value: "owner-token-fixture" }],
+    ]);
+    const calls: Array<{ path: string; token: string; body: unknown; cacheMode?: string }> = [];
+    const saved: Record<string, string> = {};
+    const messages: Array<[string, string]> = [];
+    const state: Record<string, unknown> = {
+      settingsRuntimeSnapshot: { oneShotOpenAITextEgressAvailable: true },
+    };
+
+    await new Script(`${source}\nsendChat()`).runInNewContext({
+      state,
+      byId: (id: string) => nodes.get(id)!,
+      sessionStorage: { setItem: (key: string, value: string) => { saved[key] = value; } },
+      isDirectToolShortcutInput: () => false,
+      appendChat: (kind: string, text: string) => messages.push([kind, text]),
+      postJson: async (path: string, token: string, body: unknown, _signal: unknown, cacheMode?: string) => {
+        calls.push({ path, token, body: JSON.parse(JSON.stringify(body)), cacheMode });
+        return { request_id: "one-shot-request" };
+      },
+    });
+
+    expect(calls).toEqual([{
+      path: "/owner/inbound",
+      token: "owner-token-fixture",
+      body: { user: "owner-ui", content: "send this text once", provider_egress: "openai_text_once" },
+      cacheMode: "no-store",
+    }]);
+    expect(saved).toEqual({ "bt.chatToken": "webchat-token", "bt.chatUser": "owner-ui" });
+    expect(nodes.get("chat-provider-egress")?.checked).toBe(false);
+    expect(messages).toEqual([["owner", "send this text once"], ["accepted", "one-shot-request"]]);
+  });
+
   it("submits exactly one fixed canonical store for owner L3 review", async () => {
     const inline = CONTROL_CENTER_SCRIPT;
     const selectionStart = inline.indexOf("function selectedRecoveryRestore(");
@@ -6751,6 +6802,68 @@ describe("WebChatChannel — HTTP inbound", () => {
       expect(ownerCtx.received).toHaveLength(3);
       expect(isGatewayInternalInboundRequest(ownerCtx.received[2])).toBe(true);
       expect(ownerCtx.received[2]?.metadata?.[waitReplyKey]).toBe(validReply.wait_id);
+    } finally {
+      await ownerCtx.teardown();
+    }
+  });
+
+  it("accepts one-shot OpenAI text intent only through authenticated owner text ingress", async () => {
+    const ownerCtx = await setup({ owner_token: OWNER_TOKEN });
+    const received: InboundRequest[] = [];
+    const contexts: Array<InboundEphemeralContext | undefined> = [];
+    try {
+      await ownerCtx.ch.start(async (request, context) => {
+        received.push(request);
+        contexts.push(context);
+      });
+      const wrongToken = await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "send this", provider_egress: "openai_text_once",
+      }, { authorization: `Bearer ${TOKEN}` });
+      expect(wrongToken.status).toBe(401);
+
+      const extraField = await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "send this", provider_egress: "openai_text_once", attachment: "hidden",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(extraField.status).toBe(400);
+      expect(extraField.headers.get("cache-control")).toBe("no-store");
+
+      const planBound = await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "send this", provider_egress: "openai_text_once",
+        plan_id: "a".repeat(64), revision_digest: "b".repeat(64),
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(planBound.status).toBe(400);
+      expect(planBound.headers.get("cache-control")).toBe("no-store");
+      expect(received).toHaveLength(0);
+
+      const accepted = await postJson(ownerCtx.port, "/owner/inbound", {
+        user: "owner-ui", content: "send this exact text", provider_egress: "openai_text_once",
+      }, { authorization: `Bearer ${OWNER_TOKEN}` });
+      expect(accepted.status).toBe(202);
+      expect(accepted.headers.get("cache-control")).toBe("no-store");
+      const requestId = (accepted.body as { request_id: string }).request_id;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        id: requestId,
+        channel: "webchat",
+        user: "webchat-owner-token-holder",
+        content: "send this exact text",
+        metadata: {
+          reply_to: "owner-ui",
+          "blue_tanuki.authority_context": "gateway_internal_v1",
+          "blue_tanuki.actor_kind": "owner",
+          "blue_tanuki.trust_level": "owner",
+          "blue_tanuki.process_kind": "chat",
+          "blue_tanuki.operator_surface": "developer",
+        },
+      });
+      expect(isGatewayInternalInboundRequest(received[0]!)).toBe(true);
+      expect(received[0]).not.toHaveProperty("session_id");
+      expect(contexts[0]).toEqual({
+        request_id: requestId,
+        ephemeral_images: [],
+        one_shot_openai_text_egress: true,
+      });
     } finally {
       await ownerCtx.teardown();
     }

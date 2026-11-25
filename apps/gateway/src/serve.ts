@@ -109,8 +109,13 @@ import {
   buildLLMBackendFromEnv,
   describeLLMCommandRoute,
   describeLLMConfig,
+  isSameOneShotOpenAITextEgressRoute,
   resolveLLMCommandRouteFromEnv,
 } from "./llm_config.js";
+import {
+  createOneShotOpenAITextEgressPermission,
+  type OneShotOpenAITextEgressPermission,
+} from "./provider_egress_permission.js";
 import {
   assertLoopbackListenerHost,
   attachInboundLineReplyContext,
@@ -1605,6 +1610,16 @@ async function serveWithOwnerLease(
   })) tools.register(tool);
   plugins.registerTools(tools);
   const llm = buildLLMBackendFromEnv();
+  const llmRoute = resolveLLMCommandRouteFromEnv();
+  let startupOneShotOpenAITextEgressRoute: ReturnType<typeof resolveLLMCommandRouteFromEnv> | undefined;
+  try {
+    startupOneShotOpenAITextEgressRoute = resolveLLMCommandRouteFromEnv(process.env, {
+      id: "gateway-startup-openai-text-egress-readiness",
+      content: "",
+    });
+  } catch {
+    // Startup configuration without the exact protected single-attempt route cannot enable one-shot egress.
+  }
   if (!(llm instanceof LLMRegistry)) throw new Error("gateway_llm_provider_configuration_fence_unavailable");
   activeLLMRegistryForSettings = llm;
 
@@ -1742,7 +1757,7 @@ async function serveWithOwnerLease(
     operation_plan_broker_restore_dependency_verifier: verifyRecoveryDependenciesForFreshReview,
     audit: buildAuditLog(),
     memory: memoryStore,
-    llm_route: resolveLLMCommandRouteFromEnv(),
+    llm_route: llmRoute,
     goal_governance: goalGovernanceConfigFromEnvironment(process.env),
     self_health: runtimeSelfHealth,
   });
@@ -2473,6 +2488,7 @@ async function serveWithOwnerLease(
    */
   type ExecuteAndEchoOptions = {
     skip_approval?: boolean;
+    provider_egress_permission?: OneShotOpenAITextEgressPermission;
     actor?: string;
     failure_memory_gate_digest?: string;
     failure_memory_gate_actor?: string;
@@ -2532,6 +2548,7 @@ async function serveWithOwnerLease(
           taskExecutionRegistered = true;
         });
     } finally {
+      opts.provider_egress_permission?.revoke();
       if (isRuntimeRecoveryMutationCommand(cmd) && runtimeRecoveryMutationCommandId === cmd.id &&
           !runtimeRecoveryMutationToolClaimed && runtimeRecoveryCronQuiesced) {
         try {
@@ -3594,6 +3611,13 @@ async function serveWithOwnerLease(
               throw new Error("daily_brief_read_stale_before_dispatch");
             }
             if (emergencyStop.active) throw new Error("action_dispatch_emergency_stop_active");
+            if (cmd.type === "llm_call") {
+              const grant = cmd.payload.compute_context?.compute_grant;
+              if (grant?.egress) {
+                if (!opts.provider_egress_permission) throw new Error("openai_text_egress_permission_unavailable");
+                opts.provider_egress_permission.assertCurrent(grant);
+              }
+            }
           },
           before_browser_form_submit: () => {
             recheckFailureMemoryApproval();
@@ -9549,8 +9573,52 @@ async function serveWithOwnerLease(
           : undefined,
       },
     });
+    const oneShotOpenAITextEgressRequested = ephemeralContext?.one_shot_openai_text_egress === true;
+    let oneShotOpenAITextEgressPermission: OneShotOpenAITextEgressPermission | undefined;
+    let oneShotOpenAITextEgressDenialReason: string | undefined;
+    if (oneShotOpenAITextEgressRequested) {
+      const metadataKeys = Object.keys(authorityReq.metadata ?? {}).sort().join(",");
+      const ephemeralKeys = ephemeralContext ? Object.keys(ephemeralContext).sort().join(",") : "";
+      const oneShotRequestValid = boundary.boundary_ok && ephemeralContext?.request_id === authorityReq.id &&
+        ephemeralKeys === "ephemeral_images,one_shot_openai_text_egress,request_id" &&
+        ephemeralContext.ephemeral_images.length === 0 && (ephemeralContext.ephemeral_audio?.length ?? 0) === 0 &&
+        ephemeralContext.ephemeral_canvas_artifact === undefined && ephemeralContext.require_audio_task_compute !== true &&
+        authorityReq.channel === "webchat" && authorityReq.user === "webchat-owner-token-holder" &&
+        isGatewayInternalInboundRequest(authorityReq) && !authorityReq.session_id &&
+        authorityReq.goal_completion_rules === undefined &&
+        metadataKeys === "blue_tanuki.actor_kind,blue_tanuki.authority_context,blue_tanuki.operator_surface,blue_tanuki.process_kind,blue_tanuki.trust_level,reply_to" &&
+        authorityReq.metadata?.["blue_tanuki.actor_kind"] === "owner" &&
+        authorityReq.metadata?.["blue_tanuki.authority_context"] === "gateway_internal_v1" &&
+        authorityReq.metadata?.["blue_tanuki.operator_surface"] === "developer" &&
+        authorityReq.metadata?.["blue_tanuki.process_kind"] === "chat" &&
+        authorityReq.metadata?.["blue_tanuki.trust_level"] === "owner" &&
+        documentOrganizationSourceFromRequest(authorityReq) === null;
+      if (!oneShotRequestValid) {
+        oneShotOpenAITextEgressDenialReason = "invalid_request_scope";
+      } else {
+        let currentRoute: ReturnType<typeof resolveLLMCommandRouteFromEnv> | undefined;
+        try {
+          currentRoute = resolveLLMCommandRouteFromEnv(process.env, authorityReq);
+        } catch {
+          oneShotOpenAITextEgressDenialReason = "configured_route_unavailable";
+        }
+        if (currentRoute && !isSameOneShotOpenAITextEgressRoute(
+          startupOneShotOpenAITextEgressRoute,
+          currentRoute,
+        )) {
+          oneShotOpenAITextEgressDenialReason = "configured_route_changed";
+        }
+        if (currentRoute && !oneShotOpenAITextEgressDenialReason) {
+          try {
+            oneShotOpenAITextEgressPermission = createOneShotOpenAITextEgressPermission(authorityReq, currentRoute.model ?? "");
+          } catch {
+            oneShotOpenAITextEgressDenialReason = "configured_route_unavailable";
+          }
+        }
+      }
+    }
     const documentSource = boundary.boundary_ok && !ownerWaitReply
-      ? documentOrganizationSourceFromRequest(authorityReq)
+      && !oneShotOpenAITextEgressRequested ? documentOrganizationSourceFromRequest(authorityReq)
       : null;
     const documentSession = documentSource === null
       ? null
@@ -9568,7 +9636,7 @@ async function serveWithOwnerLease(
           ? `${DOCUMENT_ORGANIZATION_PROMPT_PREFIX}復旧済みの終端projection表示に必要なHDS判断です。計算は実行しません。`
           : documentCoordinator.buildComputePrompt(),
       }
-      : boundary.boundary_ok && !ownerWaitReply
+      : boundary.boundary_ok && !ownerWaitReply && !oneShotOpenAITextEgressRequested
         ? prepareFailureReviewInbound(hdsBoundaryInput, failureMemory, completeHistory)
         : hdsBoundaryInput;
     const commandEphemeralContext = selectGatewayInboundEphemeralContext(boundary, decisionInput, ephemeralContext);
@@ -9579,7 +9647,7 @@ async function serveWithOwnerLease(
       commandEphemeralContext.ephemeral_images.length === 0 && audioTranscriptionProjection
       ? createGatewayInternalTransientAudioRequest(authorityReq, commandEphemeralContext)
       : decisionInput;
-    const selectedFileStateRefresh = ownerWaitReply ? undefined : await refreshOwnerSelectedFileStateObservations({
+    const selectedFileStateRefresh = ownerWaitReply || oneShotOpenAITextEgressRequested ? undefined : await refreshOwnerSelectedFileStateObservations({
       hds,
       caller: authorityReq,
       lookupExecutionReceipt: (commandKey) => executionStore.lookupCommand(commandKey),
@@ -9587,7 +9655,7 @@ async function serveWithOwnerLease(
     let planComputeMcpCatalogContext:
       Awaited<ReturnType<typeof inspectMcpToolPlanningCatalogFromEnvironment>> | undefined;
     let planComputeMcpCatalogRefreshFailed = false;
-    if (!ownerWaitReply && requestIncludesMcpPlanningCatalog(decisionInput)) {
+    if (!ownerWaitReply && !oneShotOpenAITextEgressRequested && requestIncludesMcpPlanningCatalog(decisionInput)) {
       try {
         planComputeMcpCatalogContext = await inspectMcpToolPlanningCatalogFromEnvironment(process.env);
       } catch {
@@ -9595,6 +9663,8 @@ async function serveWithOwnerLease(
       }
     }
     const decisionOptions = {
+      ...(oneShotOpenAITextEgressPermission
+        ? { one_shot_external_text_egress: oneShotOpenAITextEgressPermission.binding } : {}),
       ...(documentCoordinator ? { transient_content: "document_organization" as const } : {}),
       ...(selectedFileStateRefresh?.status === "failed"
         ? { plan_compute_source_refresh_failure: selectedFileStateRefresh.reason } : {}),
@@ -9636,7 +9706,106 @@ async function serveWithOwnerLease(
           reason: "gateway_inbound_boundary_invalid",
         });
       }
+      oneShotOpenAITextEgressPermission?.revoke();
+      if (oneShotOpenAITextEgressRequested) {
+        recordCompleteHistory({
+          kind: "audit_history",
+          request_id: authorityReq.id,
+          actor: authorityReq.user,
+          source: "one_shot_openai_text_egress",
+          timestamp: Date.now(),
+          payload: {
+            status: "not_sent",
+            reason: "gateway_inbound_boundary_invalid",
+            external_call_performed: false,
+            used_for_authority: false,
+          },
+        });
+      }
       return;
+    }
+
+    if (oneShotOpenAITextEgressRequested && oneShotOpenAITextEgressDenialReason) {
+      if (command) {
+        hds.onCommandLifecycle(command.id, "approval_cancelled", {
+          actor: authorityReq.user,
+          reason: "one_shot_openai_text_egress_not_authorized",
+        });
+      }
+      const message = "この依頼は一回限りの本文送信条件を満たさなかったため、OpenAIへは送信されませんでした。";
+      const outputAudit = hds.onHDSDecisionOutputAudit({
+        request_id: authorityReq.id,
+        upstream_commit_hash: log.commit.hash,
+        upstream_decision: log.commit.decision,
+        rendered_output: message,
+        target_surface: "channel",
+      });
+      recordHDSDecisionOutputHistory(authorityReq, authorityReq.user, outputAudit);
+      recordCompleteHistory({
+        kind: "audit_history",
+        request_id: authorityReq.id,
+        actor: authorityReq.user,
+        source: "one_shot_openai_text_egress",
+        timestamp: Date.now(),
+        payload: {
+          status: "not_sent",
+          reason: oneShotOpenAITextEgressDenialReason,
+          external_call_performed: false,
+          used_for_authority: false,
+        },
+      });
+      await dispatcher.dispatch(replyPayload(authorityReq, message), {
+        command_id: `notify-${authorityReq.id}`,
+        upstream_commit_hash: log.commit.hash,
+        request_id: authorityReq.id,
+      });
+      return;
+    }
+
+    if (oneShotOpenAITextEgressRequested) {
+      const grant = command?.type === "llm_call" ? command.payload.compute_context?.compute_grant : undefined;
+      try {
+        if (!oneShotOpenAITextEgressPermission || command?.type !== "llm_call" || !grant?.egress) {
+          throw new Error("one_shot_openai_text_egress_grant_unavailable");
+        }
+        oneShotOpenAITextEgressPermission.assertCurrent(grant);
+      } catch {
+        if (command) {
+          hds.onCommandLifecycle(command.id, "approval_cancelled", {
+            actor: authorityReq.user,
+            reason: "one_shot_openai_text_egress_not_authorized",
+          });
+        }
+        const message = "この依頼は一回限りの本文送信条件を満たさなかったため、OpenAIへは送信されませんでした。";
+        const outputAudit = hds.onHDSDecisionOutputAudit({
+          request_id: authorityReq.id,
+          upstream_commit_hash: log.commit.hash,
+          upstream_decision: log.commit.decision,
+          rendered_output: message,
+          target_surface: "channel",
+        });
+        recordHDSDecisionOutputHistory(authorityReq, authorityReq.user, outputAudit);
+        oneShotOpenAITextEgressPermission?.revoke();
+        recordCompleteHistory({
+          kind: "audit_history",
+          request_id: authorityReq.id,
+          actor: authorityReq.user,
+          source: "one_shot_openai_text_egress",
+          timestamp: Date.now(),
+          payload: {
+            status: "not_sent",
+            reason: "request_scoped_grant_unavailable_or_not_current",
+            external_call_performed: false,
+            used_for_authority: false,
+          },
+        });
+        await dispatcher.dispatch(replyPayload(authorityReq, message), {
+          command_id: `notify-${authorityReq.id}`,
+          upstream_commit_hash: log.commit.hash,
+          request_id: authorityReq.id,
+        });
+        return;
+      }
     }
 
     if (command?.type === "noop" && command.payload.control_event === "operation_plan_result_return") {
@@ -9856,7 +10025,9 @@ async function serveWithOwnerLease(
     }
 
     if (command) {
-      await executeAndEcho(command, log, authorityReq, {}, commandEphemeralContext);
+      await executeAndEcho(command, log, authorityReq,
+        oneShotOpenAITextEgressPermission ? { provider_egress_permission: oneShotOpenAITextEgressPermission } : {},
+        commandEphemeralContext);
       return;
     }
 

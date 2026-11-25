@@ -4,6 +4,7 @@ import { SETTINGS_WRITE_ACTIVATION_DESTINATIONS, type ComputeGrant } from "@blue
 import { createOneShotOpenAITextEgressPermission } from "../src/provider_egress_permission.js";
 
 const request = { id: "cli-request-1", content: "send this one request" };
+const model = "synthetic-model";
 
 function makeGrant(overrides: Partial<ComputeGrant> = {}): ComputeGrant {
   const issuedAt = Date.now();
@@ -19,7 +20,7 @@ function makeGrant(overrides: Partial<ComputeGrant> = {}): ComputeGrant {
       .digest("hex"),
     local_p_version: "blue-tanuki.c-input-rules.v1",
     provider: "openai-compatible",
-    model: "synthetic-model",
+    model,
     egress: { endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai },
     allowed_input_sources: ["accepted_inbound_request"],
     max_tokens: 64,
@@ -34,10 +35,20 @@ function makeGrant(overrides: Partial<ComputeGrant> = {}): ComputeGrant {
 
 describe("one-shot OpenAI text egress permission", () => {
   it("accepts only the current owner request's bounded J grant", () => {
-    const permission = createOneShotOpenAITextEgressPermission(request);
+    const permission = createOneShotOpenAITextEgressPermission(request, model);
 
     expect(permission.request_id).toBe(request.id);
     expect(permission.endpoint).toBe(SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai);
+    expect(permission.model).toBe(model);
+    expect(permission.binding).toEqual({
+      request_id: request.id,
+      purpose_digest: createHash("sha256")
+        .update("blue-tanuki.compute-grant.purpose.v1\0")
+        .update(request.content, "utf8")
+        .digest("hex"),
+      endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+      model,
+    });
     expect(permission.assertCurrent(makeGrant())).toBeUndefined();
   });
 
@@ -46,16 +57,17 @@ describe("one-shot OpenAI text egress permission", () => {
     ["another purpose", { purpose_digest: "c".repeat(64) }],
     ["another provider", { provider: "other-provider" }],
     ["another endpoint", { egress: { endpoint: "https://provider.example/v1" } }],
+    ["another model", { model: "different-model" }],
     ["a broader input scope", { allowed_input_sources: ["accepted_inbound_request", "session_history"] }],
     ["another local policy", { local_p_version: "blue-tanuki.other-policy.v1" }],
   ])("rejects a grant with %s", (_label, changes) => {
-    const permission = createOneShotOpenAITextEgressPermission(request);
+    const permission = createOneShotOpenAITextEgressPermission(request, model);
 
     expect(() => permission.assertCurrent(makeGrant(changes))).toThrow("openai_text_egress_permission_not_current");
   });
 
   it("rejects expired and revoked permissions", () => {
-    const permission = createOneShotOpenAITextEgressPermission(request);
+    const permission = createOneShotOpenAITextEgressPermission(request, model);
     const expiredAt = Date.now() - 1;
     expect(() => permission.assertCurrent(makeGrant({
       issued_at_ms: expiredAt - 1,

@@ -136,6 +136,8 @@ ${CONTROL_CENTER_STYLE}    </style>
               <textarea id="chat-content" autocomplete="off" placeholder="Message BLUE-TANUKI"></textarea>
               <button id="send-chat" class="primary">Send</button>
             </div>
+            <label class="muted"><input id="chat-provider-egress" type="checkbox" disabled /> この1件の本文をOpenAIへ一回だけ送信する</label>
+            <p id="chat-provider-egress-status" class="muted">既定ではOFFです。利用可能なOpenAI設定を読み込むと、モデルと設定上限を表示します。</p>
           </div>
         </section>
 

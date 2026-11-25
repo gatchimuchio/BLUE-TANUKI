@@ -626,12 +626,16 @@ export function resolveLLMCommandRouteFromEnv(
       purpose_digest: createHash("sha256").update("blue-tanuki.compute-grant.purpose.v1\0")
         .update(externalTextRequest.content, "utf8").digest("hex"),
       endpoint: SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai,
+      model: identity.model,
     };
   }
   return {
     ...route,
     backend_hint: identity.provider,
     model: identity.model,
+    maximum_provider_attempts: buildLLMRetryPolicyFromEnv(env).max_attempts,
+    ...(envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND")
+      ? { configured_fallback_backend: envValue(env, "BLUE_TANUKI_LLM_FALLBACK_BACKEND") } : {}),
     ...(computeCostLimit ? { compute_cost_limit: {
       amount: computeCostLimit.amount,
       currency: computeCostLimit.currency,
@@ -645,8 +649,19 @@ export function describeLLMCommandRoute(env: Env = process.env): {
   temperature: string;
   max_tokens: string;
   timeout_ms: string;
+  compute_cost_limit: { amount: number; currency: string } | null;
+  one_shot_openai_text_egress_available: boolean;
 } {
   const route = buildLLMCommandRouteFromEnv(env);
+  let resolvedRoute: LLMCommandRoute | undefined;
+  let oneShotOpenAITextEgressAvailable = false;
+  try {
+    resolvedRoute = resolveLLMCommandRouteFromEnv(env);
+    resolveLLMCommandRouteFromEnv(env, { id: "control-center-egress-readiness", content: "" });
+    oneShotOpenAITextEgressAvailable = true;
+  } catch {
+    // 設定表示は継続し、保護されたOpenAI単一試行の条件が揃わない時だけ選択肢を隠す。
+  }
   return {
     backend_hint: route.backend_hint ?? "(registry default)",
     model: route.model ?? "(provider default)",
@@ -654,7 +669,30 @@ export function describeLLMCommandRoute(env: Env = process.env): {
       route.temperature === undefined ? "(provider default)" : String(route.temperature),
     max_tokens: route.max_tokens === undefined ? "1024" : String(route.max_tokens),
     timeout_ms: route.timeout_ms === undefined ? "30000" : String(route.timeout_ms),
+    compute_cost_limit: resolvedRoute?.compute_cost_limit ?? null,
+    one_shot_openai_text_egress_available: oneShotOpenAITextEgressAvailable,
   };
+}
+
+/** Keep request-time one-shot egress bound to the route used to construct the provider registry. */
+export function isSameOneShotOpenAITextEgressRoute(
+  startup: LLMCommandRoute | undefined,
+  current: LLMCommandRoute,
+): boolean {
+  const startupEgress = startup?.external_text_egress;
+  const currentEgress = current.external_text_egress;
+  const sameCostLimit = startup?.compute_cost_limit?.amount === current.compute_cost_limit?.amount &&
+    startup?.compute_cost_limit?.currency === current.compute_cost_limit?.currency;
+  return Boolean(startup && startupEgress && currentEgress &&
+    startup.backend_hint === "openai-compatible" && current.backend_hint === "openai-compatible" &&
+    startup.model === current.model && startupEgress.model === startup.model && currentEgress.model === current.model &&
+    startupEgress.endpoint === SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai &&
+    currentEgress.endpoint === SETTINGS_WRITE_ACTIVATION_DESTINATIONS.openai &&
+    startup.temperature === current.temperature && startup.max_tokens === current.max_tokens &&
+    startup.timeout_ms === current.timeout_ms && sameCostLimit &&
+    startup.maximum_provider_attempts === 1 && current.maximum_provider_attempts === 1 &&
+    startup.configured_fallback_backend === undefined && current.configured_fallback_backend === undefined &&
+    startup.fallback_authorization === undefined && current.fallback_authorization === undefined);
 }
 
 export function listConfiguredLLMProviders(env: Env = process.env): string[] {

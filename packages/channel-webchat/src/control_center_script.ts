@@ -545,11 +545,11 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         return response.json();
       }
 
-      async function postJson(path, token, body, signal) {
+      async function postJson(path, token, body, signal, cacheMode) {
         const response = await fetch(path, {
           method: "POST",
           headers: Object.assign({ "content-type": "application/json" }, authHeaders(token)),
-          body: JSON.stringify(body), signal: signal
+          body: JSON.stringify(body), signal: signal, ...(cacheMode ? { cache: cacheMode } : {})
         });
         if (!response.ok) throw new Error(path + " failed: HTTP " + response.status);
         return response.json();
@@ -1017,6 +1017,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("chat-status").className = "badge " + (tone || "warn");
       }
 
+      function renderChatProviderEgressControl() {
+        const checkbox = byId("chat-provider-egress");
+        const status = byId("chat-provider-egress-status");
+        const route = state.settingsRuntimeSnapshot;
+        const cost = route?.oneShotOpenAICostLimit;
+        const available = route?.oneShotOpenAITextEgressAvailable === true &&
+          route.provider === "openai-compatible" && typeof route.model === "string" && route.model.length > 0 &&
+          cost && Number.isFinite(cost.amount) && cost.amount > 0 && typeof cost.currency === "string" && cost.currency.length > 0;
+        checkbox.disabled = !available;
+        if (!available) checkbox.checked = false;
+        status.textContent = available
+          ? (checkbox.checked ? "選択中。送信対象: この1件の本文のみ。" : "既定OFF。送信対象に選ぶと、この1件の本文のみを送ります。") +
+            " 外部送信には過去の会話履歴・添付・ツール・操作計画を含めません。モデル " + route.model +
+            "、設定上の1回上限 " + String(cost.amount) + " " + cost.currency + "（実料金の見積りではありません）。外部API料金が発生する場合があります。"
+          : "利用には、OpenAI-compatibleの保護資格参照・モデル・単一試行・有限の費用上限が必要です。設定画面で現在の状態を読み込んでください。";
+      }
+
       function isDirectToolShortcutInput(value) {
         const trimmed = String(value || "").trim();
         return /^tool:[A-Za-z0-9_.-]+/.test(trimmed) ||
@@ -1135,6 +1152,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         state.chatToken = byId("chat-token").value.trim();
         state.chatUser = byId("chat-user").value.trim() || "owner";
         const content = byId("chat-content").value.trim();
+        const oneShotOpenAITextEgress = byId("chat-provider-egress").checked === true;
         sessionStorage.setItem("bt.chatToken", state.chatToken);
         sessionStorage.setItem("bt.chatUser", state.chatUser);
         if (!state.chatToken) throw new Error("webchat token is required");
@@ -1142,8 +1160,23 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         if (isDirectToolShortcutInput(content)) {
           throw new Error("tool shortcut is not available from normal Conversation. Use an Operator surface or developer recovery entrypoint.");
         }
+        let path = "/inbound";
+        let requestToken = state.chatToken;
+        let requestBody = { user: state.chatUser, content };
+        if (oneShotOpenAITextEgress) {
+          const ownerToken = byId("owner-task-token").value.trim();
+          if (!ownerToken) throw new Error("一回限りのOpenAI送信にはTasksのowner tokenが必要です");
+          if (state.settingsRuntimeSnapshot?.oneShotOpenAITextEgressAvailable !== true) {
+            throw new Error("現在のOpenAI送信設定を確認できません。設定画面を読み込み直してください");
+          }
+          path = "/owner/inbound";
+          requestToken = ownerToken;
+          requestBody = { ...requestBody, provider_egress: "openai_text_once" };
+          byId("chat-provider-egress").checked = false;
+        }
         appendChat("owner", content);
-        const result = await postJson("/inbound", state.chatToken, { user: state.chatUser, content });
+        const result = await postJson(path, requestToken, requestBody, undefined,
+          oneShotOpenAITextEgress ? "no-store" : undefined);
         byId("chat-content").value = "";
         appendChat("accepted", result.request_id || "request accepted", result.request_id);
       }
@@ -6019,17 +6052,28 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         const llm = snapshot.llm || {};
         const routeModel = llm.command_route && llm.command_route.model;
         const model = typeof routeModel === "string" && routeModel !== "(provider default)" ? routeModel : String(llm.model ?? "");
+        const commandRoute = isObject(llm.command_route) ? llm.command_route : {};
+        const routeCostLimit = commandRoute.compute_cost_limit;
+        const validOneShotOpenAICostLimit = isObject(routeCostLimit) && Number.isFinite(routeCostLimit.amount) &&
+          routeCostLimit.amount > 0 && typeof routeCostLimit.currency === "string" && routeCostLimit.currency.length > 0
+          ? { amount: routeCostLimit.amount, currency: routeCostLimit.currency }
+          : null;
         state.settingsRuntimeSnapshot = llm.provider ? {
           provider: llm.provider,
           model,
           temperature: String(llm.temperature ?? ""),
           max_tokens: String(llm.max_tokens ?? ""),
           timeout_ms: String(llm.timeout_ms ?? ""),
+          oneShotOpenAICostLimit: validOneShotOpenAICostLimit,
+          oneShotOpenAITextEgressAvailable: llm.provider === "openai-compatible" && llm.api_key_set === true &&
+            commandRoute.one_shot_openai_text_egress_available === true &&
+            model.length > 0 && model !== "(provider default)" && validOneShotOpenAICostLimit !== null,
           nativeCredentialPromptAvailable: llm.native_credential_prompt_available === true && isLocalCredentialControlCenter(),
           nativeCredentialRotationAvailable: llm.native_credential_prompt_available === true &&
             llm.native_credential_rotation_available === true && Object.hasOwn(SETTINGS_LLM_ACTIVATION_DESTINATIONS, llm.provider) &&
             isLocalCredentialControlCenter()
         } : null;
+        byId("chat-provider-egress").checked = false;
         const openrouter = snapshot.integrations && snapshot.integrations.openrouter ? snapshot.integrations.openrouter : {};
         const composio = snapshot.integrations && snapshot.integrations.composio ? snapshot.integrations.composio : {};
         renderComposioApiKeyCredentialAvailability(snapshot.composio_api_key_credential_registration_available,
@@ -6050,6 +6094,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
         byId("settings-max-tokens").value = String(llm.max_tokens ?? "");
         byId("settings-timeout-ms").value = String(llm.timeout_ms ?? "");
         renderSettingsComputeReadiness(llm.compute_readiness);
+        renderChatProviderEgressControl();
         setText("settings-provider-status", llm.provider || "stub");
         setText("settings-model-status", model || "(provider default)");
         setText("settings-writable-status", snapshot.writable ? "writable" : "read only");
@@ -14170,6 +14215,8 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
       byId("verify-llm-settings").addEventListener("click", verifyLlmSettings);
       byId("settings-token").addEventListener("input", function () {
         state.settingsRuntimeSnapshot = null;
+        byId("chat-provider-egress").checked = false;
+        renderChatProviderEgressControl();
         renderGoogleReadCredentialAvailability();
         renderGitHubWriteCredentialAvailability();
         renderTelegramBotCredentialAvailability();
@@ -14229,6 +14276,7 @@ export const CONTROL_CENTER_SCRIPT = `      const AOTANU_SPRITE_SPECS = ${AOTANU
           appendChat("error", error.message);
         });
       });
+      byId("chat-provider-egress").addEventListener("change", renderChatProviderEgressControl);
       byId("chat-content").addEventListener("keydown", function (event) {
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
