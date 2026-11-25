@@ -5368,3 +5368,27 @@ run #53のworkflow summaryはruntime scopeをNOT_RUNと理由付きで記録し�
 実装・workflow commit `c823122cd168b70fae20b1e06f243e09ae4e4f40`をrun #53完了後にGitHub `main`へfast-forwardした。local／remote recovery currentは同SHA、previousは開始時main `f1a1008ae3bbf387af29626900c2ec38c1937660`。検証branchはlocal／remote双方で削除した。Git操作中に古い`.git/worktrees/blue-tanuki-health-2026-11-07-windows` metadataの削除がPermission deniedとなったが、metadata・ACL変更や迂回は行っていない。
 
 `.codex-attachments/`と`.codex-remote-attachments/`は保持した。`packages/blue-tanuki/native/linux-isolation/target/`は29,650,224 bytesの再生成可能なRust build出力で、作業プロセスがないことを確認したが、OneDrive配下のReparsePointであるため同期削除伝播を避けて保持し、ゴミ箱へ移動していない。これは空き容量回収ではない。
+
+## 2026-11-25 — rev8.0 P2 / Windows x64 installer build
+
+### 主語・目的
+
+主語はBLUE-TANUKI製品。目的はWindows一般利用者向けの新規導入経路で、sourceから同梱runtime入りpackageを構築し、Node／pnpm／Gitを要求しないsingle-file installerまで結ぶこと。対象はG02.01とBT-R-G02-01/02のP2 build evidenceであり、導入完遂や製品完成の認定ではない。
+
+### 構築・限定確認
+
+対象sourceはWindows x64、Node `v22.23.3`、pnpm `9.12.0`、`main` SHA `49a6e75d1c1c4c0d0383040c1dc8362d81709380`。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm --filter @blue-tanuki/gateway... run build` | PASS。依存する7 workspace projectsをbuild。 |
+| `corepack pnpm package:windows` | PASS。新しい非OneDrive temp出力先へWindows x64 payload ZIP、自己展開CMD、IExpress EXE、manifest/sidecarを生成。 |
+| `corepack pnpm package:windows:verify` | PASS。ZIP 19,053 entries、payload/installer SHA、Node runtime、embedded IExpress payloadを照合。manifest/検査結果は利用者Node・pnpm・Git不要、秘密非同梱、browser preview既定OFF、unsignedを宣言。 |
+
+payload ZIP SHA-256 `1632d16b437815756fd01ff7e3414592f90eb26d28c4c398bb32a41bf9595dc1`、CMD installer SHA-256 `bb22d1d8767097c8c076968a4e39c27f39e8c7de96cb95a73b212c6297042f2b`、IExpress EXE SHA-256 `6ca1f26a83fae0e9314c0545a839473df62da4606022d99ca7f44d1e57e94fd5`。ローカルtemp成果物10件・787,933,944 bytesは後続のWindows installed確認用に保持し、既存`release/windows`成果物には触れていない。
+
+実インストール／起動／GUI／削除は`NOT_RUN`。インストーラは未署名で`public_distribution=HOLD_owner_GO_and_signing_required`。実物packageの作成・静的照合はG02.01の限定BUILD証拠であり、G02.01全要件、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・出荷GOを成立させない。作業中の稼働MCPプロセスとユーザーデータは変更していない。
+
+### Git・作業資産
+
+package構築開始／終了時のsource `main`は`49a6e75d1c1c4c0d0383040c1dc8362d81709380`でremoteと一致。履歴追記前の復旧2世代はlocal branch／remote tagともcurrent=`49a6e75d1c1c4c0d0383040c1dc8362d81709380`、previous=`1da7e95d65fea5d9973b4fbc3f10d5ea3999906f`。`.codex-attachments/`、`.codex-remote-attachments/`、既存Linux isolation `target/`は変更していない。生成installerはローカルtempに保持し、公開・Git管理していない。
