@@ -5416,3 +5416,29 @@ APK `blue-tanuki-android-0.1.0-0562f7056d1b20f8-unsigned.apk`は705,774 bytes、
 ### Git・作業資産
 
 履歴編集前にlocal復旧branchとremote tagをcurrent=`d3790c51aabf5acaab8f98e1bf12437c5a166127`、previous=`49a6e75d1c1c4c0d0383040c1dc8362d81709380`へ期待SHA照合付きで回転した。build clone `C:\Users\ohira\AppData\Local\Temp\blue-tanuki-g09-android-mwvtdwe0ng1dl`は17,690 files・230,672,837 bytesで、成果物転記後は不要と判定。標準ゴミ箱APIが`Unauthorized operation`で拒否し、ゴミ箱に該当itemがないことを確認したため、cloneは保持・片付け保留とし、ACL変更や別削除経路は使っていない。
+
+## 2026-11-25 — rev8.0 P2 / Linux x64 installer build
+
+### 主語・目的
+
+主語はBLUE-TANUKI製品全体。目的はcurrent `main` SHA `77d2ea00ad88786c80afd2ca88ef51c4ee146bcb`のsourceからLinux x64 installerを再生成し、G03.01の配布package buildを現在版へ更新すること。この結果はpackage build evidenceであり、Linux installed product、G03全体、製品完成や配布GOを意味しない。
+
+### 構築・限定確認
+
+sourceは`main`のtracked treeをWindowsから読み取り、WSL2 Ubuntu 24.04のext4 `/home/ohira/work/blue-tanuki-p2-linux-77d2ea00`へ固定SHAで展開した。環境はx86_64、kernel `6.18.58.1-microsoft-standard-WSL2`、glibc 2.39、Node `v22.23.3`、Corepack pnpm `9.12.0`、Cargo `1.95.0`。固定lockfileによる依存導入、全workspace build、Rust Linux isolation helper buildを行った。package manifestのtarget宣言はvendor-supported GNU/Linux、x86_64、kernel 4.18以上、glibc 2.28以上、musl非対応である。WSL上のbuild成功は、そのtarget範囲に対するnative installed確認を代替しない。
+
+| 確認 | 結果 |
+|---|---|
+| `corepack pnpm install --frozen-lockfile` | PASS。16 workspace project、lockfile変更なし。 |
+| `corepack pnpm build` | PASS。15 workspace projectをbuildし、Linux isolation release binaryをsourceから生成。 |
+| `corepack pnpm package:linux` | PASS。Node `22.14.0`、Playwright `1.65.0`とLinux Chromium headless shellを含むunsigned x64 tar installerを生成。runtime SHAを確認。 |
+| `corepack pnpm package:linux:verify` | PASS。20,560 entriesとarchive SHA-256を照合。 |
+| unit/integration tests、install/start、GUI/service、Linux hostのKeystore/Secret Service、Desktop/Gateway/C/J/M runtime、実provider、全OS QC/QA | NOT_RUN。 |
+
+archive `blue-tanuki-1.0.0-rc.1-linux-x64-installer.tar.gz`は193,178,141 bytes、SHA-256 `4e6ecd737acca5dd368ca23508aede0a4c4cc9f861b62788f59455eed4b4ef78`。manifestは2,511 bytes、SHA-256 `b2e700d574b7c8c4f500952844f582694ab8ed793977d52fc2930e4dc728fea6`。archive、sha sidecar、manifest、Linux install READMEの4ファイル（合計193,182,203 bytes）を`C:/Users/ohira/AppData/Local/Temp/blue-tanuki-g03.01-linux-77d2ea00`へ複製し、WSL原物とのSHA-256一致を確認した。manifestの`secrets_included=false`宣言は独立したsecrets reviewではない。
+
+生成packageはunsignedで、install/start、service権限、source tree非依存、更新/rollback/uninstall、desktop launcher、secret store実効性は未確認。これはG03.01のpackage構築段階のBUILD evidenceに限る。Linux host runtime、全体`SYSTEM_SHAPED`／`BUILD_COVERED`、QE_QC／QE_QA、公開・配布GOの根拠へ拡張しない。公開、CI、実provider、credential、外部業務作用、D4-Pocket変更は行っていない。
+
+### Git・作業資産
+
+package source `main`は開始・終了時とも`77d2ea00ad88786c80afd2ca88ef51c4ee146bcb`でremoteと一致。履歴編集前のrecovery refsはlocal branch/tag・remote tagともcurrent=`77d2ea00ad88786c80afd2ca88ef51c4ee146bcb`、previous=`d3790c51aabf5acaab8f98e1bf12437c5a166127`。WSL build workspaceは18,587 files・434,401,084 bytesで、後続のLinux package作業に使うactive build environmentとして保持。package scriptの`/tmp/blue-tanuki-linux-x64-package-jF8acn` stagingは最終inventoryで存在しなかった。Windows Tempの4成果物も後続のinstalled確認まで保持する。既存の`.codex-attachments/`、`.codex-remote-attachments/`、Linux isolation `target/`、897 deletionを含む別の登録済みdetached worktreeは未変更。D4-Pocketの別repo作業領域も未変更。
